@@ -166,6 +166,14 @@ impl Photos {
         Ok(self.working.contains(id))
     }
 
+    pub(super) fn memory_resources(
+        &self,
+        engine: &Engine,
+        native: Option<&RenderSession>,
+        reservation: &foveonic::render::MemoryReservation,
+    ) -> foveonic::render::MemoryResources {
+        engine.memory_resources(native, &self.working, reservation)
+    }
     pub fn configure_memory(&mut self, limit: u64) {
         self.working.set_limit(limit);
         self.prune();

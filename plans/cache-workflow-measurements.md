@@ -54,11 +54,30 @@ The first implementation slice measures two declared photographs in Smart: Fit, 
 
 Start with 2 GB and 4 GB budgets, disk disabled and verified primed disk with fresh processing. Use unrecorded runs for latency and separate Wall captures for attribution. Wider workflows follow once this small report establishes useful resource and timing evidence. This slice changes no retention policy or default.
 
-- [ ] Map current cache/resource owners and their accounting boundaries.
-- [ ] Add only missing shared-boundary observations needed to distinguish the major operations.
+- [x] Map current cache/resource owners and their accounting boundaries.
+- [x] Add only missing shared-boundary observations needed to distinguish the major operations.
 - [ ] Run reproducible workflow/budget cases and identify working-set transitions.
 - [ ] Produce practical budget ranges, including image-size and recipe qualifications.
 - [ ] Explain residual latency that extra memory does not fix.
 - [ ] Propose the smallest retention changes justified by those results for owner discussion.
 
 Prefer guidance such as “this workload retains about X MB and stops rebuilding near Y MB on these photographs” over a universal photos-per-GB promise. Evaluate whether a simple base cost plus per-working-pixel and native-detail costs fits the measurements before proposing any automatic estimator. Implementation of a new cache policy requires a separate agreed slice.
+
+## First two-photo results
+
+Three uncontended Off trials per cell used the declared blue parking sign in color/Natural and hazy coast in monochrome/Natural. Smart Fit chose divisors four and eight respectively; the sign then requested native detail. Each cell contains twelve measured shared edits. All twenty-four final images matched fresh processing exactly. Reported medians combine these four declared edit actions; individual action samples remain available in runner output.
+
+| Retained budget | Disk setup | Visible-group completion | Whole settlement observed |
+| --- | --- | --- | --- |
+| 2 GB | Disabled | 128 ms | 201 ms |
+| 4 GB | Disabled | 69 ms | 144 ms |
+| 2 GB | Primed | 125 ms | 205 ms |
+| 4 GB | Primed | 71 ms | 143 ms |
+
+Separate Wall controls confirmed no payload reads during the repeated edits. Smart Fit and initial native zoom read original payloads with disk disabled and decoded-cache payloads with primed disk. Native preparation remained on the same photo throughout this case. It does not test the one-native-session replacement limit.
+
+At 2 GB, edit-boundary snapshots reached roughly 2.15 GiB before trimming and about 1.97 GiB afterward, with sixteen checkpoint evictions on the first edit and eight on subsequent edits. At 4 GB, retained snapshots reached roughly 2.17 GiB and each edit recorded four checkpoint evictions. These observations suggest useful working-set pressure near 2 GB for this recipe, rather than a disk bottleneck. They do not establish a universal budget or process peak.
+
+The native region's backing allocation was about 86 MiB with an 8 MiB display texture; the Whole result referenced about 184 MiB backing and 225 MiB display texture. Regional backing includes processing support beyond the requested visible rectangle. These references can overlap other retained owners and must not be summed into a separate memory total. The next measurements remain Full/Full, Before/After and eight-photo/loupe workflows, followed by shared-budget native retention.
+
+The first slice passed largest-model design/code review, 518 ordinary GUI tests, 134 portable profiling-tool tests, strict release Clippy, formatting and documentation checks. Four diagnostic cells saved complete, loss-free traces with matching action/resource attribution. Final Off and Wall integration runs exercised the maintained runner after report/comparison integration; Off milestone comparison accepts the resulting report. This completes the first measurement slice, not the wider workflow matrix or retention change.

@@ -21,6 +21,10 @@ The diagnostic model must support future concurrent Draft/Thumb execution across
 
 Cache diagnostics must distinguish local decoded data, corrected/reduced processing inputs, graph checkpoints, displayed images and browser previews. They must report hits, misses, invalidations, admission and eviction with reasons and resource sizes. Actual source payload reads must identify original versus local storage independently of readiness indicators. Recording a cache observation must not change recency or load a payload merely to inspect it.
 
+Cache-budget workflow tests must report foreground delivery separately from background Whole preparation. Record logical retained resources at worker boundaries with available task identity; identify per-image references as potentially shared and non-additive. Keep retained-resource snapshots distinct from process footprint, transient allocation traffic and physical GPU residency. These measurements belong in test evidence and traces; no memory-usage UI is required.
+
+Workflow coverage must include Full/Full, reduced/reduced, mixed-resolution editing and native-detail switching through zoom or loupe. Use these cases to check shared-budget retention and reuse independently of selection count, and to detect when background Whole preparation displaces useful regional processing state.
+
 ## Instrumentation and capture
 
 Instrumentation must have one shared ownership model and reusable scoped APIs. Common execution boundaries should supply coverage automatically. Routine profiling must not require scattered formatted log statements or per-pixel/per-element events. Existing stage measurements and GPU activity counters should migrate into the shared model instead of establishing a parallel profiling system. The viewer and machine reports should preserve scoped application call hierarchy and actual thread ownership. Uninstrumented function internals may require a separate sampling profiler.

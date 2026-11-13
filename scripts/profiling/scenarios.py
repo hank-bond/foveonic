@@ -18,10 +18,11 @@ from file_hash import digest
 from results import PREVIEW_QUALITIES, include_assertions, render_result
 from interaction_latency import matched_workload, summarize_ui_ticks
 from inputs import stage_inputs
-from scenario_checks import checked_scenario_images, pointer_value, same_numeric, validate_choice_recipes
+from scenario_checks import checked_scenario_images, pointer_value, same_numeric, validate_choice_recipes, check_cache_workflow
 from image_replay import replay_images
+from cache_workflow import associate_trace
 
-NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure', 'slider-drag', 'selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'collection-journey', 'choice-journey', 'source-loading')
+NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure', 'slider-drag', 'selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'collection-journey', 'choice-journey', 'source-loading', 'cache-workflow')
 
 
 def selected_cases(cases, count, quality, scenario):
@@ -33,6 +34,8 @@ def selected_cases(cases, count, quality, scenario):
         raise ValueError('a mixed-value slider drag needs at least two photographs')
     if scenario in ('selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'choice-journey') and count < 2:
         raise ValueError('a selection journey needs at least two photographs')
+    if scenario == 'cache-workflow' and count != 2:
+        raise ValueError('cache-workflow needs exactly two photographs')
     if scenario == 'collection-journey' and count != 8:
         raise ValueError('collection-journey needs eight originals for its 100-photo folder')
     selected = cases[:count]
@@ -234,6 +237,9 @@ def run_trial(args, selected, directory, source_hash):
                        'scenario_poll_ms':20,'numerical_equality':'verified separately by maintained headless cases',
                        'capture_images_after_scenario':bool(getattr(args, 'compare_images', None))},
     }
+    if args.scenario == 'cache-workflow':
+        manifest['measurement']['setup'] = (f'initial explicit {args.quality} selection starts with cold processing; disk may be primed. '
+            'Smart Fit follows that selection, then one native-detail viewport and warm edits')
     manifest['measurement']['controlled_delivery'] = args.scenario in ('selection-journey','selection-pressure','transition-journey','source-loading')
     manifest['scenario']['capture_images'] = bool(getattr(args, 'compare_images', None))
     manifest['scenario']['save_on_exit'] = bool(getattr(args, 'save_on_exit', False))
@@ -295,6 +301,19 @@ def run_trial(args, selected, directory, source_hash):
     ui_latency = summarize_ui_ticks(native_result.get('ui_samples', []), getattr(args, 'max_ui_gap_ms', None))
     if ui_latency['assertion'] is not None:
         include_assertions(test_result, [ui_latency['assertion']])
+    if args.scenario == 'cache-workflow':
+        try:
+            result['cache_workflow'] = check_cache_workflow(native_result, inputs)
+            if args.mode != 'off':
+                analysis = json.loads((capture_directory/'summary.json').read_text())['analysis']
+                result['cache_workflow']['trace'] = associate_trace(native_result['cache_workflow'], analysis)
+                include_assertions(test_result, [{'name':'cache_workflow_trace',
+                    'outcome':'passed' if result['cache_workflow']['trace']['available'] else 'unverified',
+                    'actual':result['cache_workflow']['trace']}])
+            assertion = {'name':'cache_workflow_actions', 'outcome':'passed', 'actual':result['cache_workflow']}
+        except (ValueError, KeyError, TypeError) as error:
+            assertion = {'name':'cache_workflow_actions', 'outcome':'failed', 'failure':str(error)}
+        include_assertions(test_result, [assertion])
     if args.scenario == 'background-edit':
         at_edit = (native_result.get('background') or {}).get('background_at_edit') or {}
         overlaps = sum(sample.get('action') == 'background-edit' and sample.get('worker_busy') is True
@@ -372,7 +391,7 @@ def run(args):
         raise ValueError('collection-journey needs explicit manual exposures')
     if args.scenario == 'source-loading' and any(not isinstance(case.get('settings'), dict) or case['settings'].get('exposure_auto') is not False or type(case['settings'].get('exposure')) not in (int, float) for case in selected):
         raise ValueError('source-loading needs explicit manual exposures')
-    journeys = ('selection-journey','selection-pressure','background-edit','transition-journey','lifecycle-journey','browser-journey','choice-journey')
+    journeys = ('selection-journey','selection-pressure','background-edit','transition-journey','lifecycle-journey','browser-journey','choice-journey','cache-workflow')
     if args.scenario == 'choice-journey':
         validate_choice_recipes(selected)
     if getattr(args, 'compare_images', None) and args.scenario not in ('slider-drag', *journeys):

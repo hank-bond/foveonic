@@ -1,7 +1,22 @@
 """Check real-trace query decoding and scheduling-independent scenario assertions without GPU work."""
 
 import unittest
-from trace_analysis import expected_work, analyze_tables, csv_tables, decode_transport, loss_status, typed_arg
+from trace_analysis import expected_work, analyze_tables, csv_tables, decode_transport, loss_status, typed_arg, memory_snapshots
+
+
+
+class MemorySnapshotTests(unittest.TestCase):
+    def test_pairs_only_same_track_and_complete_task_identity(self):
+        def event(ts, phase, task=1, track='a'):
+            return {'name':'memory.snapshot', 'ts':ts, 'track_id':track,
+                    'args':{'phase':phase, 'task':task, 'revision':4, 'photo':7, 'retained_bytes':100}}
+        result = memory_snapshots([event(1, 'before_trim'), event(2, 'after_trim', track='b'),
+                                   event(3, 'after_trim'), event(4, 'before_trim', task=0),
+                                   event(5, 'after_trim', task=0), event(6, 'before_trim', task=2)])
+        self.assertEqual(len(result['pairs']), 1)
+        self.assertEqual(result['pairs'][0]['before']['ts_ns'], 1)
+        self.assertEqual(result['pairs'][0]['after']['ts_ns'], 3)
+        self.assertEqual(len(result['unpaired']), 4)
 
 
 def tables(events):

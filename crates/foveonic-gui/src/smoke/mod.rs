@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 mod background;
 mod browser_journey;
+mod cache_workflow;
 mod capture;
 mod choices;
 mod collection;
@@ -390,6 +391,17 @@ pub struct Smoke {
     multi_sweep_ms: Vec<f64>,
 }
 impl Smoke {
+    pub(crate) fn observe_admitted(
+        &mut self,
+        frame: &crate::rendering::worker::Frame,
+        current: bool,
+        destination: crate::rendering::delivery::Destination,
+        visible: Option<[u32; 4]>,
+    ) {
+        if let Some(scenario) = &mut self.scenario {
+            scenario.observe_admitted(frame, current, destination, visible);
+        }
+    }
     pub(crate) fn expects_failure(&self, path: &std::path::Path) -> bool {
         self.scenario
             .as_ref()

@@ -112,6 +112,12 @@ def matched_workload(manifest, native_result):
                 'geometry':geometry, 'step_geometry':step_geometry, 'geometry_complete':geometry_complete,
                 'first_current_complete':geometry_complete and cache_policy_matches and len(current)==len(inputs) and all(row['first_current_settings_sha256'] for row in inputs),
                 'measurement':manifest['measurement']}
+    if scenario['name'] == 'cache-workflow':
+        workflow = native_result.get('cache_workflow') or {}
+        descriptor['cache_workflow_protocol'] = [
+            {key:row[key] for key in ('action', 'delta') if key in row}
+            for row in workflow.get('rows', []) if row.get('event') == 'action'
+        ]
     if scenario['name']=='slider-drag':
         descriptor['scenario'].update({key:scenario[key] for key in ('control_pointer','drag_steps','drag_fraction','drag_pattern','light_theme','mixed_values','editing_section')})
     descriptor['scenario'].update(folder_mode=scenario.get('folder_mode', 'import'),

@@ -800,6 +800,27 @@ impl App {
                 }
                 continue;
             };
+            if self.smoke.is_some() {
+                if let Ok(Some(frame)) = &reply.result {
+                    let visible = self.current_photo_frame(&frame.path).and_then(|base| {
+                        let window = base.display_window(false);
+                        self.viewports
+                            .view(Some(&frame.path))
+                            .visible_pixels()
+                            .map(|pixels| {
+                                [
+                                    pixels.top_left[0] + window[0],
+                                    pixels.top_left[1] + window[1],
+                                    pixels.bottom_right[0] + 1 + window[0],
+                                    pixels.bottom_right[1] + 1 + window[1],
+                                ]
+                            })
+                    });
+                    if let Some(smoke) = &mut self.smoke {
+                        smoke.observe_admitted(frame, current, destination, visible);
+                    }
+                }
+            }
             if destination == delivery::Destination::Overview {
                 match reply.result {
                     Ok(Some(frame)) => {

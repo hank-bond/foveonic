@@ -14,6 +14,7 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 
 - **[acceptance.py](./acceptance.py)** Run selected acceptance evidence and report the maintained user-path inventory.
 - **[behavioral.py](./behavioral.py)** Run declared real-app slider cases across camera fixtures and report observed coverage.
+- **[cache_workflow.py](./cache_workflow.py)** Check and report the two-photo native-detail cache workflow.
 - **[compare.py](./compare.py)** Compare matched, uncontended native Off reports with explicit optional regression budgets.
 - **[fetch_samples.py](./fetch_samples.py)** Fetch pinned external RAW samples and verify cached originals without replacing them.
 - **[file_hash.py](./file_hash.py)** Hash profiling inputs and tools without retaining their complete file contents.

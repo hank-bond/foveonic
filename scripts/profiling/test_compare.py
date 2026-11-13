@@ -28,7 +28,63 @@ def report(values, build='one'):
             'workload_key':key,'trials':[trial]}
 
 
+def cache_report():
+    result = report([1])
+    key = result['workload_key']
+    key['descriptor']['scenario']['name'] = 'cache-workflow'
+    key['descriptor']['cache_workflow_protocol'] = [{'action':'exposure-0', 'delta':0.125}]
+    key['sha256'] = value_hash(key['descriptor'])
+    actions = []
+    for name in ['zoom-a-200', *[f'exposure-{index}' for index in range(4)]]:
+        actions.append({'action':name,
+                        'first_current_admissions':[{'photo':0, 'action_elapsed_ms':2}],
+                        'first_current_observations':[{'photo':1, 'action_elapsed_ms':3}],
+                        'foreground_on_admission_ms':[] if name == 'zoom-a-200' else [4],
+                        'foreground_by_observation_ms':[],
+                        'whole_current_admissions':[{'action_elapsed_ms':2.5}],
+                        'whole_settled_observed_ms':8})
+    trial = result['trials'][0]
+    trial['steps'] = [{'action':'initial-selection', 'baseline_elapsed_ms':10},
+                      {'action':'cache-workflow', 'baseline_elapsed_ms':None}]
+    trial['cache_workflow'] = {'actions':actions}
+    return result
+
+
 class CompareTests(unittest.TestCase):
+    def test_cache_workflow_compares_milestones_not_a_scenario_total(self):
+        before, after = cache_report(), cache_report()
+        comparison = compare_reports(before, after)
+        actions = {row['action']:row for row in comparison['actions']}
+        self.assertEqual(len(actions), 21)
+        self.assertEqual(actions['initial-selection']['median']['before_ms'], 10)
+        self.assertEqual(actions['zoom-a-200/foreground']['median']['before_ms'], 3)
+        self.assertEqual(actions['exposure-0/foreground']['median']['before_ms'], 4)
+        self.assertEqual(actions['exposure-0/whole-observed']['median']['before_ms'], 8)
+        for mutation in (lambda trial:trial['cache_workflow']['actions'].pop(),
+                         lambda trial:trial['cache_workflow']['actions'][1].update(whole_settled_observed_ms=float('nan')),
+                         lambda trial:trial['cache_workflow']['actions'][1].update(foreground_on_admission_ms=[]),
+                         lambda trial:trial['cache_workflow']['actions'][1].update(foreground_on_admission_ms=[1]),
+                         lambda trial:trial['cache_workflow']['actions'][1].update(whole_settled_observed_ms=-1),
+                         lambda trial:trial['cache_workflow']['actions'][0].update(first_current_observations=[]),
+                         lambda trial:trial.update(steps=trial['steps'][:1]),
+                         lambda trial:trial.update(mode='wall')):
+            broken = cache_report()
+            mutation(broken['trials'][0])
+            with self.assertRaises(ValueError):
+                compare_reports(before, broken)
+
+    def test_cache_protocol_is_matched_without_runtime_paths_or_revisions(self):
+        manifest, native = workload()
+        manifest['scenario']['name'] = 'cache-workflow'
+        native['cache_workflow'] = {'rows':[{'event':'action', 'action':'fit-smart', 'elapsed_ms':3},
+                                          {'event':'action', 'action':'exposure-0', 'delta':0.125, 'minimum_revision':7}]}
+        key = matched_workload(manifest, native)
+        changed = deepcopy(native)
+        changed['cache_workflow']['rows'][1]['minimum_revision'] = 99
+        self.assertEqual(key, matched_workload(manifest, changed))
+        changed['cache_workflow']['rows'][1]['delta'] = -0.125
+        self.assertNotEqual(key, matched_workload(manifest, changed))
+
     def test_effective_disk_policy_must_match_the_declared_workload(self):
         manifest,native=workload()
         self.assertTrue(matched_workload(manifest,native)['descriptor']['cache_policy_matches'])

@@ -469,6 +469,39 @@ def gpu_query_status(events):
                       'No additional GPU completion wait is introduced to close the recording.']}
 
 
+
+def memory_snapshots(events):
+    """Pair trim boundaries only on the same track and complete task identity."""
+    waiting, pairs, unpaired = {}, [], []
+    for event in events:
+        if event['name'] != 'memory.snapshot':
+            continue
+        args = event['args']
+        context = tuple(args.get(key) for key in ('task', 'revision', 'photo'))
+        record = {'ts_ns':event['ts'], 'track_id':event['track_id'], **args}
+        if any(value is None or value == 0 for value in context):
+            unpaired.append(record)
+            continue
+        key = (event['track_id'], *context)
+        if args.get('phase') == 'before_trim':
+            if key in waiting:
+                unpaired.append(waiting[key])
+            waiting[key] = record
+        elif args.get('phase') == 'after_trim' and key in waiting:
+            before = waiting.pop(key)
+            if event['ts'] >= before['ts_ns']:
+                pairs.append({'before':before, 'after':record,
+                              'elapsed_ms':(event['ts'] - before['ts_ns']) / 1e6})
+            else:
+                unpaired.extend((before, record))
+        else:
+            unpaired.append(record)
+    unpaired.extend(waiting.values())
+    return {'pairs':pairs, 'unpaired':unpaired,
+            'limits':['Snapshots report logical retained allocations at trim boundaries, not transient or driver peaks.',
+                      'Records lacking complete task identity are not paired.']}
+
+
 def analyze_tables(tables, capture_summary):
     events = events_from_tables(tables)
     markers = [event for event in events if event['name'] == 'scenario.step']
@@ -571,6 +604,10 @@ def analyze_tables(tables, capture_summary):
             'behavior_valid': (not failures and bool(steps)) if markers else (smoke['valid'] if smoke else None), 'behavior_failures': failures,
             'smoke':smoke,
             'steps': steps, 'incomplete_steps': incomplete,
+            'memory_snapshots': memory_snapshots(events),
+            'resource_events': [{'name':event['name'], 'ts_ns':event['ts'], 'args':event['args']}
+                                      for event in events if event['name'].startswith('cache.')
+                                      or event['name'] in ('source.read.complete', 'gpu.encode.dispatch')],
             'work_census': node_work_census(events),
             'event_counts': dict(Counter(event['name'] for event in events)),
             'flow_count': len(tables['flows']),

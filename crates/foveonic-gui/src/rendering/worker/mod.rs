@@ -1043,12 +1043,21 @@ fn trim_memory(
     slot: &Arc<(Mutex<Pending>, Condvar)>,
 ) {
     let inventory = memory_inventory(presented, budget, pending_images, slot);
+    if foveonic::diagnostics::enabled() {
+        let resources = reduced.memory_resources(
+            engine,
+            source.as_ref().map(|(_, session)| session),
+            inventory.reservation(),
+        );
+        memory_snapshot("before_trim", resources, budget.limit, source.as_ref());
+    }
     let trim = reduced.trim_memory(
         engine,
         source.as_mut().map(|(_, session)| session),
         budget.limit,
         inventory.reservation(),
     );
+    memory_snapshot("after_trim", trim.resources, budget.limit, source.as_ref());
     let status = MemoryStatus {
         resources: trim.resources,
         over_budget_bytes: trim.over_budget_bytes,
@@ -1069,6 +1078,39 @@ fn trim_memory(
         }
         context.request_repaint();
     }
+}
+
+fn memory_snapshot(
+    phase: &'static str,
+    resources: foveonic::render::MemoryResources,
+    budget: u64,
+    native: Option<&(PathBuf, RenderSession)>,
+) {
+    foveonic::diagnostics::event(
+        foveonic::diagnostics::Category::Memory,
+        "memory.snapshot",
+        |fields| {
+            fields
+                .str("phase", phase)
+                .u64("cpu_bytes", resources.cpu_bytes)
+                .u64("gpu_bytes", resources.gpu_bytes)
+                .u64("reserved_bytes", resources.reserved_bytes)
+                .u64("retained_bytes", resources.total_bytes)
+                .u64("budget_bytes", budget)
+                .u64(
+                    "over_budget_bytes",
+                    resources.total_bytes.saturating_sub(budget),
+                );
+            if let Some((path, session)) = native {
+                fields
+                    .u64("native_photo", foveonic::diagnostics::photo_id(path))
+                    .u64(
+                        "native_source_bytes_in_cpu",
+                        session.source().retained_source_bytes(),
+                    );
+            }
+        },
+    );
 }
 
 fn memory_inventory(
@@ -1114,17 +1156,26 @@ fn load_native_source(
     revision: u64,
     progress: impl Fn(foveonic::source::LoadStage),
 ) -> foveonic::source::Result<bool> {
-    if source.as_ref().is_some_and(|(loaded, session)| {
-        loaded == path
-            && cache
+    let reason = match source.as_ref() {
+        None => "empty",
+        Some((loaded, _)) if loaded != path => "different_photo",
+        Some((_, session))
+            if cache
                 .source_origin(path)
-                .is_none_or(|known| known == *session.source().origin())
-    }) {
-        return Ok(true);
-    }
+                .is_some_and(|known| known != *session.source().origin()) =>
+        {
+            "origin_changed"
+        }
+        Some(_) => {
+            native_source_event("hit", "same_source", path, source.as_ref());
+            return Ok(true);
+        }
+    };
     let Some(loaded) = sources.open(path, revision)? else {
+        native_source_event("pending", reason, path, source.as_ref());
         return Ok(false);
     };
+    native_source_event("loaded", reason, path, source.as_ref());
     if let Some((_, previous)) = source.take() {
         engine.release_native_preparation(previous.metadata());
     }
@@ -1132,6 +1183,32 @@ fn load_native_source(
     record_source_load(revision, path, &loaded);
     *source = Some((path.clone(), RenderSession::new(loaded)));
     Ok(true)
+}
+
+fn native_source_event(
+    decision: &'static str,
+    reason: &'static str,
+    requested: &std::path::Path,
+    previous: Option<&(PathBuf, RenderSession)>,
+) {
+    foveonic::diagnostics::event(
+        foveonic::diagnostics::Category::Cache,
+        "cache.native_source",
+        |fields| {
+            fields.str("decision", decision).str("reason", reason).u64(
+                "requested_photo",
+                foveonic::diagnostics::photo_id(requested),
+            );
+            if let Some((path, session)) = previous {
+                fields
+                    .u64("previous_photo", foveonic::diagnostics::photo_id(path))
+                    .u64(
+                        "previous_source_bytes_in_cpu",
+                        session.source().retained_source_bytes(),
+                    );
+            }
+        },
+    );
 }
 
 fn record_source_load(revision: u64, path: &std::path::Path, loaded: &foveonic::source::Source) {

@@ -133,6 +133,7 @@ For an original X3F, `source.original` separates file opening, metadata access, 
 | `selection-journey` | Edit, retarget, remove and re-add viewport targets while a computed image is held at delivery, then check unchanged selection reuse |
 | `selection-pressure` | Run the selection journey, lower the memory budget, prove an inactive processing entry was evicted, then edit it and check rebuilding |
 | `background-edit` | Start a frozen TIFF import through the actual batch worker, edit while it is active, settle foreground results, then separately await batch completion |
+| `cache-workflow` | Fit two photos in Smart, zoom the first to 200%, edit both and return to Fit, measuring visible delivery separately from background Whole settlement |
 
 `--rapid-edits`, `--pressure-mib`, `--repeats`, `--step-timeout` and `--timeout` control these existing actions. A single active image and device are set up before capture. Input hashing warms the OS filesystem cache, so `initial` does not claim a cold storage device. Warm disk means a ready local decoded entry, not a retained GPU checkpoint. Actual payload reads establish which input path ran.
 
@@ -159,6 +160,25 @@ python3 scripts/profiling/scenarios.py \
 Supply an explicit value for the selected numeric control in every starting recipe. Exposure also requires `exposure_auto: false`. The check verifies those initial values and checks the gesture's edit from pointer movement, separately from the rendered output. After all measured actions and any trace save, the existing image worker reads each settled frame's floating samples to `evidence/image-NN.f32`; the UI polls completion. After the app exits, the runner independently processes those sources with the exact verified settings. Diagnostic settings snapshots retain working scale, analysis tuning and other transient fields omitted from photo sidecars. The headless example accepts these through `--settings-snapshot FILE`, which cannot be combined with photographic or scale overrides.
 
 The shared `image_samples` assertion checks every byte, complete buffer length, storage layout, color space, nominal white and view geometry. Results preserve both image paths and hashes, geometry differences and the first differing byte. A stale frame identity, missing capture or effective value that differs from the checked edit fails the trial. The runner checks GPU adapter names and records both binary hashes. Use binaries built from the same sources; exact floating results are not portable across GPU backends. Readback and fresh verification are outside interaction timing. Image comparison also supports the declared editing journeys.
+
+### Cache workflow measurements
+
+`cache-workflow` requires exactly two declared manual exposures. It starts after the ordinary initial selection at the configured explicit quality. Smart Fit inherits that processing state. Shared edits apply offsets of +0.125, +0.25, +0.125 and +0.375 from each starting exposure. The test independently checks those edits, per-photo identity, rendition, demanded scale and native visible coverage. It uses direct application commands without delivery holds or timed image readbacks.
+
+```sh
+python3 scripts/profiling/scenarios.py \
+  --binary target/release/foveonic-gui --cases REGIONAL_CASES.json \
+  --directory .local/cache-workflow-2g --scenario cache-workflow \
+  --count 2 --quality thumb --mode off --trials 3 --background \
+  --folder-mode browse --memory-cache-bytes 2147483648 --disk-cache-bytes 0 \
+  --compare-images target/release/examples/profile_pipeline
+```
+
+Resolve `REGIONAL_CASES.json` from the tracked `regional_cases` recipes through `prepare_inputs.py`. Repeat with 4294967296 bytes for 4 GB, and with an enabled disk budget for primed-disk/cold-initial-processing coverage. Verify actual storage reads in separate Wall captures; readiness alone does not establish which payload was used. Use new output directories and `--mode wall --trace-processor PATH_TO_LOCAL_TRACE_PROCESSOR` for attribution. Existing cache namespace isolation applies.
+
+Each trial's `cache_workflow` report separates per-photo first-current admissions from later retained-frame observations, foreground group completion and polled Whole settlement. Returning to Fit ends measurement; restoring the original explicit quality for shared final-image assertions is cleanup. The aggregate action duration is deliberately absent because it would include unrelated work. The Off comparison tool uses the workflow's individual milestones instead.
+
+Wall reports associate worker `memory.snapshot` trim pairs with current action windows and newly admitted task/revision identities. They also report cache events, native-source decisions, payload reads and dispatch encoding. A source read belongs to its completion timestamp, so it may have started in an earlier action. Unattributed snapshots remain in the trace analysis. Per-image backing/texture sizes describe references that can alias other owners; only the global inventory deduplicates them. These logical boundary snapshots do not measure transient peaks, driver residency or whole-process footprint. No memory-usage UI is required.
 
 ### Coordination journeys
 

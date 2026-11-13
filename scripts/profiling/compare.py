@@ -9,6 +9,7 @@ from pathlib import Path
 
 from trace_analysis import distribution
 from interaction_latency import geometry_identity, value_hash
+from cache_workflow import latency_samples
 
 
 def baseline_samples(report):
@@ -37,8 +38,17 @@ def baseline_samples(report):
         if trial.get('workload_key')!=key:
             raise ValueError('report contains mixed workload keys')
         counts=Counter()
+        if key['descriptor'].get('scenario', {}).get('name') == 'cache-workflow':
+            names = [step.get('action') for step in trial['steps']]
+            if names.count('cache-workflow') != 1 or names.count('initial-selection') != 1:
+                raise ValueError('cache workflow trial needs initial selection and exactly one workflow step')
         for step in trial['steps']:
             action=step['action'];value=step.get('baseline_elapsed_ms')
+            if action == 'cache-workflow' and key['descriptor'].get('scenario', {}).get('name') == 'cache-workflow':
+                for milestone, duration in latency_samples(trial.get('cache_workflow')).items():
+                    counts[milestone] += 1
+                    samples[milestone].append(duration)
+                continue
             if not isinstance(value,(int,float)) or isinstance(value,bool) or not math.isfinite(value) or value<0:
                 raise ValueError('every baseline step needs a finite nonnegative elapsed duration')
             counts[action]+=1;samples[action].append(value)
@@ -81,7 +91,8 @@ def compare_reports(before, after, default_budget=None, action_budgets=None):
             'limits':['Budgets are caller-supplied. Without a budget this command reports deltas without a pass/fail threshold.',
                       'Median and nearest-rank p95 describe these samples, not statistical significance.',
                       'Workload matching includes recorded host, application GPU, window/viewport geometry and pixel density.',
-                      'Controlled-delivery journeys include intentional harness waiting and are not natural rendering throughput measurements.']}
+                      'Controlled-delivery journeys include intentional harness waiting and are not natural rendering throughput measurements.',
+                      'Cache-workflow photo and Whole milestones are observed readiness, not physical presentation; zoom foreground is the later photo milestone.']}
 
 
 def report_identity(path):

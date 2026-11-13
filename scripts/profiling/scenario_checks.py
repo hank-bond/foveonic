@@ -3,6 +3,8 @@
 import json
 import struct
 
+from cache_workflow import check_cache_workflow
+
 
 def pointer_value(settings, pointer):
     value = settings
@@ -58,6 +60,7 @@ def check_exposures(expected, inputs, photos):
             or any(photos[item['staged_source']]['settings']['exposure'] != exposure
                    for item,exposure in zip(inputs,expected_exposures))):
         raise ValueError('journey lacks the expected per-photo edits')
+
 
 
 def check_choices(choices, inputs, initial, photos, declared):
@@ -120,9 +123,11 @@ def checked_scenario_images(native_result, inputs, directory, control_pointer='/
     lifecycle = native_result.get('lifecycle')
     browser = native_result.get('browser_journey')
     choices = native_result.get('choices')
+    cache_workflow = native_result.get('cache_workflow')
     final_action = ('restore-selection' if journey else 'background-finish' if background else
                     'transition-journey' if transitions else 'lifecycle-journey' if lifecycle else
-                    'browser-journey' if browser else 'choice-journey' if choices else 'slider-drag')
+                    'browser-journey' if browser else 'choice-journey' if choices else
+                    'cache-workflow' if cache_workflow else 'slider-drag')
     steps = [step for step in native_result['steps'] if step['action'] == final_action]
     initial_steps = [step for step in native_result['steps'] if step['action'] == 'initial-selection']
     captures = native_result.get('image_captures', [])
@@ -133,7 +138,7 @@ def checked_scenario_images(native_result, inputs, directory, control_pointer='/
     declared = {item['staged_source']:item for item in inputs}
     if len(photos) != len(inputs) or set(photos) != set(declared) or set(initial) != set(declared):
         raise ValueError('final slider photos do not match the declared inputs')
-    is_journey = bool(journey or background or transitions or lifecycle or browser or choices)
+    is_journey = bool(journey or background or transitions or lifecycle or browser or choices or cache_workflow)
     pointer = '/exposure' if is_journey else control_pointer
     for source, record in declared.items():
         expected = pointer_value(record['settings'], pointer)
@@ -145,6 +150,8 @@ def checked_scenario_images(native_result, inputs, directory, control_pointer='/
         check_slider_drag(native_result, initial, photos, declared, directory, pointer)
     if journey or background or transitions or lifecycle or browser:
         check_exposures(journey or background or transitions or lifecycle or browser, inputs, photos)
+    if cache_workflow:
+        check_cache_workflow(native_result, inputs)
     if choices:
         check_choices(choices, inputs, initial, photos, declared)
     if transitions:

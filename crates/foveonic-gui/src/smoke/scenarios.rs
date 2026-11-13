@@ -36,6 +36,7 @@ enum Case {
     CollectionJourney,
     ChoiceJourney,
     SourceLoading,
+    CacheWorkflow,
 }
 impl Case {
     fn selection_journey(self) -> bool {
@@ -52,6 +53,7 @@ impl Case {
                     | Self::CollectionJourney
                     | Self::ChoiceJourney
                     | Self::SourceLoading
+                    | Self::CacheWorkflow
             )
     }
 }
@@ -196,6 +198,7 @@ enum Action {
     LifecycleJourney,
     BrowserJourney,
     CollectionJourney,
+    CacheWorkflow,
 }
 impl Action {
     fn name(self) -> &'static str {
@@ -220,6 +223,7 @@ impl Action {
             Self::LifecycleJourney => "lifecycle-journey",
             Self::BrowserJourney => "browser-journey",
             Self::CollectionJourney => "collection-journey",
+            Self::CacheWorkflow => "cache-workflow",
         }
     }
     fn coverage(self) -> &'static str {
@@ -289,6 +293,7 @@ pub(super) struct Scenario {
     lifecycle: Option<super::lifecycle::LifecycleJourney>,
     browser_journey: Option<super::browser_journey::BrowserJourney>,
     collection_journey: Option<super::collection::CollectionJourney>,
+    cache_workflow: Option<super::cache_workflow::Driver>,
     feedback: Vec<super::journey::ImageFeedback>,
     retained_before: Vec<PathBuf>,
     eviction: Option<serde_json::Value>,
@@ -300,6 +305,21 @@ pub(super) struct Scenario {
     shutdown_pending: Option<serde_json::Value>,
 }
 impl Scenario {
+    pub(super) fn observe_admitted(
+        &mut self,
+        frame: &crate::rendering::worker::Frame,
+        current: bool,
+        destination: crate::rendering::delivery::Destination,
+        visible: Option<[u32; 4]>,
+    ) {
+        if matches!(self.phase, Phase::Running)
+            && matches!(self.action, Some(Action::CacheWorkflow))
+        {
+            if let Some(driver) = &mut self.cache_workflow {
+                driver.observe_admitted(&self.paths, frame, current, destination, visible);
+            }
+        }
+    }
     pub(super) fn expects_failure(&self, path: &Path) -> bool {
         self.lifecycle
             .as_ref()
@@ -325,6 +345,10 @@ impl Scenario {
         assert!(
             config.name != Case::CachedSwitch || config.photo_count >= 2,
             "cached switching needs at least two photographs"
+        );
+        assert!(
+            config.name != Case::CacheWorkflow || config.photo_count == 2,
+            "cache workflow requires exactly two photographs"
         );
         assert!(
             config.name != Case::SliderDrag
@@ -394,6 +418,14 @@ impl Scenario {
             .name
             .selection_journey()
             .then(|| super::selection::SelectionJourney::new(exposures.clone()));
+        if config.name == Case::CacheWorkflow {
+            assert!(
+                exposures
+                    .iter()
+                    .all(|value: &f32| value.is_finite() && (-4. ..=3.625).contains(value)),
+                "cache workflow exposure offsets must remain in range"
+            );
+        }
         assert!(
             config.name != Case::TransitionJourney
                 || super::transitions::valid_count(config.action_count),
@@ -434,6 +466,8 @@ impl Scenario {
             .then(|| super::lifecycle::LifecycleJourney::new(exposures[0]));
         let source_loading = (config.name == Case::SourceLoading)
             .then(|| super::source_loading::SourceLoading::new(exposures.clone()));
+        let cache_workflow = (config.name == Case::CacheWorkflow)
+            .then(|| super::cache_workflow::Driver::new(exposures.clone()));
         if matches!(
             config.name,
             Case::SliderDrag
@@ -480,6 +514,7 @@ impl Scenario {
             lifecycle,
             browser_journey,
             collection_journey,
+            cache_workflow,
             feedback,
             retained_before: Vec::new(),
             eviction: None,
@@ -698,6 +733,7 @@ impl Scenario {
                     Case::LifecycleJourney => self.actions.push_back(Action::LifecycleJourney),
                     Case::BrowserJourney => self.actions.push_back(Action::BrowserJourney),
                     Case::CollectionJourney => self.actions.push_back(Action::CollectionJourney),
+                    Case::CacheWorkflow => self.actions.push_back(Action::CacheWorkflow),
                     Case::BackgroundEdit => self
                         .actions
                         .extend([Action::BackgroundEdit, Action::BackgroundWait]),
@@ -718,6 +754,23 @@ impl Scenario {
                 }
             }
             Phase::Running => {
+                if matches!(self.action, Some(Action::CacheWorkflow)) {
+                    let completed =
+                        self.cache_workflow
+                            .as_mut()
+                            .unwrap()
+                            .advance(app, ctx, &self.paths);
+                    self.update_journey_expectations();
+                    match completed {
+                        Ok(false) => return,
+                        Ok(true) => {}
+                        Err(error) => {
+                            self.failed = Some(error);
+                            self.finish(app);
+                            return;
+                        }
+                    }
+                }
                 if matches!(self.action, Some(Action::SourceLoading)) {
                     let result =
                         self.source_loading
@@ -1065,7 +1118,7 @@ impl Scenario {
                         "presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),
                         "settings":self.settings(app,path)})
                 }).collect::<Vec<_>>();
-                self.results.push(serde_json::json!({"step":self.step,"action":self.action.unwrap().name(),"coverage":self.action.unwrap().coverage(),"baseline_elapsed_ms":if self.config.mode==Mode::Off {Some(self.began.elapsed().as_secs_f64()*1000.)}else{None},"photos":photos,"retained":app.worker.memory_status().resources}));
+                self.results.push(serde_json::json!({"step":self.step,"action":self.action.unwrap().name(),"coverage":self.action.unwrap().coverage(),"baseline_elapsed_ms":if self.config.mode==Mode::Off && !matches!(self.action,Some(Action::CacheWorkflow)) {Some(self.began.elapsed().as_secs_f64()*1000.)}else{None},"photos":photos,"retained":app.worker.memory_status().resources}));
                 self.results.last_mut().unwrap()["geometry"] = self.geometry.clone();
                 if self.config.name == Case::BackgroundEdit {
                     let batch = app.import.smoke_batch_progress();
@@ -1195,6 +1248,7 @@ impl Scenario {
                         "source_loading":self.source_loading.as_ref().map(|journey|journey.evidence()),
                         "browser_journey":self.browser_journey.as_ref().map(|journey|journey.evidence()),
                         "collection_journey":self.collection_journey.as_ref().map(|journey|journey.evidence()),
+                        "cache_workflow":self.cache_workflow.as_ref().map(|journey|journey.evidence()),
                         "lifecycle":self.lifecycle.as_ref().map(|journey| {
                             let mut evidence = journey.evidence();
                             evidence["expected"] = serde_json::json!({"exposures":self.paths.iter()
@@ -1262,6 +1316,7 @@ impl Scenario {
             .map(|journey| &journey.model)
             .or_else(|| self.source_loading.as_ref().map(|journey| &journey.model))
             .or_else(|| self.transitions.as_ref().map(|journey| &journey.model))
+            .or_else(|| self.cache_workflow.as_ref().map(|journey| &journey.model))
             .or_else(|| self.browser_journey.as_ref().map(|journey| &journey.model))
             .or_else(|| {
                 self.background_edit
@@ -1277,6 +1332,7 @@ impl Scenario {
             .map(|journey| &journey.model)
             .or_else(|| self.source_loading.as_ref().map(|journey| &journey.model))
             .or_else(|| self.transitions.as_ref().map(|journey| &journey.model))
+            .or_else(|| self.cache_workflow.as_ref().map(|journey| &journey.model))
             .or_else(|| self.browser_journey.as_ref().map(|journey| &journey.model))
             .or_else(|| {
                 self.background_edit
@@ -1365,9 +1421,11 @@ impl Scenario {
         minimum: u64,
     ) -> bool {
         frame.rendition == crate::editor::Rendition::Current
-            && frame.diagnostic_task.revision >= minimum
-            && Some(frame.artifact.settings.working_scale)
-                == self.config.quality.expected_scale(&frame.artifact.metadata)
+            && (matches!(self.action, Some(Action::CacheWorkflow))
+                || frame.diagnostic_task.revision >= minimum)
+            && (matches!(self.action, Some(Action::CacheWorkflow))
+                || Some(frame.artifact.settings.working_scale)
+                    == self.config.quality.expected_scale(&frame.artifact.metadata))
             && crate::rendering::matching::same_authored_edits(
                 &frame.requested,
                 self.expected
@@ -1456,6 +1514,7 @@ impl Scenario {
                     | Action::BrowserJourney
                     | Action::CollectionJourney
                     | Action::ChoiceJourney
+                    | Action::CacheWorkflow
             );
         let target_reuse = self.config.name.selection_journey()
             && (matches!(action, Action::Switch(_))
@@ -1546,7 +1605,10 @@ impl Scenario {
             Action::SliderDrag => {
                 crate::automation::reveal(Some(&self.config.control_pointer));
             }
-            Action::SelectionJourney | Action::TransitionJourney | Action::ChoiceJourney => {}
+            Action::SelectionJourney
+            | Action::TransitionJourney
+            | Action::ChoiceJourney
+            | Action::CacheWorkflow => {}
             Action::Restore => {
                 self.click(app, ctx, smoke, 0, egui::Modifiers::NONE);
                 self.click(

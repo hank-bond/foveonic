@@ -8,7 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from scenarios import compare_scenario_images
-from scenario_checks import validate_choice_recipes
+from cache_workflow import associate_trace
+from scenario_checks import validate_choice_recipes, check_cache_workflow, checked_scenario_images
 
 
 class ScenarioCheckTests(unittest.TestCase):
@@ -131,6 +132,119 @@ class ScenarioCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'slider drag values differ'):
                 compare_scenario_images(native,inputs,root/'renderer',root,'/tone/contrast')
 
+
+
+    def test_cache_trace_association_excludes_old_tasks_and_outside_windows(self):
+        workflow = {'trace_origin_ns':1_000_000_000, 'rows':[
+            {'event':'action', 'action':'one', 'elapsed_ms':0, 'minimum_revision':5},
+            {'event':'first-current', 'action':'one', 'task':10, 'revision':5},
+            {'event':'reuse-observed', 'action':'one', 'task':2, 'revision':2},
+            {'event':'action', 'action':'return-fit', 'elapsed_ms':10, 'minimum_revision':6},
+            {'event':'fit-current', 'action':'return-fit', 'elapsed_ms':12}]}
+        def pair(ts, task, revision):
+            return {'before':{'ts_ns':ts, 'task':task, 'revision':revision},
+                    'after':{'ts_ns':ts+1, 'task':task, 'revision':revision}}
+        analysis = {'memory_snapshots':{'pairs':[pair(1_001_000_000, 10, 5),
+                     pair(1_002_000_000, 2, 2), pair(1_011_000_000, 10, 5)]},
+                    'resource_events':[{'ts_ns':1_003_000_000, 'name':'cache.native_source', 'args':{'decision':'hit', 'reason':'same_source'}},
+                    {'ts_ns':1_013_000_000, 'name':'cache.native_source', 'args':{}}]}
+        result = associate_trace(workflow, analysis)
+        self.assertEqual(len(result['actions'][0]['matched_memory_pairs']), 1)
+        self.assertEqual(result['actions'][0]['window_event_counts'], {'cache.native_source':1})
+        self.assertEqual(result['actions'][0]['window_native_decisions'], {'hit:same_source':1})
+        self.assertEqual(result['actions'][1]['matched_memory_pairs'], [])
+        self.assertEqual(result['actions'][1]['window_event_counts'], {})
+        workflow['trace_origin_ns'] = None
+        self.assertFalse(associate_trace(workflow, analysis)['available'])
+
+    def test_cache_workflow_uses_declared_deltas_and_distinguishes_observations(self):
+        inputs = [{'staged_source': name, 'source': name,
+                   'settings': {'exposure': start, 'exposure_auto': False}}
+                  for name, start in [('a', 0.), ('b', 0.5)]]
+        initial = [{'source':item['staged_source'], 'settings':dict(item['settings'])} for item in inputs]
+        final = [{'source':item['staged_source'], 'settings':{'exposure':item['settings']['exposure'] + 0.375,
+                                                              'exposure_auto':False}} for item in inputs]
+        rows = []
+        def action(name, start, delta=None):
+            row = {'event':'action', 'action':name, 'elapsed_ms':start}
+            if delta is not None: row['delta'] = delta
+            rows.append(row)
+        def frame(event, name, photo, exposure, start, elapsed, scale=1):
+            row = {'event':event, 'action':name, 'photo':photo, 'source':inputs[photo]['staged_source'],
+                   'exposure':exposure, 'elapsed_ms':start+elapsed, 'action_elapsed_ms':elapsed,
+                   'rendition':'Current', 'effective_scale':scale, 'actual_region':None,
+                   'visible_region':[10,10,20,20], 'available_region':[0,0,30,30]}
+            if event == 'first-current': row['current'] = True
+            rows.append(row)
+        action('fit-smart', 0)
+        for photo, item in enumerate(inputs):
+            frame('fit-overview', 'fit-smart', photo, item['settings']['exposure'], 0, photo + 1, 4)
+            rows[-1]['demanded_scale'] = 4
+        action('zoom-a-200', 10)
+        for photo, item in enumerate(inputs):
+            frame('reuse-observed', 'zoom-a-200', photo, item['settings']['exposure'], 10, photo + 1)
+        frame('whole-settled', 'zoom-a-200', 0, 0., 10, 4)
+        for index, (delta, offset) in enumerate(zip((0.125, 0.125, -0.125, 0.25), (0.125, 0.25, 0.125, 0.375))):
+            name=f'exposure-{index}'
+            start=20+10*index
+            action(name, start, delta)
+            for photo, item in enumerate(inputs):
+                frame('first-current' if photo == 0 else 'first-current-observed', name, photo,
+                      item['settings']['exposure'] + offset, start, photo + 1)
+            rows.append({'event':'all-foreground-observed', 'action':name, 'elapsed_ms':start+3, 'action_elapsed_ms':3})
+            frame('whole-settled', name, 0, offset, start, 4)
+        action('return-fit', 60)
+        rows.append({'event':'fit-current', 'action':'return-fit', 'elapsed_ms':61, 'action_elapsed_ms':1})
+        native={'passed':True, 'steps':[{'action':'initial-selection', 'photos':initial},
+                                        {'action':'cache-workflow', 'photos':final}],
+                'cache_workflow':{'rows':rows, 'expected_exposures':[99, 99]}}
+        report=check_cache_workflow(native, inputs)
+        self.assertEqual(report['expected_final_exposures'], [0.375, 0.875])
+        edit=report['actions'][1]
+        self.assertEqual(len(edit['first_current_admissions']), 1)
+        self.assertEqual(len(edit['first_current_observations']), 1)
+        self.assertEqual(edit['foreground_on_admission_ms'], [])
+        self.assertEqual(edit['foreground_by_observation_ms'], [3])
+        self.assertEqual(edit['whole_settled_observed_ms'], 4)
+        final[0]['settings']['exposure'] = 99
+        with self.assertRaisesRegex(ValueError, 'independent expectation'):
+            check_cache_workflow(native, inputs)
+        final[0]['settings']['exposure'] = 0.375
+        edit_action = next(row for row in rows if row['event'] == 'action' and row['action'] == 'exposure-0')
+        edit_action['delta'] = 9
+        with self.assertRaisesRegex(ValueError, 'declared delta'):
+            check_cache_workflow(native, inputs)
+        edit_action['delta'] = 0.125
+        first = next(row for row in rows if row['event'] == 'first-current')
+        first['exposure'] = 0.25
+        with self.assertRaisesRegex(ValueError, 'wrong photo or exposure'):
+            check_cache_workflow(native, inputs)
+        first['exposure'] = 0.125
+        first['available_region'] = [11, 0, 30, 30]
+        with self.assertRaisesRegex(ValueError, 'cover the viewport'):
+            check_cache_workflow(native, inputs)
+        first['available_region'] = [0, 0, 30, 30]
+        first['effective_scale'] = 2
+        with self.assertRaisesRegex(ValueError, 'insufficient scale'):
+            check_cache_workflow(native, inputs)
+        first['effective_scale'] = 1
+        first['rendition'] = 'Camera'
+        with self.assertRaisesRegex(ValueError, 'wrong photo or exposure'):
+            check_cache_workflow(native, inputs)
+        first['rendition'] = 'Current'
+        first['elapsed_ms'] = float('nan')
+        with self.assertRaisesRegex(ValueError, 'nonmonotonic timing'):
+            check_cache_workflow(native, inputs)
+        first['elapsed_ms'] = 21
+        foreground = next(row for row in rows if row['event'] == 'all-foreground-observed')
+        foreground['event'] = 'unrelated'
+        with self.assertRaisesRegex(ValueError, 'foreground completion'):
+            check_cache_workflow(native, inputs)
+        foreground['event'] = 'all-foreground-observed'
+        whole = next(row for row in rows if row['event'] == 'whole-settled' and row['action'] == 'exposure-0')
+        whole['exposure'] = 0.
+        with self.assertRaisesRegex(ValueError, 'Whole settlement'):
+            check_cache_workflow(native, inputs)
 
 
 if __name__ == '__main__':
