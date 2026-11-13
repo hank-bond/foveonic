@@ -566,7 +566,7 @@ impl Worker {
                     let reusing_pixels = composed.is_some();
                     let mut reduced_loaded = if !reusing_pixels && request.uses_reduced_session()
                         && composition_quality.is_none_or(|scale| scale.is_reduced()) {
-                        let Some(loaded) = reduced.load(&request.path, request.revision, &decoded_cache, &engine, &mut source, &mut |path, revision| sources.open(path, revision))? else {
+                        let Some(loaded) = reduced.load(&request.path, request.revision, &decoded_cache, &source, &mut |path, revision| sources.open(path, revision))? else {
                             return Ok(Execution::NeedsSource);
                         };
                         Some(loaded)
@@ -651,7 +651,7 @@ impl Worker {
                             Some(composed.artifacts)
                         } else if let Some(loaded) = reduced_loaded.take() {
                             used_reduced = true;
-                            match reduced.render(&engine, &mut source, loaded, &settings, &cancel, &mut profile,
+                            match reduced.render(&engine, &source, loaded, &settings, &cancel, &mut profile,
                                 &mut |path, revision| sources.open(path, revision), &|stage| reporter.rendered(stage))? {
                                 reduced::RenderOutcome::Rendered(artifacts) => Some(artifacts),
                                 reduced::RenderOutcome::Superseded => None,
@@ -1952,6 +1952,113 @@ mod tests {
         assert_eq!(key.region, None);
         let samples = result.unwrap().samples;
         assert_eq!(samples[0].max(samples[1]), 512);
+    }
+
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
+    fn mixed_native_and_reduced_edits_preserve_warm_native_work() {
+        use crate::preferences::PreviewMode;
+        use foveonic::{inspection::Content, render::Settings};
+        use std::sync::atomic::Ordering;
+        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let paths = [
+            root.join("blue-parking-sign.x3f"),
+            root.join("merrill-hazy-coast.x3f"),
+        ];
+        let engine = foveonic::render::Engine::new().unwrap();
+        let verifier = engine.executor();
+        let worker = TestWorker::new(engine, eframe::egui::Context::default());
+        worker.set_memory_budget(4 * 1024 * 1024 * 1024, Default::default());
+        let mut full = Settings::new("Sunlight", "Standard");
+        let mut thumb = full.clone();
+        thumb.reconstruction = Some(Default::default());
+        let render = |revision, index: usize, quality: PreviewMode, settings: &Settings| {
+            worker.submit(super::Request {
+                path: paths[index].clone(),
+                revision,
+                settings: settings.clone(),
+                framing_preview: false,
+                calibration: None,
+                rendition: Default::default(),
+                preview_quality: quality,
+                preview_policy: PreviewMode::Smart,
+                output: "final".into(),
+                comparison: false,
+                export: None,
+            });
+            let reply = receive(&worker);
+            assert_eq!(reply.revision, revision);
+            let frame = reply.result.unwrap().expect("completed photograph");
+            assert_eq!(frame.path, paths[index]);
+            assert_eq!(
+                frame.artifact.settings.working_scale.divisor(),
+                quality.working_scale().divisor()
+            );
+            frame
+        };
+        render(1, 0, PreviewMode::Full, &full);
+        full.exposure = 0.125;
+        render(2, 0, PreviewMode::Full, &full);
+        let warm_dispatches = worker.checks.recipes.lock().unwrap().last().unwrap().1;
+        assert!(warm_dispatches > 0);
+        render(3, 1, PreviewMode::Thumb, &thumb); // Cold reduced acquisition.
+        assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 2);
+        for round in 0..3 {
+            full.exposure += 0.125;
+            render(4 + round * 2, 0, PreviewMode::Full, &full);
+            assert_eq!(
+                worker.checks.source_loads.load(Ordering::Relaxed),
+                2,
+                "reduced work must not discard another photograph's native source"
+            );
+            assert_eq!(
+                worker.checks.recipes.lock().unwrap().last().unwrap().1,
+                warm_dispatches,
+                "mixed edits must retain the native photograph's warm graph checkpoints"
+            );
+            thumb.exposure += 0.125;
+            render(5 + round * 2, 1, PreviewMode::Thumb, &thumb); // Cached reduced edits.
+            assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 2);
+        }
+        // A finer reduced grid recovers its own original, retaining the other photo.
+        let reduced_frame = render(10, 1, PreviewMode::Draft, &thumb);
+        assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 3);
+        full.exposure += 0.125;
+        let native_frame = render(11, 0, PreviewMode::Full, &full);
+        assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            worker.checks.recipes.lock().unwrap().last().unwrap().1,
+            warm_dispatches
+        );
+        let captures = tempfile::tempdir().unwrap();
+        for frame in [native_frame, reduced_frame] {
+            let fresh = verifier
+                .render_artifacts(
+                    &foveonic::source::Source::open(&frame.path).unwrap(),
+                    &frame.artifact.settings,
+                    &["final"],
+                    &mut Default::default(),
+                )
+                .unwrap()
+                .pop()
+                .unwrap();
+            let Content::Image(expected) = fresh.content else {
+                panic!("fresh photograph")
+            };
+            let Content::Image(actual) = &frame.artifact.content else {
+                panic!("retained photograph")
+            };
+            let captured = captures.path().join(format!("{}.f32", frame.revision));
+            worker
+                .capture_image((**actual).clone(), captured.clone())
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                std::fs::read(captured).unwrap(),
+                verifier.readback_image(&expected).unwrap()
+            );
+        }
     }
 
     #[test]

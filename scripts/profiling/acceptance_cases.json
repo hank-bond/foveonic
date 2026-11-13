@@ -352,9 +352,24 @@
       "id": "scenario-transition-journey",
       "domain": "viewport",
       "driver": "scenario",
-      "evidence": "Native journey result and declared checks; integration requires a build and scenario runner supporting this name.",
+      "evidence": "Checks quality, persistent per-photo viewing and mixed Full/Thumb editing at the 2 GiB app default. Records per-photo and group latency for Fit, one zoomed photo with all editing targets, and a single-target control.",
       "scenario": "transition-journey",
-      "mode": "wall"
+      "mode": "wall",
+      "count": 4,
+      "memory_cache_bytes": 2147483648,
+      "step_timeout": 150
+    },
+    {
+      "id": "scenario-smart-low-memory",
+      "domain": "viewport",
+      "driver": "scenario",
+      "scenario": "transition-journey",
+      "count": 4,
+      "mode": "wall",
+      "memory_cache_bytes": 1073741824,
+      "disk_cache_bytes": 1073741824,
+      "step_timeout": 150,
+      "evidence": "Repeats the mixed-resolution Smart journey at 1 GiB with cached decodes. Records latency, rebuilding and eviction under low memory without imposing a latency limit on behavioral correctness."
     },
     {
       "id": "scenario-lifecycle-journey",
@@ -799,6 +814,18 @@
       ],
       "gaps": [
         "Cache/edit-limit preference inputs and their restoration across process restart are not covered by these headed checks."
+      ]
+    },
+    {
+      "domain": "viewport",
+      "path": "Mixed-resolution Smart editing at normal and low memory",
+      "jobs": [
+        "scenario-transition-journey",
+        "scenario-smart-low-memory"
+      ],
+      "checks": [
+        "Four displayed editing targets retain independent Smart processing scales after one photo is zoomed.",
+        "Fit, mixed-resolution and single-target edit phases record per-photo delivery and group completion at explicit 2 GiB and 1 GiB budgets."
       ]
     }
   ]

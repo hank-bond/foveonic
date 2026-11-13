@@ -76,7 +76,7 @@ impl App {
             || self.framing_preview_active()
             || self.output != "final"
             || self.comparison.requested()
-            || !self.viewport.explicit_zoom()
+            || !self.viewport().explicit_zoom()
             || !self.selected.as_ref().is_some_and(|path| {
                 self.preview_quality_for(path, preferences::PreviewMode::Smart)
                     == preferences::PreviewMode::Full
@@ -94,7 +94,7 @@ impl App {
                 && requested.output_size.is_none()
                 && same_image_geometry(&frame.requested, &requested)
         })?;
-        let visible = self.viewport.visible_pixels()?;
+        let visible = self.viewport().visible_pixels()?;
         if !requested.regional_preview_available(&frame.artifact.metadata) {
             return Some((preferences::PreviewMode::Full, None));
         }
@@ -113,7 +113,7 @@ impl App {
     pub(crate) fn update_smart(&mut self) {
         if self.framing_preview_active() {
             if !self.busy
-                && self.viewport.take_explicit_zoom()
+                && self.viewport_mut().take_explicit_zoom()
                 && self.preferences.preview_quality == preferences::PreviewMode::Smart
             {
                 if let Some(path) = &self.selected {
@@ -129,7 +129,7 @@ impl App {
             return;
         }
         if !self.busy {
-            self.viewport.take_explicit_zoom();
+            self.viewport_mut().take_explicit_zoom();
         }
         if self.preferences.preview_quality != preferences::PreviewMode::Smart
             || self.framing_preview_active()
@@ -140,7 +140,7 @@ impl App {
                 self.preview_quality_for(path, preferences::PreviewMode::Smart)
                     == preferences::PreviewMode::Full
             })
-            || (self.detail.is_none() && !self.viewport.explicit_zoom())
+            || (self.detail.is_none() && !self.viewport().explicit_zoom())
         {
             return;
         }
@@ -181,7 +181,7 @@ impl App {
             self.submit_with_quality(None, None, preferences::PreviewMode::Full);
             return;
         }
-        let Some(visible) = self.viewport.visible_pixels() else {
+        let Some(visible) = self.viewport().visible_pixels() else {
             return;
         };
         let window = frame.display_window(false);

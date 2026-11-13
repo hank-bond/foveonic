@@ -9,6 +9,16 @@ enum Step {
     Select(usize),
     Edit(bool),
     HandClick,
+    SmartGroupFit,
+    SmartGroupZoom,
+    SmartGroupEdit,
+    SmartGroupSolo,
+    SmartGroupEnd,
+    TileZoom,
+    TilePointerZoom,
+    TilePan,
+    TileSelect,
+    TileFit,
     Single,
     Quality(u8),
     Zoom,
@@ -46,6 +56,19 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         result.push(Step::Edit(n & 0x100 != 0));
     }
     result.extend([
+        Step::SmartGroupFit,
+        Step::SmartGroupEdit,
+        Step::SmartGroupEdit,
+        Step::SmartGroupEdit,
+        Step::SmartGroupZoom,
+        Step::SmartGroupEdit,
+        Step::SmartGroupEdit,
+        Step::SmartGroupEdit,
+        Step::SmartGroupSolo,
+        Step::SmartGroupEdit,
+        Step::SmartGroupEdit,
+        Step::SmartGroupEdit,
+        Step::SmartGroupEnd,
         Step::Quality(0),
         Step::Quality(1),
         Step::Quality(2),
@@ -58,6 +81,13 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::Inspection,
         Step::RefreshInspection,
         Step::Photograph,
+        Step::Quality(4),
+        Step::TileZoom,
+        Step::TilePan,
+        Step::TileSelect,
+        Step::TileFit,
+        Step::TilePointerZoom,
+        Step::TileFit,
         Step::HandClick,
         Step::Single,
         Step::Quality(0),
@@ -85,12 +115,26 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
     result
 }
 
+struct TileView {
+    index: usize,
+    zoom: f32,
+    pan: egui::Vec2,
+    task: (u64, u64),
+}
+
 pub(super) struct TransitionJourney {
     pub(super) model: super::journey::ExposureJourney,
     steps: Vec<Step>,
     index: usize,
     pending: bool,
     single: Option<usize>,
+    tile_view: Option<TileView>,
+    next_double_click: Option<std::time::Instant>,
+    smart_active: Option<usize>,
+    smart_zoomed: bool,
+    smart_began: Option<std::time::Instant>,
+    smart_observed: Vec<PathBuf>,
+    smart_fit_scales: Vec<(PathBuf, foveonic::render::Scale)>,
     events: Vec<serde_json::Value>,
     seed: u64,
     fit_image: Option<egui::Rect>,
@@ -111,6 +155,13 @@ impl TransitionJourney {
             index: 0,
             pending: false,
             single: None,
+            tile_view: None,
+            next_double_click: None,
+            smart_active: None,
+            smart_zoomed: false,
+            smart_began: None,
+            smart_observed: Vec::new(),
+            smart_fit_scales: Vec::new(),
             events: Vec::new(),
             seed,
             composition: None,
@@ -174,6 +225,117 @@ impl TransitionJourney {
         }
         result
     }
+    fn observe_smart_edit(&mut self, app: &App, paths: &[PathBuf]) -> Result<(), String> {
+        for path in app.edit_selection.paths() {
+            if self.smart_observed.contains(path) {
+                continue;
+            }
+            let frame = if app.selected.as_ref() == Some(path) {
+                app.frame.as_ref()
+            } else {
+                app.multi_edit.frame(path)
+            };
+            let settings = if app.selected.as_ref() == Some(path) {
+                Some(&app.settings)
+            } else {
+                app.multi_edit.settings(path)
+            };
+            if let Some(frame) = frame.filter(|frame| {
+                settings.is_some_and(|settings| {
+                    crate::rendering::matching::same_authored_edits(&frame.requested, settings)
+                })
+            }) {
+                if self.smart_zoomed {
+                    let expected =
+                        if path == &paths[self.smart_active.ok_or("missing zoomed photo")?] {
+                            foveonic::render::Scale::NATIVE
+                        } else {
+                            self.smart_fit_scales
+                                .iter()
+                                .find(|(photo, _)| photo == path)
+                                .map(|(_, scale)| *scale)
+                                .ok_or("missing Fit scale")?
+                        };
+                    if frame.artifact.settings.working_scale != expected {
+                        return Err(format!(
+                            "Smart changed {} to scale {} instead of {}",
+                            path.display(),
+                            frame.artifact.settings.working_scale.divisor(),
+                            expected.divisor()
+                        ));
+                    }
+                }
+                let event = serde_json::json!({"phase":"current","zoomed":self.smart_zoomed,"editing_count":app.edit_selection.paths().len(),"source":path,
+                    "elapsed_ms":self.smart_began.unwrap().elapsed().as_secs_f64()*1000.,
+                    "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
+                    "scale_divisor":frame.artifact.settings.working_scale.divisor()});
+                crate::timing::emit("scenario.smart_edit", || event.clone());
+                self.events.push(event);
+                self.smart_observed.push(path.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn check_tile_view(
+        &mut self,
+        app: &App,
+        ctx: &egui::Context,
+        paths: &[PathBuf],
+        step: Step,
+    ) -> Result<(), String> {
+        let expected = self
+            .tile_view
+            .as_mut()
+            .ok_or("missing tile view expectation")?;
+        let path = &paths[expected.index];
+        let view = app.viewports.view(Some(path));
+        let zoom = view
+            .zoom_percent(ctx.pixels_per_point())
+            .ok_or("missing tile zoom")?;
+        let frame = if app.selected.as_ref() == Some(path) {
+            app.frame.as_ref()
+        } else {
+            app.multi_edit.frame(path)
+        }
+        .ok_or("missing tile photograph")?;
+        if (frame.diagnostic_task.id, frame.diagnostic_task.revision) != expected.task {
+            return Err("fixed-quality tile zoom or selection rendered unchanged pixels".into());
+        }
+        match step {
+            Step::TileZoom | Step::TilePointerZoom => {
+                self.next_double_click = None;
+                if !view.explicit_zoom() || zoom < expected.zoom * 1.5 {
+                    return Err("inactive tile did not respond to double-click zoom".into());
+                }
+                expected.zoom = zoom;
+                expected.pan = view.pan;
+            }
+            Step::TilePan => {
+                if (view.pan - expected.pan).length() < 20. {
+                    return Err("inactive tile did not respond to Hand drag".into());
+                }
+                expected.pan = view.pan;
+            }
+            Step::TileSelect => {
+                if (zoom - expected.zoom).abs() > 0.01 || (view.pan - expected.pan).length() > 0.1 {
+                    return Err("activating a tile lost its zoom or pan".into());
+                }
+            }
+            Step::TileFit => {
+                self.next_double_click = None;
+                if view.explicit_zoom() || view.pan != egui::Vec2::ZERO {
+                    return Err(format!("second tile double-click did not restore Fit: zoom={zoom}, pan={:?}, fixed={}", view.pan, view.explicit_zoom()));
+                }
+                crate::photo_tools::select(ctx, crate::photo_tools::Tool::Pointer);
+            }
+            _ => unreachable!(),
+        }
+        self.events
+            .push(serde_json::json!({"tile_view":path,"zoom":zoom,"pan":[view.pan.x,view.pan.y]}));
+        Ok(())
+    }
+
     fn advance_inner(
         &mut self,
         app: &mut App,
@@ -198,11 +360,55 @@ impl TransitionJourney {
             self.events.push(serde_json::json!({"action":"release delivery", "coverage":"controlled harness wait"}));
             return Ok(false);
         }
+        if self.pending && self.steps[self.index] == Step::SmartGroupEdit {
+            self.observe_smart_edit(app, paths)?;
+        }
         if !smoke.direct_events.is_empty() || !app.sidecars.ready() || app.worker.busy() {
             return Ok(false);
         }
         if self.pending {
             let step = self.steps[self.index];
+            if step == Step::SmartGroupFit
+                && (app.edit_selection.paths() != paths || !app.multi_edit.editable_ready())
+            {
+                return Ok(false);
+            }
+            if step == Step::SmartGroupEdit {
+                if self.smart_observed.len() != app.edit_selection.paths().len() {
+                    return Ok(false);
+                }
+                if !self.smart_zoomed {
+                    self.smart_fit_scales = paths
+                        .iter()
+                        .map(|path| {
+                            let frame = app
+                                .frame
+                                .as_ref()
+                                .filter(|frame| frame.path == *path)
+                                .or_else(|| app.multi_edit.frame(path))
+                                .ok_or("missing settled Fit photograph")?;
+                            Ok((path.clone(), frame.artifact.settings.working_scale))
+                        })
+                        .collect::<Result<_, String>>()?;
+                }
+                let event = serde_json::json!({"phase":"complete","zoomed":self.smart_zoomed,"editing_count":app.edit_selection.paths().len(),
+                    "elapsed_ms":self.smart_began.unwrap().elapsed().as_secs_f64()*1000.});
+                crate::timing::emit("scenario.smart_edit", || event.clone());
+                self.events.push(event);
+            }
+            if step == Step::SmartGroupZoom {
+                let path = &paths[self.smart_active.unwrap()];
+                let frame = if app.selected.as_ref() == Some(path) {
+                    app.frame.as_ref()
+                } else {
+                    app.multi_edit.frame(path)
+                };
+                if frame.is_none_or(|frame| {
+                    frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
+                }) {
+                    return Ok(false);
+                }
+            }
             if step == Step::Single {
                 if app.multi_photo_overview() {
                     return Ok(false);
@@ -223,6 +429,16 @@ impl TransitionJourney {
                 }
                 self.model.select(vec![index]);
             }
+            if matches!(
+                step,
+                Step::TileZoom
+                    | Step::TilePointerZoom
+                    | Step::TilePan
+                    | Step::TileSelect
+                    | Step::TileFit
+            ) {
+                self.check_tile_view(app, ctx, paths, step)?;
+            }
             if step == Step::Restore {
                 if !app.multi_photo_overview() {
                     return Ok(false);
@@ -239,7 +455,7 @@ impl TransitionJourney {
                     1 => 2,
                     2 => {
                         let (_, image) = app
-                            .viewport
+                            .viewport()
                             .image_rectangles()
                             .ok_or("missing Smart display geometry")?;
                         let extent = frame.display_extent(false);
@@ -321,7 +537,7 @@ impl TransitionJourney {
             }
             if matches!(step, Step::Zoom | Step::Pan | Step::Fit) {
                 let (_, image) = app
-                    .viewport
+                    .viewport()
                     .image_rectangles()
                     .ok_or("viewport image was not drawn")?;
                 let frame = app.frame.as_ref().ok_or("missing viewport frame")?;
@@ -365,7 +581,7 @@ impl TransitionJourney {
                 let frame = app.frame.as_ref().ok_or("missing frame for scopes")?;
                 let expected_region = if step == Step::ViewportScopes {
                     let pixels = app
-                        .viewport
+                        .viewport()
                         .visible_pixels_for(frame.texture.description().extent)
                         .ok_or("missing visible pixel bounds")?;
                     Some([
@@ -515,7 +731,18 @@ impl TransitionJourney {
             return Ok(true);
         }
         let step = self.steps[self.index];
-        self.events.push(serde_json::json!({"action":step,"coverage": if matches!(step, Step::Select(_) | Step::HandClick) {"egui-input"} else {"direct-command"}}));
+        if matches!(step, Step::TileZoom | Step::TilePointerZoom | Step::TileFit) {
+            // egui groups clicks globally across widgets, including a triple-click
+            // interval twice as long as its double-click interval.
+            let ready = self.next_double_click.get_or_insert_with(|| {
+                let delay = ctx.options(|options| options.input_options.max_double_click_delay);
+                std::time::Instant::now() + std::time::Duration::from_secs_f64(delay * 2. + 0.05)
+            });
+            if std::time::Instant::now() < *ready {
+                return Ok(false);
+            }
+        }
+        self.events.push(serde_json::json!({"action":step,"coverage": if matches!(step, Step::Select(_) | Step::HandClick | Step::TileZoom | Step::TilePointerZoom | Step::TilePan | Step::TileSelect | Step::TileFit) {"egui-input"} else {"direct-command"}}));
         match step {
             Step::Select(index) => {
                 self.model.select(vec![index]);
@@ -526,6 +753,153 @@ impl TransitionJourney {
                 let delta = if positive { 0.125 } else { -0.125 };
                 self.model.adjust_exposure(delta);
                 super::scenarios::apply_exposure(app, f64::from(delta));
+            }
+            Step::SmartGroupFit => {
+                self.smart_active = app
+                    .selected
+                    .as_ref()
+                    .and_then(|p| paths.iter().position(|v| v == p));
+                self.smart_zoomed = false;
+                self.smart_fit_scales.clear();
+                for path in paths {
+                    app.viewports.view_mut(Some(path)).reset();
+                }
+                app.preferences.preview_quality = PreviewMode::Smart;
+                self.model.select((0..paths.len()).collect());
+                // Change viewport editing targets through their ordinary command API.
+                for (path, gesture) in [
+                    (&paths[0], crate::viewport_selection::Gesture::Replace),
+                    (
+                        &paths[paths.len() - 1],
+                        crate::viewport_selection::Gesture::Range,
+                    ),
+                ] {
+                    app.edit_selection.apply(
+                        crate::viewport_selection::Request {
+                            path: path.clone(),
+                            gesture,
+                        },
+                        app.preferences.multi_edit_limit,
+                    );
+                }
+                app.sync_multi_edit();
+                app.submit(None);
+            }
+            Step::SmartGroupZoom => {
+                let path = &paths[self.smart_active.ok_or("no active Smart photo")?];
+                let view = app.viewports.view_mut(Some(path));
+                let percent = view
+                    .zoom_percent(ctx.pixels_per_point())
+                    .ok_or("no Smart view geometry")?;
+                view.zoom_by(200. / percent);
+                self.smart_zoomed = true;
+            }
+            Step::SmartGroupEdit => {
+                self.smart_observed.clear();
+                self.smart_began = Some(std::time::Instant::now());
+                let event = serde_json::json!({"phase":"begin","zoomed":self.smart_zoomed,"editing_count":app.edit_selection.paths().len(),"minimum_revision":app.revision+1});
+                crate::timing::emit("scenario.smart_edit", || event.clone());
+                self.events.push(event);
+                self.model.adjust_exposure(0.125);
+                super::scenarios::apply_exposure(app, 0.125);
+            }
+            Step::SmartGroupSolo => {
+                let index = self.smart_active.ok_or("no active Smart photo")?;
+                self.model.select(vec![index]);
+                app.edit_selection.apply(
+                    crate::viewport_selection::Request {
+                        path: paths[index].clone(),
+                        gesture: crate::viewport_selection::Gesture::Replace,
+                    },
+                    app.preferences.multi_edit_limit,
+                );
+                app.sync_multi_edit();
+            }
+            Step::SmartGroupEnd => {
+                for path in paths {
+                    app.viewports.view_mut(Some(path)).reset();
+                }
+                let index = self.smart_active.ok_or("no original Smart selection")?;
+                self.model.select(vec![index]);
+                crate::photo_tools::select(ctx, crate::photo_tools::Tool::Pointer);
+                app.smoke_multi_click(ctx, smoke, index, egui::Modifiers::NONE);
+                smoke.direct_events.push_back(vec![]);
+            }
+            Step::TileZoom | Step::TilePointerZoom => {
+                let active = app
+                    .selected
+                    .as_ref()
+                    .and_then(|path| paths.iter().position(|v| v == path))
+                    .ok_or("no active tile")?;
+                let index = (active + 1) % paths.len();
+                let path = &paths[index];
+                let frame = app
+                    .multi_edit
+                    .frame(path)
+                    .ok_or("inactive tile has no frame")?;
+                let view = app.viewports.view(Some(path));
+                self.tile_view = Some(TileView {
+                    index,
+                    zoom: view
+                        .zoom_percent(ctx.pixels_per_point())
+                        .ok_or("tile has no geometry")?,
+                    pan: view.pan,
+                    task: (frame.diagnostic_task.id, frame.diagnostic_task.revision),
+                });
+                let tool = if step == Step::TilePointerZoom {
+                    self.model.select(vec![index]);
+                    crate::photo_tools::Tool::Pointer
+                } else {
+                    crate::photo_tools::Tool::Hand
+                };
+                crate::photo_tools::select(ctx, tool);
+                for _ in 0..2 {
+                    app.smoke_multi_click(ctx, smoke, index, egui::Modifiers::NONE);
+                }
+                smoke.direct_events.push_back(vec![]);
+            }
+            Step::TilePan => {
+                let expected = self.tile_view.as_ref().ok_or("no tile view")?;
+                let rect = ctx
+                    .read_response(app.viewports.view(Some(&paths[expected.index])).id())
+                    .ok_or("tile is not drawn")?
+                    .rect;
+                let start = rect.center();
+                let end = start + egui::vec2(40., 25.);
+                smoke.direct_events.extend([
+                    vec![
+                        egui::Event::PointerMoved(start),
+                        egui::Event::PointerButton {
+                            pos: start,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    vec![egui::Event::PointerMoved(end)],
+                    vec![egui::Event::PointerButton {
+                        pos: end,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    }],
+                    vec![],
+                ]);
+            }
+            Step::TileSelect => {
+                let index = self.tile_view.as_ref().ok_or("no tile view")?.index;
+                self.model.select(vec![index]);
+                crate::photo_tools::select(ctx, crate::photo_tools::Tool::Pointer);
+                app.smoke_multi_click(ctx, smoke, index, egui::Modifiers::NONE);
+                smoke.direct_events.push_back(vec![]);
+            }
+            Step::TileFit => {
+                let index = self.tile_view.as_ref().ok_or("no tile view")?.index;
+                crate::photo_tools::select(ctx, crate::photo_tools::Tool::Hand);
+                for _ in 0..2 {
+                    app.smoke_multi_click(ctx, smoke, index, egui::Modifiers::NONE);
+                }
+                smoke.direct_events.push_back(vec![]);
             }
             Step::HandClick => {
                 let active = app
@@ -561,7 +935,7 @@ impl TransitionJourney {
                 )]);
             }
             Step::Quality(which) => {
-                app.viewport.reset();
+                app.viewport_mut().reset();
                 app.preferences.preview_quality = [
                     PreviewMode::Full,
                     PreviewMode::Fast,
@@ -573,7 +947,7 @@ impl TransitionJourney {
             }
             Step::Zoom => {
                 let (_, image) = app
-                    .viewport
+                    .viewport()
                     .image_rectangles()
                     .ok_or("viewport image was not drawn")?;
                 self.fit_image = Some(image);
@@ -582,11 +956,11 @@ impl TransitionJourney {
                     frame.requested.clone(),
                     frame.artifact.settings.working_scale,
                 ));
-                app.viewport.zoom_by(4.);
+                app.viewport_mut().zoom_by(4.);
             }
-            Step::Pan => app.viewport.pan_to(egui::vec2(0.7, 0.3)),
+            Step::Pan => app.viewport_mut().pan_to(egui::vec2(0.7, 0.3)),
             Step::ViewportScopes => app.preferences.scope_viewport = true,
-            Step::Fit => app.viewport.reset(),
+            Step::Fit => app.viewport_mut().reset(),
             Step::WholeScopes => app.preferences.scope_viewport = false,
             Step::HeldSupersession => {
                 let index = self.single.ok_or("no single photo for delivery hold")?;
@@ -634,7 +1008,7 @@ impl TransitionJourney {
             }
             Step::BeforeZoom => {
                 app.preferences.preview_quality = PreviewMode::Smart;
-                app.viewport.zoom_by(20.);
+                app.viewport_mut().zoom_by(20.);
                 app.submit(None);
             }
             Step::RefreshOverviews => {
@@ -720,6 +1094,13 @@ mod tests {
                     .filter(|step| **step == Step::HeldSupersession)
                     .count(),
                 1
+            );
+            assert_eq!(
+                sequence
+                    .iter()
+                    .filter(|step| **step == Step::SmartGroupEdit)
+                    .count(),
+                9
             );
             assert_eq!(sequence.last(), Some(&Step::Restore));
             assert!(sequence

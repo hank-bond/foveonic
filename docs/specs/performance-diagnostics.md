@@ -41,7 +41,7 @@ Frozen numerical expectations must identify the approved code revision, source c
 
 ## Validation
 
-Correctness checks must validate causality, accepted output identity, complete task settlement, effective quality and expected work/reuse independently of timing thresholds. Performance scenarios must separately cover initial loading, warm disk with cold processing state, retained processing, editing, switching, memory pressure, rapid supersession and multi-photo delivery.
+Correctness checks must validate causality, accepted output identity, complete task settlement, effective quality and expected work/reuse independently of timing thresholds. Performance scenarios must separately cover initial loading, warm disk with cold processing state, retained processing, editing, switching, memory pressure, rapid supersession and multi-photo delivery. Keep mixed-resolution Smart coverage at both the 2 GiB default and an explicit 1 GiB low-memory budget. Record the latency effect of lower budgets without treating slower but correct delivery as a behavioral failure.
 
 Unchanged cached selection and same-photo reopening must perform zero original RAW payload reads, decoded-cache payload reads and photographic GPU dispatches for retained photographs. Check these work counts independently of accepted result identity so discarded work cannot hide a regression. Existing task purposes distinguish photographic rendering from auxiliary scopes, navigator and presentation work. Unrelated background prefetch reads must remain visible separately.
 

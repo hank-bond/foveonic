@@ -143,7 +143,7 @@ pub use crate::editor::Section as EditingSection;
 pub const DEFAULT_MULTI_EDIT_LIMIT: usize = 8;
 
 pub const MIB: u64 = 1024 * 1024;
-pub const DEFAULT_MEMORY_CACHE_BYTES: u64 = 1024 * MIB;
+pub const DEFAULT_MEMORY_CACHE_BYTES: u64 = 2048 * MIB;
 pub const MEMORY_BYTES_RANGE: std::ops::RangeInclusive<u64> = 64 * MIB..=64 * 1024 * MIB;
 pub const DEFAULT_THUMBNAIL_BYTES: u64 = DEFAULT_MEMORY_CACHE_BYTES / 4;
 
@@ -547,16 +547,16 @@ mod preview_tests {
     #[test]
     fn master_memory_defaults_round_trips_and_bounds_thumbnail_share() {
         let old: Preferences = serde_json::from_str("{}").unwrap();
-        assert_eq!(old.memory_cache_bytes, 1024 * MIB);
-        assert_eq!(old.thumbnail_cache_bytes(), 256 * MIB);
+        assert_eq!(old.memory_cache_bytes, 2048 * MIB);
+        assert_eq!(old.thumbnail_cache_bytes(), 512 * MIB);
         let prefs = Preferences {
-            memory_cache_bytes: 2048 * MIB,
+            memory_cache_bytes: 1024 * MIB,
             ..Default::default()
         };
         let bytes = serde_json::to_vec(&prefs).unwrap();
         let loaded: Preferences = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(loaded, prefs);
-        assert_eq!(loaded.thumbnail_cache_bytes(), 512 * MIB);
+        assert_eq!(loaded.thumbnail_cache_bytes(), 256 * MIB);
         assert!(!String::from_utf8(bytes)
             .unwrap()
             .contains("thumbnail_cache_bytes"));

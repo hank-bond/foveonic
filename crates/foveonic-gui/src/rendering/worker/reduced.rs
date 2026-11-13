@@ -211,14 +211,12 @@ impl Photos {
             });
         }
     }
-    #[allow(clippy::too_many_arguments)]
     pub fn load(
         &mut self,
         path: &Path,
         revision: u64,
         cache: &Cache,
-        engine: &Engine,
-        native: &mut Option<(PathBuf, RenderSession)>,
+        native: &Option<(PathBuf, RenderSession)>,
         acquire: &mut AcquireSource<'_>,
     ) -> Result<Option<Loaded>> {
         let _scope = foveonic::diagnostics::scope_with(
@@ -298,9 +296,6 @@ impl Photos {
             let Some(source) = open_source(acquire, path, revision)? else {
                 return Ok(None);
             };
-            if let Some((_, previous)) = native.take() {
-                engine.release_native_preparation(previous.metadata());
-            }
             let identity = source.origin().clone();
             (source.metadata.clone(), Some(source), identity)
         };
@@ -340,7 +335,7 @@ impl Photos {
     pub fn render(
         &mut self,
         engine: &Engine,
-        native: &mut Option<(PathBuf, RenderSession)>,
+        native: &Option<(PathBuf, RenderSession)>,
         mut loaded: Loaded,
         settings: &Settings,
         cancel: &dyn Fn() -> bool,
@@ -348,12 +343,14 @@ impl Photos {
         acquire: &mut AcquireSource<'_>,
         render_progress: &dyn Fn(RenderProgress),
     ) -> Result<RenderOutcome> {
-        // Keep another photo's native session available while this request waits
-        // for input. Its source is released only when this photo can proceed.
+        // Borrow matching native samples when available. The worker owns the
+        // native session's lifetime independently of reduced rendering.
         if loaded.source.is_none() {
             loaded.source = native
                 .as_ref()
-                .filter(|(path, _)| path == &loaded.path)
+                .filter(|(path, session)| {
+                    path == &loaded.path && session.source().origin() == &loaded.identity
+                })
                 .map(|(_, session)| session.shared_source());
         }
         if let Some(outcome) = self.working.render_with_progress(
@@ -366,9 +363,6 @@ impl Photos {
         )? {
             match outcome {
                 ReducedRender::Rendered(artifacts) => {
-                    if let Some((_, session)) = native.take() {
-                        engine.release_native_preparation(session.metadata());
-                    }
                     self.report_retention(engine, loaded.revision, "render");
                     self.prune();
                     return Ok(RenderOutcome::Rendered(artifacts));
@@ -395,9 +389,6 @@ impl Photos {
             };
             source
         };
-        if let Some((_, session)) = native.take() {
-            engine.release_native_preparation(session.metadata());
-        }
         if self.working.contains(loaded.id) {
             if self
                 .working
@@ -537,24 +528,19 @@ mod tests {
         let cache = Cache::new();
         let mut photos = Photos::default();
         photos.configure_memory(512 * 1024 * 1024);
-        let mut native = None;
+        let native = None;
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.working_scale = Scale::new(8).unwrap();
         let loaded = photos
-            .load(
-                &paths[0],
-                0,
-                &cache,
-                &engine,
-                &mut native,
-                &mut |path, _| cache.open(path, |_| {}).map(Some),
-            )
+            .load(&paths[0], 0, &cache, &native, &mut |path, _| {
+                cache.open(path, |_| {}).map(Some)
+            })
             .unwrap()
             .expect("ready source");
         photos
             .render(
                 &engine,
-                &mut native,
+                &native,
                 loaded,
                 &settings,
                 &|| false,
@@ -588,7 +574,7 @@ mod tests {
         assert!(photos.contains_source(&paths[1], &origin));
         let before = engine.gpu_activity();
         let loaded = photos
-            .load(&paths[1], 1, &cache, &engine, &mut native, &mut |_, _| {
+            .load(&paths[1], 1, &cache, &native, &mut |_, _| {
                 panic!("prefetched input must not reopen source")
             })
             .unwrap()
@@ -596,7 +582,7 @@ mod tests {
         let mut artifacts = photos
             .render(
                 &engine,
-                &mut native,
+                &native,
                 loaded,
                 &settings,
                 &|| false,
@@ -691,7 +677,7 @@ mod tests {
                 settings.reconstruction.as_mut().unwrap().chroma = 4;
             }
             let loaded = photos
-                .load(path, 0, &cache, &engine, &mut native, &mut |path, _| {
+                .load(path, 0, &cache, &native, &mut |path, _| {
                     cache.open(path, |_| {}).map(Some)
                 })
                 .unwrap()
@@ -700,7 +686,7 @@ mod tests {
             let Some(mut artifacts) = photos
                 .render(
                     &engine,
-                    &mut native,
+                    &native,
                     loaded,
                     &settings,
                     &|| false,
@@ -764,20 +750,15 @@ mod tests {
         let mut active_haze = settings.clone();
         active_haze.dehaze.amount = 10.;
         let loaded = photos
-            .load(
-                &paths[0],
-                0,
-                &cache,
-                &engine,
-                &mut native,
-                &mut |path, _| cache.open(path, |_| {}).map(Some),
-            )
+            .load(&paths[0], 0, &cache, &native, &mut |path, _| {
+                cache.open(path, |_| {}).map(Some)
+            })
             .unwrap()
             .expect("ready source");
         assert!(photos
             .render(
                 &engine,
-                &mut native,
+                &native,
                 loaded,
                 &active_haze,
                 &|| false,
@@ -788,22 +769,17 @@ mod tests {
             .unwrap()
             .artifacts()
             .is_some());
-        assert!(native.is_none());
+        assert!(native.is_some());
         let loaded = photos
-            .load(
-                &paths[0],
-                0,
-                &cache,
-                &engine,
-                &mut native,
-                &mut |path, _| cache.open(path, |_| {}).map(Some),
-            )
+            .load(&paths[0], 0, &cache, &native, &mut |path, _| {
+                cache.open(path, |_| {}).map(Some)
+            })
             .unwrap()
             .expect("ready source");
         assert!(photos
             .render(
                 &engine,
-                &mut native,
+                &native,
                 loaded,
                 &settings,
                 &|| false,
@@ -814,7 +790,7 @@ mod tests {
             .unwrap()
             .artifacts()
             .is_some());
-        assert!(native.is_none());
+        assert!(native.is_some());
         assert!(photos.working.historical_bytes() <= BUDGET);
         photos.clear(&engine);
         assert!(photos.working.is_empty());

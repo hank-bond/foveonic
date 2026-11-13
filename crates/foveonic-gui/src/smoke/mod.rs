@@ -683,7 +683,8 @@ impl App {
                 );
             }
             if self
-                .viewport
+                .viewports
+                .view(self.selected.as_deref())
                 .zoom_percent(ctx.pixels_per_point())
                 .is_some_and(|z| z <= 100.)
             {
@@ -737,7 +738,7 @@ impl App {
                     smoke,
                     self.frame.as_ref().unwrap(),
                     &self.settings,
-                    &self.viewport,
+                    self.viewports.view(self.selected.as_deref()),
                 );
             }
             if smoke.targets == CROP_TARGETS && !smoke.preview_pending() {
@@ -759,7 +760,11 @@ impl App {
                     assert_eq!(frame.artifact.settings.crop, self.settings.crop);
                     if target == "crop-tile" && regional_smart {
                         let detail = self.detail.as_ref().unwrap();
-                        let visible = self.viewport.visible_pixels().unwrap();
+                        let visible = self
+                            .viewports
+                            .view(self.selected.as_deref())
+                            .visible_pixels()
+                            .unwrap();
                         let window = frame.display_window(false);
                         assert!(crate::rendering::smart::contains(
                             detail.artifact.settings.preview_region.unwrap(),
@@ -793,7 +798,10 @@ impl App {
                 let target = smoke.targets[smoke.index];
                 if target == "workflow-current" {
                     smoke.authored = Some(self.settings.clone());
-                    smoke.fast_region = self.viewport.visible_pixels();
+                    smoke.fast_region = self
+                        .viewports
+                        .view(self.selected.as_deref())
+                        .visible_pixels();
                     smoke.display_revision = frame.map(|f| f.revision);
                     smoke.current_texture = frame.map(|f| f.texture.clone());
                 }
@@ -810,7 +818,9 @@ impl App {
                         "Before must preserve authored edits"
                     );
                     assert_eq!(
-                        self.viewport.visible_pixels(),
+                        self.viewports
+                            .view(self.selected.as_deref())
+                            .visible_pixels(),
                         smoke.fast_region,
                         "Before must preserve viewport geometry"
                     );
@@ -912,7 +922,11 @@ impl App {
                 let data = &snapshot.data;
                 assert_eq!(key.revision, frame.revision);
                 let expected_region = self.preferences.scope_viewport.then(|| {
-                    let pixels = self.viewport.visible_pixels().unwrap();
+                    let pixels = self
+                        .viewports
+                        .view(self.selected.as_deref())
+                        .visible_pixels()
+                        .unwrap();
                     [
                         pixels.top_left[0],
                         pixels.top_left[1],
@@ -956,7 +970,11 @@ impl App {
                     frame.texture.description().extent,
                     if fast { native.map(|v| v / 2) } else { native }
                 );
-                let visible = self.viewport.visible_pixels().unwrap();
+                let visible = self
+                    .viewports
+                    .view(self.selected.as_deref())
+                    .visible_pixels()
+                    .unwrap();
                 if target == "fast-edit" {
                     smoke.fast_region = Some(visible);
                 }
@@ -968,7 +986,8 @@ impl App {
                     );
                 }
                 let actual = self
-                    .viewport
+                    .viewports
+                    .view(self.selected.as_deref())
                     .visible_pixels_for(frame.texture.description().extent)
                     .unwrap();
                 let expected_scope = [
@@ -1002,7 +1021,11 @@ impl App {
                 } else {
                     self.frame.as_ref().unwrap()
                 };
-                let visible = self.viewport.visible_pixels().unwrap();
+                let visible = self
+                    .viewports
+                    .view(self.selected.as_deref())
+                    .visible_pixels()
+                    .unwrap();
                 let region = frame.artifact.settings.preview_region;
                 if !quattro_smart || !matches!(target, "final" | "cache-reopen") {
                     assert!(self.settings.reconstruction.is_some());
@@ -1083,7 +1106,11 @@ impl App {
                             foveonic::render::Scale::NATIVE
                         );
                     } else {
-                        let (_, image) = self.viewport.image_rectangles().unwrap();
+                        let (_, image) = self
+                            .viewports
+                            .view(self.selected.as_deref())
+                            .image_rectangles()
+                            .unwrap();
                         let extent = frame.native_display_extent();
                         let density = (image.width() / extent[0] as f32)
                             .max(image.height() / extent[1] as f32)
@@ -1133,7 +1160,7 @@ impl App {
                     );
                 }
                 let report = serde_json::json!({"target":target,"quality":frame.quality_label(),"region":region,"regional_supported":regional_smart,"native_extent":self.frame.as_ref().unwrap().display_extent(false),"rendered_extent":frame.texture.description().extent,
-                    "zoom_percent":self.viewport.zoom_percent(ctx.pixels_per_point()),"thumbnail_revision":self.browser.rendered_revision(&frame.path),"processing_ms":frame.milliseconds,"scope_revision":self.scope_key.map(|k|k.revision),"image_revision":frame.revision,"cache_hits":self.worker.cache.status().hits,"cache_ready":self.worker.cache.status().ready.len(),"continuation_running":self.busy});
+                    "zoom_percent":self.viewports.view(self.selected.as_deref()).zoom_percent(ctx.pixels_per_point()),"thumbnail_revision":self.browser.rendered_revision(&frame.path),"processing_ms":frame.milliseconds,"scope_revision":self.scope_key.map(|k|k.revision),"image_revision":frame.revision,"cache_hits":self.worker.cache.status().hits,"cache_ready":self.worker.cache.status().ready.len(),"continuation_running":self.busy});
                 std::fs::write(
                     smoke.directory.join(format!("{target}.json")),
                     serde_json::to_vec_pretty(&report).unwrap(),
@@ -1247,10 +1274,13 @@ impl App {
                 }
                 "crop-smart" => {
                     self.preferences.preview_quality = crate::preferences::PreviewMode::Smart;
-                    self.viewport.one_to_one = true;
+                    self.viewports.view_mut(self.selected.as_deref()).one_to_one = true;
                     self.submit(None);
                 }
-                "crop-tile" => self.viewport.zoom_by(2.),
+                "crop-tile" => self
+                    .viewports
+                    .view_mut(self.selected.as_deref())
+                    .zoom_by(2.),
                 "crop-detail" => {}
                 "crop-ready" | "crop-reopen" | "crop-hand" => {
                     let key = if smoke.targets[smoke.index] == "crop-hand" {
@@ -1273,7 +1303,8 @@ impl App {
                 "crop-drag" | "crop-applied" => {
                     let target = smoke.targets[smoke.index];
                     let point = self
-                        .viewport
+                        .viewports
+                        .view(self.selected.as_deref())
                         .position_at_uv(if target == "crop-drag" {
                             [0.002, 0.002]
                         } else {
@@ -1290,14 +1321,18 @@ impl App {
                         },
                     ]);
                     if target == "crop-drag" {
-                        let end = self.viewport.position_at_uv([0.18, 0.18]).unwrap();
+                        let end = self
+                            .viewports
+                            .view(self.selected.as_deref())
+                            .position_at_uv([0.18, 0.18])
+                            .unwrap();
                         smoke
                             .direct_events
                             .push_back(vec![egui::Event::PointerMoved(end)]);
                     }
                 }
                 "dehaze-auto" => {
-                    self.viewport.reset();
+                    self.viewports.view_mut(self.selected.as_deref()).reset();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title(
                         "Foveonic — Dehaze check".into(),
                     ));
@@ -1347,7 +1382,11 @@ impl App {
                 }
                 "white-balance-picked" => {
                     crate::editor::white_balance::toggle(ctx);
-                    let position = self.viewport.position_at_uv([0.82, 0.04]).unwrap();
+                    let position = self
+                        .viewports
+                        .view(self.selected.as_deref())
+                        .position_at_uv([0.82, 0.04])
+                        .unwrap();
                     let button = |pressed| egui::Event::PointerButton {
                         pos: position,
                         button: egui::PointerButton::Primary,
@@ -1372,7 +1411,11 @@ impl App {
                 "dehaze-picked" => {
                     crate::editor::dehaze::toggle(ctx);
                     // The neutral bolt in the parking-sign fixture avoids a clipped blue patch.
-                    let position = self.viewport.position_at_uv([0.82, 0.04]).unwrap();
+                    let position = self
+                        .viewports
+                        .view(self.selected.as_deref())
+                        .position_at_uv([0.82, 0.04])
+                        .unwrap();
                     let button = |pressed| egui::Event::PointerButton {
                         pos: position,
                         button: egui::PointerButton::Primary,
@@ -1417,7 +1460,11 @@ impl App {
                     self.submit(None);
                 }
                 "advanced-picked" => {
-                    let (response, _) = self.viewport.pointer(None).unwrap();
+                    let (response, _) = self
+                        .viewports
+                        .view(self.selected.as_deref())
+                        .pointer(None)
+                        .unwrap();
                     let position = response.rect.center();
                     let end = position + egui::vec2(60., -90.);
                     let button = |pos, pressed| egui::Event::PointerButton {
@@ -1553,7 +1600,11 @@ impl App {
                     self.submit(None);
                 }
                 "direct-color-edited" => {
-                    let (response, _) = self.viewport.pointer(None).unwrap();
+                    let (response, _) = self
+                        .viewports
+                        .view(self.selected.as_deref())
+                        .pointer(None)
+                        .unwrap();
                     let anchor = response.rect.center();
                     let end = anchor + egui::vec2(60., -90.);
                     let button = |pos, pressed| egui::Event::PointerButton {
@@ -1568,7 +1619,11 @@ impl App {
                     ]);
                 }
                 "direct-color-settings" => {
-                    let (response, _) = self.viewport.pointer(None).unwrap();
+                    let (response, _) = self
+                        .viewports
+                        .view(self.selected.as_deref())
+                        .pointer(None)
+                        .unwrap();
                     let position = response.rect.center() + egui::vec2(60., -90.);
                     let button = |button, pressed| egui::Event::PointerButton {
                         pos: position,
@@ -1725,8 +1780,10 @@ impl App {
                         foveonic::render::PhotographicMethod::Universal;
                     self.preferences.collapsed =
                         [Section::Navigator, Section::Scopes, Section::Metadata].into();
-                    self.viewport.one_to_one = true;
-                    self.viewport.pan_to(egui::vec2(0.55, 0.4));
+                    self.viewports.view_mut(self.selected.as_deref()).one_to_one = true;
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
+                        .pan_to(egui::vec2(0.55, 0.4));
                     self.submit(None);
                 }
                 "workflow-camera" | "workflow-restored" => {
@@ -1850,8 +1907,11 @@ impl App {
                     self.preferences.scope = Scope::Waveform;
                     self.preferences.scope_viewport = true;
                     self.browser.reveal_selection();
-                    self.viewport.zoom_by(recipe.zoom);
-                    self.viewport
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
+                        .zoom_by(recipe.zoom);
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
                         .pan_to(egui::vec2(recipe.pan[0], recipe.pan[1]));
                     self.submit(None);
                 }
@@ -1866,10 +1926,16 @@ impl App {
                     self.settings.reconstruction = Some(Default::default());
                     self.submit(None);
                 }
-                "smart-100" => self.viewport.one_to_one = true,
-                "smart-detail" => self.viewport.zoom_by(2.),
+                "smart-100" => self.viewports.view_mut(self.selected.as_deref()).one_to_one = true,
+                "smart-detail" => self
+                    .viewports
+                    .view_mut(self.selected.as_deref())
+                    .zoom_by(2.),
                 "smart-full" => {}
-                "smart-pan" => self.viewport.pan_to(egui::vec2(0.8, 0.7)),
+                "smart-pan" => self
+                    .viewports
+                    .view_mut(self.selected.as_deref())
+                    .pan_to(egui::vec2(0.8, 0.7)),
                 "smart-edit-detail" => {
                     self.settings.exposure = 0.25;
                     self.submit(None);
@@ -1889,10 +1955,12 @@ impl App {
                         self.smart.next([0, 0, 1, 1], [1, 1]).is_none(),
                         "edit did not queue regional work"
                     );
-                    self.viewport.reset();
+                    self.viewports.view_mut(self.selected.as_deref()).reset();
                 }
                 "smart-crop-zoom" | "smart-crop-active-zoom" | "smart-adaptive-zoom" => {
-                    self.viewport.zoom_by(6.);
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
+                        .zoom_by(6.);
                 }
                 "smart-crop-enter" => {
                     self.settings.exposure = 0.7;
@@ -1921,7 +1989,7 @@ impl App {
                     assert!(self.settings.adaptive_tone_active());
                     self.submit(None);
                 }
-                "smart-fit" => self.viewport.reset(),
+                "smart-fit" => self.viewports.view_mut(self.selected.as_deref()).reset(),
                 "cache-settings" => self.settings_open = true,
                 "cache-list" => {
                     self.settings_open = false;
@@ -1959,16 +2027,26 @@ impl App {
                     self.submit(None);
                 }
                 "fast-zoom" => {
-                    self.viewport.zoom_by(3.);
-                    self.viewport.pan_to(egui::vec2(0.6, 0.4));
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
+                        .zoom_by(3.);
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
+                        .pan_to(egui::vec2(0.6, 0.4));
                 }
                 "fast-edit" => {
                     self.settings.exposure = 0.5;
                     self.submit(None);
                 }
                 "viewport-fit" => self.preferences.scope_viewport = true,
-                "viewport-zoom" => self.viewport.zoom_by(4.),
-                "viewport-pan" => self.viewport.pan_to(egui::vec2(0.7, 0.3)),
+                "viewport-zoom" => self
+                    .viewports
+                    .view_mut(self.selected.as_deref())
+                    .zoom_by(4.),
+                "viewport-pan" => self
+                    .viewports
+                    .view_mut(self.selected.as_deref())
+                    .pan_to(egui::vec2(0.7, 0.3)),
                 "viewport-parade" => self.preferences.scope = Scope::Parade,
                 "viewport-waveform" => self.preferences.scope = Scope::Waveform,
                 "viewport-resize" => {
@@ -1991,7 +2069,7 @@ impl App {
                     self.output = "sensor.layers".into();
                     self.submit(None);
                 }
-                "viewport-fit-again" => self.viewport.reset(),
+                "viewport-fit-again" => self.viewports.view_mut(self.selected.as_deref()).reset(),
                 "diff-layer" => {
                     self.output = "repair.layers".into();
                     self.channel = 0;
@@ -2038,11 +2116,14 @@ impl App {
                     self.settings.reconstruction = None;
                     self.output = "final".into();
                     self.channel = -1;
-                    self.viewport.one_to_one = false;
+                    self.viewports.view_mut(self.selected.as_deref()).one_to_one = false;
                     if !enabled {
-                        self.viewport.zoom_by(48.);
+                        self.viewports
+                            .view_mut(self.selected.as_deref())
+                            .zoom_by(48.);
                     }
-                    self.viewport
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
                         .pan_to(egui::vec2(1582. / 3136., 2737. / 4704.));
                     self.submit(None);
                 }
@@ -2053,7 +2134,7 @@ impl App {
                         ..Default::default()
                     });
                     self.settings.despeckle = false;
-                    self.viewport.one_to_one = true;
+                    self.viewports.view_mut(self.selected.as_deref()).one_to_one = true;
                     self.submit(None);
                 }
                 "bolt-before" | "bolt-after" => {
@@ -2061,12 +2142,19 @@ impl App {
                     self.channel = -1;
                     self.settings.despeckle = smoke.targets[smoke.index] == "bolt-after";
                     if smoke.targets[smoke.index] == "bolt-before" {
-                        self.viewport.zoom_by(4.);
+                        self.viewports
+                            .view_mut(self.selected.as_deref())
+                            .zoom_by(4.);
                     }
-                    self.viewport.pan_to(egui::vec2(0.79, 0.05));
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
+                        .pan_to(egui::vec2(0.79, 0.05));
                     self.submit(None);
                 }
-                "white-before" | "white-after" => self.viewport.pan_to(egui::vec2(0.29, 0.757)),
+                "white-before" | "white-after" => self
+                    .viewports
+                    .view_mut(self.selected.as_deref())
+                    .pan_to(egui::vec2(0.29, 0.757)),
                 "final-disabled" | "final-default" => {
                     let enabled = smoke.targets[smoke.index] == "final-default";
                     self.settings.despeckle = enabled;
@@ -2075,7 +2163,7 @@ impl App {
                     self.settings.reconstruction = None;
                     self.output = "final".into();
                     self.channel = -1;
-                    self.viewport.reset();
+                    self.viewports.view_mut(self.selected.as_deref()).reset();
                     self.submit(None);
                 }
                 "reconstructed" => {
@@ -2116,12 +2204,21 @@ impl App {
                     self.channel = -1;
                     self.submit(None);
                 }
-                "repair-zoom" => self.viewport.one_to_one = true,
-                "bolt" => {
-                    self.viewport.zoom_by(4.);
-                    self.viewport.pan_to(egui::vec2(0.79, 0.05));
+                "repair-zoom" => {
+                    self.viewports.view_mut(self.selected.as_deref()).one_to_one = true
                 }
-                "white-edge" => self.viewport.pan_to(egui::vec2(0.335, 0.75)),
+                "bolt" => {
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
+                        .zoom_by(4.);
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
+                        .pan_to(egui::vec2(0.79, 0.05));
+                }
+                "white-edge" => self
+                    .viewports
+                    .view_mut(self.selected.as_deref())
+                    .pan_to(egui::vec2(0.335, 0.75)),
                 "detail-zero" | "noise-low" | "noise-high" | "color-dq" | "color-dq-off"
                 | "final-neutral" => {
                     let mut controls = foveonic::noise::Controls::default();
@@ -2150,7 +2247,7 @@ impl App {
                     self.settings.reconstruction =
                         (smoke.targets[smoke.index] != "final-neutral").then_some(controls);
                     self.output = "final".into();
-                    self.viewport.reset();
+                    self.viewports.view_mut(self.selected.as_deref()).reset();
                     self.submit(None);
                 }
                 "list" => {
@@ -2160,15 +2257,17 @@ impl App {
                 }
                 "parade" => self.preferences.scope = Scope::Parade,
                 "waveform" => self.preferences.scope = Scope::Waveform,
-                "zoom" => self.viewport.one_to_one = true,
+                "zoom" => self.viewports.view_mut(self.selected.as_deref()).one_to_one = true,
                 "reordered" => {
-                    self.viewport.pan_to(egui::vec2(0.65, 0.5));
+                    self.viewports
+                        .view_mut(self.selected.as_deref())
+                        .pan_to(egui::vec2(0.65, 0.5));
                     self.preferences
                         .move_section(Section::Metadata, Section::Navigator, false);
                 }
                 "collapsed" => self.preferences.toggle(Section::Editing),
                 name => {
-                    self.viewport.reset();
+                    self.viewports.view_mut(self.selected.as_deref()).reset();
                     let last_folder = self.preferences.last_folder.clone();
                     self.preferences = Default::default();
                     self.preferences.last_folder = last_folder;

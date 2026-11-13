@@ -22,10 +22,10 @@ pub(crate) fn resolve(mode: PreviewMode, pixels_per_native_pixel: Option<f32>) -
         .unwrap_or(PreviewMode::Full)
 }
 
-/// Fit excludes letterboxing and captions. Extent describes the native image
-/// area being fitted, including its saved composition.
-pub(crate) fn fit_density(size: [f32; 2], extent: [u32; 2], pixels_per_point: f32) -> f32 {
-    (size[0] / extent[0].max(1) as f32).min(size[1] / extent[1].max(1) as f32) * pixels_per_point
+/// Drawn image bounds exclude letterboxing and captions, and include zoom.
+/// Extent describes the native image area, including its saved composition.
+pub(crate) fn display_density(size: [f32; 2], extent: [u32; 2], pixels_per_point: f32) -> f32 {
+    (size[0] / extent[0].max(1) as f32).max(size[1] / extent[1].max(1) as f32) * pixels_per_point
 }
 
 pub(crate) fn accepts_scale(policy: PreviewMode, requested: Scale, retained: Scale) -> bool {
@@ -83,12 +83,12 @@ mod tests {
     }
 
     #[test]
-    fn fit_uses_physical_pixels_and_the_image_aspect_ratio() {
-        let portrait = fit_density([1000., 800.], [2000, 4000], 1.);
-        let landscape = fit_density([1000., 800.], [4000, 2000], 1.);
-        assert_eq!(portrait, 0.2);
+    fn sampling_uses_drawn_bounds_native_extent_and_display_density() {
+        assert_eq!(display_density([400., 800.], [2000, 4000], 1.), 0.2);
+        let landscape = display_density([1000., 500.], [4000, 2000], 1.);
         assert_eq!(landscape, 0.25);
-        assert_eq!(fit_density([1000., 800.], [4000, 2000], 2.), 0.5);
+        assert_eq!(display_density([1000., 500.], [4000, 2000], 2.), 0.5);
+        assert_eq!(display_density([4000., 2000.], [4000, 2000], 2.), 2.);
         assert_eq!(
             resolve(PreviewMode::Smart, Some(landscape)),
             PreviewMode::Draft

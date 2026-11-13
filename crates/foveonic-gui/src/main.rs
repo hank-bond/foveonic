@@ -32,6 +32,7 @@ mod multi_edit_runtime;
 mod navigator;
 mod noise_calibration;
 mod photo_tools;
+mod photo_views;
 mod preferences;
 mod preview_image;
 mod previews;
@@ -110,7 +111,7 @@ struct App {
     scope_images: Option<scopes::Images>,
     scope_snapshot: Option<worker::ScopeSnapshot>,
     scope_key: Option<worker::ScopeKey>,
-    viewport: viewport::Viewport,
+    viewports: photo_views::PhotoViews,
     navigator: navigator::Navigator,
     previews: previews::Previews,
     revision: u64,
@@ -184,6 +185,13 @@ impl App {
             "memory_cache_bytes":self.preferences.memory_cache_bytes,"multi_edit_limit":self.preferences.multi_edit_limit,
             "hardware":self.diagnostic_hardware()})
     }
+    pub(crate) fn viewport(&self) -> &viewport::Viewport {
+        self.viewports.view(self.selected.as_deref())
+    }
+    pub(crate) fn viewport_mut(&mut self) -> &mut viewport::Viewport {
+        self.viewports.view_mut(self.selected.as_deref())
+    }
+
     fn multi_photo_overview(&self) -> bool {
         multi_photo_overview(&self.viewport_paths, self.selected.as_deref())
     }
@@ -341,7 +349,7 @@ impl App {
             scope_images: None,
             scope_snapshot: None,
             scope_key: None,
-            viewport: Default::default(),
+            viewports: Default::default(),
             navigator: navigator::Navigator::new(rs.clone(), cc.egui_ctx.clone()),
             revision: 0,
             busy: false,
@@ -375,7 +383,7 @@ impl App {
             &mut app.browser,
             app.preferences.processing_destination.as_deref(),
         );
-        app.viewport.zoom_snap = app.preferences.zoom_snap;
+        app.viewport_mut().zoom_snap = app.preferences.zoom_snap;
         app.update_memory();
         if timing::requested_mode().is_some() {
             let state = app.diagnostic_state();
@@ -449,7 +457,7 @@ impl App {
         self.scope_key = None;
         self.busy = false;
         self.worker.clear_all();
-        self.viewport.reset();
+        self.viewport_mut().reset();
         viewport::clear(&self.render_state);
     }
     fn reusable_photograph(
@@ -516,6 +524,10 @@ impl App {
     }
 
     fn select(&mut self, path: PathBuf, preserve_viewport: bool) {
+        let carried = preserve_viewport.then(|| self.viewport().transform());
+        if self.selected.as_ref() != Some(&path) || carried.is_some() {
+            self.viewports.select(&path, carried);
+        }
         self.multi_edit.selected(&path);
         if let Some(frame) = self.frame.take() {
             self.multi_edit.retain(frame);
@@ -572,7 +584,6 @@ impl App {
         self.detail = None;
         self.smart.reset();
         self.scope_key = None;
-        self.viewport.begin_image(preserve_viewport);
         viewport::clear(&self.render_state);
     }
     fn update_browser_preview(&mut self, frame: &worker::Frame) {
@@ -879,7 +890,7 @@ impl App {
             .frame
             .as_ref()
             .map_or([0; 4], |f| f.display_window(false));
-        let visible = self.viewport.visible_pixels().map(|p| {
+        let visible = self.viewport().visible_pixels().map(|p| {
             [
                 p.top_left[0] + window[0],
                 p.top_left[1] + window[1],
@@ -909,7 +920,7 @@ impl App {
                     .framing_bounds(frame.camera_extent(), frame.requested.crop)
                     .map(|v| v as f32);
                 let framing = egui::Rect::from_min_max(egui::pos2(l, t), egui::pos2(r, b));
-                let visible = self.viewport.visible_uv().intersect(framing);
+                let visible = self.viewport().visible_uv().intersect(framing);
                 if !visible.is_positive() {
                     return;
                 }
@@ -932,7 +943,7 @@ impl App {
                 ])
             } else {
                 let Some(pixels) = self
-                    .viewport
+                    .viewport()
                     .visible_pixels_for(frame.texture.description().extent)
                 else {
                     return;
@@ -1145,7 +1156,10 @@ impl App {
                     .selected
                     .as_ref()
                     .and_then(|p| self.browser.thumbnail(p));
-                self.viewport.navigator(ui, texture, preview.as_ref());
+                let viewport = self.viewports.view_mut(self.selected.as_deref());
+                viewport.zoom_snap = self.preferences.zoom_snap;
+                viewport.navigator(ui, texture, preview.as_ref());
+                self.preferences.zoom_snap = viewport.zoom_snap;
                 false
             }
             Section::Scopes => {
@@ -1464,7 +1478,7 @@ impl App {
             .map(|f| &f.artifact.metadata.properties)
             .or_else(|| self.metadata.as_ref().map(|metadata| &metadata.properties))
             .or(self.capture.properties.as_ref());
-        information::show(ui, properties, &filename, self.viewport.visible_pixels());
+        information::show(ui, properties, &filename, self.viewport().visible_pixels());
         changed
     }
 
@@ -1492,7 +1506,7 @@ impl App {
         let framing_active =
             self.framing_preview_active() && !self.exporting && self.sidecars.ready();
         let crop_active = framing_active && crop_tool::active(ui.ctx());
-        self.viewport.framing = self
+        self.viewport_mut().framing = self
             .frame
             .as_ref()
             .filter(|f| framing_active && f.framing_preview)
@@ -1500,17 +1514,26 @@ impl App {
                 rotation: rotate_tool::displayed(ui.ctx(), self.settings.rotation),
                 native_extent: frame.camera_extent(),
             });
-        self.viewport.editing = photo_tools::takes_pointer(ui.ctx())
+        self.viewport_mut().editing = photo_tools::takes_pointer(ui.ctx())
             && if photo_tools::framing(ui.ctx()) {
                 framing_active
             } else {
                 allowed
             };
         if let Some(frame) = &self.frame {
-            self.viewport.show(
+            let detail = self.smart_detail().map(|detail| {
+                (
+                    detail.texture.clone(),
+                    detail.artifact.settings.preview_region.unwrap(),
+                    detail.diagnostic_identity(false),
+                )
+            });
+            let viewport = self.viewports.view_mut(self.selected.as_deref());
+            viewport.zoom_snap = self.preferences.zoom_snap;
+            viewport.show(
                 ui,
                 frame.view(mapping.input).clone(),
-                self.viewport.framing.map_or_else(
+                viewport.framing.map_or_else(
                     || frame.display_extent(mapping.input),
                     framing::Presentation::extent,
                 ),
@@ -1519,20 +1542,22 @@ impl App {
                 self.srgb_target,
                 frame.diagnostic_identity(mapping.input),
             );
-            if let Some(detail) = self.smart_detail() {
-                self.viewport.show_region(
+            if let Some((texture, region, identity)) = detail {
+                viewport.show_region(
                     ui,
-                    detail.texture.clone(),
-                    detail.artifact.settings.preview_region.unwrap(),
+                    texture,
+                    region,
                     frame.display_window(false),
                     mapping,
                     self.srgb_target,
-                    detail.diagnostic_identity(false),
+                    identity,
                 );
             }
         } else if let Some(path) = &self.selected {
             if let Some(preview) = self.browser.preview(path) {
-                self.viewport.show_preview(
+                let viewport = self.viewports.view_mut(Some(path));
+                viewport.zoom_snap = self.preferences.zoom_snap;
+                viewport.show_preview(
                     ui,
                     &preview.texture,
                     preview.native_extent,
@@ -1542,6 +1567,8 @@ impl App {
                         self.settings.crop
                     },
                 );
+            } else {
+                self.viewport_mut().show_empty(ui);
             }
         } else {
             ui.centered_and_justified(|ui| {
@@ -1565,22 +1592,24 @@ impl App {
                 .frame
                 .as_ref()
                 .is_none_or(|frame| frame.output == "final")
-            && (!framing_active || self.viewport.explicit_zoom_pending())
+            && (!framing_active || self.viewport().explicit_zoom_pending())
         {
             let density = self
                 .frame
                 .as_ref()
                 .filter(|frame| frame.output == "final")
                 .and_then(|frame| {
-                    self.viewport.image_rectangles().map(|(_, image)| {
+                    self.viewport().image_rectangles().map(|(_, image)| {
                         let extent = frame.native_display_extent();
-                        (image.width() / extent[0].max(1) as f32)
-                            .max(image.height() / extent[1].max(1) as f32)
-                            * ui.ctx().pixels_per_point()
+                        rendering::quality::display_density(
+                            [image.width(), image.height()],
+                            extent,
+                            ui.ctx().pixels_per_point(),
+                        )
                     })
                 })
                 .or_else(|| {
-                    self.viewport
+                    self.viewport()
                         .zoom_percent(ui.ctx().pixels_per_point())
                         .map(|percent| percent / 100.)
                 });
@@ -1590,7 +1619,7 @@ impl App {
         }
         if let (Some(path), Some((response, uv))) = (
             &self.selected,
-            self.viewport
+            self.viewport()
                 .pointer(ui.input(|i| i.pointer.interact_pos())),
         ) {
             if framing_active {
@@ -1598,7 +1627,7 @@ impl App {
                     self.frame
                         .as_ref()
                         .filter(|f| f.framing_preview && &f.path == path),
-                    self.viewport.image_rectangles(),
+                    self.viewport().image_rectangles(),
                 ) {
                     return framing::photo(
                         ui,
@@ -1642,7 +1671,6 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        self.preferences.zoom_snap = self.viewport.zoom_snap;
         self.preferences.save(storage);
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -1872,7 +1900,7 @@ impl eframe::App for App {
             .is_some_and(|path| !self.edit_selection.contains(path))
         {
             if let Some(path) = self.edit_selection.paths().first().cloned() {
-                self.select(path, true);
+                self.select(path, false);
             }
         }
         self.sync_multi_edit();
@@ -1940,7 +1968,7 @@ impl eframe::App for App {
             });
         self.browser.finish_previews();
         if photo_tools::take_view_change(ctx) {
-            self.viewport.reset();
+            self.viewport_mut().reset();
             changed = true;
         }
         if self.sidecars.ready() {
@@ -1981,7 +2009,7 @@ impl eframe::App for App {
                 self.edit_selection.paths().first().cloned()
             };
             if let Some(path) = active.filter(|path| self.selected.as_ref() != Some(path)) {
-                self.select(path, true);
+                self.select(path, false);
             }
         } else if let Some(selection) = select {
             let path = if self.edit_selection.contains(&selection.path) {

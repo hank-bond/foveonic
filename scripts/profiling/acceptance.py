@@ -95,6 +95,10 @@ def command(job, args, out):
             cmd += ['--save-on-exit']
         if job.get('exit_with_pending'):
             cmd += ['--exit-with-pending']
+        if 'memory_cache_bytes' in job:
+            cmd += ['--memory-cache-bytes', str(job['memory_cache_bytes'])]
+        if 'step_timeout' in job:
+            cmd += ['--step-timeout', str(job['step_timeout'])]
         cmd += ['--folder-mode', job.get('folder_mode', 'import')]
         if job['scenario'] in ('selection-journey', 'selection-pressure', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'background-edit', 'choice-journey'):
             require('renderer')
@@ -113,6 +117,10 @@ def command(job, args, out):
                '--count', str(job.get('count', 1)), '--mode', 'off', '--trials', str(args.latency_trials),
                '--disk-cache-bytes', str(job.get('disk_cache_bytes', 0))]
         cmd += ['--quality', job.get('quality', 'thumb')]
+        if 'memory_cache_bytes' in job:
+            cmd += ['--memory-cache-bytes', str(job['memory_cache_bytes'])]
+        if 'step_timeout' in job:
+            cmd += ['--step-timeout', str(job['step_timeout'])]
         cmd += ['--folder-mode', job.get('folder_mode', 'import')]
         if not args.foreground:
             cmd.append('--background')

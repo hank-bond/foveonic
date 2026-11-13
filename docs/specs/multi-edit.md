@@ -45,7 +45,7 @@ The [latency plan](../../plans/multi-edit-latency.md) tracks the application-wid
 
 ## Resource direction
 
-Disk caching and in-memory caching are separate user concepts and settings. The memory budget must be user-set with a sensible default designed for a 16 GB machine. Approximately 2 GB steady application memory and 4 GB peak application memory are the initial targets, to be validated by measurement rather than treated as guaranteed allocator limits.
+Disk caching and in-memory caching are separate user concepts and settings. The memory budget must be user-set with a sensible default designed for a 16 GB machine. The default retained-cache target is 2 GiB. Preserve explicitly saved budgets, including 1 GiB for low-memory hardware. Settings must show cache capacity as a whole-number MB count, with every digit visible and no scientific notation or significant-digit limit. Use the existing binary byte conversion internally. Retained-memory and over-target readouts use the same MB label. Approximately 2 GB steady application memory and 4 GB peak application memory remain measurement goals rather than guaranteed allocator limits.
 
 Profile every retained memory owner, including active and multi-edit photographs, processing checkpoints and parameter tables, delivered images, browser thumbnails/previews, shared preparation, speculative preloads and temporary rendering resources. Count shared allocations once. Actual-use recency must remain distinct from speculative loading. Prefetch alone must not promote an entry above genuinely used photographs.
 
@@ -54,3 +54,7 @@ The multi-edit count limit is a separate user setting within the memory design. 
 ## CPU execution
 
 Parallel CPU processing must use the host's available logical CPUs through a shared processing pool. CPU capacity and the number of simultaneously retained source buffers are separate limits. Foreground and speculative work retain their priority and cancellation rules. GPU execution and disk I/O keep separate owners. A dependency-bound stream or serial recipe walk need not invent parallel work solely to occupy every core.
+
+## Per-photo viewing
+
+Each photograph must retain its own Fit or fixed zoom and pan during the application session. Single and multi-photo views must use the same transform and gesture implementation. Selection changes, tile reordering and leaving or rejoining the displayed set must preserve photograph identity. Double-click toggles the hovered photograph between Fit and the application’s zoom snap, preserving the existing pointer-anchor behavior. Hand or temporary Space pans only the hovered photograph without changing editing selection. Pointer still owns viewport selection until its proposed consolidation with Hand is separately agreed. Explicit preview modes keep their requested processing scale through these gestures. Smart may resolve a different scale from the photograph’s drawn pixel demand.

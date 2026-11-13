@@ -61,7 +61,7 @@ pub fn section_spacing(ui: &egui::Ui) -> f32 {
 const VALUE_SIGNIFICANT_DIGITS: usize = 3;
 const VALUE_DECIMAL_PLACES: usize = 2;
 
-/// All numeric widgets and their layout measurements use this display policy.
+/// Photographic adjustment widgets and their layout measurements share this policy.
 pub(crate) fn format_numeric_value(value: f64, integral: bool) -> String {
     if integral && value.abs() < 1000. {
         format!("{value:.0}")
@@ -99,6 +99,13 @@ pub(crate) fn numeric_field_width<T: egui::emath::Numeric>(
 pub(crate) fn drag_value<T: egui::emath::Numeric>(value: &mut T) -> egui::DragValue<'_> {
     egui::DragValue::new(value)
         .custom_formatter(|value, _| format_numeric_value(value, T::INTEGRAL))
+}
+
+/// Counts and capacities use integer storage and show every digit, without scientific notation.
+pub(crate) fn count_drag_value<T: egui::emath::Numeric>(value: &mut T) -> egui::DragValue<'_> {
+    egui::DragValue::new(value)
+        .max_decimals(0)
+        .custom_formatter(|value, _| format!("{value:.0}"))
 }
 
 /// Mixed readouts keep ordinary numeric parsing and formatting while reporting differing values.

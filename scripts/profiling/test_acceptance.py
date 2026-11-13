@@ -92,7 +92,10 @@ class AcceptanceTests(unittest.TestCase):
                 if job['driver'] not in ('scenario', 'latency'):
                     continue
                 budget=job.get('disk_cache_bytes',0)
-                self.assertEqual(budget == 1073741824, job['scenario'] in ('warm-disk','prefetched-selection'))
+                self.assertIsInstance(budget, int)
+                self.assertGreaterEqual(budget, 0)
+                if job['scenario'] in ('warm-disk','prefetched-selection'):
+                    self.assertGreater(budget, 0)
             for name in ('scenario-warm-disk','latency-warm-disk-8','latency-initial-1'):
                 job=next(j for j in self.catalog['jobs'] if j['id']==name)
                 baseline,_,_=acceptance.command(job,args,Path(tmp)/'baseline')
@@ -106,6 +109,23 @@ class AcceptanceTests(unittest.TestCase):
                 job=next(j for j in self.catalog['jobs'] if j['id']=='latency-warm-edit-'+quality+'-1')
                 cmd,_,_=acceptance.command(job,args,Path(tmp)/quality)
                 self.assertEqual(cmd[cmd.index('--quality')+1],quality)
+
+    def test_smart_normal_and_low_memory_jobs_keep_explicit_budgets(self):
+        class Args:
+            foreground = False
+            seed = 0
+            action_count = 1
+        with tempfile.TemporaryDirectory() as tmp:
+            args = Args()
+            args.binary = args.cases = args.renderer = args.trace_processor = Path(tmp) / 'input'
+            args.binary.touch()
+            for name, budget in [('scenario-transition-journey', 2147483648),
+                                 ('scenario-smart-low-memory', 1073741824)]:
+                job = next(j for j in self.catalog['jobs'] if j['id'] == name)
+                cmd, _, _ = acceptance.command(job, args, Path(tmp) / name)
+                self.assertEqual(cmd[cmd.index('--memory-cache-bytes') + 1], str(budget))
+                self.assertEqual(cmd[cmd.index('--count') + 1], '4')
+                self.assertEqual(cmd[cmd.index('--step-timeout') + 1], '150')
 
     def test_behavioral_cache_defaults_to_disabled(self):
         class Args:

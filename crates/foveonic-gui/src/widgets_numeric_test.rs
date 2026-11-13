@@ -70,6 +70,25 @@ fn integer_readouts_follow_the_same_significant_digit_limit() {
 }
 
 #[test]
+fn counts_and_capacities_show_all_integer_digits_under_the_workspace_style() {
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        let ctx = egui::Context::default();
+        install_style(&ctx);
+        ctx.set_theme(theme);
+        for original in [64_u64, 2048, 65536, 123456789] {
+            let mut value = original;
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add(count_drag_value(&mut value).suffix(" MB"));
+                });
+            });
+            assert_eq!(numeric_text(&output, &format!("{original} MB")), 1);
+            assert_eq!(value, original);
+        }
+    }
+}
+
+#[test]
 fn production_numeric_controls_cannot_bypass_shared_widgets() {
     fn check(directory: &Path) {
         for entry in std::fs::read_dir(directory).unwrap() {

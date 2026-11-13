@@ -465,7 +465,7 @@ impl App {
     ) {
         let path = &smoke.multi_paths[index];
         let response = ctx
-            .read_response(egui::Id::new(("comparison photo", path)))
+            .read_response(self.viewports.view(Some(path)).id())
             .unwrap_or_else(|| panic!("comparison tile is not visible: {}", path.display()));
         let pos = response.rect.center();
         foveonic::diagnostics::event(

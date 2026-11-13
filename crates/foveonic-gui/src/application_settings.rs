@@ -51,22 +51,22 @@ pub fn show(
             ui.heading("Memory");
             ui.horizontal(|ui| {
                 ui.label("Cache memory");
-                let mut mib = preferences.memory_cache_bytes as f64 / preferences::MIB as f64;
+                let mut mb = preferences.memory_cache_bytes / preferences::MIB;
                 let range = preferences::MEMORY_BYTES_RANGE;
-                if ui.add(widgets::drag_value(&mut mib)
-                    .range(*range.start() as f64 / preferences::MIB as f64..=*range.end() as f64 / preferences::MIB as f64)
-                    .speed(64.).suffix(" MiB")).changed() {
-                    preferences.memory_cache_bytes = (mib * preferences::MIB as f64).round() as u64;
+                if ui.add(widgets::count_drag_value(&mut mb)
+                    .range(*range.start() / preferences::MIB..=*range.end() / preferences::MIB)
+                    .speed(64.).suffix(" MB")).changed() {
+                    preferences.memory_cache_bytes = mb * preferences::MIB;
                 }
             }).response.on_hover_text("Target for retained image and browser caches. Temporary processing uses additional memory.");
-            ui.label(format!("Retained data: {:.0} MiB", memory.resources.total_bytes as f64 / preferences::MIB as f64))
+            ui.label(format!("Retained data: {:.0} MB", memory.resources.total_bytes as f64 / preferences::MIB as f64))
                 .on_hover_text("Known photo samples, display images and caches. Temporary processing and graphics-driver allocations are additional.");
             if memory.over_budget_bytes > 0 {
-                ui.weak(format!("{:.0} MiB above the cache target", memory.over_budget_bytes as f64 / preferences::MIB as f64));
+                ui.weak(format!("{:.0} MB above the cache target", memory.over_budget_bytes as f64 / preferences::MIB as f64));
             }
             ui.horizontal(|ui| {
                 ui.label("Maximum editing targets");
-                ui.add(widgets::drag_value(&mut preferences.multi_edit_limit)
+                ui.add(widgets::count_drag_value(&mut preferences.multi_edit_limit)
                     .range(1..=usize::MAX).speed(1.));
             }).response.on_hover_text("The maximum number of viewport-selected photographs that receive editor changes. Browser selection remains unlimited.");
             ui.weak("The editing count is independent of cache memory.");

@@ -153,9 +153,8 @@ impl Params {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum DrawSlot {
-    Main,
-    Detail,
-    Comparison(usize),
+    Main(egui::Id),
+    Detail(egui::Id),
 }
 
 struct Resources {
@@ -478,44 +477,13 @@ impl CallbackTrait for Draw {
     }
 }
 
-/// Paint an immutable edited image in a bounded comparison slot using the
-/// ordinary photographic display mapping. This does not submit image processing.
-pub(crate) fn paint_comparison(
-    ui: &mut egui::Ui,
-    texture: Arc<ImageTexture>,
-    extent: [u32; 2],
-    srgb_target: bool,
-    slot: usize,
-    identity: Option<crate::timing::ImageIdentity>,
-) {
-    let (canvas, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
-    let scale =
-        (canvas.width() / extent[0].max(1) as f32).min(canvas.height() / extent[1].max(1) as f32);
-    let image = egui::Rect::from_center_size(
-        canvas.center(),
-        egui::vec2(extent[0] as f32, extent[1] as f32) * scale,
-    );
-    let Some((visible, params)) = Params::clipped(
-        canvas,
-        image,
-        ui.clip_rect().intersect(ui.ctx().screen_rect()),
-        texture.description().space,
-        -1,
-        srgb_target,
-    ) else {
-        return;
-    };
-    ui.painter().add(egui_wgpu::Callback::new_paint_callback(
-        visible,
-        Draw {
-            key: DrawSlot::Comparison(slot),
-            frame: ui.ctx().cumulative_pass_nr(),
-            texture,
-            input: None,
-            params,
-            probe: crate::timing::DrawProbe::new(identity),
-        },
-    ));
+/// Only the transform is carried by explicit Option-arrow navigation.
+/// Widget responses, photo identity and tool state stay with their own viewport.
+#[derive(Clone, Copy)]
+pub struct ViewTransform {
+    scale: Option<f32>,
+    one_to_one: bool,
+    center: Option<egui::Vec2>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -526,6 +494,7 @@ pub struct PixelRegion {
 }
 
 pub struct Viewport {
+    id: egui::Id,
     /// None follows Fit. Some fixes the number of UI points per image pixel.
     scale: Option<f32>,
     pub pan: egui::Vec2,
@@ -544,6 +513,7 @@ pub struct Viewport {
 impl Default for Viewport {
     fn default() -> Self {
         Self {
+            id: egui::Id::new("empty photograph viewport"),
             scale: None,
             pan: egui::Vec2::ZERO,
             editing: false,
@@ -560,6 +530,49 @@ impl Default for Viewport {
     }
 }
 impl Viewport {
+    pub fn id(&self) -> egui::Id {
+        self.id
+    }
+    pub fn response(&self) -> Option<egui::Response> {
+        self.response.clone()
+    }
+
+    pub fn show_empty(&mut self, ui: &mut egui::Ui) {
+        let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+        self.response = Some(ui.interact(rect, self.id, egui::Sense::click()));
+        self.last_image = None;
+        self.last_canvas = None;
+    }
+    pub fn for_photo(path: &std::path::Path) -> Self {
+        Self {
+            id: egui::Id::new(("photograph viewport", path)),
+            ..Default::default()
+        }
+    }
+
+    pub fn transform(&self) -> ViewTransform {
+        let center = self.pending_center.or_else(|| {
+            self.last_canvas.map(|(size, extent)| {
+                let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
+                egui::vec2(0.5, 0.5)
+                    - self.pan / (egui::vec2(extent[0] as f32, extent[1] as f32) * scale)
+            })
+        });
+        ViewTransform {
+            scale: self.scale,
+            one_to_one: self.one_to_one,
+            center,
+        }
+    }
+
+    pub fn set_transform(&mut self, transform: ViewTransform) {
+        self.reset();
+        self.scale = transform.scale;
+        self.one_to_one = transform.one_to_one;
+        self.pending_center = transform.center;
+        self.explicit_zoom_pending = self.explicit_zoom();
+    }
+
     pub fn reset(&mut self) {
         self.explicit_zoom_pending = false;
         self.scale = None;
@@ -567,17 +580,13 @@ impl Viewport {
         self.one_to_one = false;
         self.last_canvas = None;
         self.last_image = None;
+        self.response = None;
         self.pending_center = None;
         self.navigator_offset = egui::Vec2::ZERO;
     }
 
-    /// Start a photo change without carrying stale pixel bounds into loading.
-    /// A pending center survives repeated navigation before any preview arrives.
-    pub fn begin_image(&mut self, preserve_viewport: bool) {
-        if !preserve_viewport {
-            self.reset();
-            return;
-        }
+    /// Retain zoom and image-relative center while discarding old layout bounds.
+    pub fn detach_layout(&mut self) {
         if let Some((size, extent)) = self.last_canvas {
             let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
             let image_size = egui::vec2(extent[0] as f32, extent[1] as f32) * scale;
@@ -585,6 +594,7 @@ impl Viewport {
         }
         self.last_canvas = None;
         self.last_image = None;
+        self.response = None;
         self.navigator_offset = egui::Vec2::ZERO;
     }
     fn fit_scale(size: egui::Vec2, extent: [u32; 2]) -> f32 {
@@ -714,8 +724,8 @@ impl Viewport {
 
     /// Allocate the same canvas and interaction geometry for JPEG and pipeline presentation.
     fn layout(&mut self, ui: &mut egui::Ui, extent: [u32; 2]) -> (egui::Rect, egui::Rect) {
-        let (rect, response) =
-            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+        let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+        let response = ui.interact(rect, self.id, egui::Sense::click_and_drag());
         self.reframe(rect.size(), extent);
         let fit = Self::fit_scale(rect.size(), extent);
         if self.one_to_one {
@@ -743,12 +753,16 @@ impl Viewport {
             self.toggle_fit_snap(ui.ctx().pixels_per_point(), anchor);
         }
         if response.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll != 0. {
+            let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            let factor = if pinch != 1. {
+                pinch
+            } else {
+                (scroll * 0.005).exp()
+            };
+            if factor != 1. {
                 let old = self.scale.unwrap_or(fit);
                 let pixels_per_point = ui.ctx().pixels_per_point();
-                let next = (old * (scroll * 0.005).exp())
-                    .clamp(0.05 / pixels_per_point, 64. / pixels_per_point);
+                let next = (old * factor).clamp(0.05 / pixels_per_point, 64. / pixels_per_point);
                 let anchor = response
                     .hover_pos()
                     .map(|mouse| mouse - rect.center())
@@ -779,6 +793,7 @@ impl Viewport {
     ) {
         let [l, t, r, b] = crop.pixels(native_extent);
         let (canvas, image) = self.layout(ui, [r - l, b - t]);
+        self.last_image = Some((canvas, image));
         let painter = ui
             .painter()
             .with_clip_rect(canvas.intersect(ui.clip_rect()));
@@ -828,7 +843,7 @@ impl Viewport {
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             visible,
             Draw {
-                key: DrawSlot::Main,
+                key: DrawSlot::Main(self.id),
                 frame: ui.ctx().cumulative_pass_nr(),
                 texture,
                 input,
@@ -924,7 +939,7 @@ impl Viewport {
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
             visible,
             Draw {
-                key: DrawSlot::Detail,
+                key: DrawSlot::Detail(self.id),
                 frame: ui.ctx().cumulative_pass_nr(),
                 texture,
                 input: None,
@@ -1084,11 +1099,11 @@ mod photo_navigation_tests {
                     last_canvas: Some((canvas_size, previous_extent)),
                     ..Default::default()
                 };
-                viewport.begin_image(true);
+                viewport.detach_layout();
                 assert_eq!(viewport.zoom_percent(pixels_per_point), Some(200.));
                 assert!(viewport.visible_pixels().is_none());
                 // Repeated navigation can supersede photos before they load.
-                viewport.begin_image(true);
+                viewport.detach_layout();
                 viewport.reframe(egui::Vec2::ZERO, extent);
                 viewport.reframe(canvas_size, extent);
                 let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, canvas_size);
@@ -1113,14 +1128,14 @@ mod photo_navigation_tests {
             last_canvas: Some((size, [4000, 3000])),
             ..Default::default()
         };
-        viewport.begin_image(true);
-        viewport.begin_image(false);
+        viewport.detach_layout();
+        viewport.reset();
         assert_eq!(viewport.zoom_percent(1.), None);
         for extent in [[4000, 3000], [3000, 4000]] {
             viewport.reframe(size, extent);
             assert_eq!(viewport.scale, None);
             assert_eq!(viewport.pan, egui::Vec2::ZERO);
-            viewport.begin_image(true);
+            viewport.detach_layout();
         }
     }
 }

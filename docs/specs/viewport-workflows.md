@@ -23,7 +23,7 @@ Automatic layout should maximize useful photograph area in the available viewpor
 
 Combine Pointer and Hand interaction so selecting a photograph does not require changing tools before panning it. Photograph tools must preserve the existing separation between viewport gestures and ordinary browser/editor interaction. Exact click, drag and modifier behavior remains to be reviewed.
 
-Zoom must work within multi-photo views. Double-click enters detail zoom, which persists until double-click returns that photograph to Fit. A circular loupe must work in both single- and multi-photo views without leaving the current comparison layout or changing its editing targets.
+The owner approved per-photo persistent viewing in both single and multi-photo views. Its implemented contract belongs to [multi-edit](./multi-edit.md#per-photo-viewing) and the [workspace navigation requirements](./gui-workspace.md). A circular loupe must work in both single- and multi-photo views without leaving the current comparison layout or changing its editing targets.
 
 Use the agreed [viewport and image-coordinate vocabulary](../architecture/concepts.md#viewport-and-image-coordinates). A viewport describes the UI area, while its visible region describes image coordinates. Saved Crop remains separate from transient viewing. **Detail view** is the proposed name for persistent zoom, and **loupe** names the magnifier.
 
@@ -40,7 +40,7 @@ Native decoded data, reduced processing inputs, regional/full photographic outpu
 ## Open decisions
 
 - Smart behavior beyond eight displayed photographs and the relationship to overflow tiles.
-- Exact persistent zoom level, pan/zoom synchronization between photographs, and restoration when leaving/rejoining a displayed set.
+- Optional synchronized pan or zoom between photographs. Independent session viewing and restoration are specified in multi-edit.
 - Layout stability, captions and viewport Shift-range order after aspect-aware reordering.
 - When persistent Smart zoom merits whole-image continuation, compared with a transient loupe's region-only demand.
 - Whether the first version needs more than one independently refreshed detail region for the same photograph. One replaceable detail request per photograph is the proposed starting point.

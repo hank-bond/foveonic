@@ -443,7 +443,7 @@ def main():
     parser.add_argument('--quality',choices=PREVIEW_QUALITIES,default='thumb')
     parser.add_argument('--disk-cache-bytes',type=int,default=10_000_000_000,
                         help='owned disk cache budget; zero measures retained processing after original loading')
-    parser.add_argument('--memory-cache-bytes',type=int,default=1024*1024*1024,
+    parser.add_argument('--memory-cache-bytes',type=int,default=2*1024*1024*1024,
                         help='application retained-memory budget, separate from disk storage')
     parser.add_argument('--mode',choices=['off','wall','gpu'],default='wall')
     parser.add_argument('--trace-processor',type=Path)

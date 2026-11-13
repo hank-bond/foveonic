@@ -144,8 +144,12 @@ impl App {
                 );
             }
             "rotate-shared-zoom" => {
-                self.viewport.zoom_by(1.3);
-                self.viewport.pan_to(egui::vec2(0.57, 0.45));
+                self.viewports
+                    .view_mut(self.selected.as_deref())
+                    .zoom_by(1.3);
+                self.viewports
+                    .view_mut(self.selected.as_deref())
+                    .pan_to(egui::vec2(0.57, 0.45));
             }
             "rotate-fast" | "rotate-smart" => {
                 self.preferences.preview_quality = if smoke.targets[smoke.index] == "rotate-fast" {
@@ -157,7 +161,8 @@ impl App {
             }
             "rotate-first-click" | "rotate-click-applied" => {
                 let point = self
-                    .viewport
+                    .viewports
+                    .view(self.selected.as_deref())
                     .position_at_uv(if smoke.targets[smoke.index] == "rotate-first-click" {
                         [0.25, 0.4]
                     } else {
@@ -177,7 +182,11 @@ impl App {
                 }
             }
             "rotate-click-line" => {
-                let point = self.viewport.position_at_uv([0.75, 0.5]).unwrap();
+                let point = self
+                    .viewports
+                    .view(self.selected.as_deref())
+                    .position_at_uv([0.75, 0.5])
+                    .unwrap();
                 smoke
                     .direct_events
                     .push_back(vec![egui::Event::PointerMoved(point)]);
@@ -202,11 +211,13 @@ impl App {
                     );
                 }
                 let start = self
-                    .viewport
+                    .viewports
+                    .view(self.selected.as_deref())
                     .position_at_uv(if freehand { [0.75, 0.5] } else { [0.25, 0.4] })
                     .unwrap();
                 let end = self
-                    .viewport
+                    .viewports
+                    .view(self.selected.as_deref())
                     .position_at_uv(if freehand { [0.74, 0.6] } else { [0.75, 0.5] })
                     .unwrap();
                 smoke.direct_events.push_back(vec![
@@ -224,7 +235,8 @@ impl App {
             }
             "rotate-straight" | "rotate-freehand" => {
                 let point = self
-                    .viewport
+                    .viewports
+                    .view(self.selected.as_deref())
                     .position_at_uv(if smoke.targets[smoke.index] == "rotate-freehand" {
                         [0.74, 0.6]
                     } else {

@@ -69,10 +69,6 @@ impl App {
     pub(crate) fn comparison_view(&mut self, ui: &mut egui::Ui, paths: &[PathBuf]) -> bool {
         let mut changed = false;
         let available = ui.available_size();
-        if ui.rect_contains_pointer(ui.available_rect_before_wrap()) {
-            self.comparison_zoom =
-                (self.comparison_zoom * ui.input(|i| i.zoom_delta())).clamp(0.5, 3.);
-        }
         let layout = layout(paths.len(), available, self.comparison_zoom);
         self.displayed_paths
             .extend_from_slice(&paths[..layout.shown]);
@@ -101,63 +97,82 @@ impl App {
             let mut child = ui.new_child(
                 egui::UiBuilder::new()
                     .max_rect(image_rect)
-                    .id_salt(("comparison photo content", index)),
+                    .id_salt(("comparison photo content", path)),
             );
             child.set_clip_rect(image_rect.intersect(ui.clip_rect()));
             let has_active_frame = self.frame.as_ref().is_some_and(|frame| frame.path == *path);
             if active && (has_active_frame || self.multi_edit_frame(path).is_none()) {
                 let temporary_pan = ui.input(|input| input.key_down(egui::Key::Space));
                 let editing = crate::photo_tools::takes_pointer(ui.ctx()) && !temporary_pan;
-                if selecting
-                    || (editing
-                        && !(self.photo_interaction_available(mapping)
-                            || self.framing_preview_active()))
+                if editing
+                    && !(self.photo_interaction_available(mapping) || self.framing_preview_active())
                 {
                     child.disable();
                 }
                 changed |= self.show_photo(&mut child, mapping);
                 self.before_badge(&child, image_rect);
-            } else if let Some(frame) = self.multi_edit_frame(path) {
-                let density = crate::rendering::quality::fit_density(
-                    image_rect.size().into(),
-                    frame.native_display_extent(),
-                    ui.ctx().pixels_per_point(),
-                );
-                crate::viewport::paint_comparison(
-                    &mut child,
-                    frame.view(false).clone(),
-                    frame.display_extent(false),
-                    self.srgb_target,
-                    index,
-                    frame.diagnostic_identity(false),
-                );
-                self.observe_preview_density(path, density);
             } else {
-                // Larger display previews belong only to the bounded editing set.
-                let preview = if target {
-                    self.browser.preview(path)
+                let view = self.viewports.view_mut(Some(path));
+                view.editing = crate::photo_tools::takes_pointer(ui.ctx());
+                view.framing = None;
+                view.zoom_snap = self.preferences.zoom_snap;
+                let native_extent = if let Some(frame) = self.multi_edit.frame(path) {
+                    view.show(
+                        &mut child,
+                        frame.view(false).clone(),
+                        frame.display_extent(false),
+                        None,
+                        crate::viewport::Mapping::normal(-1),
+                        self.srgb_target,
+                        frame.diagnostic_identity(false),
+                    );
+                    Some(frame.native_display_extent())
                 } else {
-                    self.browser.thumbnail(path)
+                    let preview = if target {
+                        self.browser.preview(path)
+                    } else {
+                        self.browser.thumbnail(path)
+                    };
+                    if let Some(preview) = preview {
+                        // Browser previews already include their prepared composition.
+                        view.show_preview(
+                            &mut child,
+                            &preview.texture,
+                            preview.native_extent,
+                            Default::default(),
+                        );
+                        Some(preview.native_extent)
+                    } else {
+                        view.show_empty(&mut child);
+                        None
+                    }
                 };
-                if let Some(preview) = preview {
-                    preview.paint(&child, image_rect);
-                    let density = crate::rendering::quality::fit_density(
-                        image_rect.size().into(),
-                        preview.native_extent,
+                if let Some((extent, (_, image))) = native_extent.zip(view.image_rectangles()) {
+                    let density = crate::rendering::quality::display_density(
+                        [image.width(), image.height()],
+                        extent,
                         ui.ctx().pixels_per_point(),
                     );
                     self.observe_preview_density(path, density);
                 }
             }
-            let response = ui.interact(
-                rect,
-                egui::Id::new(("comparison photo", path)),
+            // The image owns its gestures. Only the non-overlapping caption
+            // needs a separate selection response.
+            let caption = ui.interact(
+                egui::Rect::from_min_max(egui::pos2(rect.left(), image_rect.bottom()), rect.max),
+                egui::Id::new(("comparison photo caption", path)),
                 if selecting {
                     egui::Sense::click()
                 } else {
                     egui::Sense::hover()
                 },
             );
+            let response = self
+                .viewports
+                .view(Some(path))
+                .response()
+                .unwrap_or_else(|| caption.clone());
+            let clicked = response.clicked() || caption.clicked();
             let response = response.on_hover_text(if selecting {
                 "Click to edit this photo. Option-click toggles editing. Shift-click selects a range up to the editing limit."
             } else { "Photo tools preserve the viewport editing selection. Press V to select photographs." });
@@ -173,12 +188,12 @@ impl App {
                 crate::timing::emit("viewport.tile.release", || {
                     serde_json::json!({
                     "source":path,"photo":foveonic::diagnostics::photo_id(path),
-                    "clicked":response.clicked(),"hovered":response.hovered(),
+                    "clicked":clicked,"hovered":response.hovered(),
                     "selecting":selecting,"active":active,"widget":response.id.value(),
                     "rect":[rect.min.x,rect.min.y,rect.max.x,rect.max.y]})
                 });
             }
-            if selecting && response.clicked() {
+            if selecting && clicked {
                 let modifiers = ui.input(|input| input.modifiers);
                 self.comparison_selection = Some(Request {
                     path: path.clone(),

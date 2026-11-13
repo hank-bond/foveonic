@@ -38,7 +38,7 @@ The owner agreed these distinct meanings:
 
 Zoom and pan define the transform between a viewport and its visible region. A single-photo view has one photograph viewport. A multi-photo comparison has one per photograph within the comparison area. A loupe follows the same distinction between its display area and the image region it shows.
 
-Layout supplies viewport geometry. UI interaction owns zoom and pan, from which the visible region is derived. The coordinator requests useful rendering, while the engine owns numerical alignment and required neighboring samples. These distinctions do not prescribe additional managers or one Rust type per term. Saved Crop remains a separate photographic composition setting.
+Layout supplies viewport geometry. A photo-keyed UI owner retains each photograph’s zoom and pan across single and multi-photo layouts. UI interaction changes that state, from which the visible region is derived. The coordinator requests useful rendering, while the engine owns numerical alignment and required neighboring samples. These distinctions do not prescribe additional managers or one Rust type per term. Saved Crop remains a separate photographic composition setting.
 
 ## Established meanings
 

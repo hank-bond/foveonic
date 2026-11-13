@@ -62,6 +62,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[multi_edit_runtime.rs](./multi_edit_runtime.rs)** Owns bounded photo settings and images with independent editing selection and render demand.
 - **[navigator.rs](./navigator.rs)** Keeps navigator previews small and lets the main image reach the screen first.
 - **[photo_tools.rs](./photo_tools.rs)** Owns photograph-tool selection, cancellation and pointer routing, and composes the toolbar.
+- **[photo_views.rs](./photo_views.rs)** Retains per-photo viewing geometry independently of rendered pixels and editing selection.
 - **[preferences.rs](./preferences.rs)** Persists workspace, display, cache and per-mode processing preferences separately from image edits.
 - **[preview_image.rs](./preview_image.rs)** Prepares oriented display thumbnails and larger previews away from the UI thread.
 - **[previews.rs](./previews.rs)** Retains edited GPU previews immediately and persists bounded photographic previews after foreground work yields.
