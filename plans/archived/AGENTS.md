@@ -24,6 +24,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[camera-repair-default](./camera-repair-default.md)** _(archived)._ Camera-record repair uses source-derived cutoffs with a manual override; ordered correction now fixes the subsequently reported leaf cluster.
 - **[cargo-releases](./cargo-releases.md)** _(archived)._ Replace Python app packaging with Cargo tasks and prepare an unsigned v0.1.0 draft-release workflow.
 - **[checkpoint-profiling](./checkpoint-profiling.md)** _(archived)._ Measure graph stage costs and retained checkpoint ownership before changing numerical cache policy.
+- **[checkpoint-trace](./checkpoint-trace.md)** _(archived)._ Explain repeated work in ordinary app captures through bounded graph demand and checkpoint metadata.
 - **[classic-auto-performance](./classic-auto-performance.md)** _(archived)._ Parallelize the measured serial reductions in Classic automatic white balance.
 - **[classic-cleanup](./classic-cleanup.md)** _(archived)._ Clarify the Classic photographic/output boundary, consolidate metadata preparation, and retire obsolete profile machinery.
 - **[classic-consolidation](./classic-consolidation.md)** _(archived)._ Consolidate Classic stage selection and preparation while enforcing signal-scale boundaries.

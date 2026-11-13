@@ -9,6 +9,7 @@ from pathlib import Path
 import statistics
 import subprocess
 from file_hash import digest
+from checkpoint_trace import explain as explain_checkpoints
 
 
 # Hex transports text through the CLI CSV writer, including JSON quotes/newlines.
@@ -351,6 +352,7 @@ def node_work_census(events):
     for key, event in nodes.items():
         fields = event['args']
         rows[key] = {'slice': key, **{name: fields.get(name) for name in (*IDENTITY_FIELDS, 'node')},
+                     'graph_id':fields.get('graph_id'), 'output_count':fields.get('outputs'),
                      'operation': fields['operation'], 'executed': fields['executed'],
                      'seed_hits': fields.get('seed_hits', 0),
                      'inclusive_host_ms': None if event['dur'] < 0 else event['dur'] / 1e6,
@@ -600,15 +602,18 @@ def analyze_tables(tables, capture_summary):
         if all(key in fields for key in ('clock_id','start_tick','end_tick','duration_ns')):
             gpu.append(fields)
     gpu_status = gpu_query_status(events)
+    work = node_work_census(events)
+    memory = memory_snapshots(events)
     return {'schema_version': 1, 'input_kind': 'perfetto', 'validity': validity,
             'behavior_valid': (not failures and bool(steps)) if markers else (smoke['valid'] if smoke else None), 'behavior_failures': failures,
             'smoke':smoke,
             'steps': steps, 'incomplete_steps': incomplete,
-            'memory_snapshots': memory_snapshots(events),
+            'memory_snapshots': memory,
+            'checkpoint_explanations':explain_checkpoints(events, work, memory, validity['valid']),
             'resource_events': [{'name':event['name'], 'ts_ns':event['ts'], 'args':event['args']}
                                       for event in events if event['name'].startswith('cache.')
                                       or event['name'] in ('source.read.complete', 'gpu.encode.dispatch')],
-            'work_census': node_work_census(events),
+            'work_census': work,
             'event_counts': dict(Counter(event['name'] for event in events)),
             'flow_count': len(tables['flows']),
             'host_scope_elapsed_ms': [{'category':category,'name':name,**distribution(values)} for (category,name),values in sorted(scopes.items())],
@@ -630,6 +635,15 @@ def analyze_capture(directory, tool, attach=True):
     summary = json.loads(summary_path.read_text())
     tables = query_trace(tool, directory / 'trace.pftrace', directory / 'analysis')
     result = analyze_tables(tables, summary)
+    checkpoints = result.pop('checkpoint_explanations')
+    (directory/'analysis'/'checkpoint-explanations.json').write_text(json.dumps(checkpoints, indent=2)+'\n')
+    result['checkpoint_explanations'] = {
+        'path':'analysis/checkpoint-explanations.json', 'graphs':len(checkpoints['graphs']),
+        'incomplete_graphs':sum(not graph['local_evidence_complete'] for graph in checkpoints['graphs']),
+        'producers_with_cached_siblings':sum(len(graph['producers_with_cached_siblings']) for graph in checkpoints['graphs']),
+        'recorded_history_valid':checkpoints['recorded_history_valid'],
+        'unidentified_graph_records':checkpoints['unidentified_graph_records'],
+        'orphan_graph_ids':checkpoints['orphan_graph_ids']}
     node_rows = result['work_census'].pop('nodes')
     (directory/'analysis'/'node-work.json').write_text(json.dumps(node_rows, indent=2)+'\n')
     result['work_census']['nodes'] = 'analysis/node-work.json'

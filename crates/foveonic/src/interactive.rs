@@ -327,6 +327,7 @@ struct WorkingSet {
 }
 #[derive(Default)]
 pub(crate) struct Cache {
+    diagnostic_id: std::sync::OnceLock<u64>,
     owner: Option<Arc<()>>,
     source: Option<crate::source::SourceOrigin>,
     repair: Option<RepairSlot>,
@@ -340,6 +341,30 @@ pub(crate) struct Cache {
 }
 impl Cache {
     pub(crate) const LIMIT: u64 = 1024 * 1024 * 1024;
+
+    pub(crate) fn diagnostic_id(&self) -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        *self
+            .diagnostic_id
+            .get_or_init(|| NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub(crate) fn diagnostic_version(&self, name: &str) -> Option<u64> {
+        self.working
+            .versions
+            .get(name)
+            .map(|version| version.generation)
+    }
+
+    pub(crate) fn trace_checkpoints(&self, graph_id: u64) {
+        diagnostics::event(Category::Cache, "cache.checkpoint.snapshot", |fields| {
+            self.diagnostic_source(fields);
+            fields.u64("graph_id", graph_id).str(
+                "entries",
+                &serde_json::to_string(&self.checkpoints()).expect("scalar checkpoint inventory"),
+            );
+        });
+    }
 
     fn checkpoint_versions(&self) -> Vec<crate::profile::CheckpointVersion> {
         self.retained_versions()
@@ -469,6 +494,7 @@ impl Cache {
             .sum()
     }
     fn diagnostic_source(&self, fields: &mut diagnostics::Fields<'_>) {
+        fields.u64("cache_id", self.diagnostic_id());
         match &self.source {
             Some(crate::source::SourceOrigin::File(identity)) => {
                 fields.str("cache_source", &String::from_utf8_lossy(&identity.location));
@@ -1210,6 +1236,18 @@ impl Execution<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_identity_is_lazy_and_follows_cache_replacement() {
+        let mut first = Cache::default();
+        let second = Cache::default();
+        assert!(first.diagnostic_id.get().is_none());
+        let id = first.diagnostic_id();
+        assert_eq!(first.diagnostic_id(), id);
+        assert_ne!(second.diagnostic_id(), id);
+        first.bind(&Arc::new(()));
+        assert!(first.diagnostic_id.get().is_none());
+        assert_ne!(first.diagnostic_id(), id);
+    }
     #[test]
     fn framing_metadata_is_part_of_the_exact_output_identity() {
         let mut cache = Cache::default();

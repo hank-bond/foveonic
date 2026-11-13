@@ -269,3 +269,100 @@ fn session_node_phases_preserve_work_and_exact_pixels() {
     assert_eq!(activities[0], activities[1]);
     assert_eq!(outputs[0], outputs[1]);
 }
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR, run serialized"]
+fn native_checkpoint_capture_preserves_warm_edit_work_and_pixels() {
+    use crate::{diagnostics, inspection::Content, render::RenderSession};
+    use std::sync::Arc;
+    let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+        .join("blue-parking-sign.x3f");
+    let source = Arc::new(Source::open(&path).unwrap());
+    let engine = Engine::new().unwrap();
+    let mut base = Settings::new("Sunlight", "Standard");
+    base.photographic.tone_method = crate::render::PhotographicMethod::Universal;
+    base.photographic.base_response = crate::render::BaseResponse::Natural;
+    crate::render::ControlCapabilities::from_metadata(&source.metadata)
+        .unwrap()
+        .apply_capture_defaults(&mut base, &source.metadata)
+        .unwrap();
+    let mut exposure = base.clone();
+    exposure.exposure = 0.25;
+    let mut detail = exposure.clone();
+    detail.reconstruction.as_mut().unwrap().texture.fine = 1.3;
+    let warm = || {
+        let mut session = RenderSession::new(source.clone());
+        for settings in [&base, &exposure] {
+            engine
+                .render_session(
+                    &mut session,
+                    settings,
+                    &["final"],
+                    || false,
+                    &mut Profile::default(),
+                )
+                .unwrap()
+                .unwrap();
+        }
+        engine.device().poll(wgpu::Maintain::Wait);
+        session
+    };
+    let mut baseline = warm();
+    let before = engine.gpu_activity();
+    let mut artifacts = engine
+        .render_session(
+            &mut baseline,
+            &detail,
+            &["final"],
+            || false,
+            &mut Profile::default(),
+        )
+        .unwrap()
+        .unwrap();
+    engine.device().poll(wgpu::Maintain::Wait);
+    let expected_activity = engine.gpu_activity().since(before);
+    let Content::Image(image) = artifacts.remove(0).content else {
+        panic!("expected image")
+    };
+    let expected = engine.readback_image(&image).unwrap();
+    drop(image);
+    drop(baseline);
+
+    let mut session = warm();
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = std::env::var_os("FOVEONIC_CHECKPOINT_TRACE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| temporary.path().join("capture"));
+    let recorder = diagnostics::Recorder::new();
+    recorder
+        .start(diagnostics::CaptureConfig::default())
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    let _context = diagnostics::enter(diagnostics::Context {
+        task: 77,
+        revision: 3,
+        photo: diagnostics::photo_id(&path),
+        purpose: "current",
+        node: None,
+    });
+    let before = engine.gpu_activity();
+    let mut profile = Profile::default();
+    let mut artifacts = engine
+        .render_session(&mut session, &detail, &["final"], || false, &mut profile)
+        .unwrap()
+        .unwrap();
+    engine.device().poll(wgpu::Maintain::Wait);
+    assert_eq!(
+        serde_json::to_value(engine.gpu_activity().since(before)).unwrap(),
+        serde_json::to_value(expected_activity).unwrap()
+    );
+    assert!(profile.nodes.is_empty() && profile.graphs.is_empty());
+    let Content::Image(image) = artifacts.remove(0).content else {
+        panic!("expected image")
+    };
+    let saved = recorder.stop_save(directory, serde_json::json!({"fixture":"blue-parking-sign.x3f","workload":"warm-exposure-to-detail"})).unwrap().recv().unwrap().unwrap();
+    assert!(saved.trace_bytes > 0);
+    assert_eq!(engine.readback_image(&image).unwrap(), expected);
+}

@@ -119,3 +119,7 @@ One primed-disk Wall run was rejected by the strict trace validator: an idle Thu
 ## Checkpoint cost investigation
 
 The owner next requested per-stage latency and memory evidence before changing the 1 GiB numerical-cache policy. The [checkpoint profiling plan](./archived/checkpoint-profiling.md) owns its instrumentation, controlled measurements and complete-checkpoint-set findings. Diagnostics retain scalar metadata only. Native boundary working storage, steady checkpoint history, decoded CPU owners and GUI presentation owners remain separate measurements. Policy experiments follow owner discussion of those results.
+
+## Native checkpoint explanations
+
+The [native trace slice](./archived/checkpoint-trace.md) connects per-output demand and cache-instance/version identities to existing task timing and worker budget observations. Ordinary manual captures can now explain missing-output producer re-entry, including warm-start recordings. The rebuilt app is ready for owner import/editing captures. Analyze those real usage histories before choosing complete checkpoint sets or background-preparation policies. Keep pre-capture history unknown and validate any predicted benefit through subsequent controlled replay.

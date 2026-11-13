@@ -70,12 +70,15 @@ fn boundary_memory(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn trace_graph_outputs(
     graph_id: Option<u64>,
     graph: &Graph,
     ids: &[usize],
     values: &[Option<Value>],
     cached: &[bool],
+    reachable: Option<&[bool]>,
+    execution: &Execution<'_>,
 ) {
     if !crate::diagnostics::enabled() {
         return;
@@ -94,6 +97,26 @@ fn trace_graph_outputs(
                     .str("data_type", &format!("{:?}", graph.outputs[id].data))
                     .bool("seeded", cached[id])
                     .bool("present", values[id].is_some());
+                fields
+                    .u64("producer", graph.outputs[id].producer as u64)
+                    .str(
+                        "dependencies",
+                        &serde_json::to_string(&graph.outputs[id].dependencies)
+                            .expect("graph output dependencies"),
+                    );
+                if let Some(reachable) = reachable {
+                    fields
+                        .bool("required", reachable[id])
+                        .bool("requested_for_execution", reachable[id] && !cached[id])
+                        .bool("published", !cached[id] && values[id].is_some());
+                }
+                if let Some(cache) = execution.cache.as_deref() {
+                    fields.u64("cache_id", cache.diagnostic_id());
+                    if let Some(version) = cache.diagnostic_version(&graph.outputs[id].cache_name())
+                    {
+                        fields.u64("cache_version", version);
+                    }
+                }
                 if let Some(value) = &values[id] {
                     let (allocation_id, generation) = value.buffer.identity();
                     fields
@@ -184,6 +207,13 @@ impl Engine {
             |fields| {
                 fields.u64("nodes", graph.nodes.len() as u64);
                 fields.u64("targets", targets.len() as u64);
+                fields.u64("outputs", graph.outputs.len() as u64).str(
+                    "requested_roots",
+                    &serde_json::to_string(targets).expect("graph targets"),
+                );
+                if let Some(cache) = execution.cache.as_deref() {
+                    fields.u64("cache_id", cache.diagnostic_id());
+                }
                 if let Some(id) = graph_id {
                     fields.u64("graph_id", id);
                 }
@@ -227,6 +257,9 @@ impl Engine {
         } else {
             graph.required(targets)?
         };
+        if let (Some(graph_id), Some(cache)) = (graph_id, execution.cache.as_deref()) {
+            cache.trace_checkpoints(graph_id);
+        }
         if matches!(context, Input::Metadata(_))
             && graph.outputs.iter().enumerate().any(|(id, output)| {
                 required[id]
@@ -241,7 +274,8 @@ impl Engine {
         }
         // A cached main output does not guarantee that a side output is cached.
         // Request only what is missing so a partial run cannot replace retained values.
-        let reachable = profile.mode.enabled().then(|| required.clone());
+        let reachable =
+            (profile.mode.enabled() || crate::diagnostics::enabled()).then(|| required.clone());
         let required: Vec<bool> = required
             .iter()
             .zip(&cached)
@@ -314,7 +348,8 @@ impl Engine {
                     }
                 },
             );
-            let diagnostic = if let Some(reachable) = &reachable {
+            let diagnostic = if profile.mode.enabled() {
+                let reachable = reachable.as_ref().expect("profiled output reachability");
                 let diagnostic_started = Instant::now();
                 let mut observation = crate::profile::NodeObservation {
                     graph_id: graph_id.expect("profiled graph has an identity"),
@@ -363,7 +398,15 @@ impl Engine {
                 None
             };
             if !run {
-                trace_graph_outputs(graph_id, graph, &node.outputs, &values, &cached);
+                trace_graph_outputs(
+                    graph_id,
+                    graph,
+                    &node.outputs,
+                    &values,
+                    &cached,
+                    reachable.as_deref(),
+                    execution,
+                );
                 if let Some((mut observation, _, _, _)) = diagnostic {
                     observation.memory_after_publication = observation.memory_before;
                     observation.memory_after_retirement = observation.memory_before;
@@ -2208,7 +2251,15 @@ impl Engine {
                 observation.diagnostic_overhead_ms +=
                     diagnostic_started.elapsed().as_secs_f64() * 1000.;
             }
-            trace_graph_outputs(graph_id, graph, &node.outputs, &values, &cached);
+            trace_graph_outputs(
+                graph_id,
+                graph,
+                &node.outputs,
+                &values,
+                &cached,
+                reachable.as_deref(),
+                execution,
+            );
             // Queuing a whole outdated render would delay both drawing and newer edits.
             // Finish submitted work off-thread, then check for newer work between stages.
             // Background graph work uses this same completed-operation boundary.
@@ -2282,6 +2333,15 @@ impl Engine {
             profile.scratch_allocations += scratch.allocations;
             profile.scratch_reuses += scratch.reuses;
         }
+        crate::diagnostics::event(
+            crate::diagnostics::Category::Graph,
+            "graph.complete",
+            |fields| {
+                if let Some(graph_id) = graph_id {
+                    fields.u64("graph_id", graph_id);
+                }
+            },
+        );
         Ok(targets.iter().filter_map(|id| values[*id].take()).collect())
     }
 }

@@ -389,3 +389,30 @@ Run separate `--mode wall` and `--mode gpu` captures for attribution. The exampl
 The report preserves graph topology, output allocation/generation identities, cache version ancestry, overlapping retention flags, node host/GPU timing and graph/scratch/cache boundary ownership. It deduplicates physical storage by allocation identity. CPU source, metadata, preparation and parameter resources remain separate. Boundary bytes exclude node-internal transient peaks, frontend allocations and driver residency. Optional node observation overhead is reported separately, but it does not include every trace or graph-metadata cost. Node total spans include some diagnostic work, and the observation counter includes scans before those spans. Do not subtract the entire observation counter from node totals. Compare separate Off and Wall captures to assess the broader diagnostic effect.
 
 The analyzer reports missing controls, trials, phases and required verification. Unequal verification fails the command. Its ancestry rankings describe measured contributing GPU work per byte and must not be interpreted as marginal latency saved by a new cache policy. Shared producers and preparation outside graph execution require subsequent targeted experiments. The [checkpoint plan](../plans/archived/checkpoint-profiling.md) records those findings and follow-ups.
+
+## Explain checkpoints in app captures
+
+Start a Wall capture from Settings → Diagnostics and use the app normally, including Import, multi-edit, quality changes, zoom/loupe or Before. Stop and save the capture, then run the existing reader:
+
+```sh
+python3 scripts/profiling/trace_analysis.py CAPTURE_DIRECTORY --trace-processor TRACE_PROCESSOR
+```
+
+`analysis/checkpoint-explanations.json` links each graph's requested outputs, dependency table, exact cache versions and observed availability with executed node costs. It identifies producers that ran for missing outputs despite cached siblings. The entry inventory describes unique referenced GPU allocations, including data retained before recording started. Task rows include existing render/queue/UI observations, actual processing route and worker budget boundaries. Native encoding observations identify command encoding rather than physical presentation.
+
+A loss-free capture establishes validity of the recorded history, not completeness before capture started. An absent prior eviction stays unknown. Partial or cancelled graphs are explicitly incomplete, and graph observations without a retained header are listed as orphans. Cache-instance IDs distinguish native, reduced and replacement caches for one photo. Allocation aliases count once within an inventory. Do not sum per-cache inventories or eviction reference bytes into memory freed or a process peak. Existing worker totals provide the deduplicated budget observations.
+
+This report explains actual work. It does not simulate retention policy, estimate counterfactual latency savings or track every reference lifetime. Native capture adds one scalar numerical-cache snapshot per graph and demand metadata to existing output events. It does not enable the headless profiler's per-node memory scans or retain processing buffers. Use separate matched Off runs to assess capture overhead.
+
+The maintained warm-capture check starts recording after exposure preparation, then changes detail. Its source comes from the example release:
+
+```sh
+FOVEONIC_FIXTURE_DIR=.local/example-photographs \
+FOVEONIC_CHECKPOINT_TRACE_DIR="$PWD/.local/warm-checkpoint-capture" \
+cargo test --release --offline -p foveonic --lib native_checkpoint_capture_preserves_warm_edit_work_and_pixels -- --ignored --test-threads=1
+python3 scripts/profiling/trace_analysis.py .local/warm-checkpoint-capture --trace-processor TRACE_PROCESSOR
+FOVEONIC_CHECKPOINT_TRACE_DIR="$PWD/.local/warm-checkpoint-capture" \
+python3 -m unittest discover -s scripts/profiling -p 'test_checkpoint_trace.py'
+```
+
+Choose a new capture directory. The Rust check compares activity and exact pixels with ordinary execution. The Python integration check reads the actual native metadata and validates graph completeness, version links and retained dependency tables. Portable tests separately cover partial producer reuse, allocation aliases, distinct/replaced caches, exact eviction matching and missing history.

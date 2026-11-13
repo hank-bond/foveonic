@@ -25,6 +25,8 @@ Cache-budget workflow tests must report foreground delivery separately from back
 
 Workflow coverage must include Full/Full, reduced/reduced, mixed-resolution editing and native-detail switching through zoom or loupe. Use these cases to check shared-budget retention and reuse independently of selection count, and to detect when background Whole preparation displaces useful regional processing state.
 
+Native captures should connect exact graph-output demand and availability with numerical-cache instance/version identities and scalar retained-checkpoint snapshots at shared execution boundaries. A capture started with warm data must describe the participating cache without relying on earlier admission events. Offline explanations should join these facts with existing task timing and budget observations. Missing or truncated history must remain unknown. Referenced checkpoint bytes must not imply freed memory, and observed rebuilding must not be presented as measured savings under a different policy. Diagnostics must preserve buffer lifetimes and avoid enabling headless per-node memory scans merely to explain a native task.
+
 ## Instrumentation and capture
 
 Instrumentation must have one shared ownership model and reusable scoped APIs. Common execution boundaries should supply coverage automatically. Routine profiling must not require scattered formatted log statements or per-pixel/per-element events. Existing stage measurements and GPU activity counters should migrate into the shared model instead of establishing a parallel profiling system. The viewer and machine reports should preserve scoped application call hierarchy and actual thread ownership. Uninstrumented function internals may require a separate sampling profiler.
