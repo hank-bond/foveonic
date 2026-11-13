@@ -41,6 +41,16 @@ UI interaction owns persistent zoom, pan and loupe position. Processing caches d
 
 Native decoded data, reduced processing inputs, regional/full photographic output and display textures have distinct ownership and memory costs. Preparing native detail must use explicit source identity and current edits. Keep the existing memory-accounting and foreground-priority requirements. Preloading is not actual cache use. A new decoded-RAM retention policy requires evidence that it addresses the measured detail latency.
 
+## Loupe interaction
+
+The approved first version uses **P** to select Loupe. Press and hold over a photograph to show the lens, then drag to inspect that photograph. Releasing the pointer hides the lens. Escape or choosing another tool cancels the gesture. Loupe gestures must preserve both browser and editing selections. Space temporarily pans with the existing viewport behavior.
+
+The toolbar menu provides Small, Medium and Large sizes, 25%, 50%, 100% and 200% magnification, and centered or offset placement. These workspace options persist independently of photographic settings. At 100%, one native image pixel occupies one physical display pixel. Positioning the lens within the viewport must not change which image point it inspects. Its circular image uses the existing color-managed GPU presentation with a thin dark rim.
+
+The lens requests native detail independently of the main preview mode. Compatible existing pixels remain useful while replacement detail renders. Moving the lens replaces obsolete detail demand and must not request whole-image continuation or cancel useful whole-image work. Unsupported regional processing may return whole-image detail, but that image remains a detail resource and must not promote the main preview. A thumbnail-only displayed photograph may temporarily join the bounded photo owner for inspection without joining the editing selection.
+
+The [Capture One Loupe documentation](https://support.captureone.com/hc/en-us/articles/360002472897-The-Loupe-tool) informs the shortcut, hold-and-drag interaction, size, magnification and placement options. Release-to-hide is the chosen first-version interaction here. Separate zoom and focus-point tools from that menu are outside this slice.
+
 ## Open decisions
 
 - Smart behavior beyond eight displayed photographs and the relationship to overflow tiles.
