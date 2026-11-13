@@ -1957,10 +1957,6 @@ impl App {
                     );
                     self.submit(None);
                     assert!(self.busy);
-                    assert!(
-                        self.smart.next([0, 0, 1, 1], [1, 1]).is_none(),
-                        "edit did not queue regional work"
-                    );
                     self.viewports.view_mut(self.selected.as_deref()).reset();
                 }
                 "smart-crop-zoom" | "smart-crop-active-zoom" | "smart-adaptive-zoom" => {
@@ -1972,10 +1968,6 @@ impl App {
                     self.settings.exposure = 0.7;
                     self.submit(None);
                     assert!(self.busy);
-                    assert!(
-                        self.smart.next([0, 0, 1, 1], [1, 1]).is_none(),
-                        "edit did not queue regional work"
-                    );
                     crate::crop_tool::toggle(ctx);
                 }
                 "smart-crop-leave" => {

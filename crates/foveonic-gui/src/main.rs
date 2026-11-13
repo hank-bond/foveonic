@@ -105,7 +105,6 @@ struct App {
     comparison: inspect::Comparison,
     frame: Option<worker::Frame>,
     detail: Option<worker::Frame>,
-    smart: smart::Controller,
     smart_qualities: std::collections::BTreeMap<PathBuf, preferences::PreviewMode>,
     preview_demand_changed: bool,
     scope_images: Option<scopes::Images>,
@@ -343,7 +342,6 @@ impl App {
             comparison: Default::default(),
             frame: None,
             detail: None,
-            smart: Default::default(),
             smart_qualities: Default::default(),
             preview_demand_changed: false,
             scope_images: None,
@@ -451,7 +449,7 @@ impl App {
         self.metadata = None;
         self.frame = None;
         self.detail = None;
-        self.smart.reset();
+        self.cancel_smart();
         self.scope_images = None;
         self.scope_snapshot = None;
         self.scope_key = None;
@@ -583,7 +581,7 @@ impl App {
             }
         }
         self.detail = None;
-        self.smart.reset();
+        self.cancel_smart();
         self.scope_key = None;
         viewport::clear(&self.render_state);
     }
@@ -614,14 +612,12 @@ impl App {
             self.submit_photos();
             return;
         }
-        self.smart.reset();
-        let request = if export.is_none() {
-            self.smart_edit_request()
+        self.cancel_smart();
+        if export.is_none() && self.smart_refinement_active() {
+            self.submit_smart_refinement();
         } else {
-            None
-        };
-        let (quality, region) = request.unwrap_or((self.preferences.preview_quality, None));
-        self.submit_with_quality(export, region, quality);
+            self.submit_with_quality(export, None, self.preferences.preview_quality);
+        }
     }
     fn submit_request(&mut self, export: Option<export::Export>, region: Option<[u32; 4]>) {
         self.submit_with_quality(export, region, self.preferences.preview_quality);
@@ -643,40 +639,9 @@ impl App {
             self.busy = true;
             self.exporting = export.is_some();
             timing::requested(self.revision, path, &self.output, &self.settings);
-            let mut requested = self.view_settings();
-            requested.working_scale = foveonic::render::Scale::NATIVE;
-            requested.preview_region = region;
-            let quality = if region.is_some() {
-                preferences::PreviewMode::Full
-            } else {
-                self.preview_quality_for(path, quality)
-            };
-            let request = request::Request {
-                framing_preview: export.is_none() && self.framing_preview_active(),
-                calibration: self
-                    .noise_calibration
-                    .selected(self.preferences.noise_profile),
-                rendition: self.before.active,
-                revision: self.revision,
-                path: path.clone(),
-                settings: requested,
-                preview_quality: quality,
-                preview_policy: self.preferences.preview_quality,
-                output: if self.before.active == editor::Rendition::Current {
-                    self.output.clone()
-                } else {
-                    "final".into()
-                },
-                comparison: self.before.active == editor::Rendition::Current
-                    && self.comparison.requested()
-                    && foveonic::inspection::comparison_input(
-                        &self.settings,
-                        &self.output,
-                        self.metadata.as_deref(),
-                    )
-                    .is_some(),
-                export,
-            };
+            let request = self
+                .active_render_request(self.revision, export, region, quality)
+                .unwrap();
             if let Some(opening) = &self.opening {
                 self.worker.submit_at(request, opening.began);
             } else {
@@ -685,6 +650,49 @@ impl App {
             self.opening = None;
             self.busy = self.worker.busy() || self.exporting;
         }
+    }
+    fn active_render_request(
+        &self,
+        revision: u64,
+        export: Option<export::Export>,
+        region: Option<[u32; 4]>,
+        quality: preferences::PreviewMode,
+    ) -> Option<request::Request> {
+        let path = self.selected.as_ref()?;
+        let mut requested = self.view_settings();
+        requested.working_scale = foveonic::render::Scale::NATIVE;
+        requested.preview_region = region;
+        let quality = if region.is_some() {
+            preferences::PreviewMode::Full
+        } else {
+            self.preview_quality_for(path, quality)
+        };
+        Some(request::Request {
+            framing_preview: export.is_none() && self.framing_preview_active(),
+            calibration: self
+                .noise_calibration
+                .selected(self.preferences.noise_profile),
+            rendition: self.before.active,
+            revision,
+            path: path.clone(),
+            settings: requested,
+            preview_quality: quality,
+            preview_policy: self.preferences.preview_quality,
+            output: if self.before.active == editor::Rendition::Current {
+                self.output.clone()
+            } else {
+                "final".into()
+            },
+            comparison: self.before.active == editor::Rendition::Current
+                && self.comparison.requested()
+                && foveonic::inspection::comparison_input(
+                    &self.settings,
+                    &self.output,
+                    self.metadata.as_deref(),
+                )
+                .is_some(),
+            export,
+        })
     }
     fn sync_render_progress(&mut self, failed_revision: Option<u64>) {
         self.busy = self.worker.busy() || self.exporting;
@@ -1783,7 +1791,7 @@ impl eframe::App for App {
             .show(ctx, &mut self.preferences.noise_profile);
         if !self.exporting && self.noise_calibration.take_changed() {
             self.multi_edit.invalidate();
-            self.smart.reset();
+            self.cancel_smart();
             self.detail = None;
             let selected = self
                 .noise_calibration

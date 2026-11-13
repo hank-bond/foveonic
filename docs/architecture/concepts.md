@@ -65,6 +65,10 @@ Do not equate a job finishing, its request settling, its pixels being retained, 
 
 Wide execution is a [separate future engine investigation](../../plans/wide-rendering.md): advancing ready graph work across photographs rather than finishing each graph serially. It does not imply one shader dispatch or a barrier across all images. It is outside this ownership migration.
 
+## Refinement requests
+
+A refinement request freezes a first render request and an optional whole-image continuation. The UI supplies visible image coordinates and reserves ordered revisions for both. The coordinator owns completion, replacement and when continuation becomes runnable. A request without continuation settles after its first result. Existing Smart interactions request whole-image continuation. Source loading and numerical processing keep their existing owners.
+
 ## Naming practice
 
 Prefer established software terms with familiar meanings. Reuse request, job, result and handler in other domains when those meanings fit, qualifying the domain where context needs it. Define a new concept only when existing vocabulary cannot explain a behavior callers need to distinguish. If two different things need the same word, refine the distinction before naming their types. Avoid converting every lifecycle step into a new noun or exposing implementation details in a domain name. Introduce concrete API names with their first callers and migrate those callers together.

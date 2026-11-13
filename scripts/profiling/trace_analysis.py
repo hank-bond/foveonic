@@ -113,6 +113,40 @@ def loss_status(stats, complete):
             'valid': complete is True and checked and not problems}
 
 
+def cancelled_prefetch_reads(events):
+    """Require the read's own prefetch scope to report an explicit interruption."""
+    indexed = {str(event['id']): event for event in events if 'id' in event}
+    outcomes = {str(event.get('parent_id')): event for event in events
+                if event['name'] == 'cache.processing.prefetch_result'}
+    misses = {str(event.get('parent_id')): event for event in events
+              if event['name'] == 'cache.decoded.miss'}
+    cancelled = set()
+    for event in events:
+        fields = event['args']
+        if (event['name'] != 'source.read.complete' or fields.get('task') != 0
+                or fields.get('purpose') != 'thumb_prefetch'
+                or fields.get('storage') != 'decoded-cache'
+                or fields.get('complete') is not False or fields.get('read_errors') != 0):
+            continue
+        parent = str(event.get('parent_id'))
+        miss = None
+        while parent in indexed:
+            scope = indexed[parent]
+            if scope['name'] == 'cache.decoded.lookup':
+                miss = misses.get(parent)
+            if scope['name'] == 'cache.processing.prefetch':
+                outcome = outcomes.get(parent)
+                if (outcome and outcome['args'].get('outcome') == 'interrupted'
+                        and miss and miss['args'].get('reason') == 'background prefetch interrupted'
+                        and fields.get('source')
+                        and outcome['args'].get('source') == fields['source']
+                        and miss['args'].get('source') == fields['source']):
+                    cancelled.add(str(event['id']))
+                break
+            parent = str(scope.get('parent_id'))
+    return cancelled
+
+
 def expected_work(window, expectations, photos, sources=None):
     """Check actual work independently of accepted result identity or latency."""
     payloads = [event for event in window if event['name'] == 'source.read.complete' and
@@ -137,7 +171,11 @@ def expected_work(window, expectations, photos, sources=None):
         expected = expectations.get(field)
         if expected is not None and counts[kind] != expected:
             issues.append(f'{kind} payload reads: expected {expected}, observed {counts[kind]}')
-    if any(event['args'].get('read_errors', 0) or event['args'].get('complete') is False for event in reads):
+    cancelled = cancelled_prefetch_reads(window)
+    cancelled_reads = [event for event in reads if str(event.get('id')) in cancelled]
+    if any(event['args'].get('read_errors', 0) or
+           (event['args'].get('complete') is False and str(event.get('id')) not in cancelled)
+           for event in reads):
         issues.append('a source payload read failed or was incomplete')
     dispatches = [event for event in window if event['name'] == 'gpu.encode.dispatch' and
                   event['args'].get('purpose') in ('current', 'camera', 'defaults', 'detail', 'inspection')]
@@ -187,6 +225,8 @@ def expected_work(window, expectations, photos, sources=None):
             'target_photographic_dispatches': [work_identity(event) for event in target_dispatches],
             'payload_read_counts': dict(counts),
             'payload_attempts_without_io': len(not_started),
+            'cancelled_payload_read_count': len(cancelled_reads),
+            'cancelled_payload_read_bytes': sum(event['args'].get('bytes', 0) for event in cancelled_reads),
             'payload_read_bytes': sum(event['args'].get('bytes', 0) for event in reads),
             'background_payload_read_counts': dict(Counter(event['args']['storage'] for event in background)),
             'background_payload_read_bytes': sum(event['args'].get('bytes', 0) for event in background),

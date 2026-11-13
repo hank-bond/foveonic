@@ -1,7 +1,7 @@
 """Check real-trace query decoding and scheduling-independent scenario assertions without GPU work."""
 
 import unittest
-from trace_analysis import analyze_tables, csv_tables, decode_transport, loss_status, typed_arg
+from trace_analysis import expected_work, analyze_tables, csv_tables, decode_transport, loss_status, typed_arg
 
 
 def tables(events):
@@ -362,6 +362,54 @@ class TraceAnalysisTests(unittest.TestCase):
         result=analyze_tables(tables([(10,'capture.start',{})]),{'complete':True})
         self.assertIsNone(result['behavior_valid'])
         self.assertEqual(result['steps'],[])
+
+
+class PrefetchCancellationTests(unittest.TestCase):
+    def events(self):
+        return [
+            {'id': '1', 'parent_id': None, 'name': 'cache.processing.prefetch', 'args': {'source': 'A.x3f'}},
+            {'id': '2', 'parent_id': '1', 'name': 'cache.decoded.lookup', 'args': {}},
+            {'id': '3', 'parent_id': '2', 'name': 'source.read.complete', 'args': {
+                'task': 0, 'photo': 1, 'purpose': 'thumb_prefetch', 'source': 'A.x3f', 'storage': 'decoded-cache',
+                'read_operations': 1, 'bytes': 64, 'read_errors': 0, 'complete': False}},
+            {'id': '5', 'parent_id': '2', 'name': 'cache.decoded.miss',
+             'args': {'source': 'A.x3f', 'reason': 'background prefetch interrupted'}},
+            {'id': '4', 'parent_id': '1', 'name': 'cache.processing.prefetch_result',
+             'args': {'source': 'A.x3f', 'outcome': 'interrupted'}},
+        ]
+
+    def test_interrupted_read_is_not_an_io_failure_and_still_counts_physical_work(self):
+        work, issues = expected_work(self.events(), {}, {1})
+        self.assertEqual(issues, [])
+        self.assertEqual(work['payload_read_counts'], {'decoded-cache': 1})
+        self.assertEqual(work['payload_read_bytes'], 64)
+        self.assertEqual(work['cancelled_payload_read_count'], 1)
+        self.assertEqual(work['cancelled_payload_read_bytes'], 64)
+        for expectations in ({'expect_local_reads': 0}, {'expected_work': 'reuse'}):
+            self.assertTrue(expected_work(self.events(), expectations, {1})[1],
+                            'cancellation must not hide unnecessary reads')
+
+    def test_missing_or_unrelated_interruption_does_not_excuse_incomplete_reads(self):
+        for change in ['missing', 'scope', 'source', 'outcome', 'read_error', 'foreground',
+                       'missing_miss', 'miss_scope', 'miss_source', 'checksum', 'storage',
+                       'purpose', 'missing_errors']:
+            events = self.events()
+            if change == 'missing': events.pop()
+            if change == 'scope': events[-1]['parent_id'] = 'other-scope'
+            if change == 'source': events[-1]['args']['source'] = 'B.x3f'
+            if change == 'outcome': events[-1]['args']['outcome'] = 'not-retained'
+            if change == 'read_error': events[2]['args']['read_errors'] = 1
+            if change == 'foreground': events[2]['args']['task'] = 1
+            if change == 'missing_miss': events.pop(3)
+            if change == 'miss_scope': events[3]['parent_id'] = 'other-lookup'
+            if change == 'miss_source': events[3]['args']['source'] = 'B.x3f'
+            if change == 'checksum': events[3]['args']['reason'] = 'checksum mismatch'
+            if change == 'storage': events[2]['args']['storage'] = 'original'
+            if change == 'purpose': events[2]['args']['purpose'] = 'current'
+            if change == 'missing_errors': events[2]['args'].pop('read_errors')
+            work, issues = expected_work(events, {}, {1})
+            self.assertIn('a source payload read failed or was incomplete', issues, change)
+            self.assertEqual(work['cancelled_payload_read_count'], 0)
 
 
 if __name__=='__main__':unittest.main()

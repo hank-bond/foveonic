@@ -3,7 +3,7 @@
 use super::{
     coordinator::{RenderCoordinator, TaskId},
     delivery::ViewState,
-    request::Request,
+    request::{Refinement, Request},
     worker::{
         self, ColorPickRequest, MemoryBudget, Pending, PreparationConfig, ScopeRequest, Update,
     },
@@ -26,6 +26,8 @@ enum Command {
     RetireBefore(PathBuf),
     Clear(bool),
     Submit(Box<Request>, Instant),
+    Refine(Box<Refinement>, Option<SourceOrigin>, Instant),
+    CancelRefinement(PathBuf),
     Overviews(Vec<Request>, Vec<PathBuf>, Instant),
     Retain(Vec<PathBuf>, Vec<PathBuf>),
     Scopes(Box<ScopeRequest>),
@@ -50,6 +52,7 @@ pub(super) struct Handle {
     status: Arc<Mutex<Arc<Status>>>,
     observed: RefCell<Arc<Status>>,
     view: RefCell<Option<Arc<ViewState>>>,
+    refinements: RefCell<Vec<(Refinement, Option<SourceOrigin>)>>,
     preparation: RefCell<Option<Arc<PreparationConfig>>>,
 }
 
@@ -92,6 +95,7 @@ impl Handle {
                 status,
                 observed: Default::default(),
                 view: Default::default(),
+                refinements: Default::default(),
                 preparation: Default::default(),
             },
             updates,
@@ -139,18 +143,71 @@ impl Handle {
     }
 
     pub fn activate(&self, path: PathBuf) {
+        self.refinements.borrow_mut().clear();
         self.send(Command::Activate(path), true);
     }
     pub fn retire_before(&self, path: PathBuf) {
+        self.refinements
+            .borrow_mut()
+            .retain(|(request, _)| request.first.path != path);
         self.send(Command::RetireBefore(path), true);
     }
     pub fn clear(&self, all: bool) {
+        self.refinements.borrow_mut().clear();
         self.send(Command::Clear(all), true);
     }
     pub fn submit(&self, request: Request, queued_at: Instant) {
+        self.refinements.borrow_mut().retain(|(old, _)| {
+            old.first.path != request.path || old.first.rendition != request.rendition
+        });
         self.send(Command::Submit(Box::new(request), queued_at), true);
     }
+    /// Suppress identical intent publication, as with immutable view snapshots.
+    /// Sequencing and completion remain exclusively with the coordinator.
+    pub fn refine(
+        &self,
+        request: Refinement,
+        origin: Option<SourceOrigin>,
+        queued_at: Instant,
+    ) -> bool {
+        let mut previous = self.refinements.borrow_mut();
+        if let Some((old, old_origin)) = previous.iter_mut().find(|(old, old_origin)| {
+            old.same_sequence(&request)
+                && (old_origin.is_none() || origin.is_none() || *old_origin == origin)
+        }) {
+            if old_origin.is_none() && origin.is_some() {
+                *old_origin = origin.clone();
+                // Binding identity changes the desired snapshot, not the work
+                // or presentation revision already published for this sequence.
+                self.send(
+                    Command::Refine(Box::new(old.clone()), origin, queued_at),
+                    false,
+                );
+            }
+            return false;
+        }
+        previous.retain(|(old, _)| {
+            old.first.path != request.first.path || old.first.rendition != request.first.rendition
+        });
+        previous.push((request.clone(), origin.clone()));
+        self.send(Command::Refine(Box::new(request), origin, queued_at), true);
+        true
+    }
+    pub fn cancel_refinement(&self, path: PathBuf) {
+        let mut previous = self.refinements.borrow_mut();
+        let count = previous.len();
+        previous.retain(|(request, _)| request.first.path != path);
+        if previous.len() != count {
+            self.send(Command::CancelRefinement(path), true);
+        }
+    }
     pub fn overviews(&self, requests: Vec<Request>, retained: Vec<PathBuf>, queued_at: Instant) {
+        self.refinements.borrow_mut().retain(|(old, _)| {
+            !requests.iter().any(|request| {
+                request.path == old.first.path
+                    && old.first.rendition == crate::editor::Rendition::Current
+            })
+        });
         self.send(Command::Overviews(requests, retained, queued_at), true);
     }
     pub fn retain(&self, paths: Vec<PathBuf>, retained: Vec<PathBuf>) {
@@ -323,6 +380,14 @@ impl Runtime {
                     self.desire(*request, origin, queued_at);
                 }
             }
+            Command::Refine(request, origin, queued_at) => {
+                let origin = self.cache.source_origin(&request.first.path).or(origin);
+                if let Some(started) = self.coordinator.refine(*request, origin, queued_at) {
+                    self.progress
+                        .begin(started.stamp.revision, started.queued_at);
+                }
+            }
+            Command::CancelRefinement(path) => self.coordinator.cancel_refinement(&path),
             Command::Overviews(requests, retained, queued_at) => {
                 let paths = requests
                     .iter()
@@ -379,8 +444,12 @@ impl Runtime {
                     self.exporting = None;
                 }
                 let view = self.view.as_ref().unwrap().context(&reply.path);
-                let handling = self.coordinator.handle_result(reply, &view);
+                let (handling, started) = self.coordinator.handle_result(reply, &view);
                 reply.handling = Some(handling);
+                if let Some(started) = started {
+                    self.progress
+                        .begin(started.stamp.revision, started.queued_at);
+                }
             }
             Update::Scopes { id, .. } => {
                 if !self.coordinator.finish_scope(*id) {

@@ -78,7 +78,7 @@ impl App {
             }
         } else {
             self.before.active = target;
-            self.smart.reset();
+            self.cancel_smart();
             self.submit_request(None, None);
         }
     }
@@ -110,7 +110,7 @@ impl App {
         }
         self.sync_render_progress(None);
         self.scope_key = None;
-        self.smart.reset();
+        self.cancel_smart();
         self.previews.invalidate();
         crate::viewport::clear(&self.render_state);
     }

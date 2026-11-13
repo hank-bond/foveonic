@@ -23,6 +23,23 @@ pub struct Request {
     pub export: Option<Export>,
 }
 
+/// Frozen refinement intent. The UI reserves both presentation revisions, while
+/// the coordinator decides when the optional whole-image request becomes runnable.
+#[derive(Clone)]
+pub struct Refinement {
+    pub first: Request,
+    pub whole: Option<Request>,
+}
+impl Refinement {
+    /// Panning does not restart the initial region for unchanged photo edits.
+    pub fn same_sequence(&self, other: &Self) -> bool {
+        super::matching::same_request_context(&self.first, &other.first)
+            && super::matching::same_authored_edits(&self.first.settings, &other.first.settings)
+            && self.first.preview_policy == other.first.preview_policy
+            && self.whole.is_some() == other.whole.is_some()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Purpose {
     Current,

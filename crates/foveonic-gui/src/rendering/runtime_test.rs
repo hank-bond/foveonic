@@ -264,3 +264,40 @@ fn a_failure_in_transit_cannot_overwrite_a_newer_ui_edit() {
     assert!(!update.update_photo);
     assert!(update.destination.is_none());
 }
+
+#[test]
+fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_revision() {
+    let rig = Rig::new();
+    let mut first = request("a.x3f", 1, 0.);
+    first.preview_policy = PreviewMode::Smart;
+    first.preview_quality = PreviewMode::Full;
+    first.settings.preview_region = Some([0, 0, 128, 128]);
+    rig.handle.set_view(view(&[first.clone()]));
+    let initial = super::super::request::Refinement { first, whole: None };
+    assert!(rig.handle.refine(initial.clone(), None, Instant::now()));
+    rig.applied();
+    assert_eq!(rig.progress.snapshot().unwrap().revision, 1);
+    let mut pan = initial;
+    pan.first.revision = 3;
+    pan.first.settings.preview_region = Some([100, 100, 228, 228]);
+    assert!(!rig
+        .handle
+        .refine(pan, Some(SourceOrigin::default()), Instant::now()));
+    rig.applied();
+    assert_eq!(rig.tasks()[0].stamp.revision, 1);
+    assert_eq!(rig.progress.snapshot().unwrap().revision, 1);
+    let mut replacement = request("a.x3f", 5, 0.);
+    replacement.preview_policy = PreviewMode::Smart;
+    replacement.preview_quality = PreviewMode::Full;
+    replacement.settings.preview_region = Some([0, 0, 128, 128]);
+    assert!(rig.handle.refine(
+        super::super::request::Refinement {
+            first: replacement,
+            whole: None
+        },
+        Some(SourceOrigin::default()),
+        Instant::now()
+    ));
+    rig.applied();
+    assert_eq!(rig.tasks()[0].stamp.revision, 5);
+}

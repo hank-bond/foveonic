@@ -928,6 +928,17 @@ impl Worker {
     pub fn submit_at(&self, request: Request, queued_at: std::time::Instant) {
         self.runtime.submit(request, queued_at);
     }
+    pub fn refine(
+        &self,
+        request: super::request::Refinement,
+        queued_at: std::time::Instant,
+    ) -> bool {
+        let origin = self.cache.source_origin(&request.first.path);
+        self.runtime.refine(request, origin, queued_at)
+    }
+    pub fn cancel_refinement(&self, path: &std::path::Path) {
+        self.runtime.cancel_refinement(path.to_owned());
+    }
     pub fn set_overviews(
         &self,
         requests: Vec<Request>,
@@ -2218,6 +2229,115 @@ mod tests {
             2,
             "initial Thumb and the single shared native acquisition must suffice"
         );
+    }
+
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
+    fn refinement_continues_without_ui_receipt_and_keeps_regional_admission() {
+        use crate::{
+            editor::Rendition,
+            preferences::PreviewMode,
+            rendering::{delivery, request::Refinement},
+        };
+        use std::time::{Duration, Instant};
+        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let path = root.join("blue-parking-sign.x3f");
+        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
+        worker.cache.configure(foveonic::decode_cache::Settings {
+            enabled: false,
+            ..Default::default()
+        });
+        for (index, (rendition, continuation)) in [
+            (Rendition::Current, true),
+            (Rendition::Camera, true),
+            (Rendition::Defaults, true),
+            (Rendition::Current, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            worker.clear_all();
+            let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+            settings.reconstruction = Some(Default::default());
+            settings.preview_region = Some([100, 100, 512, 512]);
+            let first = super::Request {
+                path: path.clone(),
+                revision: index as u64 * 10 + 1,
+                settings,
+                rendition,
+                output: "final".into(),
+                comparison: false,
+                framing_preview: false,
+                calibration: None,
+                export: None,
+                preview_quality: PreviewMode::Full,
+                preview_policy: PreviewMode::Smart,
+            };
+            let whole = continuation.then(|| {
+                let mut whole = first.clone();
+                whole.revision += 1;
+                whole.settings.preview_region = None;
+                whole
+            });
+            worker.publish_view(&first);
+            assert!(worker.refine(
+                Refinement {
+                    first: first.clone(),
+                    whole: whole.clone()
+                },
+                Instant::now()
+            ));
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while worker.busy() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(!worker.busy(), "refinement waited for UI receipt");
+            // Neither reply has been received or acknowledged by the UI.
+            let regional = receive(&worker);
+            let frame = regional.result.as_ref().unwrap().as_ref().unwrap();
+            assert!(frame.artifact.settings.preview_region.is_some());
+            assert_eq!(frame.revision, first.revision);
+            assert_eq!(
+                regional.handling.unwrap().destination,
+                Some(delivery::Destination::Active)
+            );
+            let view = delivery::ViewState {
+                active: Some(path.clone()),
+                rendition,
+                output: "final".into(),
+                comparison: false,
+                framing_preview: false,
+                exporting: false,
+                calibration: None,
+                settings: first.settings.clone(),
+                overviews: vec![],
+                displayed_revision: None,
+                detail_revision: None,
+            };
+            assert_eq!(
+                delivery::recheck(&regional, &view.context(&path), Some(&first.settings))
+                    .destination,
+                Some(delivery::Destination::Active),
+                "Full promotion must preserve regional delivery"
+            );
+            if let Some(whole) = whole {
+                let reply = receive(&worker);
+                let frame = reply.result.unwrap().unwrap();
+                assert_eq!(frame.revision, whole.revision);
+                assert!(frame.artifact.settings.preview_region.is_none());
+                assert_eq!(worker.progress.snapshot().unwrap().revision, whole.revision);
+                worker.progress.settle(false, Some(whole.revision));
+                assert!(
+                    worker.progress.snapshot().unwrap().failed,
+                    "failure settlement must address the activated Full phase"
+                );
+            } else {
+                assert!(
+                    worker.replies.try_recv().is_err(),
+                    "region-only request queued more work"
+                );
+            }
+        }
     }
 
     #[test]

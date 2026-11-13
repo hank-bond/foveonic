@@ -819,7 +819,7 @@ impl crate::App {
         if covers_active {
             self.restore_photograph(self.revision);
             self.detail = None;
-            self.smart.reset();
+            self.cancel_smart();
         }
         let queued_at = if covers_active {
             self.opening.take().map(|opening| opening.began)

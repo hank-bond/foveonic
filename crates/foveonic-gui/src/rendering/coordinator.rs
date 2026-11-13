@@ -2,7 +2,7 @@
 
 use super::{
     delivery::{self, Destination, ViewContext},
-    request::{Purpose, Request},
+    request::{Purpose, Refinement, Request},
     worker::{ColorPickRequest, Reply, ScopeRequest},
 };
 use foveonic::source::SourceOrigin;
@@ -78,10 +78,17 @@ pub struct ResultUpdate {
     pub update_photo: bool,
     pub destination: Option<Destination>,
 }
+struct RefinementState {
+    first: Stamp,
+    request: Arc<Refinement>,
+}
 struct Desired {
     task: Arc<Task>,
+    refinement: Option<RefinementState>,
     settled: bool,
     admitted: u64,
+    // Coverage of the admitted result. Admission must match the current stamp.
+    regional: bool,
     delivered: Option<(
         TaskId,
         Arc<crate::rendering::worker::presentation::Snapshot>,
@@ -117,6 +124,7 @@ impl RenderCoordinator {
         origin: Option<SourceOrigin>,
         queued_at: Instant,
     ) -> TaskId {
+        self.cancel_refinement_for(&request.path, Some(request.rendition));
         let target = Target::of(&request);
         self.desired.retain(|entry| {
             if target.purpose == Purpose::Current
@@ -224,13 +232,147 @@ impl RenderCoordinator {
         } else {
             self.desired.push(Desired {
                 task,
+                refinement: None,
                 settled: false,
                 admitted: 0,
+                regional: false,
                 delivered: None,
             });
         }
         id
     }
+    pub fn refine(
+        &mut self,
+        request: Refinement,
+        origin: Option<SourceOrigin>,
+        queued_at: Instant,
+    ) -> Option<Arc<Task>> {
+        if let Some(index) = self.desired.iter().position(|entry| {
+            entry.refinement.as_ref().is_some_and(|state| {
+                state.request.same_sequence(&request)
+                    && (entry.task.origin.is_none()
+                        || origin.is_none()
+                        || entry.task.origin == origin)
+            })
+        }) {
+            if let Some(origin) = origin {
+                let stamp = self.desired[index].task.stamp.clone();
+                self.bind_origin(&stamp, &origin);
+            }
+            return None;
+        }
+        self.cancel_refinement_for(&request.first.path, Some(request.first.rendition));
+        // A new edit's regional job replaces obsolete whole-image work for that
+        // photo. Completed whole images remain useful presentation resources.
+        self.desired.retain(|entry| {
+            let keep = request.first.rendition != crate::editor::Rendition::Current
+                || entry.settled
+                || entry.task.stamp.target.path != request.first.path
+                || entry.task.stamp.target.purpose != Purpose::Current;
+            if !keep {
+                retired(entry, "refinement_replaced");
+            }
+            keep
+        });
+        let request = Arc::new(request);
+        self.desire(Arc::new(request.first.clone()), origin, queued_at);
+        let entry = self
+            .desired
+            .iter_mut()
+            .find(|entry| entry.task.stamp.target == Target::of(&request.first))
+            .unwrap();
+        entry.refinement = Some(RefinementState {
+            first: entry.task.stamp.clone(),
+            request,
+        });
+        if !entry.settled {
+            return Some(entry.task.clone());
+        }
+        // The first image can already be admitted, for example when a
+        // region-only request acquires a whole-image continuation later.
+        if entry.admitted == entry.task.stamp.revision {
+            let stamp = entry.task.stamp.clone();
+            let origin = entry.task.origin.clone();
+            let regional = entry.regional;
+            return self.advance_refinement(
+                &stamp,
+                ResultUpdate {
+                    current: true,
+                    update_photo: true,
+                    destination: Some(Destination::Active),
+                },
+                origin.as_ref().map(|origin| (origin, regional)),
+            );
+        }
+        None
+    }
+
+    pub fn cancel_refinement(&mut self, path: &Path) {
+        self.cancel_refinement_for(path, None);
+    }
+
+    fn cancel_refinement_for(&mut self, path: &Path, rendition: Option<crate::editor::Rendition>) {
+        self.desired.retain_mut(|entry| {
+            if entry.task.stamp.target.path != path
+                || !entry.refinement.as_ref().is_some_and(|state| {
+                    rendition.is_none_or(|rendition| state.request.first.rendition == rendition)
+                })
+            {
+                return true;
+            }
+            entry.refinement = None;
+            let keep = entry.task.request.settings.preview_region.is_none() || entry.settled;
+            if !keep {
+                retired(entry, "refinement_cancelled");
+            }
+            keep
+        });
+    }
+
+    fn advance_refinement(
+        &mut self,
+        stamp: &Stamp,
+        update: ResultUpdate,
+        image: Option<(&SourceOrigin, bool)>,
+    ) -> Option<Arc<Task>> {
+        let index = self.desired.iter().position(|entry| {
+            entry.task.stamp == *stamp
+                && entry
+                    .refinement
+                    .as_ref()
+                    .is_some_and(|state| state.first == *stamp)
+        })?;
+        if !update.current || update.destination.is_none() {
+            self.desired[index].refinement = None;
+            return None;
+        }
+        let Some((origin, regional)) = image else {
+            self.desired[index].refinement = None;
+            return None;
+        };
+        if !regional {
+            return None;
+        }
+        let state = self.desired[index].refinement.take().unwrap();
+        let Some(whole) = state.request.whole.as_ref() else {
+            self.desired[index].refinement = Some(state);
+            return None;
+        };
+        let target = Target::of(whole);
+        self.desire(
+            Arc::new(whole.clone()),
+            Some(origin.clone()),
+            Instant::now(),
+        );
+        let entry = self
+            .desired
+            .iter_mut()
+            .find(|entry| entry.task.stamp.target == target)
+            .unwrap();
+        entry.refinement = Some(state);
+        (!entry.settled).then(|| entry.task.clone())
+    }
+
     pub fn retain_overviews(&mut self, paths: &[PathBuf], retained: &[PathBuf]) {
         self.desired.retain(|entry| {
             let keep = entry.task.stamp.target.purpose != Purpose::Current
@@ -245,6 +387,9 @@ impl RenderCoordinator {
     pub fn activate(&mut self, path: &Path) {
         if self.active.as_deref() == Some(path) {
             return;
+        }
+        if let Some(previous) = self.active.clone() {
+            self.cancel_refinement(&previous);
         }
         self.active = Some(path.to_owned());
         self.desired.retain(|entry| {
@@ -332,7 +477,11 @@ impl RenderCoordinator {
     }
     /// Decide reuse and view updates together. Photo feedback can remain useful
     /// even when the image is rejected. UI application and acknowledgement follow.
-    pub fn handle_result(&mut self, reply: &Reply, view: &ViewContext<'_>) -> ResultUpdate {
+    pub fn handle_result(
+        &mut self,
+        reply: &Reply,
+        view: &ViewContext<'_>,
+    ) -> (ResultUpdate, Option<Arc<Task>>) {
         let completion = if reply.exported.is_some() {
             crate::timing::task(
                 &reply.stamp,
@@ -367,11 +516,35 @@ impl RenderCoordinator {
                 None
             }
         };
-        ResultUpdate {
+        let update = ResultUpdate {
             current: completion == Completion::Current,
             update_photo: decision.update_photo,
             destination,
+        };
+        if update.current && update.destination.is_some() {
+            if let Some(image) = image {
+                if let Some(entry) = self
+                    .desired
+                    .iter_mut()
+                    .find(|entry| entry.task.stamp == reply.stamp)
+                {
+                    entry.regional = image.artifact.settings.preview_region.is_some();
+                }
+            }
         }
+        // Freeze regional admission before replacing desired work. Camera and
+        // Defaults use the same target for their regional and whole phases.
+        let started = self.advance_refinement(
+            &reply.stamp,
+            update,
+            image.map(|frame| {
+                (
+                    &frame.origin,
+                    frame.artifact.settings.preview_region.is_some(),
+                )
+            }),
+        );
+        (update, started)
     }
     pub fn finish(&mut self, stamp: &Stamp) -> Completion {
         let Some(entry) = self

@@ -4,7 +4,7 @@ summary: "Render coordination separates request meaning, work matching, target s
 
 # Render coordination
 
-Requests describe desired photo results and preview policy. Matching compares requests and settings without scheduling work. The coordinator owns per-target demand, task identity and the result handler for settlement, reuse and admission. The runtime runs that coordinator on its own thread, handles typed commands and forwards bounded results. Delivery supplies classification and the UI's final view check. The UI applies permitted updates and acknowledges Active image delivery. Smart owns progressive detail requests. Keep these responsibilities distinct from the worker's processing resources and execution order.
+Requests describe desired photo results and preview policy. Matching compares requests and settings without scheduling work. The coordinator owns per-target demand, task identity and the result handler for settlement, reuse and admission. The runtime runs that coordinator on its own thread, handles typed commands and forwards bounded results. Delivery supplies classification and the UI's final view check. The UI applies permitted updates and acknowledges Active image delivery. Smart publishes visible detail intent and preserves compatible presentation. The coordinator owns its regional completion and optional whole-image continuation. Keep these responsibilities distinct from the worker's processing resources and execution order.
 
 Authored edits remain with the application, multi-edit runtime and sidecar session. Numerical graph validity, intermediate reuse and operation implementations remain in `foveonic`. This module coordinates that engine without reproducing its processing graph.
 
@@ -25,7 +25,7 @@ Authored edits remain with the application, multi-edit runtime and sidecar sessi
 - **[quality.rs](./quality.rs)** Selects a preview's processing level from workspace policy and physical display sampling.
 - **[request.rs](./request.rs)** Describes photo render requests and resolves their purpose and preview geometry independently of execution.
 - **[runtime.rs](./runtime.rs)** Owns render coordination on a dedicated thread and publishes bounded UI updates.
-- **[smart.rs](./smart.rs)** Refines reduced overviews into Full, using a first viewport tile where the recipe supports it.
+- **[smart.rs](./smart.rs)** Publishes Smart detail intent and preserves compatible image presentation without sequencing jobs.
 - **[source_loader.rs](./source_loader.rs)** Acquires decoded sources off the renderer and hands bounded results through coordination.
 
 <!-- INDEX:END -->
