@@ -40,6 +40,11 @@ pub(in crate::render::recipes) fn build(
     let space = ColorSpace::from_metadata(source.metadata())?;
     linear_edits::alias(&mut recipe, space, "linear.base")?;
     if requested(&recipe.graph, names) {
+        if settings.preview_region.is_some() {
+            recipe
+                .graph
+                .set_view(recipe.final_id, super::super::camera_view(recipe.params));
+        }
         return Ok(recipe);
     }
     let adaptive = if settings.adaptive_tone_active() {
@@ -126,6 +131,13 @@ pub(in crate::render::recipes) fn build(
         profile,
         execution,
     )?;
+    if settings.preview_region.is_some() {
+        // Shared filters use all valid active samples, while presentation shows
+        // only the requested rectangle inside that supported backing buffer.
+        recipe
+            .graph
+            .set_view(recipe.final_id, super::super::camera_view(recipe.params));
+    }
     if requested(&recipe.graph, names) {
         return Ok(recipe);
     }

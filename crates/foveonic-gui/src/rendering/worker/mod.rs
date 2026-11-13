@@ -38,6 +38,13 @@ struct Checks {
     source_loads: std::sync::atomic::AtomicU64,
     deferred: (Mutex<Vec<super::coordinator::Stamp>>, Condvar),
     recipes: Mutex<Vec<(u64, u64)>>,
+    speculative_hold: Mutex<
+        Option<(
+            crossbeam_channel::Sender<()>,
+            crossbeam_channel::Receiver<()>,
+        )>,
+    >,
+    yielded: (Mutex<Vec<super::coordinator::Stamp>>, Condvar),
 }
 #[cfg(test)]
 use crate::preferences::PreviewMode;
@@ -281,6 +288,8 @@ pub struct MemoryStatus {
 pub struct Worker {
     #[cfg(test)]
     checks: Arc<Checks>,
+    #[cfg(test)]
+    test_pending: Arc<(Mutex<Pending>, Condvar)>,
     pub replies: crossbeam_channel::Receiver<Update>,
     pub progress: crate::progress::Tracker,
     pub cache: Arc<foveonic::decode_cache::Cache>,
@@ -293,6 +302,7 @@ pub struct Worker {
 enum Execution {
     Complete(Option<Box<Frame>>),
     NeedsSource,
+    Yield,
 }
 impl Worker {
     pub fn new(engine: Engine, context: egui::Context) -> Self {
@@ -477,7 +487,7 @@ impl Worker {
                             continue 'worker;
                         }
                         let export_ready = state.export.as_ref().is_some_and(|task| cursor.ready(&task.stamp, sources.can_retry(&task.request.path, &state)));
-                        let next = export_ready.then(|| state.export.take()).flatten()
+                        let mut next = export_ready.then(|| state.export.take()).flatten()
                             .or_else(|| {
                                 previous
                                     .as_ref()
@@ -485,6 +495,10 @@ impl Worker {
                                     .and_then(|prior| cursor.followup(&state.plan, prior))
                             })
                             .or_else(|| cursor.next_ready(&state.plan, |task| sources.can_retry(&task.request.path, &state)));
+                        if state.export.is_some() && next.as_ref().is_some_and(|task| task.speculative) {
+                            cursor.yield_task(&next.as_ref().unwrap().stamp);
+                            next = None;
+                        }
                         if let Some(task) = next {
                             break task;
                         }
@@ -568,7 +582,7 @@ impl Worker {
                 crate::timing::task(
                     &task.stamp,
                     "execution_started",
-                    || serde_json::json!({"has_pixel_seed":task.seed.is_some()}),
+                    || serde_json::json!({"has_pixel_seed":task.seed.is_some(), "speculative":task.speculative}),
                 );
                 let _execution_scope = foveonic::diagnostics::scope(
                     foveonic::diagnostics::Category::Cpu,
@@ -579,6 +593,9 @@ impl Worker {
                 let mut metadata = None;
                 let mut settings = request.settings.clone();
                 let mut defaults_errors = Vec::new();
+                let yielded = std::cell::Cell::new(false);
+                #[cfg(test)]
+                let initial_submissions = engine.gpu_activity().submissions;
                 let result = (|| -> foveonic::source::Result<Execution> {
                     let composition_quality = presented.quality_for_view_change(request, &decoded_cache);
                     let mut composed = presented.prepare(request, &decoded_cache)?;
@@ -631,10 +648,22 @@ impl Worker {
                             .unwrap_or_default()
                     } else { source.as_ref().unwrap().1.changed_parameters(&settings) };
                     let cancel=||{
+                        #[cfg(test)]
+                        if task.speculative && engine.gpu_activity().submissions > initial_submissions {
+                            let hold = observations.speculative_hold.lock().unwrap().take();
+                            if let Some((reached, release)) = hold {
+                                let _ = reached.send(());
+                                let _ = release.recv();
+                            }
+                        }
                         let state=slot.0.lock().unwrap();
                         if state.clear || state.stop { return true; }
                         let Some(desired) = state.plan.task(&task.stamp.target) else { return true; };
                         if task.origin.is_some() && desired.origin.is_some() && task.origin != desired.origin { return true; }
+                        if cursor.should_yield(&state.plan, &task, state.export.is_some()) {
+                            yielded.set(true);
+                            return true;
+                        }
                         if desired.stamp.id == task.stamp.id { return false; }
                         let pending = &desired.request;
                         let mut next=pending.settings.clone();
@@ -687,15 +716,15 @@ impl Worker {
                         foveonic::diagnostics::event(foveonic::diagnostics::Category::Graph,"processing",|fields| {
                             fields.u64("revision",request.revision).str("source",&request.path.to_string_lossy()).str("output",root)
                                 .str("execution",if reusing_pixels {"presentation"} else if used_reduced {"reduced-session"} else {"session"})
-                                .str("status",if rendered.is_some(){"complete"}else{"superseded"})
+                                .str("status",if rendered.is_some(){"complete"}else if yielded.get(){"yielded"}else{"superseded"})
                                 .u64("scale",u64::from(settings.working_scale.divisor())).u64("cache_before_bytes",cache_before.unwrap_or(0))
                                 .u64("cache_after_bytes",if reusing_pixels {0} else if used_reduced {reduced.cached_bytes_for_path(&request.path)} else {source.as_ref().unwrap().1.cached_bytes()});
                             crate::timing::activity(fields,engine.gpu_activity().since(before));
                         });
                     }
                     let mut profile = Profile::new(crate::timing::mode());
-                    let Some(mut artifacts) = rendered else { return Ok(Execution::Complete(None)); };
-                    if cancel(){return Ok(Execution::Complete(None));}
+                    let Some(mut artifacts) = rendered else { return Ok(if yielded.get() { Execution::Yield } else { Execution::Complete(None) }); };
+                    if cancel(){return Ok(if yielded.get() { Execution::Yield } else { Execution::Complete(None) });}
                     let retain_whole = presented.retain(request, &settings, &artifacts, &origin);
                     let view_before = crate::timing::enabled().then(||engine.gpu_activity());
                     let comparison = if let Some(input) = input {
@@ -717,7 +746,7 @@ impl Worker {
                                 .into(),
                         );
                     };
-                    if cancel(){return Ok(Execution::Complete(None));}
+                    if cancel(){return Ok(if yielded.get() { Execution::Yield } else { Execution::Complete(None) });}
                     let native_extent=if root=="final" {foveonic::render::native_extent(&artifact.metadata)?} else {image.uncropped_view().extent};
                     let texture = {
                         let _span = crate::timing::Span::new(request.revision, "view_prepare_host");
@@ -758,6 +787,18 @@ impl Worker {
                     }))))
                 })();
                 let result = match result {
+                    Ok(Execution::Yield) => {
+                        crate::timing::task(&task.stamp, "execution_yielded", || serde_json::json!({"reason":"foreground"}));
+                        cursor.yield_task(&task.stamp);
+                        #[cfg(test)] {
+                            observations.yielded.0.lock().unwrap().push(task.stamp.clone());
+                            observations.yielded.1.notify_all();
+                        }
+                        trim_memory(&engine, &mut source, &mut reduced, &presented, &budget,
+                            &mut pending_images, &memory_updates, &context, &slot);
+                        previous = None;
+                        continue 'worker;
+                    }
                     Ok(Execution::NeedsSource) => {
                         crate::timing::task(&task.stamp, "execution_deferred", || serde_json::json!({"reason":"source-loading"}));
                         cursor.defer(&task.stamp);
@@ -880,6 +921,8 @@ impl Worker {
         Self {
             #[cfg(test)]
             checks,
+            #[cfg(test)]
+            test_pending: pending,
             replies,
             progress,
             cache,
@@ -2387,6 +2430,98 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
+    fn speculative_whole_yields_to_new_foreground_then_completes() {
+        use crate::{editor::Rendition, preferences::PreviewMode, rendering::request::Refinement};
+        use std::time::{Duration, Instant};
+        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let paths = [
+            root.join("blue-parking-sign.x3f"),
+            root.join("merrill-hazy-coast.x3f"),
+        ];
+        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
+        let (reached, waiting) = crossbeam_channel::bounded(1);
+        let (release, resume) = crossbeam_channel::bounded(1);
+        *worker.checks.speculative_hold.lock().unwrap() = Some((reached, resume));
+        let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+        settings.preview_region = Some([100, 100, 512, 512]);
+        let first = super::Request {
+            detail: true,
+            framing_preview: false,
+            calibration: None,
+            rendition: Rendition::Current,
+            revision: 1,
+            path: paths[0].clone(),
+            settings,
+            preview_quality: PreviewMode::Full,
+            preview_policy: PreviewMode::Smart,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        };
+        let mut whole = first.clone();
+        whole.revision = 2;
+        whole.detail = false;
+        whole.settings.preview_region = None;
+        *worker.requests.borrow_mut() = vec![first.clone()];
+        worker.publish_view(&first);
+        assert!(worker.refine(
+            Refinement {
+                first: first.clone(),
+                whole: Some(whole.clone())
+            },
+            Instant::now()
+        ));
+        let regional = receive(&worker);
+        assert_eq!(regional.revision, 1);
+        assert!(regional
+            .result
+            .unwrap()
+            .unwrap()
+            .artifact
+            .settings
+            .preview_region
+            .is_some());
+        waiting.recv_timeout(Duration::from_secs(30)).unwrap();
+        let mut foreground = whole.clone();
+        foreground.path = paths[1].clone();
+        foreground.revision = 3;
+        foreground.preview_quality = PreviewMode::Thumb;
+        *worker.requests.borrow_mut() = vec![first.clone(), foreground.clone()];
+        worker.publish_view(&foreground);
+        worker.worker.submit(foreground);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !worker
+            .test_pending
+            .0
+            .lock()
+            .unwrap()
+            .plan
+            .tasks
+            .iter()
+            .any(|task| task.stamp.revision == 3)
+        {
+            assert!(Instant::now() < deadline, "foreground was not published");
+            std::thread::yield_now();
+        }
+        release.send(()).unwrap();
+        let ready = receive(&worker);
+        assert_eq!(
+            ready.revision, 3,
+            "foreground must arrive before the continuation"
+        );
+        assert!(ready.result.unwrap().is_some());
+        let completed = receive(&worker);
+        assert_eq!(
+            completed.revision, 2,
+            "yield must preserve the continuation"
+        );
+        let image = completed.result.unwrap().unwrap();
+        assert!(image.artifact.settings.preview_region.is_none());
+        assert_eq!(worker.checks.yielded.0.lock().unwrap().len(), 1);
     }
 
     #[test]

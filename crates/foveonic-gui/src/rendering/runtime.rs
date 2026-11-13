@@ -340,7 +340,10 @@ impl Runtime {
                 }
             } else if index == source_request {
                 match operation.recv(&source_signals) {
-                    Ok(signal) => self.loader.signal(signal),
+                    Ok(signal) => {
+                        self.loader.signal(signal);
+                        self.prioritize_sources();
+                    }
                     Err(_) => {
                         self.stop();
                         return;
@@ -348,7 +351,10 @@ impl Runtime {
                 }
             } else if index == source_result {
                 match operation.recv(&loaded_sources) {
-                    Ok(source) => self.loader.completed(source),
+                    Ok(source) => {
+                        self.loader.completed(source);
+                        self.prioritize_sources();
+                    }
                     Err(_) => {
                         self.stop();
                         return;
@@ -504,6 +510,7 @@ impl Runtime {
         wanted.extend(plan.pick.iter().map(|task| task.request.path.clone()));
         wanted.extend(self.exporting.iter().cloned());
         self.loader.retain(wanted);
+        self.prioritize_sources();
         self.loader.admit();
         let retained = self.coordinator.retained_images();
         foveonic::diagnostics::counter(
@@ -536,6 +543,25 @@ impl Runtime {
             admitted: self.coordinator.admitted_images(),
         });
         self.slot.1.notify_one();
+    }
+
+    fn prioritize_sources(&mut self) {
+        let plan = self.coordinator.plan();
+        let mut foreground = plan
+            .tasks
+            .iter()
+            .filter(|task| !task.speculative)
+            .map(|task| task.request.path.clone())
+            .collect::<Vec<_>>();
+        foreground.extend(plan.pick.iter().map(|task| task.request.path.clone()));
+        foreground.extend(self.exporting.iter().cloned());
+        let speculative = plan
+            .tasks
+            .iter()
+            .filter(|task| task.speculative)
+            .map(|task| task.request.path.clone())
+            .collect::<Vec<_>>();
+        self.loader.prioritize(&foreground, &speculative);
     }
 
     fn stop(&self) {

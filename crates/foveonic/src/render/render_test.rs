@@ -572,6 +572,7 @@ fn image(engine: &Engine, pixels: &[f32]) -> RenderedImage {
         settings: Settings::new("Sunlight", "Standard"),
         dehaze_basis: None,
         owner: engine.owner.clone(),
+        regional: None,
     }
 }
 

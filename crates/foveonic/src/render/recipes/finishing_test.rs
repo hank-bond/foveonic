@@ -86,6 +86,72 @@ fn session_image(
     };
     *image
 }
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE pointing to a regional-capable X3F"]
+fn gpu_adaptive_regions_use_whole_analysis_and_match_whole_pixels() {
+    use crate::render::BaseResponse;
+    let source =
+        Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
+    let engine = Engine::new().unwrap();
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let mut settings = caps
+        .editing_defaults(&source.metadata, Rendering::Color)
+        .unwrap();
+    settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+    settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+    settings.photographic.tone_method = PhotographicMethod::Universal;
+    for response in [BaseResponse::Natural, BaseResponse::Strong] {
+        settings.photographic.base_response = response;
+        assert!(settings.regional_preview_available(&source.metadata));
+        let mut session = RenderSession::new(source.clone());
+        for edit in 0..2 {
+            settings.exposure = edit as f32 * 0.35;
+            settings.photographic.local_contrast = edit as f32 * 0.2;
+            settings.tonal_ranges.shadows = edit as f32 * 0.15;
+            settings.preview_region = None;
+            let full = engine
+                .render(&source, &settings, &mut Profile::default())
+                .unwrap();
+            let full_bytes = engine.readback_image(&full).unwrap();
+            let [w, h] = full.uncropped_view().extent;
+            for [x, y] in [[0, 0], [w / 2 + 3, h / 2 + 5], [w - 321, h - 239]] {
+                let rect = [x, y, x + 321, y + 239];
+                settings.preview_region = Some(rect);
+                let region =
+                    session_image(&engine, &mut session, &settings, &mut Profile::default());
+                assert_eq!(region.settings.preview_region, Some(rect), "Whole fallback");
+                assert_eq!(region.view().extent, [321, 239]);
+                let [l, t, r, b] = region.view().crop;
+                let crop_extent = if region.view().rotation.is_multiple_of(180) {
+                    [r - l, b - t]
+                } else {
+                    [b - t, r - l]
+                };
+                assert_eq!(crop_extent, [321, 239]);
+                assert!(
+                    region.description().extent != full.description().extent,
+                    "Whole backing buffer"
+                );
+                let bytes = engine.readback_image(&region).unwrap();
+                let mut maximum = 0_f32;
+                for yy in 0..239 {
+                    for xx in 0..321 {
+                        for (a, b) in view_pixel(&region, &bytes, xx, yy)
+                            .into_iter()
+                            .zip(view_pixel(&full, &full_bytes, x + xx, y + yy))
+                        {
+                            assert!(a.is_finite() && b.is_finite());
+                            maximum = maximum.max((a - b).abs());
+                        }
+                    }
+                }
+                eprintln!("adaptive {response:?} edit {edit} rect {rect:?}: max {maximum}");
+                assert!(maximum < 0.0001, "adaptive regional mismatch: {maximum}");
+            }
+        }
+    }
+}
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE pointing to a supported X3F"]
 fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
@@ -492,4 +558,124 @@ fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent()
             );
         }
     }
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE pointing to a regional-capable X3F"]
+fn gpu_rotated_regions_match_sampled_whole_view() {
+    let source =
+        Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
+    let engine = Engine::new().unwrap();
+    let capabilities = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let mut settings = capabilities
+        .editing_defaults(&source.metadata, Rendering::Color)
+        .unwrap();
+    if settings.white_balance.is_empty() {
+        settings.white_balance = capabilities
+            .default_white_balance(&source.metadata)
+            .unwrap();
+    }
+    if settings.color_mode.is_empty() {
+        settings.color_mode = capabilities.default_color_mode(&source.metadata).unwrap();
+    }
+    settings.crop.bounds = [0.12, 0.17, 0.89, 0.92];
+    let mut session = RenderSession::new(source.clone());
+    let read = |image: &crate::image::RenderedImage| {
+        let extent = image.view().extent;
+        let texture = engine
+            .view_texture(image, None, &mut Profile::default())
+            .unwrap();
+        let pitch = (extent[0] * 16).div_ceil(256) * 256;
+        (
+            engine
+                .gpu
+                .readback_texture(texture.texture(), extent, pitch)
+                .unwrap(),
+            pitch as usize,
+        )
+    };
+    for (rendering, response) in [
+        (Rendering::Color, crate::render::BaseResponse::Camera),
+        (Rendering::Color, crate::render::BaseResponse::Natural),
+        (Rendering::Monochrome, crate::render::BaseResponse::Natural),
+    ] {
+        settings.rendering = rendering;
+        settings.photographic.tone_method = PhotographicMethod::Universal;
+        settings.photographic.base_response = response;
+        for rotation in [
+            crate::rotation::Rotation {
+                turns: 1,
+                degrees: 0.,
+            },
+            crate::rotation::Rotation {
+                turns: 2,
+                degrees: 17.,
+            },
+            crate::rotation::Rotation {
+                turns: 3,
+                degrees: -23.,
+            },
+        ] {
+            settings.rotation = rotation;
+            settings.preview_region = None;
+            assert!(settings.regional_preview_available(&source.metadata));
+            let whole = session_image(&engine, &mut session, &settings, &mut Profile::default());
+            let camera = whole.uncropped_view().extent;
+            let window = settings.crop.pixels(rotation.extent(camera));
+            let width = window[2] - window[0];
+            let height = window[3] - window[1];
+            let (full, full_pitch) = read(&whole);
+            for [x, y] in [[0, 0], [width / 2, height / 2], [width - 128, height - 96]] {
+                let rect = [
+                    window[0] + x,
+                    window[1] + y,
+                    window[0] + x + 128,
+                    window[1] + y + 96,
+                ];
+                settings.preview_region = Some(rect);
+                let detail =
+                    session_image(&engine, &mut session, &settings, &mut Profile::default());
+                assert_eq!(detail.settings().preview_region, Some(rect));
+                assert_eq!(detail.view().extent, [128, 96]);
+                let (tile, tile_pitch) = read(&detail);
+                let sample = |bytes: &[u8], offset| {
+                    f32::from_ne_bytes(bytes[offset..offset + 4].try_into().unwrap())
+                };
+                let mut maximum = 0_f32;
+                for yy in 0..96_usize {
+                    for xx in 0..128_usize {
+                        for channel in 0..3 {
+                            let a = (yy + y as usize) * full_pitch
+                                + (xx + x as usize) * 16
+                                + channel * 4;
+                            let b = yy * tile_pitch + xx * 16 + channel * 4;
+                            let a = sample(&full, a);
+                            let b = sample(&tile, b);
+                            assert!(a.is_finite() && b.is_finite());
+                            maximum = maximum.max((a - b).abs());
+                        }
+                    }
+                }
+                // Fine-angle sampling translates an affine map onto a local
+                // buffer. Float32 coordinate rounding differs slightly from
+                // evaluating that map on the complete photograph.
+                let tolerance = if rotation.degrees == 0. {
+                    0.0001
+                } else {
+                    0.0005
+                };
+                eprintln!("{rendering:?} {response:?} {rotation:?} {rect:?}: max {maximum}");
+                assert!(
+                    maximum < tolerance,
+                    "{rendering:?} {response:?} {rotation:?} {rect:?}: {maximum}"
+                );
+            }
+        }
+    }
+    settings.output_size = Some([320, 240]);
+    settings.preview_region = Some([10, 10, 128, 96]);
+    assert!(!settings.regional_preview_available(&source.metadata));
+    let resized = session_image(&engine, &mut session, &settings, &mut Profile::default());
+    assert!(resized.settings().preview_region.is_none());
+    assert_eq!(resized.view().extent, [320, 240]);
 }

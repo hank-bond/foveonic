@@ -54,17 +54,19 @@ pub(super) fn build(
     }
     let region = settings
         .preview_region
-        .filter(|_| {
-            !settings.adaptive_tone_active()
-                && mode.is_some()
-                && !settings.is_monochrome()
-                && (names == ["final"] || names == ["linear.base"])
-        })
+        .filter(|_| mode.is_some() && (names == ["final"] || names == ["linear.base"]))
         .map(|rect| {
             let shared = super::super::linear_edits::support(settings);
-            if shared > 0 {
+            if shared > 0 || settings.is_monochrome() {
                 let (tonal, alignment) = if settings.tonal_ranges.is_neutral() {
-                    (0, 1)
+                    (
+                        0,
+                        if settings.adaptive_tone_active() {
+                            crate::nodes::finish::tone_equalizer::GUIDE_ALIGNMENT
+                        } else {
+                            1
+                        },
+                    )
                 } else {
                     (
                         crate::nodes::finish::tone_equalizer::support(),
@@ -74,7 +76,7 @@ pub(super) fn build(
                 region::Prepared::with_finish_support(
                     params,
                     rect,
-                    shared + tonal + region::FINISH_SUPPORT,
+                    shared + tonal + region::FINISH_SUPPORT + super::monochrome::support(settings),
                     alignment,
                 )
             } else if !settings.tonal_ranges.is_neutral() {
@@ -186,6 +188,7 @@ pub(super) fn build(
             preview.as_ref(),
             rows,
             speckles,
+            region.as_ref(),
         )? {
             Prepared::Linear(recipe, mode, _) => Ok(Prepared::Linear(recipe, mode, preview)),
             requested => Ok(requested),
@@ -387,7 +390,9 @@ pub(super) fn build(
         final_id: linear,
         params,
         rgb_extent: [params.source[0], params.source[1]],
-        rgb_bounds: params.crop,
+        rgb_bounds: region
+            .as_ref()
+            .map_or(params.crop, |region| region.rgb_bounds),
     };
     Ok(Prepared::Linear(recipe, mode, preview))
 }

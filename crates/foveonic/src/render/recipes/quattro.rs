@@ -710,9 +710,7 @@ fn compose(
     let region = settings
         .preview_region
         .filter(|_| {
-            !dng && !settings.is_monochrome()
-                && (names == ["final"] || names == ["linear.base"])
-                && fast_available(metadata)
+            !dng && (names == ["final"] || names == ["linear.base"]) && fast_available(metadata)
         })
         .map(|rect| region::Prepared::new(metadata, [params.output[0], params.output[1]], rect))
         .transpose()?;
@@ -779,6 +777,7 @@ fn compose(
             settings.effective_sharpen_amount(metadata)?,
         )?;
         controls.grid = grid;
+        controls.region = region.as_ref().map(|r| r.physical);
         controls
     } else {
         stage3::Controls {

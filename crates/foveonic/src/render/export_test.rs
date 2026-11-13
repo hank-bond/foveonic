@@ -60,6 +60,7 @@ fn saved_rotation_agrees_between_preview_export_and_picker_coordinates() {
         settings: Settings::new("Sunlight", "Standard"),
         dehaze_basis: None,
         owner: engine.owner.clone(),
+        regional: None,
     };
     for turns in 0..4 {
         for degrees in [0., 13., -17.] {
@@ -175,6 +176,7 @@ fn saved_crop_exports_the_same_oriented_pixels_without_changing_the_working_imag
         settings: Settings::new("Sunlight", "Standard"),
         dehaze_basis: None,
         owner: engine.owner.clone(),
+        regional: None,
     };
     let read = |image: &RenderedImage, name: &str| {
         let path = directory.0.join(name);
@@ -285,6 +287,7 @@ fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() 
             settings: Settings::new("Sunlight", "Standard"),
             dehaze_basis: None,
             owner: engine.owner.clone(),
+            regional: None,
         };
         let texture = engine
             .view_texture(&image, None, &mut Profile::default())
@@ -419,6 +422,7 @@ fn zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged() {
         settings: Settings::new("Sunlight", "Standard"),
         dehaze_basis: None,
         owner: engine.owner.clone(),
+        regional: None,
     };
     let mut graph = Graph::default();
     let input = graph
@@ -615,6 +619,7 @@ fn jxl_native_prophoto_encodes_shadows_with_its_declared_gamma() {
             settings,
             dehaze_basis: None,
             owner: engine.owner.clone(),
+            regional: None,
         };
         for (name, lossless, quality) in [
             ("lossy", false, 99),
@@ -651,6 +656,156 @@ fn jxl_native_prophoto_encodes_shadows_with_its_declared_gamma() {
                     value.abs_diff(expected) <= tolerance,
                     "linear {linear} {name}: got {value}, expected {expected}"
                 );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn regional_rotation_samples_match_the_whole_composed_view() {
+    let engine = Engine::new().unwrap();
+    let pixels: Vec<f32> = (0..24)
+        .flat_map(|y| {
+            (0..32).flat_map(move |x| [(x % 2) as f32, (y % 2) as f32, ((x + y) % 2) as f32])
+        })
+        .collect();
+    let metadata = Arc::new(crate::source::Metadata {
+        processing_version: None,
+        width: 32,
+        height: 24,
+        rotation: 0,
+        properties: Default::default(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    });
+    for camera_rotation in [0, 90, 180, 270] {
+        let camera = if camera_rotation % 180 == 0 {
+            [32, 24]
+        } else {
+            [24, 32]
+        };
+        let mut whole = RenderedImage {
+            buffer: engine.gpu.upload("Rotation whole", &pixels).unwrap(),
+            description: Description::new([32, 24], Space::ToneMappedRgb(ColorSpace::Srgb)),
+            view: crate::image::View {
+                crop: [0, 0, 32, 24],
+                rotation: camera_rotation,
+                extent: camera,
+            },
+            metadata: metadata.clone(),
+            settings: Settings::new("Sunlight", "Standard"),
+            dehaze_basis: None,
+            owner: engine.owner.clone(),
+            regional: None,
+        };
+        for turns in 0..4 {
+            for degrees in [-27., 0., 19.] {
+                whole.settings.rotation = crate::rotation::Rotation { turns, degrees };
+                whole.settings.crop.bounds = [0.12, 0.18, 0.88, 0.93];
+                let window = whole
+                    .settings
+                    .crop
+                    .pixels(whole.settings.rotation.extent(camera));
+                let width = (window[2] - window[0] - 2).min(13) | 1;
+                let height = (window[3] - window[1] - 2).min(9) | 1;
+                let width = width.min(window[2] - window[0] - 1);
+                let height = height.min(window[3] - window[1] - 1);
+                let rect = [
+                    window[0] + 1,
+                    window[1] + 1,
+                    window[0] + 1 + width,
+                    window[1] + 1 + height,
+                ];
+                let region = whole
+                    .settings
+                    .rotation
+                    .regional(camera, whole.settings.crop, rect)
+                    .unwrap();
+                let [l, t, r, b] = region.camera;
+                let [pl, pt, pr, pb] = match camera_rotation {
+                    90 => [t, 24 - r, b, 24 - l],
+                    180 => [32 - r, 24 - b, 32 - l, 24 - t],
+                    270 => [32 - b, l, 32 - t, r],
+                    _ => [l, t, r, b],
+                };
+                let storage = [pr - pl + 4, pb - pt + 6];
+                let mut data = vec![0.; (storage[0] * storage[1] * 3) as usize];
+                for y in pt..pb {
+                    for x in pl..pr {
+                        let src = ((y * 32 + x) * 3) as usize;
+                        let dst = (((y - pt + 3) * storage[0] + x - pl + 2) * 3) as usize;
+                        data[dst..dst + 3].copy_from_slice(&pixels[src..src + 3]);
+                    }
+                }
+                let mut detail = whole.clone();
+                detail.buffer = engine.gpu.upload("Rotation region", &data).unwrap();
+                detail.description =
+                    Description::new(storage, Space::ToneMappedRgb(ColorSpace::Srgb));
+                detail.view = crate::image::View {
+                    crop: [2, 3, pr - pl + 2, pb - pt + 3],
+                    rotation: camera_rotation,
+                    extent: [r - l, b - t],
+                };
+                detail.settings.preview_region = Some(rect);
+                detail.regional = Some(region);
+                let read = |image: &RenderedImage| {
+                    let extent = image.view().extent;
+                    let texture = engine
+                        .view_texture(image, None, &mut Profile::default())
+                        .unwrap();
+                    let pitch = (extent[0] * 16).div_ceil(256) * 256;
+                    (
+                        engine
+                            .gpu
+                            .readback_texture(texture.texture(), extent, pitch)
+                            .unwrap(),
+                        pitch as usize,
+                    )
+                };
+                let (full, full_pitch) = read(&whole);
+                let (tile, tile_pitch) = read(&detail);
+                if degrees == 0. {
+                    let expected = engine
+                        .scopes(
+                            &whole,
+                            Some([
+                                rect[0] - window[0],
+                                rect[1] - window[1],
+                                rect[2] - window[0],
+                                rect[3] - window[1],
+                            ]),
+                            &mut Profile::default(),
+                        )
+                        .unwrap();
+                    let actual = engine
+                        .scopes(&detail, None, &mut Profile::default())
+                        .unwrap();
+                    assert_eq!(actual.samples, expected.samples);
+                    for channel in 0..3 {
+                        assert_eq!(actual.histogram(channel), expected.histogram(channel));
+                    }
+                }
+                for y in 0..region.extent[1] as usize {
+                    for x in 0..region.extent[0] as usize {
+                        let a = (y + (rect[1] - window[1]) as usize) * full_pitch
+                            + (x + (rect[0] - window[0]) as usize) * 16;
+                        let b = y * tile_pitch + x * 16;
+                        for channel in 0..3 {
+                            let sample = |bytes: &[u8], offset| {
+                                f32::from_ne_bytes(bytes[offset..offset + 4].try_into().unwrap())
+                            };
+                            let error = (sample(&full, a + channel * 4)
+                                - sample(&tile, b + channel * 4))
+                            .abs();
+                            assert!(error.is_finite());
+                            if degrees == 0. {
+                                assert_eq!(error, 0., "quarter turn changed native sampling");
+                            }
+                            assert!(error < 0.00002, "camera {camera_rotation}, turn {turns}, angle {degrees}, pixel {x},{y}: {error}");
+                        }
+                    }
+                }
             }
         }
     }

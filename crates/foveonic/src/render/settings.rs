@@ -254,12 +254,9 @@ impl Settings {
         metadata.width != 0 && metadata.height != 0 && metadata.processing_family().is_ok()
     }
 
-    /// Color recipes can refine native viewport detail before the whole frame.
+    /// Supported camera recipes can process native visible detail with neighboring context.
     pub fn regional_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
-        self.rotation.is_neutral()
-            && !self.adaptive_tone_active()
-            && (self.crop.is_full() || self.output_size.is_none())
-            && !self.is_monochrome()
+        ((self.crop.is_full() && self.rotation.is_neutral()) || self.output_size.is_none())
             && (super::recipes::quattro::fast_available(metadata)
                 || (self.output_size.is_none()
                     && metadata.processing_family().ok()

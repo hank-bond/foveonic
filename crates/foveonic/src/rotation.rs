@@ -79,6 +79,91 @@ impl Rotation {
         view.extent = output.unwrap_or([x1 - x0, y1 - y0]);
         view
     }
+    /// Map a composed native rectangle to a camera-oriented processing rectangle.
+    /// Both rectangles use half-open native pixel coordinates.
+    pub(crate) fn regional(self, camera: [u32; 2], crop: Crop, rect: [u32; 4]) -> Result<Regional> {
+        let view = View {
+            crop: [0, 0, camera[0], camera[1]],
+            rotation: 0,
+            extent: camera,
+        };
+        let composed = self.view(view, crop, None);
+        let window = crop.pixels(self.extent(camera));
+        if rect[0] < window[0]
+            || rect[1] < window[1]
+            || rect[2] > window[2]
+            || rect[3] > window[3]
+            || rect[0] >= rect[2]
+            || rect[1] >= rect[3]
+        {
+            return Err("preview region must be inside the composed photograph".into());
+        }
+        let extent = composed.extent;
+        let whole = if self.degrees != 0. {
+            self.mapping(view, crop)
+        } else {
+            // Reproduce sample_oriented at native size, using pixel centers.
+            let [l, t, r, b] = composed.crop.map(|x| x as f32);
+            let [w, h] = extent.map(|x| x as f32);
+            match composed.rotation {
+                90 => [[0., h, l - 0.5, 1.], [-w, 0., b - 0.5, 1.]],
+                180 => [[-w, 0., r - 0.5, 1.], [0., -h, b - 0.5, 1.]],
+                270 => [[0., -h, r - 0.5, 1.], [w, 0., t - 0.5, 1.]],
+                _ => [[w, 0., l - 0.5, 1.], [0., h, t - 0.5, 1.]],
+            }
+        };
+        let start = [rect[0] - window[0], rect[1] - window[1]];
+        let size = [rect[2] - rect[0], rect[3] - rect[1]];
+        let mapping = std::array::from_fn(|i| {
+            let x = whole[i][0] / extent[0] as f32;
+            let y = whole[i][1] / extent[1] as f32;
+            [
+                x * size[0] as f32,
+                y * size[1] as f32,
+                whole[i][2] + x * start[0] as f32 + y * start[1] as f32,
+                1.,
+            ]
+        });
+        if self.degrees == 0. {
+            let [l, t, r, b] = composed.crop;
+            let [x0, y0] = start;
+            let [x1, y1] = [x0 + size[0], y0 + size[1]];
+            let camera = match composed.rotation {
+                90 => [l + y0, b - x1, l + y1, b - x0],
+                180 => [r - x1, b - y1, r - x0, b - y0],
+                270 => [r - y1, t + x0, r - y0, t + x1],
+                _ => [l + x0, t + y0, l + x1, t + y1],
+            };
+            return Ok(Regional {
+                camera,
+                mapping,
+                extent: size,
+            });
+        }
+        let mut lower = [f32::INFINITY; 2];
+        let mut upper = [f32::NEG_INFINITY; 2];
+        for x in [0.5 / size[0] as f32, 1. - 0.5 / size[0] as f32] {
+            for y in [0.5 / size[1] as f32, 1. - 0.5 / size[1] as f32] {
+                for i in 0..2 {
+                    let p = mapping[i][0] * x + mapping[i][1] * y + mapping[i][2];
+                    lower[i] = lower[i].min(p);
+                    upper[i] = upper[i].max(p);
+                }
+            }
+        }
+        // One extra pixel on each side also absorbs floating point rounding at boundaries.
+        let camera_region = [
+            (lower[0].floor() as i64 - 1).clamp(0, i64::from(camera[0] - 1)) as u32,
+            (lower[1].floor() as i64 - 1).clamp(0, i64::from(camera[1] - 1)) as u32,
+            (upper[0].floor() as i64 + 3).clamp(1, i64::from(camera[0])) as u32,
+            (upper[1].floor() as i64 + 3).clamp(1, i64::from(camera[1])) as u32,
+        ];
+        Ok(Regional {
+            camera: camera_region,
+            mapping,
+            extent: size,
+        })
+    }
     /// Map normalized output coordinates directly to physical storage. The fourth slot enables mapping.
     pub(crate) fn mapping(self, mut view: View, crop: Crop) -> [[f32; 4]; 2] {
         if self.degrees == 0. {
@@ -127,9 +212,65 @@ impl Rotation {
     }
 }
 
+/// Mapping of the requested composed tile to camera-oriented native pixels.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Regional {
+    pub camera: [u32; 4],
+    pub mapping: [[f32; 4]; 2],
+    pub extent: [u32; 2],
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn regional_mapping_covers_composed_pixel_centers() {
+        let camera = [113, 79];
+        let crop = Crop {
+            bounds: [0.13, 0.17, 0.87, 0.91],
+            ..Default::default()
+        };
+        for turns in 0..4 {
+            for degrees in [-31., 0., 19.] {
+                let rotation = Rotation { turns, degrees };
+                let window = crop.pixels(rotation.extent(camera));
+                for rect in [
+                    window,
+                    [window[0], window[1], window[0] + 1, window[1] + 1],
+                    [window[2] - 3, window[3] - 2, window[2], window[3]],
+                ] {
+                    let region = rotation.regional(camera, crop, rect).unwrap();
+                    let full = rotation.regional(camera, crop, window).unwrap();
+                    for (x, y) in [(0, 0), (region.extent[0] - 1, region.extent[1] - 1)] {
+                        let q = [
+                            (x as f32 + 0.5) / region.extent[0] as f32,
+                            (y as f32 + 0.5) / region.extent[1] as f32,
+                        ];
+                        let global_q = [
+                            (rect[0] - window[0] + x) as f32 + 0.5,
+                            (rect[1] - window[1] + y) as f32 + 0.5,
+                        ];
+                        for (i, camera_extent) in camera.iter().enumerate() {
+                            let point = region.mapping[i][0] * q[0]
+                                + region.mapping[i][1] * q[1]
+                                + region.mapping[i][2];
+                            let expected = full.mapping[i][0] * global_q[0] / full.extent[0] as f32
+                                + full.mapping[i][1] * global_q[1] / full.extent[1] as f32
+                                + full.mapping[i][2];
+                            assert!(
+                                (point - expected).abs() < 0.0001,
+                                "{rotation:?} {rect:?}: {point} {expected}"
+                            );
+                            let clamped = point.clamp(0., *camera_extent as f32 - 1.);
+                            assert!(clamped + 0.0001 >= region.camera[i] as f32);
+                            assert!(clamped < region.camera[i + 2] as f32);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn turns_preserve_fine_angle_and_crop_content_and_cycle_back() {
         let mut rotation = Rotation {

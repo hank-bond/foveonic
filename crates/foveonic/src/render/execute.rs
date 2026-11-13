@@ -2192,6 +2192,7 @@ mod observation_tests {
             }),
             settings: Settings::new("Sunlight", "Standard"),
             owner: engine.owner.clone(),
+            regional: None,
             dehaze_basis: None,
         };
         let mut graph = Graph::default();
@@ -2279,6 +2280,7 @@ mod observation_tests {
             }),
             settings: Settings::new("Sunlight", "Standard"),
             owner: engine.owner.clone(),
+            regional: None,
             dehaze_basis: None,
         };
         let mut graph = Graph::default();

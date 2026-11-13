@@ -11,16 +11,20 @@ use std::path::Path;
 const DETAIL_OVERSCAN_PIXELS: u32 = 64;
 
 /// Expand the visible image region by the existing native-pixel margin.
-fn render_region(visible: [u32; 4], extent: [u32; 2]) -> [u32; 4] {
+fn render_region(visible: [u32; 4], window: [u32; 4]) -> [u32; 4] {
     [
-        visible[0].saturating_sub(DETAIL_OVERSCAN_PIXELS),
-        visible[1].saturating_sub(DETAIL_OVERSCAN_PIXELS),
+        visible[0]
+            .saturating_sub(DETAIL_OVERSCAN_PIXELS)
+            .max(window[0]),
+        visible[1]
+            .saturating_sub(DETAIL_OVERSCAN_PIXELS)
+            .max(window[1]),
         visible[2]
             .saturating_add(DETAIL_OVERSCAN_PIXELS)
-            .min(extent[0]),
+            .min(window[2]),
         visible[3]
             .saturating_add(DETAIL_OVERSCAN_PIXELS)
-            .min(extent[1]),
+            .min(window[3]),
     ]
 }
 
@@ -163,7 +167,7 @@ impl App {
             visible.bottom_right[0] + 1 + window[0],
             visible.bottom_right[1] + 1 + window[1],
         ];
-        Some(render_region(rect, frame.uncropped_extent()))
+        Some(render_region(rect, window))
     }
 
     /// Current detail follows the complete photo set, independently of active selection.
@@ -331,12 +335,16 @@ mod tests {
     #[test]
     fn detail_margin_stays_inside_the_native_image() {
         assert_eq!(
-            render_region([100, 100, 400, 300], [1000, 800]),
+            render_region([100, 100, 400, 300], [0, 0, 1000, 800]),
             [36, 36, 464, 364]
         );
         assert_eq!(
-            render_region([900, 700, 1000, 800], [1000, 800]),
+            render_region([900, 700, 1000, 800], [0, 0, 1000, 800]),
             [836, 636, 1000, 800]
+        );
+        assert_eq!(
+            render_region([100, 130, 180, 190], [100, 120, 300, 250]),
+            [100, 120, 244, 250]
         );
     }
 }

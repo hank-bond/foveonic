@@ -38,6 +38,7 @@ fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
         settings: settings.clone(),
         dehaze_basis: None,
         owner: engine.owner.clone(),
+        regional: None,
     };
     let base = image(&[-4095., 2047.5, 8190., 4095., 4095., 4095.]);
     let (packed, scale) = engine
@@ -122,6 +123,7 @@ fn saved_rotation_uses_the_same_samples_for_dng_and_photographic_preview() {
         settings,
         dehaze_basis: None,
         owner: engine.owner.clone(),
+        regional: None,
     };
     image.settings.crop.bounds = [0.1, 0.1, 0.9, 0.9];
     for turns in 0..4 {

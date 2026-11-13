@@ -122,6 +122,7 @@ impl Engine {
                             _ => None,
                         },
                         owner: self.owner.clone(),
+                        regional: None,
                     }))
                 } else {
                     let bytes = self.gpu.readback(&value.buffer)?;

@@ -288,7 +288,6 @@ fn regional_app_response_bakes_exports_and_preserves_reference() {
             settings.photographic.base_response = response;
             assert!(settings
                 .working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap()));
-            assert!(!settings.regional_preview_available(&source.metadata));
             let mut images = engine
                 .render_artifacts(
                     &source,

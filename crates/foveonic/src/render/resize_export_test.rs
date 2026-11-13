@@ -82,6 +82,7 @@ fn resized_tiff_defaults_to_reference_sampling_before_destination_conversion() {
             settings: Settings::new("Sunlight", "Standard"),
             dehaze_basis: None,
             owner: engine.owner.clone(),
+            regional: None,
         };
         for (index, case) in fixture["cases"].as_array().unwrap().iter().enumerate() {
             image.view.rotation = case["rotation"].as_u64().unwrap() as u32;

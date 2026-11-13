@@ -717,6 +717,93 @@ fn multiscale_regional_views_match_whole_frame() {
 
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
+fn monochrome_regional_views_match_whole_frame() {
+    let engine = Engine::new().unwrap();
+    for rotation in [0, 90, 180, 270] {
+        let mut source = Source::open(
+            PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+                .join("blue-parking-sign.x3f"),
+        )
+        .unwrap();
+        Arc::make_mut(&mut source.metadata).rotation = rotation;
+        let source = Arc::new(source);
+        for (noise, texture) in [(0, false), (2, true)] {
+            let mut settings = settings();
+            settings.rendering = Rendering::Monochrome;
+            settings.monochrome.noise = noise;
+            settings.monochrome.mix = [0.2, 0.3, 0.5];
+            if texture {
+                settings.monochrome.texture.fine = 1.5;
+                settings.monochrome.texture.coarse = 0.5;
+                settings.monochrome.texture.fine_size = 2.;
+                settings.monochrome.texture.coarse_size = 2.;
+            }
+            let full = engine
+                .render(&source, &settings, &mut Profile::default())
+                .unwrap();
+            let expected_bytes = engine.readback_image(&full).unwrap();
+            let expected: &[f32] = bytemuck::cast_slice(&expected_bytes);
+            let mut session = RenderSession::new(source.clone());
+            let [w, h] = full.view().extent;
+            for rect in [
+                [0, 0, 200, 220],
+                [w / 2 - 150, h / 2 - 150, w / 2 + 150, h / 2 + 150],
+                [w - 200, h - 220, w, h],
+            ] {
+                settings.preview_region = Some(rect);
+                let regional = cached(&engine, &mut session, &settings);
+                assert_eq!(
+                    regional.view().extent,
+                    [rect[2] - rect[0], rect[3] - rect[1]]
+                );
+                assert!(regional.description().extent[0] < full.description().extent[0]);
+                let encode = calibration::encode(
+                    &source.metadata,
+                    ColorSpace::from_metadata(&source.metadata).unwrap(),
+                )
+                .unwrap();
+                let geometry = super::region::Prepared::with_finish_support(
+                    encode,
+                    rect,
+                    super::super::linear_edits::support(&settings)
+                        + super::region::FINISH_SUPPORT
+                        + 2
+                        + if texture { 68 } else { 0 },
+                    1,
+                )
+                .unwrap();
+                let local_bytes = engine.readback_image(&regional).unwrap();
+                let local: &[f32] = bytemuck::cast_slice(&local_bytes);
+                let [x0, y0, x1, y1] = regional.view().crop;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let dst = ((y * regional.description().extent[0] + x) * 3) as usize;
+                        let src = (((y + geometry.physical[1]) * full.description().extent[0]
+                            + x
+                            + geometry.physical[0])
+                            * 3) as usize;
+                        assert_eq!(
+                            &local[dst..dst + 3],
+                            &expected[src..src + 3],
+                            "rotation {rotation}, noise {noise}, pixel {x},{y}"
+                        );
+                    }
+                }
+            }
+            settings.preview_region = None;
+            assert_same(
+                "monochrome Full continuation",
+                &engine
+                    .readback_image(&cached(&engine, &mut session, &settings))
+                    .unwrap(),
+                &expected_bytes,
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn speckle_method_threshold_and_size_cached_results_match_fresh() {
     let engine = Engine::new().unwrap();
     let source = fixture();

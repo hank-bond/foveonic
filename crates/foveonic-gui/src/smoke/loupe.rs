@@ -40,10 +40,10 @@ enum Phase {
     TransientDetail,
     TransientReleased,
     OwnersRestored,
-    FallbackReady,
-    FallbackDetail,
-    FallbackDragged,
-    FallbackReleased,
+    AdaptiveReady,
+    AdaptiveDetail,
+    AdaptiveDragged,
+    AdaptiveReleased,
     SingleReady,
     SingleDetail,
     SingleReleased,
@@ -660,44 +660,47 @@ impl Driver {
                     app.sidecars.apply(target.clone(), settings.clone());
                     app.multi_edit.observe_requested(target, &settings);
                     app.submit_photos();
-                    self.phase = Phase::FallbackReady;
+                    self.phase = Phase::AdaptiveReady;
                 } else {
-                    self.events.push(json!({"skipped":"native whole-coverage fallback","reason":"no inactive Merrill fixture"}));
+                    self.events.push(json!({"skipped":"Adaptive regional detail","reason":"no inactive Merrill fixture"}));
                     self.begin_single(app);
                 }
             }
-            Phase::FallbackReady => {
+            Phase::AdaptiveReady => {
                 if app.worker.busy() || !thumb_ready(app, self.target()) {
                     return Ok(false);
                 }
                 self.snapshot_main(app, paths);
                 loupe_tool::activate(ctx);
                 self.queue_pointer(app, smoke, [0.2, 0.2], Some(true))?;
-                self.phase = Phase::FallbackDetail;
+                self.phase = Phase::AdaptiveDetail;
             }
-            Phase::FallbackDetail => {
-                let Some(detail) = self.detail(app, ctx, true)? else {
+            Phase::AdaptiveDetail => {
+                let Some(detail) = self.detail(app, ctx, false)? else {
                     return Ok(false);
                 };
                 self.first = Some(detail);
-                self.events.push(json!({"observed":"Full whole-coverage detail preserved main Thumb","photo":self.target(),"task":detail.image}));
+                self.events.push(json!({"observed":"Full Adaptive regional detail preserved main Thumb","photo":self.target(),"task":detail.image}));
                 self.queue_pointer(app, smoke, [0.8, 0.8], None)?;
-                self.phase = Phase::FallbackDragged;
+                self.phase = Phase::AdaptiveDragged;
             }
-            Phase::FallbackDragged => {
-                let Some(detail) = self.detail(app, ctx, true)? else {
+            Phase::AdaptiveDragged => {
+                let Some(detail) = self.detail(app, ctx, false)? else {
                     return Ok(false);
                 };
                 if app.worker.busy() {
                     return Ok(false);
                 }
-                if detail.image != self.first.unwrap().image {
-                    return Err("dragging within whole-coverage detail rendered it again".into());
+                if detail.image == self.first.unwrap().image {
+                    return Err(
+                        "moving Adaptive loupe outside coverage did not render its new region"
+                            .into(),
+                    );
                 }
                 self.release_pointer(smoke);
-                self.phase = Phase::FallbackReleased;
+                self.phase = Phase::AdaptiveReleased;
             }
-            Phase::FallbackReleased => {
+            Phase::AdaptiveReleased => {
                 if loupe_tool::gesture(ctx).is_some() || app.worker.busy() {
                     return Ok(false);
                 }

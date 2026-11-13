@@ -13,6 +13,20 @@ use crate::{
 };
 use std::sync::Arc;
 
+/// Scalar despeckle and sharpening read six pixels at a tile edge. Texture
+/// restoration adds four binomial levels and their interpolated neighbors.
+pub(super) fn support(settings: &Settings) -> u32 {
+    if settings.is_monochrome() {
+        2 + if settings.monochrome.detail().is_some() {
+            68
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
 fn guide_controls(settings: &Settings) -> crate::render::MonochromeControls {
     let mut controls = settings.monochrome;
     // The reference amount controls its selected banding method only. The
@@ -34,6 +48,7 @@ pub(super) fn build(
     grid: Option<&super::preview::Grid>,
     rows: Option<crate::nodes::sensor::banding::Description>,
     speckles: Option<super::native_layers::Speckles>,
+    region: Option<&super::region::Prepared>,
 ) -> Result<Prepared> {
     let space = ColorSpace::from_metadata(metadata)?;
     if let Some(speckles) = speckles {
@@ -83,7 +98,7 @@ pub(super) fn build(
             return Ok(Prepared::Requested(recipe));
         }
     }
-    let prepared = Arc::new(profile.measure("prepare monochrome", || {
+    let mut prepared = Arc::new(profile.measure("prepare monochrome", || {
         MonoPrepared::new(metadata, &settings.white_balance, guide_controls(settings))?
             .on_grid(grid.map(|g| g.grid))
     })?);
@@ -118,6 +133,40 @@ pub(super) fn build(
     } else {
         (column, directional)
     };
+    let (mono, neighbors) = if let Some(region) = region {
+        // Column blocks and histogram recurrences retain the native strip geometry.
+        // Extract their results only after those whole-frame operations have completed.
+        let source = [metadata.width as u32, metadata.height as u32];
+        let mut extract = |input, output| {
+            recipe.graph.retain_for_session(input);
+            recipe.graph.add(
+                Operation::ImageRegion {
+                    prepared: crate::nodes::finish::image_region::Prepared::new(
+                        source,
+                        region.physical,
+                        1,
+                    )?,
+                    data: crate::graph::DataType::Monochrome,
+                    output,
+                },
+                &[input],
+            )
+        };
+        let local_mono = extract(mono, "region.mono")?;
+        let local_neighbors = if mono == neighbors {
+            local_mono
+        } else {
+            extract(neighbors, "region.mono-neighbors")?
+        };
+        let mut local = MonoPrepared {
+            params: prepared.params,
+        };
+        local.params.source[..2].copy_from_slice(&region.encode.source[..2]);
+        prepared = Arc::new(local);
+        (local_mono, local_neighbors)
+    } else {
+        (mono, neighbors)
+    };
     let mut corrected = if settings.despeckle {
         node!(Stage::Despeckle, &[mono, neighbors])
     } else {
@@ -148,6 +197,9 @@ pub(super) fn build(
         execution.check()?;
     }
     recipe.final_id = linear;
+    if let Some(region) = region {
+        recipe.rgb_bounds = region.rgb_bounds;
+    }
     if requested(&recipe.graph, names) {
         return Ok(Prepared::Requested(recipe));
     }

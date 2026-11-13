@@ -261,5 +261,73 @@
         "dp3-merrill-low.x3f"
       ]
     }
+  ],
+  "regional_cases": [
+    {
+      "source": "blue-parking-sign.x3f",
+      "settings": {
+        "exposure": -0.15,
+        "exposure_auto": false,
+        "photographic": {
+          "tone_method": "universal",
+          "base_response": "natural"
+        }
+      }
+    },
+    {
+      "source": "merrill-hazy-coast.x3f",
+      "settings": {
+        "exposure": 0.15,
+        "exposure_auto": false,
+        "rendering": "monochrome",
+        "photographic": {
+          "tone_method": "universal",
+          "base_response": "natural"
+        }
+      }
+    },
+    {
+      "source": "sd-quattro.x3f",
+      "settings": {
+        "exposure": -0.15,
+        "exposure_auto": false,
+        "rotation": {
+          "turns": 1,
+          "degrees": 17
+        },
+        "crop": {
+          "bounds": [
+            0.12,
+            0.17,
+            0.89,
+            0.92
+          ]
+        }
+      }
+    },
+    {
+      "source": "sd-quattro-h.x3f",
+      "settings": {
+        "exposure": 0.15,
+        "exposure_auto": false,
+        "rendering": "monochrome",
+        "photographic": {
+          "tone_method": "universal",
+          "base_response": "natural"
+        },
+        "rotation": {
+          "turns": 3,
+          "degrees": -11
+        },
+        "crop": {
+          "bounds": [
+            0.12,
+            0.17,
+            0.89,
+            0.92
+          ]
+        }
+      }
+    }
   ]
 }

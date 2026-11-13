@@ -217,6 +217,11 @@ pub(super) fn build_stage3(
             controls.grid,
         )?
     };
+    let prepared = if let Some(rect) = controls.region {
+        prepared.with_extent([rect[2] - rect[0], rect[3] - rect[1]])?
+    } else {
+        prepared
+    };
     graph.add(
         crate::graph::Operation::ProportionalSharpen(std::sync::Arc::new(prepared)),
         &[contrast, detail],

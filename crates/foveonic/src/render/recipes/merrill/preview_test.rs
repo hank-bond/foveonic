@@ -455,11 +455,15 @@ fn regional_views_keep_native_crop_and_all_four_rotations() {
             ]
         );
         assert_eq!(region.encode.crop, [4, 4, 304, 304]);
+        assert_eq!(region.rgb_bounds, [0, 0, 308, 308]);
         assert_eq!(region.encode.output[..2], [300, 300]);
         assert_eq!(region.encode.source[2], rotation);
     }
     assert!(super::super::region::Prepared::new(encoding(0), [0, 0, 0, 10]).is_err());
     assert!(super::super::region::Prepared::new(encoding(0), [0, 0, 99999, 10]).is_err());
+    let edge = super::super::region::Prepared::new(encoding(0), [0, 0, 100, 100]).unwrap();
+    assert_eq!(edge.encode.crop, [4, 4, 104, 104]);
+    assert_eq!(edge.rgb_bounds, [4, 4, 108, 108]);
 }
 
 #[test]

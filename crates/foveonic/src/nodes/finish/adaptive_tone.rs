@@ -15,6 +15,12 @@ use crate::{
     source::Result,
 };
 
+/// Regional application needs the brightness guide, its broad structure probe
+/// and the neighboring half-grid gain used during interpolation.
+pub(crate) fn support() -> u32 {
+    tone_equalizer::support() + 8 + 2
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Params {

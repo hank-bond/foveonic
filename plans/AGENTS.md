@@ -18,6 +18,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 
 - **[archived/](./archived/AGENTS.md)** Archived plans record completed implementation slices, their checks, and historical limitations.
 - **[behavioral-testing](./behavioral-testing.md)** Extend real-app interaction checks and diagnostic feedback across camera families without binding behavior to the current render architecture.
+- **[cache-workflow-measurements](./cache-workflow-measurements.md)** Measure memory ownership and latency across editing workflows before recommending cache budgets or changing retention policy.
 - **[classic-coverage](./classic-coverage.md)** Complete ordinary color rendering and editable DNG export across all pre-Merrill Sigma Classic cameras.
 - **[color-field-boundaries](./color-field-boundaries.md)** Prepare the reviewed Color Field boundary recovery with separate evidence and application masks for a scoped commit.
 - **[color-field-controls](./color-field-controls.md)** Investigate whether color agreement and boundary controls produce visible changes independently of GUI and cache behavior.
@@ -43,6 +44,8 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[performance-diagnostics](./performance-diagnostics.md)** Integrate the owner-approved Perfetto recorder and application scenarios, then validate causal coverage, capture completeness and overhead before renderer experiments.
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
+- **[regional-bounds](./regional-bounds.md)** Inventory regional storage, active samples and delivered coverage before a separate geometry consolidation slice.
+- **[regional-preview-completion](./regional-preview-completion.md)** Complete native visible-region rendering for adaptive tone, monochrome and authored rotation, with whole-image comparisons and measured app latency.
 - **[render-coordination-consistency](./render-coordination-consistency.md)** Inventory coordination, scheduling and cache inconsistencies before choosing small current-architecture cleanup slices.
 - **[render-runtime](./render-runtime.md)** Clarify render ownership and responsibilities through one owner-reviewed concept at a time while preserving serial engine execution.
 - **[sequoia-compatibility](./sequoia-compatibility.md)** Ship a macOS 15-targeted Apple Silicon build for Sequoia user testing while retaining explicit runtime coverage limits.

@@ -195,6 +195,7 @@ pub struct RenderedImage {
     pub(crate) settings: Settings,
     pub(crate) owner: Arc<()>,
     pub(crate) dehaze_basis: Option<crate::nodes::finish::dehaze::Basis>,
+    pub(crate) regional: Option<crate::rotation::Regional>,
 }
 
 impl RenderedImage {
@@ -221,7 +222,20 @@ impl RenderedImage {
         self.description
     }
     pub fn view(&self) -> View {
-        if self.description.space.uses_full_sensor_view() || self.settings.preview_region.is_some()
+        if let Some(region) = self.regional {
+            View {
+                extent: region.extent,
+                rotation: (self.view.rotation
+                    + if self.settings.rotation.degrees == 0. {
+                        u32::from(self.settings.rotation.turns) * 90
+                    } else {
+                        0
+                    })
+                    % 360,
+                ..self.view
+            }
+        } else if self.description.space.uses_full_sensor_view()
+            || self.settings.preview_region.is_some()
         {
             self.view
         } else {
@@ -293,7 +307,27 @@ impl RenderedImage {
             | Space::SignedDetail => 0,
         };
         EncodeParams {
-            mapping: if self.description.space.uses_full_sensor_view()
+            mapping: if let Some(region) = self
+                .regional
+                .filter(|_| self.settings.rotation.degrees != 0.)
+            {
+                let mut map = region.mapping;
+                map[0][2] -= region.camera[0] as f32;
+                map[1][2] -= region.camera[1] as f32;
+                let [l, t, r, b] = self.view.crop.map(|v| v as f32);
+                let [x, y] = map;
+                let neg = |v: [f32; 4], offset: f32| [-v[0], -v[1], offset - v[2], 1.];
+                let add = |mut v: [f32; 4], offset: f32| {
+                    v[2] += offset;
+                    v
+                };
+                match self.view.rotation {
+                    90 => [add(y, l), neg(x, b - 1.)],
+                    180 => [neg(x, r - 1.), neg(y, b - 1.)],
+                    270 => [neg(y, r - 1.), add(x, t)],
+                    _ => [add(x, l), add(y, t)],
+                }
+            } else if self.description.space.uses_full_sensor_view()
                 || self.settings.preview_region.is_some()
             {
                 [[0.; 4]; 2]
@@ -359,6 +393,7 @@ mod composition_tests {
             }),
             settings: Settings::new("Sunlight", "Standard"),
             owner: Arc::new(()),
+            regional: None,
             dehaze_basis: None,
         };
         let before = engine.gpu_activity();

@@ -78,6 +78,62 @@ fn neutral(bytes: &[u8]) {
     }
 }
 
+fn mixed_resolution_regional_matches_full(path: &Path) {
+    let engine = Engine::new().unwrap();
+    for rotation in [0, 90, 180, 270] {
+        let mut source = Source::open(path).unwrap();
+        Arc::make_mut(&mut source.metadata).rotation = rotation;
+        let mut session = RenderSession::new(source);
+        for noise in [0, 2] {
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.rendering = Rendering::Monochrome;
+            settings.monochrome.noise = noise;
+            settings.monochrome.mix = [0.2, 0.3, 0.5];
+            let full = engine
+                .render(session.source(), &settings, &mut Profile::default())
+                .unwrap();
+            let expected = engine.readback_image(&full).unwrap();
+            let [width, height] = full.view().extent;
+            for [x, y] in [[0, 0], [width / 2, height / 2], [width - 480, height - 320]] {
+                settings.preview_region = Some([x, y, x + 480, y + 320]);
+                let tile = session_image(&engine, &mut session, &settings);
+                assert_eq!(tile.view().extent, [480, 320]);
+                assert_eq!(tile.description().extent, [480, 320]);
+                let bytes = engine.readback_image(&tile).unwrap();
+                for (row, actual) in bytes.as_chunks::<{ 480 * 12 }>().0.iter().enumerate() {
+                    let start = (((y as usize + row) * width as usize + x as usize) * 3) * 4;
+                    assert_eq!(
+                        actual,
+                        &expected[start..start + 480 * 12],
+                        "regional monochrome at {x},{y}, noise {noise}"
+                    );
+                }
+            }
+            settings.preview_region = None;
+            let completed = session_image(&engine, &mut session, &settings);
+            same(
+                &engine.readback_image(&completed).unwrap(),
+                &expected,
+                "monochrome Full continuation",
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Quattro file"]
+fn quattro_monochrome_regional_matches_full() {
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    mixed_resolution_regional_matches_full(&root.join("dp2-quattro.x3f"));
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR containing sd-quattro-h.x3f"]
+fn tiger_monochrome_regional_matches_full() {
+    let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    mixed_resolution_regional_matches_full(&root.join("sd-quattro-h.x3f"));
+}
+
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn mono_inspection_stops_before_unrelated_processing_and_keeps_original_layers() {

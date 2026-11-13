@@ -42,6 +42,8 @@ pub struct Task {
     pub origin: Option<SourceOrigin>,
     pub queued_at: Instant,
     pub seed: Option<Arc<crate::rendering::worker::presentation::Snapshot>>,
+    /// Whole-image continuation created after regional detail, not explicit demand.
+    pub speculative: bool,
 }
 #[derive(Clone)]
 pub struct ScopeTask {
@@ -183,9 +185,12 @@ impl RenderCoordinator {
                     "coalesced",
                     || json!({"desired_revision":request.revision,"settled":self.desired[index].settled}),
                 );
-                if old.origin.is_none() && origin.is_some() {
+                if (old.origin.is_none() && origin.is_some()) || old.speculative {
                     let mut task = (**old).clone();
-                    task.origin = origin;
+                    if task.origin.is_none() {
+                        task.origin = origin;
+                    }
+                    task.speculative = false;
                     self.desired[index].task = Arc::new(task);
                 }
                 return id;
@@ -218,6 +223,7 @@ impl RenderCoordinator {
             origin,
             queued_at,
             seed,
+            speculative: false,
         });
         crate::timing::task(&task.stamp, "desired", || {
             json!({"nominal_scale":task.request.preview_quality.working_scale().divisor(),"preview_quality":format!("{:?}",task.request.preview_quality),
@@ -378,6 +384,17 @@ impl RenderCoordinator {
             return None;
         };
         let target = Target::of(whole);
+        let foreground = self.desired.iter().any(|entry| {
+            entry.task.stamp.target == target
+                && !entry.settled
+                && !entry.task.speculative
+                && entry
+                    .task
+                    .origin
+                    .as_ref()
+                    .is_none_or(|current| current == origin)
+                && crate::rendering::matching::same_delivery_request(&entry.task.request, whole)
+        });
         self.desire(
             Arc::new(whole.clone()),
             Some(origin.clone()),
@@ -388,6 +405,11 @@ impl RenderCoordinator {
             .iter_mut()
             .find(|entry| entry.task.stamp.target == target)
             .unwrap();
+        if !foreground {
+            let mut task = (*entry.task).clone();
+            task.speculative = true;
+            entry.task = Arc::new(task);
+        }
         entry.refinement = Some(state);
         (!entry.settled).then(|| entry.task.clone())
     }
@@ -460,6 +482,7 @@ impl RenderCoordinator {
             origin,
             queued_at,
             seed: None,
+            speculative: false,
         });
         crate::timing::task(
             &task.stamp,
@@ -770,9 +793,35 @@ pub struct Cursor {
     waiting_pick: Option<TaskId>,
 }
 impl Cursor {
+    pub fn should_yield(&self, plan: &WorkPlan, task: &Task, export_pending: bool) -> bool {
+        task.speculative
+            && plan
+                .task(&task.stamp.target)
+                .is_some_and(|current| current.speculative)
+            && (export_pending || self.foreground_pending(plan, &task.stamp.target))
+    }
+    pub fn foreground_pending(&self, plan: &WorkPlan, except: &Target) -> bool {
+        plan.tasks
+            .iter()
+            .any(|task| !task.speculative && &task.stamp.target != except)
+            || plan
+                .scopes
+                .as_ref()
+                .is_some_and(|task| self.scopes != Some(task.id))
+            || plan
+                .pick
+                .as_ref()
+                .is_some_and(|task| self.pick != Some(task.id))
+    }
     pub fn defer(&mut self, stamp: &Stamp) {
         self.served.remove(stamp);
         self.waiting.insert(stamp.clone());
+        self.followed = None;
+    }
+    /// A yielded continuation remains desired and can run as soon as foreground work settles.
+    pub fn yield_task(&mut self, stamp: &Stamp) {
+        self.served.remove(stamp);
+        self.waiting.remove(stamp);
         self.followed = None;
     }
     pub fn retry_pick(&mut self) {
@@ -818,6 +867,20 @@ impl Cursor {
         if len == 0 {
             return None;
         }
+        // Even a foreground render waiting for source loading precedes background work.
+        let foreground = plan.tasks.iter().any(|task| !task.speculative);
+        if !foreground
+            && (plan
+                .scopes
+                .as_ref()
+                .is_some_and(|task| self.scopes != Some(task.id))
+                || plan
+                    .pick
+                    .as_ref()
+                    .is_some_and(|task| self.pick != Some(task.id)))
+        {
+            return None;
+        }
         let start = self
             .last
             .as_ref()
@@ -829,6 +892,9 @@ impl Cursor {
             .map_or(0, |index| (index + 1) % len);
         for offset in 0..len {
             let task = &plan.tasks[(start + offset) % len];
+            if foreground && task.speculative {
+                continue;
+            }
             if self.ready(&task.stamp, ready(task)) && self.served.insert(task.stamp.clone()) {
                 self.waiting.remove(&task.stamp);
                 self.last = Some(task.stamp.target.clone());
@@ -840,7 +906,8 @@ impl Cursor {
     }
     pub fn followup(&mut self, plan: &WorkPlan, previous: &Stamp) -> Option<Arc<Task>> {
         let next = plan.task(&previous.target)?;
-        if self.followed != Some(previous.id)
+        if (!next.speculative || !self.foreground_pending(plan, &next.stamp.target))
+            && self.followed != Some(previous.id)
             && next.stamp.id == previous.id
             && next.stamp.revision != previous.revision
             && self.served.insert(next.stamp.clone())

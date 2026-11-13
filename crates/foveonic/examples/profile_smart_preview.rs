@@ -26,6 +26,7 @@ fn epoch_millis() -> Result<u128> {
 struct Completed {
     milliseconds: f64,
     extent: [u32; 2],
+    actual_region: Option<[u32; 4]>,
     activity: GpuActivity,
     profile: Profile,
 }
@@ -79,7 +80,7 @@ fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let source_path = PathBuf::from(
         args.next()
-            .ok_or("usage: profile_smart_preview ORIGINAL.x3f REPORT.json [--region-first [fresh|exposure|noise] | --direct-only | --full-edit exposure|noise | --warm-edits] [--fractions LIST] [--repeats N] [--benchmark-off] [--diagnostic wall|gpu | --diagnostic-only wall|gpu] [-- RENDER_OPTIONS]")?,
+            .ok_or("usage: profile_smart_preview ORIGINAL.x3f REPORT.json [--region-first [fresh|exposure|noise] | --direct-only | --full-edit exposure|noise | --warm-edits] [--region-only (with --warm-edits)] [--settings-snapshot FILE] [--fractions LIST] [--repeats N] [--benchmark-off] [--diagnostic wall|gpu | --diagnostic-only wall|gpu] [-- RENDER_OPTIONS]")?,
     );
     let destination = PathBuf::from(args.next().ok_or("missing report destination")?);
     if destination.exists() {
@@ -103,6 +104,8 @@ fn main() -> Result<()> {
     let mut region_mode = false;
     let mut direct_only = false;
     let mut warm_edits = false;
+    let mut region_only = false;
+    let mut settings_snapshot = None;
     let mut scenario = "fresh";
     let mut repeats = 5usize;
     let mut repeats_set = false;
@@ -113,6 +116,12 @@ fn main() -> Result<()> {
         match arg.to_str() {
             Some("--direct-only") => direct_only = true,
             Some("--warm-edits") => warm_edits = true,
+            Some("--region-only") => region_only = true,
+            Some("--settings-snapshot") => {
+                settings_snapshot = Some(PathBuf::from(
+                    runner.next().ok_or("missing settings snapshot")?,
+                ))
+            }
             Some("--benchmark-off") => benchmark_off = true,
             Some("--full-edit") => {
                 if full_edit.is_some() {
@@ -220,8 +229,18 @@ fn main() -> Result<()> {
                 .into(),
         );
     }
+    if region_only && !warm_edits {
+        return Err("region-only requires warm-edits".into());
+    }
     let source = Arc::new(Source::open(&source_path)?);
-    let settings = if controls.is_empty() {
+    let settings = if let Some(path) = settings_snapshot {
+        if !controls.is_empty() {
+            return Err("settings snapshot cannot be combined with render options".into());
+        }
+        let snapshot: foveonic::profile::RenderSettingsSnapshot =
+            serde_json::from_slice(&std::fs::read(path)?)?;
+        snapshot.into_settings()
+    } else if controls.is_empty() {
         camera_settings(&source)?
     } else {
         let initial = camera_settings(&source)?;
@@ -246,7 +265,15 @@ fn main() -> Result<()> {
         .unwrap_or(Mode::Off)
         .check_gpu_features(engine.device().features())?;
     if warm_edits {
-        return warm_edit_benchmark(&engine, source, source_path, destination, settings, repeats);
+        return warm_edit_benchmark(
+            &engine,
+            source,
+            source_path,
+            destination,
+            settings,
+            repeats,
+            region_only,
+        );
     }
     if let Some(edit) = full_edit {
         if benchmark_off {
@@ -316,6 +343,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn warm_edit_benchmark(
     engine: &Engine,
     source: Arc<Source>,
@@ -323,14 +351,20 @@ fn warm_edit_benchmark(
     destination: PathBuf,
     mut settings: Settings,
     repeats: usize,
+    region_only: bool,
 ) -> Result<()> {
     let initial = settings.clone();
+    let native_extent = foveonic::render::native_extent(&source.metadata)?;
     let mut session = RenderSession::new(source);
     settings.working_scale = Scale::new(2).unwrap();
     let overview = region_completed(engine, &mut session, &settings, Mode::Off)?;
-    let extent = overview.0.extent.map(|v| v * 2);
+    let window = initial.crop.pixels(initial.rotation.extent(native_extent));
+    let extent = [window[2] - window[0], window[3] - window[1]];
     let size = [992.min(extent[0]), 1002.min(extent[1])];
-    let origin = [(extent[0] - size[0]) / 2, (extent[1] - size[1]) / 2];
+    let origin = [
+        window[0] + (extent[0] - size[0]) / 2,
+        window[1] + (extent[1] - size[1]) / 2,
+    ];
     let region = Some([
         origin[0],
         origin[1],
@@ -340,31 +374,66 @@ fn warm_edit_benchmark(
     settings.working_scale = Scale::NATIVE;
     settings.preview_region = region;
     let mut detail = region_completed(engine, &mut session, &settings, Mode::Off)?;
+    if detail.0.actual_region != region {
+        return Err("warm regional benchmark fell back to Whole processing".into());
+    }
     settings.preview_region = None;
-    let mut full = region_completed(engine, &mut session, &settings, Mode::Off)?;
+    let mut full = if region_only {
+        None
+    } else {
+        Some(region_completed(
+            engine,
+            &mut session,
+            &settings,
+            Mode::Off,
+        )?)
+    };
     let mut runs = Vec::new();
-    for round in 0..repeats {
-        settings.exposure = initial.exposure + (round + 1) as f32 * 0.1;
+    for round in 0..repeats + if region_only { 2 } else { 0 } {
+        settings.exposure = initial.exposure
+            + if region_only {
+                if round % 2 == 0 {
+                    0.5
+                } else {
+                    0.
+                }
+            } else {
+                (round + 1) as f32 * 0.1
+            };
         let started = Instant::now();
         settings.preview_region = region;
         detail = region_completed(engine, &mut session, &settings, Mode::Off)?;
         settings.preview_region = None;
-        full = region_completed(engine, &mut session, &settings, Mode::Off)?;
+        full = if region_only {
+            None
+        } else {
+            Some(region_completed(
+                engine,
+                &mut session,
+                &settings,
+                Mode::Off,
+            )?)
+        };
         let total_ms = started.elapsed().as_secs_f64() * 1000.;
         eprintln!(
             "warm edit {round}: slice {:.1} ms, Full {:.1} ms, total {total_ms:.1} ms",
-            detail.0.milliseconds, full.0.milliseconds
+            detail.0.milliseconds,
+            full.as_ref().map_or(0., |full| full.0.milliseconds)
         );
-        runs.push(serde_json::json!({"round":round, "exposure":settings.exposure, "slice":detail.0, "full":full.0, "total_ms":total_ms, "cached_bytes":session.cached_bytes()}));
+        runs.push(serde_json::json!({"round":round, "warmup":region_only && round < 2, "exposure":settings.exposure, "slice":detail.0, "full":full.as_ref().map(|full| &full.0), "total_ms":total_ms, "cached_bytes":session.cached_bytes()}));
     }
     settings.exposure += 0.1;
     settings.preview_region = region;
     let diagnostic_slice = completed(engine, &mut session, &settings, Mode::Wall)?;
     settings.preview_region = None;
-    let diagnostic_full = completed(engine, &mut session, &settings, Mode::Wall)?;
+    let diagnostic_full = if region_only {
+        None
+    } else {
+        Some(completed(engine, &mut session, &settings, Mode::Wall)?)
+    };
     // Retain both displayed artifacts through the complete handoff.
     drop((overview, detail, full));
-    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "settings":initial, "region":region, "timing":"completed warm slice and Full continuation with view preparation, source decode and initial grid priming excluded, previous displayed artifacts retained, no scopes or physical presentation", "runs":runs, "wall_diagnostics":{"slice":diagnostic_slice.0,"full":diagnostic_full.0}});
+    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "settings":initial, "region":region, "whole_continuation":!region_only, "timing":"completed warm regional edits with optional Full continuation and view preparation; source decode and priming excluded; previous displayed artifacts retained; no scopes or physical presentation", "runs":runs, "wall_diagnostics":{"slice":diagnostic_slice.0,"full":diagnostic_full.as_ref().map(|full| &full.0)}});
     std::fs::write(destination, serde_json::to_vec_pretty(&report)?)?;
     Ok(())
 }
@@ -428,6 +497,7 @@ fn completed_image(
         Completed {
             milliseconds: started.elapsed().as_secs_f64() * 1000.,
             extent: texture.description().extent,
+            actual_region: image.settings().preview_region,
             activity: engine.gpu_activity().since(before),
             profile,
         },

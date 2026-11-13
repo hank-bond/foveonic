@@ -805,7 +805,12 @@ pub(super) fn support(settings: &Settings) -> u32 {
     } else {
         0
     };
-    sharp + local + editor + shadows
+    let adaptive = if settings.adaptive_tone_active() {
+        crate::nodes::finish::adaptive_tone::support()
+    } else {
+        0
+    };
+    sharp + local + editor + shadows + adaptive
 }
 
 pub(super) fn bake(

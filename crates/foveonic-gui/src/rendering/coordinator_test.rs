@@ -713,6 +713,102 @@ fn regional_completion(coordinator: &mut RenderCoordinator, stamp: &Stamp, origi
 }
 
 #[test]
+fn speculative_whole_waits_for_all_foreground_and_can_resume_after_yield() {
+    let mut coordinator = RenderCoordinator::default();
+    let origin = SourceOrigin::default();
+    let mut cursor = Cursor::default();
+    coordinator.refine(
+        refinement(Rendition::Current, 1, true),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let regional = cursor.next(&coordinator.plan()).unwrap();
+    regional_completion(&mut coordinator, &regional.stamp, &origin);
+    let whole = coordinator.plan().tasks[0].clone();
+    assert!(whole.speculative);
+    let b = desire(&mut coordinator, request("b.x3f", 3, 0.));
+    let c = desire(&mut coordinator, request("c.x3f", 4, 0.));
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, b);
+    cursor.defer(&b);
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, c);
+    assert_eq!(coordinator.finish(&c), Completion::Current);
+    assert!(
+        cursor.next_ready(&coordinator.plan(), |_| false).is_none(),
+        "source-waiting foreground blocks speculative work"
+    );
+    assert_eq!(
+        cursor
+            .next_ready(&coordinator.plan(), |_| true)
+            .unwrap()
+            .stamp,
+        b
+    );
+    assert_eq!(coordinator.finish(&b), Completion::Current);
+    coordinator.pick(
+        ColorPickRequest {
+            tool: crate::rendering::worker::ColorPickTool::Basic,
+            token: 1,
+            path: "pick.x3f".into(),
+            settings: Settings::new("Sunlight", "Standard"),
+            uv: [0.5, 0.5],
+        },
+        5,
+        None,
+    );
+    let pick = cursor.pick_ready(&coordinator.plan(), true).unwrap();
+    cursor.retry_pick();
+    assert!(cursor.pick_ready(&coordinator.plan(), false).is_none());
+    assert!(
+        cursor.next(&coordinator.plan()).is_none(),
+        "source-waiting pick blocks speculative work"
+    );
+    assert_eq!(
+        cursor.pick_ready(&coordinator.plan(), true).unwrap().id,
+        pick.id
+    );
+    assert!(coordinator.finish_pick(pick.id));
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, whole.stamp);
+    let new = desire(&mut coordinator, request("d.x3f", 5, 0.));
+    assert!(cursor.foreground_pending(&coordinator.plan(), &whole.stamp.target));
+    cursor.yield_task(&whole.stamp);
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, new);
+    assert_eq!(coordinator.finish(&new), Completion::Current);
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, whole.stamp);
+    assert_eq!(coordinator.finish(&whole.stamp), Completion::Current);
+    assert!(!coordinator.busy());
+}
+
+#[test]
+fn explicit_whole_promotes_matching_continuation_to_foreground() {
+    let mut coordinator = RenderCoordinator::default();
+    let origin = SourceOrigin::default();
+    coordinator.refine(
+        refinement(Rendition::Current, 1, true),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let regional = coordinator.plan().tasks[0].stamp.clone();
+    regional_completion(&mut coordinator, &regional, &origin);
+    let whole = coordinator.plan().tasks[0].clone();
+    assert!(whole.speculative);
+    let cursor = Cursor::default();
+    desire(&mut coordinator, request("b.x3f", 3, 0.));
+    assert!(cursor.should_yield(&coordinator.plan(), &whole, false));
+    coordinator.desire(whole.request.clone(), Some(origin), Instant::now());
+    assert!(
+        !coordinator
+            .plan()
+            .task(&whole.stamp.target)
+            .unwrap()
+            .speculative
+    );
+    assert!(
+        !cursor.should_yield(&coordinator.plan(), &whole, false),
+        "promotion applies to a running continuation"
+    );
+}
+
+#[test]
 fn refinement_advances_after_regional_admission_without_ui_ack_or_sibling_settlement() {
     for rendition in [Rendition::Current, Rendition::Camera, Rendition::Defaults] {
         let mut coordinator = RenderCoordinator::default();

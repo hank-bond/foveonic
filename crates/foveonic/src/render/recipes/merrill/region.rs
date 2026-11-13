@@ -22,6 +22,8 @@ pub(super) const FINISH_SUPPORT: u32 = 4;
 pub(super) struct Prepared {
     pub physical: [u32; 4],
     pub encode: EncodeParams,
+    /// Valid active sensor bounds on the tile, separate from its displayed crop.
+    pub rgb_bounds: [u32; 4],
 }
 impl Prepared {
     pub fn new(encode: EncodeParams, output: [u32; 4]) -> Result<Self> {
@@ -82,6 +84,16 @@ impl Prepared {
         encode.source[..2].copy_from_slice(&[physical[2] - physical[0], physical[3] - physical[1]]);
         encode.crop = std::array::from_fn(|i| crop[i] - physical[i % 2]);
         encode.output[..2].copy_from_slice(&[x1 - x0, y1 - y0]);
-        Ok(Self { physical, encode })
+        let rgb_bounds = [
+            left.max(physical[0]) - physical[0],
+            top.max(physical[1]) - physical[1],
+            right.min(physical[2]) - physical[0],
+            bottom.min(physical[3]) - physical[1],
+        ];
+        Ok(Self {
+            physical,
+            encode,
+            rgb_bounds,
+        })
     }
 }

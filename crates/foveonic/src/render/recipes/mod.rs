@@ -150,7 +150,27 @@ impl Engine {
             request.to_mut().working_scale = super::Scale::NATIVE;
             request.to_mut().preview_region = None;
         }
-        let settings = request.as_ref();
+        let requested = request.as_ref();
+        let regional = if let Some(rect) = requested
+            .preview_region
+            .filter(|_| !requested.rotation.is_neutral())
+        {
+            Some(requested.rotation.regional(
+                native_extent(source.metadata())?,
+                requested.crop,
+                rect,
+            )?)
+        } else {
+            None
+        };
+        let camera_settings = regional.map(|region| {
+            let mut camera_settings = requested.clone();
+            camera_settings.preview_region = Some(region.camera);
+            camera_settings.crop = Default::default();
+            camera_settings.rotation = Default::default();
+            camera_settings
+        });
+        let settings = camera_settings.as_ref().unwrap_or(requested);
         let resolved = settings.resolved_exposure(source.metadata());
         let dng_settings;
         let input = if matches!(recipe, Recipe::DngBase) {
@@ -180,7 +200,7 @@ impl Engine {
         if let Some(progress) = execution.progress {
             progress(super::RenderProgress::Prepared);
         }
-        self.collect_artifacts(
+        let mut artifacts = self.collect_artifacts(
             source,
             settings,
             &built.graph,
@@ -188,7 +208,17 @@ impl Engine {
             names,
             profile,
             execution,
-        )
+        )?;
+        if let Some(region) = regional {
+            for artifact in &mut artifacts {
+                artifact.settings = requested.clone();
+                if let crate::inspection::Content::Image(image) = &mut artifact.content {
+                    image.settings = requested.clone();
+                    image.regional = Some(region);
+                }
+            }
+        }
+        Ok(artifacts)
     }
 }
 

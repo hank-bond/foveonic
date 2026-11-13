@@ -71,6 +71,8 @@ pub(super) struct Service {
     queue: VecDeque<Request>,
     active: Option<PathBuf>,
     wanted: Vec<PathBuf>,
+    foreground: Vec<PathBuf>,
+    speculative: Vec<PathBuf>,
     slot: Slot,
 }
 
@@ -131,6 +133,8 @@ pub(super) fn start(
             queue: Default::default(),
             active: None,
             wanted: Vec::new(),
+            foreground: Vec::new(),
+            speculative: Vec::new(),
             slot,
         },
         Control(hold),
@@ -230,11 +234,44 @@ impl Service {
         self.admit();
     }
 
+    /// Free the single handoff slot when a different foreground source needs it.
+    /// The still-desired continuation may request its source again later.
+    pub fn prioritize(&mut self, foreground: &[PathBuf], speculative: &[PathBuf]) {
+        self.foreground = foreground.to_vec();
+        self.speculative = speculative.to_vec();
+        let mut pending = self.slot.0.lock().unwrap();
+        if pending.source.as_ref().is_some_and(|source| {
+            speculative.contains(&source.path)
+                && !foreground.contains(&source.path)
+                && foreground
+                    .iter()
+                    .any(|path| pending.source_requests.contains(path))
+        }) {
+            let loaded = pending.source.take().unwrap();
+            pending.source_requests.remove(&loaded.path);
+            self.slot.1.notify_one();
+        }
+        drop(pending);
+        self.admit();
+    }
+
     pub fn admit(&mut self) {
         if self.active.is_some() || self.slot.0.lock().unwrap().source.is_some() {
             return;
         }
-        if let Some(request) = self.queue.pop_front() {
+        let index = if self.foreground.is_empty() {
+            (!self.queue.is_empty()).then_some(0)
+        } else {
+            self.queue
+                .iter()
+                .position(|request| self.foreground.contains(&request.path))
+                .or_else(|| {
+                    self.queue
+                        .iter()
+                        .position(|request| !self.speculative.contains(&request.path))
+                })
+        };
+        if let Some(request) = index.and_then(|index| self.queue.remove(index)) {
             self.active = Some(request.path.clone());
             let _ = self.jobs.try_send(request);
         }
@@ -464,6 +501,117 @@ mod tests {
                 .unwrap(),
         );
         assert!(handle.open(&b, 1).is_err());
+    }
+
+    #[test]
+    fn speculative_handoff_does_not_block_foreground_source() {
+        let (mut handle, mut service, control) = rig();
+        let a = PathBuf::from("speculative-a.x3f");
+        let b = PathBuf::from("foreground-b.x3f");
+        let hold = control.hold(a.clone());
+        service.retain(vec![a.clone(), b.clone()]);
+        assert!(handle.open(&a, 1).unwrap().is_none());
+        service.signal(
+            service
+                .signals
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        hold.reached.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(handle.open(&b, 2).unwrap().is_none());
+        service.signal(
+            service
+                .signals
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        drop(hold);
+        service.completed(
+            service
+                .results
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        assert_eq!(
+            service.slot.0.lock().unwrap().source.as_ref().unwrap().path,
+            a
+        );
+        service.prioritize(&[a.clone(), b.clone()], std::slice::from_ref(&a));
+        assert!(
+            service.slot.0.lock().unwrap().source.is_some(),
+            "same-path foreground can consume the handoff"
+        );
+        service.prioritize(std::slice::from_ref(&b), std::slice::from_ref(&a));
+        assert!(service.slot.0.lock().unwrap().source.is_none());
+        assert_eq!(service.active.as_ref(), Some(&b));
+        assert!(handle.can_retry(&a, &service.slot.0.lock().unwrap()));
+        service.completed(
+            service
+                .results
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        assert!(handle.open(&b, 2).is_err());
+        assert!(
+            handle.open(&a, 1).unwrap().is_none(),
+            "continuation can reacquire its source"
+        );
+    }
+
+    #[test]
+    fn queued_speculative_source_does_not_overtake_foreground() {
+        let (mut handle, mut service, control) = rig();
+        let a = PathBuf::from("speculative-active.x3f");
+        let b = PathBuf::from("speculative-queued.x3f");
+        let c = PathBuf::from("foreground-queued.x3f");
+        let hold = control.hold(a.clone());
+        service.retain(vec![a.clone(), b.clone(), c.clone()]);
+        assert!(handle.open(&a, 1).unwrap().is_none());
+        service.signal(
+            service
+                .signals
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        hold.reached.recv_timeout(Duration::from_secs(5)).unwrap();
+        for (path, revision) in [(&b, 2), (&c, 3)] {
+            assert!(handle.open(path, revision).unwrap().is_none());
+            service.signal(
+                service
+                    .signals
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap(),
+            );
+        }
+        service.prioritize(std::slice::from_ref(&c), &[a.clone(), b.clone()]);
+        drop(hold);
+        service.completed(
+            service
+                .results
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        service.prioritize(std::slice::from_ref(&c), &[a.clone(), b.clone()]);
+        assert_eq!(service.active.as_ref(), Some(&c));
+        service.completed(
+            service
+                .results
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        assert!(handle.open(&c, 3).is_err());
+        service.signal(
+            service
+                .signals
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+        );
+        assert!(
+            service.active.is_none(),
+            "queued speculative work waits for foreground settlement"
+        );
+        service.prioritize(&[], &[a, b.clone()]);
+        assert_eq!(service.active.as_ref(), Some(&b));
     }
 
     #[test]

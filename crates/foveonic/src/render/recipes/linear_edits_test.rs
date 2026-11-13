@@ -762,6 +762,7 @@ fn scope_normalization_follows_declared_linear_white() {
             settings: Settings::default(),
             dehaze_basis: None,
             owner: engine.owner.clone(),
+            regional: None,
         };
         let scopes =
             crate::scopes::analyze(&engine.gpu, &image, None, &mut Profile::default()).unwrap();
