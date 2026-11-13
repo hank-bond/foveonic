@@ -334,6 +334,33 @@ struct SmartReopen {
     thumbnail_revision: Option<u64>,
 }
 
+struct ZoomRetention {
+    texture: std::sync::Weak<foveonic::image::ImageTexture>,
+    task: crate::timing::DeliveredTask,
+}
+impl ZoomRetention {
+    fn capture(frame: &crate::rendering::worker::Frame) -> Self {
+        Self {
+            texture: std::sync::Arc::downgrade(&frame.texture),
+            task: frame.diagnostic_task,
+        }
+    }
+    fn check(&self, frame: &crate::rendering::worker::Frame) {
+        let texture = self
+            .texture
+            .upgrade()
+            .expect("zoom discarded compatible Full pixels");
+        assert!(
+            std::sync::Arc::ptr_eq(&texture, &frame.texture),
+            "pure zoom replaced compatible Full pixels"
+        );
+        assert_eq!(
+            frame.diagnostic_task, self.task,
+            "pure zoom replaced the compatible Full task"
+        );
+    }
+}
+
 pub struct Smoke {
     scenario: Option<scenarios::Scenario>,
     capture: capture::Capture,
@@ -347,6 +374,7 @@ pub struct Smoke {
     settled_frames: u8,
     fast_region: Option<crate::viewport::PixelRegion>,
     smart_full_revision: Option<u64>,
+    zoom_retained: Option<ZoomRetention>,
     smart_scrub_checked: bool,
     smart_reopen: Option<SmartReopen>,
     display_revision: Option<u64>,
@@ -468,6 +496,7 @@ impl Smoke {
             settled_frames: 0,
             fast_region: None,
             smart_full_revision: None,
+            zoom_retained: None,
             smart_scrub_checked: false,
             smart_reopen: None,
             display_revision: None,
@@ -627,31 +656,64 @@ impl App {
                 && !smoke.smart_scrub_checked
         }) && self
             .smart_detail()
-            .is_some_and(|detail| detail.requested.exposure == 0.5)
+            .or(self.frame.as_ref())
+            .is_some_and(|frame| {
+                frame.requested.exposure == 0.5
+                    && frame.rendition == crate::editor::Rendition::Current
+                    && frame.output == "final"
+                    && self.selected.as_ref() == Some(&frame.path)
+                    && frame.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
+                    && crate::rendering::matching::same_authored_edits(
+                        &frame.requested,
+                        &self.settings,
+                    )
+            })
         {
-            let detail = self.smart_detail().unwrap();
-            let revision = detail.revision;
-            let texture = detail.texture.clone();
-            // Change settings after a tile is already visible. Checking only
-            // two queued edits before any completion misses the presentation rewind.
+            let feedback = self.smart_detail().or(self.frame.as_ref()).unwrap();
+            let revision = feedback.revision;
+            let task = feedback.diagnostic_task;
+            let content_revision = feedback.content_revision();
+            let texture = feedback.texture.clone();
+            let requested = feedback.requested.clone();
+            let regional = feedback.artifact.settings.preview_region.is_some();
+            // Either the regional result or its whole-image continuation may already be visible.
+            // Changing settings and submitting must preserve the exact completed feedback.
             for exposure in [0.625, 0.75] {
                 self.settings.exposure = exposure;
-                let retained = self
-                    .smart_detail()
-                    .expect("settings change hid the latest completed tile");
-                assert_eq!(retained.revision, revision);
-                assert!(std::sync::Arc::ptr_eq(&retained.texture, &texture));
-                self.submit(None);
-                let retained = self
-                    .smart_detail()
-                    .expect("submission hid the latest completed tile");
-                assert_eq!(retained.revision, revision);
-                assert!(std::sync::Arc::ptr_eq(&retained.texture, &texture));
+                for submitted in [false, true] {
+                    if submitted {
+                        self.submit(None);
+                    }
+                    let retained = self
+                        .smart_detail()
+                        .or(self.frame.as_ref())
+                        .expect("editing hid the latest completed feedback");
+                    assert_eq!(retained.revision, revision);
+                    assert_eq!(retained.diagnostic_task, task);
+                    assert_eq!(retained.content_revision(), content_revision);
+                    assert_eq!(retained.requested, requested);
+                    assert!(std::sync::Arc::ptr_eq(&retained.texture, &texture));
+                }
             }
             let smoke = self.smoke.as_mut().unwrap();
             smoke.smart_scrub_checked = true;
-            std::fs::write(smoke.directory.join("smart-scrub-retained.json"), serde_json::to_vec_pretty(&serde_json::json!({"retained_revision":revision,"retained_exposure":0.5,"requested_exposure":0.75,"requested_revision":self.revision})).unwrap()).unwrap();
+            std::fs::write(smoke.directory.join("smart-scrub-retained.json"), serde_json::to_vec_pretty(&serde_json::json!({"retained_revision":revision,"retained_content_revision":content_revision,"retained_exposure":0.5,"requested_exposure":0.75,"requested_revision":self.revision,"retained_kind":if regional {"region"} else {"whole"}})).unwrap()).unwrap();
         }
+        let current_native_feedback =
+            self.smart_detail()
+                .or(self.frame.as_ref())
+                .is_some_and(|frame| {
+                    self.selected.as_ref() == Some(&frame.path)
+                        && frame.output == "final"
+                        && frame.rendition == crate::editor::Rendition::Current
+                        && !frame.framing_preview
+                        && frame.comparison.is_none()
+                        && frame.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
+                        && crate::rendering::matching::same_authored_edits(
+                            &frame.requested,
+                            &self.settings,
+                        )
+                });
         let Some(smoke) = &mut self.smoke else {
             return;
         };
@@ -758,28 +820,56 @@ impl App {
                         matches!(target, "crop-ready" | "crop-drag")
                     );
                     assert_eq!(frame.artifact.settings.crop, self.settings.crop);
-                    if target == "crop-tile" && regional_smart {
-                        let detail = crate::rendering::smart::detail_frame(
-                            &self.before,
-                            &self.multi_edit,
-                            self.selected.as_deref(),
-                        )
-                        .unwrap();
-                        let visible = self
-                            .viewports
-                            .view(self.selected.as_deref())
-                            .visible_pixels()
-                            .unwrap();
-                        let window = frame.display_window(false);
-                        assert!(crate::rendering::smart::contains(
-                            detail.artifact.settings.preview_region.unwrap(),
-                            [
-                                visible.top_left[0] + window[0],
-                                visible.top_left[1] + window[1],
-                                visible.bottom_right[0] + 1 + window[0],
-                                visible.bottom_right[1] + 1 + window[1],
-                            ]
-                        ));
+                    if target == "crop-smart" {
+                        assert_eq!(
+                            frame.artifact.settings.working_scale,
+                            foveonic::render::Scale::NATIVE
+                        );
+                        assert!(frame.artifact.settings.preview_region.is_none());
+                        smoke.zoom_retained = Some(ZoomRetention::capture(frame));
+                    }
+                    if target == "crop-tile" {
+                        assert!(current_native_feedback);
+                        let feedback = if shown_detail.is_some() {
+                            crate::rendering::smart::detail_frame(
+                                &self.before,
+                                &self.multi_edit,
+                                self.selected.as_deref(),
+                            )
+                            .unwrap()
+                        } else {
+                            frame
+                        };
+                        let region = feedback.artifact.settings.preview_region;
+                        if let Some(region) = region {
+                            let visible = self
+                                .viewports
+                                .view(self.selected.as_deref())
+                                .visible_pixels()
+                                .unwrap();
+                            let window = frame.display_window(false);
+                            assert!(crate::rendering::smart::contains(
+                                region,
+                                [
+                                    visible.top_left[0] + window[0],
+                                    visible.top_left[1] + window[1],
+                                    visible.bottom_right[0] + 1 + window[0],
+                                    visible.bottom_right[1] + 1 + window[1],
+                                ]
+                            ));
+                            assert_eq!(
+                                feedback.texture.description().extent,
+                                [region[2] - region[0], region[3] - region[1]]
+                            );
+                            assert_eq!(
+                                feedback.artifact.settings.working_scale,
+                                foveonic::render::Scale::NATIVE
+                            );
+                        } else {
+                            smoke.zoom_retained.as_ref().unwrap().check(feedback);
+                        }
+                        std::fs::write(smoke.directory.join("crop-tile-feedback.json"),
+                            serde_json::to_vec_pretty(&serde_json::json!({"feedback":if region.is_some() {"region"} else {"whole"},"regional_supported":regional_smart})).unwrap()).unwrap();
                     }
                     if frame.framing_preview {
                         assert_eq!(frame.display_extent(false), frame.editing_extent());
@@ -1018,10 +1108,7 @@ impl App {
             }
             if smoke.targets == SMART_TARGETS && !smoke.preview_pending() {
                 let target = smoke.targets[smoke.index];
-                let regional = matches!(target, "smart-detail" | "smart-edit-detail")
-                    && regional_smart
-                    && shown_detail.is_some();
-                let frame = if regional {
+                let frame = if shown_detail.is_some() {
                     crate::rendering::smart::detail_frame(
                         &self.before,
                         &self.multi_edit,
@@ -1037,9 +1124,23 @@ impl App {
                     .visible_pixels()
                     .unwrap();
                 let region = frame.artifact.settings.preview_region;
+                let regional = region.is_some();
                 if !quattro_smart || !matches!(target, "final" | "cache-reopen") {
                     assert!(self.settings.reconstruction.is_some());
                     assert!(frame.artifact.settings.reconstruction.is_some());
+                }
+                if matches!(target, "smart-detail" | "smart-edit-detail") {
+                    assert!(current_native_feedback);
+                    if target == "smart-edit-detail" {
+                        assert!(smoke.smart_scrub_checked);
+                        assert_eq!(frame.requested.exposure, 0.75);
+                    }
+                }
+                if target == "smart-100" {
+                    smoke.zoom_retained = Some(ZoomRetention::capture(frame));
+                }
+                if target == "smart-detail" && !regional {
+                    smoke.zoom_retained.as_ref().unwrap().check(frame);
                 }
                 if regional {
                     if target == "smart-edit-detail" {
@@ -1169,7 +1270,7 @@ impl App {
                         "retained image was not admitted for the reopened photo"
                     );
                 }
-                let report = serde_json::json!({"target":target,"quality":frame.quality_label(),"region":region,"regional_supported":regional_smart,"native_extent":self.frame.as_ref().unwrap().display_extent(false),"rendered_extent":frame.texture.description().extent,
+                let report = serde_json::json!({"target":target,"quality":frame.quality_label(),"region":region,"feedback":if regional {"region"} else {"whole"},"regional_supported":regional_smart,"native_extent":self.frame.as_ref().unwrap().display_extent(false),"rendered_extent":frame.texture.description().extent,
                     "zoom_percent":self.viewports.view(self.selected.as_deref()).zoom_percent(ctx.pixels_per_point()),"thumbnail_revision":self.browser.rendered_revision(&frame.path),"processing_ms":frame.milliseconds,"scope_revision":self.scope_key.map(|k|k.revision),"image_revision":frame.revision,"cache_hits":self.worker.cache.status().hits,"cache_ready":self.worker.cache.status().ready.len(),"continuation_running":self.busy});
                 std::fs::write(
                     smoke.directory.join(format!("{target}.json")),
@@ -2296,16 +2397,8 @@ impl App {
                 self.selected
                     .as_ref()
                     .is_some_and(|p| self.browser.thumbnail(p).is_some())
-            } else if smoke.targets == CROP_TARGETS
-                && smoke.targets[smoke.index] == "crop-tile"
-                && regional_smart
-            {
-                crate::rendering::smart::detail_frame(
-                    &self.before,
-                    &self.multi_edit,
-                    self.selected.as_deref(),
-                )
-                .is_some()
+            } else if smoke.targets == CROP_TARGETS && smoke.targets[smoke.index] == "crop-tile" {
+                current_native_feedback
             } else if smoke.targets == DEHAZE_TARGETS {
                 // These controls require the current photo, independently of ancillary panels.
                 !self.busy
@@ -2319,14 +2412,8 @@ impl App {
                     smoke.targets[smoke.index],
                     "smart-detail" | "smart-edit-detail"
                 )
-                && regional_smart
             {
-                crate::rendering::smart::detail_frame(
-                    &self.before,
-                    &self.multi_edit,
-                    self.selected.as_deref(),
-                )
-                .is_some()
+                current_native_feedback
             } else {
                 !self.busy
                     && self.frame.as_ref().is_some_and(|frame| {
@@ -2360,23 +2447,11 @@ impl App {
             let ready = ready
                 && (smoke.targets != SMART_TARGETS
                     || match smoke.targets[smoke.index] {
-                        "smart-detail" | "smart-edit-detail" if regional_smart => {
-                            crate::rendering::smart::detail_frame(
-                                &self.before,
-                                &self.multi_edit,
-                                self.selected.as_deref(),
-                            )
-                            .is_some_and(|detail| {
-                                crate::rendering::matching::same_authored_edits(
-                                    &detail.requested,
-                                    &self.settings,
-                                )
-                            })
-                        }
-                        "smart-detail" | "smart-edit-detail" => {
-                            self.frame.as_ref().is_some_and(|f| {
-                                f.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
-                            })
+                        "smart-detail" => current_native_feedback,
+                        "smart-edit-detail" => {
+                            current_native_feedback
+                                && smoke.smart_scrub_checked
+                                && self.settings.exposure == 0.75
                         }
                         "smart-zoom-pending"
                         | "smart-crop-enter"
@@ -2496,21 +2571,7 @@ impl App {
                                 .frame
                                 .as_ref()
                                 .is_some_and(|f| f.revision == self.revision && !f.framing_preview),
-                            "crop-tile" => {
-                                if regional_smart {
-                                    crate::rendering::smart::detail_frame(
-                                        &self.before,
-                                        &self.multi_edit,
-                                        self.selected.as_deref(),
-                                    )
-                                    .is_some()
-                                } else {
-                                    self.frame.as_ref().is_some_and(|f| {
-                                        f.artifact.settings.working_scale
-                                            == foveonic::render::Scale::NATIVE
-                                    })
-                                }
-                            }
+                            "crop-tile" => current_native_feedback,
                             "crop-detail" => self.frame.as_ref().is_some_and(|f| {
                                 f.revision == self.revision
                                     && f.artifact.settings.working_scale
