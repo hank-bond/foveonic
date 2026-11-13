@@ -11,6 +11,8 @@ enum Step {
     SpaceClick,
     SmartGroupFit,
     SmartGroupZoom,
+    SmartGroupZoomOther,
+    SmartGroupSelectPending,
     SmartGroupEdit,
     SmartGroupSolo,
     SmartGroupEnd,
@@ -64,6 +66,11 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::SmartGroupEdit,
         Step::SmartGroupEdit,
         Step::SmartGroupEdit,
+        Step::SmartGroupZoomOther,
+        Step::SmartGroupEdit,
+        Step::SmartGroupEdit,
+        Step::SmartGroupEdit,
+        Step::SmartGroupSelectPending,
         Step::SmartGroupSolo,
         Step::SmartGroupEdit,
         Step::SmartGroupEdit,
@@ -132,6 +139,7 @@ pub(super) struct TransitionJourney {
     next_double_click: Option<std::time::Instant>,
     smart_active: Option<usize>,
     smart_zoomed: bool,
+    smart_zoomed_paths: Vec<PathBuf>,
     smart_began: Option<std::time::Instant>,
     smart_observed: Vec<PathBuf>,
     smart_fit_scales: Vec<(PathBuf, foveonic::render::Scale)>,
@@ -159,6 +167,7 @@ impl TransitionJourney {
             next_double_click: None,
             smart_active: None,
             smart_zoomed: false,
+            smart_zoomed_paths: Vec::new(),
             smart_began: None,
             smart_observed: Vec::new(),
             smart_fit_scales: Vec::new(),
@@ -225,16 +234,20 @@ impl TransitionJourney {
         }
         result
     }
-    fn observe_smart_edit(&mut self, app: &App, paths: &[PathBuf]) -> Result<(), String> {
+    fn observe_smart_edit(&mut self, app: &App, _paths: &[PathBuf]) -> Result<(), String> {
         for path in app.edit_selection.paths() {
             if self.smart_observed.contains(path) {
                 continue;
             }
-            let frame = if app.selected.as_ref() == Some(path) {
-                app.frame.as_ref()
-            } else {
-                app.multi_edit.frame(path)
-            };
+            let frame = app
+                .multi_edit
+                .detail(path)
+                .filter(|detail| {
+                    app.multi_edit.settings(path).is_some_and(|settings| {
+                        crate::rendering::matching::same_authored_edits(&detail.requested, settings)
+                    })
+                })
+                .or_else(|| app.current_photo_frame(path));
             let settings = if app.selected.as_ref() == Some(path) {
                 Some(&app.settings)
             } else {
@@ -246,16 +259,15 @@ impl TransitionJourney {
                 })
             }) {
                 if self.smart_zoomed {
-                    let expected =
-                        if path == &paths[self.smart_active.ok_or("missing zoomed photo")?] {
-                            foveonic::render::Scale::NATIVE
-                        } else {
-                            self.smart_fit_scales
-                                .iter()
-                                .find(|(photo, _)| photo == path)
-                                .map(|(_, scale)| *scale)
-                                .ok_or("missing Fit scale")?
-                        };
+                    let expected = if self.smart_zoomed_paths.contains(path) {
+                        foveonic::render::Scale::NATIVE
+                    } else {
+                        self.smart_fit_scales
+                            .iter()
+                            .find(|(photo, _)| photo == path)
+                            .map(|(_, scale)| *scale)
+                            .ok_or("missing Fit scale")?
+                    };
                     if frame.artifact.settings.working_scale != expected {
                         return Err(format!(
                             "Smart changed {} to scale {} instead of {}",
@@ -268,7 +280,8 @@ impl TransitionJourney {
                 let event = serde_json::json!({"phase":"current","zoomed":self.smart_zoomed,"editing_count":app.edit_selection.paths().len(),"source":path,
                     "elapsed_ms":self.smart_began.unwrap().elapsed().as_secs_f64()*1000.,
                     "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
-                    "scale_divisor":frame.artifact.settings.working_scale.divisor()});
+                    "scale_divisor":frame.artifact.settings.working_scale.divisor(),
+                    "region":frame.artifact.settings.preview_region});
                 crate::timing::emit("scenario.smart_edit", || event.clone());
                 self.events.push(event);
                 self.smart_observed.push(path.clone());
@@ -343,7 +356,13 @@ impl TransitionJourney {
         smoke: &mut super::Smoke,
         paths: &[PathBuf],
     ) -> Result<bool, String> {
-        if self.pending && self.steps[self.index] == Step::HeldSupersession && self.hold.is_some() {
+        if self.pending
+            && matches!(
+                self.steps[self.index],
+                Step::HeldSupersession | Step::SmartGroupSelectPending
+            )
+            && self.hold.is_some()
+        {
             match self.hold.as_ref().unwrap().reached.try_recv() {
                 Ok(()) => {}
                 Err(crossbeam_channel::TryRecvError::Empty) => return Ok(false),
@@ -352,6 +371,13 @@ impl TransitionJourney {
                 }
             }
             self.events.push(serde_json::json!({"observation":"delivery held", "coverage":"controlled harness wait"}));
+            if self.steps[self.index] == Step::SmartGroupSelectPending {
+                let next = self.smart_active.ok_or("missing pending Smart selection")?;
+                app.select(paths[next].clone(), false);
+                self.events.push(serde_json::json!({"action":"activate photo while regional delivery is held", "photo":next, "coverage":"direct-command"}));
+                self.release();
+                return Ok(false);
+            }
             app.preferences.preview_quality = PreviewMode::Draft;
             self.model.adjust_exposure(self.held_delta);
             super::scenarios::apply_exposure(app, f64::from(self.held_delta));
@@ -396,8 +422,11 @@ impl TransitionJourney {
                 crate::timing::emit("scenario.smart_edit", || event.clone());
                 self.events.push(event);
             }
-            if step == Step::SmartGroupZoom {
-                let path = &paths[self.smart_active.unwrap()];
+            if matches!(step, Step::SmartGroupZoom | Step::SmartGroupZoomOther) {
+                let path = self
+                    .smart_zoomed_paths
+                    .last()
+                    .ok_or("missing zoomed Smart photo")?;
                 let frame = if app.selected.as_ref() == Some(path) {
                     app.frame.as_ref()
                 } else {
@@ -407,6 +436,20 @@ impl TransitionJourney {
                     frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
                 }) {
                     return Ok(false);
+                }
+            }
+            if step == Step::SmartGroupSelectPending {
+                for path in paths {
+                    if app.current_photo_frame(path).is_none_or(|frame| {
+                        app.multi_edit.settings(path).is_none_or(|settings| {
+                            !crate::rendering::matching::same_authored_edits(
+                                &frame.requested,
+                                settings,
+                            )
+                        })
+                    }) {
+                        return Ok(false);
+                    }
                 }
             }
             if step == Step::Single {
@@ -760,6 +803,7 @@ impl TransitionJourney {
                     .as_ref()
                     .and_then(|p| paths.iter().position(|v| v == p));
                 self.smart_zoomed = false;
+                self.smart_zoomed_paths.clear();
                 self.smart_fit_scales.clear();
                 for path in paths {
                     app.viewports.view_mut(Some(path)).reset();
@@ -785,14 +829,21 @@ impl TransitionJourney {
                 app.sync_multi_edit();
                 app.submit(None);
             }
-            Step::SmartGroupZoom => {
-                let path = &paths[self.smart_active.ok_or("no active Smart photo")?];
+            Step::SmartGroupZoom | Step::SmartGroupZoomOther => {
+                let active = self.smart_active.ok_or("no active Smart photo")?;
+                let index = if step == Step::SmartGroupZoom {
+                    active
+                } else {
+                    (active + 1) % paths.len()
+                };
+                let path = &paths[index];
                 let view = app.viewports.view_mut(Some(path));
                 let percent = view
                     .zoom_percent(ctx.pixels_per_point())
                     .ok_or("no Smart view geometry")?;
                 view.zoom_by(200. / percent);
                 self.smart_zoomed = true;
+                self.smart_zoomed_paths.push(path.clone());
             }
             Step::SmartGroupEdit => {
                 self.smart_observed.clear();
@@ -800,6 +851,20 @@ impl TransitionJourney {
                 let event = serde_json::json!({"phase":"begin","zoomed":self.smart_zoomed,"editing_count":app.edit_selection.paths().len(),"minimum_revision":app.revision+1});
                 crate::timing::emit("scenario.smart_edit", || event.clone());
                 self.events.push(event);
+                self.model.adjust_exposure(0.125);
+                super::scenarios::apply_exposure(app, 0.125);
+            }
+            Step::SmartGroupSelectPending => {
+                let active = app
+                    .selected
+                    .as_ref()
+                    .and_then(|path| paths.iter().position(|candidate| candidate == path))
+                    .ok_or("no active Smart photo for held selection")?;
+                self.smart_active = Some((active + 1) % paths.len());
+                self.hold = Some(
+                    app.worker
+                        .hold_delivery(paths[active].clone(), app.revision + 1),
+                );
                 self.model.adjust_exposure(0.125);
                 super::scenarios::apply_exposure(app, 0.125);
             }
@@ -1117,7 +1182,7 @@ mod tests {
                     .iter()
                     .filter(|step| **step == Step::SmartGroupEdit)
                     .count(),
-                9
+                12
             );
             assert_eq!(sequence.last(), Some(&Step::Restore));
             assert!(sequence

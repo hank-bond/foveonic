@@ -27,8 +27,8 @@ enum Command {
     Clear(bool),
     Submit(Box<Request>, Instant),
     Refine(Box<Refinement>, Option<SourceOrigin>, Instant),
-    CancelRefinement(PathBuf),
-    Overviews(Vec<Request>, Vec<PathBuf>, Instant),
+    CancelRefinement(PathBuf, crate::editor::Rendition),
+    Overviews(Vec<Request>, Vec<PathBuf>, Vec<PathBuf>, Instant),
     Retain(Vec<PathBuf>, Vec<PathBuf>),
     Scopes(Box<ScopeRequest>),
     Pick(Box<ColorPickRequest>, u64, Option<SourceOrigin>),
@@ -143,13 +143,17 @@ impl Handle {
     }
 
     pub fn activate(&self, path: PathBuf) {
-        self.refinements.borrow_mut().clear();
+        self.refinements.borrow_mut().retain(|(request, _)| {
+            request.first.rendition == crate::editor::Rendition::Current
+                || request.first.path == path
+        });
         self.send(Command::Activate(path), true);
     }
     pub fn retire_before(&self, path: PathBuf) {
-        self.refinements
-            .borrow_mut()
-            .retain(|(request, _)| request.first.path != path);
+        self.refinements.borrow_mut().retain(|(request, _)| {
+            request.first.path != path
+                || request.first.rendition == crate::editor::Rendition::Current
+        });
         self.send(Command::RetireBefore(path), true);
     }
     pub fn clear(&self, all: bool) {
@@ -193,24 +197,39 @@ impl Handle {
         self.send(Command::Refine(Box::new(request), origin, queued_at), true);
         true
     }
-    pub fn cancel_refinement(&self, path: PathBuf) {
+    pub fn cancel_refinement(&self, path: PathBuf, rendition: crate::editor::Rendition) {
         let mut previous = self.refinements.borrow_mut();
         let count = previous.len();
-        previous.retain(|(request, _)| request.first.path != path);
+        previous.retain(|(request, _)| {
+            request.first.path != path || request.first.rendition != rendition
+        });
         if previous.len() != count {
-            self.send(Command::CancelRefinement(path), true);
+            self.send(Command::CancelRefinement(path, rendition), true);
         }
     }
-    pub fn overviews(&self, requests: Vec<Request>, retained: Vec<PathBuf>, queued_at: Instant) {
+    pub fn overviews(
+        &self,
+        requests: Vec<Request>,
+        paths: Vec<PathBuf>,
+        retained: Vec<PathBuf>,
+        queued_at: Instant,
+    ) {
         self.refinements.borrow_mut().retain(|(old, _)| {
             !requests.iter().any(|request| {
                 request.path == old.first.path
                     && old.first.rendition == crate::editor::Rendition::Current
             })
         });
-        self.send(Command::Overviews(requests, retained, queued_at), true);
+        self.send(
+            Command::Overviews(requests, paths, retained, queued_at),
+            true,
+        );
     }
     pub fn retain(&self, paths: Vec<PathBuf>, retained: Vec<PathBuf>) {
+        self.refinements.borrow_mut().retain(|(request, _)| {
+            request.first.rendition != crate::editor::Rendition::Current
+                || paths.contains(&request.first.path)
+        });
         self.send(Command::Retain(paths, retained), true);
     }
     pub fn scopes(&self, request: ScopeRequest) {
@@ -387,12 +406,10 @@ impl Runtime {
                         .begin(started.stamp.revision, started.queued_at);
                 }
             }
-            Command::CancelRefinement(path) => self.coordinator.cancel_refinement(&path),
-            Command::Overviews(requests, retained, queued_at) => {
-                let paths = requests
-                    .iter()
-                    .map(|request| request.path.clone())
-                    .collect::<Vec<_>>();
+            Command::CancelRefinement(path, rendition) => {
+                self.coordinator.cancel_refinement(&path, rendition)
+            }
+            Command::Overviews(requests, paths, retained, queued_at) => {
                 self.coordinator.retain_overviews(&paths, &retained);
                 for request in requests {
                     let origin = self.cache.source_origin(&request.path);

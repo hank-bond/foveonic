@@ -13,30 +13,29 @@ pub enum Rendition {
 #[derive(Default)]
 pub struct Before {
     pub active: Rendition,
-    saved: Option<(Option<worker::Frame>, Option<worker::Frame>)>,
+    saved: Option<Option<worker::Frame>>,
+    pub detail: Option<worker::Frame>,
 }
 impl Before {
     pub(crate) fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
-        if let Some((frame, detail)) = &self.saved {
-            for frame in frame.iter().chain(detail.iter()) {
-                inventory.frame(frame);
-            }
+        for frame in self.saved.iter().flatten().chain(self.detail.iter()) {
+            inventory.frame(frame);
         }
     }
     pub(crate) fn memory_key(&self, key: &mut Vec<u64>) {
-        if let Some((frame, detail)) = &self.saved {
-            for frame in frame.iter().chain(detail.iter()) {
-                crate::memory::frame_key(frame, key);
-            }
+        for frame in self.saved.iter().flatten().chain(self.detail.iter()) {
+            crate::memory::frame_key(frame, key);
         }
     }
-    pub fn retain_current(
-        &mut self,
-        frame: &mut Option<worker::Frame>,
-        detail: &mut Option<worker::Frame>,
-    ) {
+    pub fn current_frame(&self) -> Option<&worker::Frame> {
+        self.saved.as_ref()?.as_ref()
+    }
+    pub fn take_current(&mut self) -> Option<Option<worker::Frame>> {
+        self.saved.take()
+    }
+    pub fn retain_current(&mut self, frame: &mut Option<worker::Frame>) {
         if self.active != Rendition::Current && self.saved.is_none() {
-            self.saved = Some((frame.take(), detail.take()));
+            self.saved = Some(frame.take());
         }
     }
     pub fn settings(
@@ -78,6 +77,7 @@ impl App {
             }
         } else {
             self.before.active = target;
+            self.before.detail = None;
             self.cancel_smart();
             self.submit_request(None, None);
         }
@@ -87,16 +87,24 @@ impl App {
             return;
         }
         self.before.active = Rendition::Current;
-        if let Some((frame, detail)) = self.before.saved.take() {
+        self.before.detail = None;
+        if let Some(frame) = self.before.take_current() {
             self.frame = frame;
-            self.detail = detail;
         }
         self.revision += 1;
         if let Some(path) = &self.selected {
             self.worker.retire_before(path);
             if self.output == "final" && !self.comparison.requested() {
                 if let Some(frame) = self.multi_edit.take_frame(path) {
-                    self.frame = Some(frame);
+                    if self
+                        .frame
+                        .as_ref()
+                        .is_none_or(|saved| frame.content_revision() >= saved.content_revision())
+                    {
+                        self.frame = Some(frame);
+                    } else {
+                        self.multi_edit.retain(frame);
+                    }
                 }
             }
         }
@@ -110,7 +118,6 @@ impl App {
         }
         self.sync_render_progress(None);
         self.scope_key = None;
-        self.cancel_smart();
         self.previews.invalidate();
         crate::viewport::clear(&self.render_state);
     }
@@ -141,6 +148,21 @@ impl App {
 mod tests {
     use super::*;
     use foveonic::render::{EditScope, EditSection, PhotographicMethod, RecipeDefaults, Settings};
+    #[test]
+    fn capturing_an_absent_current_frame_is_still_a_saved_presentation() {
+        let mut before = Before {
+            active: Rendition::Camera,
+            ..Default::default()
+        };
+        let mut frame = None;
+        before.retain_current(&mut frame);
+        assert!(matches!(before.saved, Some(None)));
+        // Repeated alternate replies cannot replace the captured absence.
+        before.retain_current(&mut frame);
+        assert!(matches!(before.take_current(), Some(None)));
+        assert!(before.take_current().is_none());
+    }
+
     #[test]
     fn camera_and_default_renditions_never_replace_authored_values() {
         let metadata = crate::capture::processing_metadata(

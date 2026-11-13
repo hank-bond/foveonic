@@ -85,6 +85,24 @@ impl App {
                 changed |= self.show_photo(&mut child, mapping);
                 self.before_badge(&child, image_rect);
             } else {
+                let detail = self
+                    .multi_edit
+                    .settings(path)
+                    .and_then(|settings| {
+                        self.photo_detail(
+                            path,
+                            self.multi_edit.frame(path),
+                            settings,
+                            crate::editor::Rendition::Current,
+                        )
+                    })
+                    .map(|detail| {
+                        (
+                            detail.texture.clone(),
+                            detail.detail_region(),
+                            detail.diagnostic_identity(false),
+                        )
+                    });
                 let view = self.viewports.view_mut(Some(path));
                 view.editing = crate::photo_tools::takes_pointer(ui.ctx());
                 view.framing = None;
@@ -99,6 +117,17 @@ impl App {
                         self.srgb_target,
                         frame.diagnostic_identity(false),
                     );
+                    if let Some((texture, region, identity)) = detail {
+                        view.show_region(
+                            &mut child,
+                            texture,
+                            region,
+                            frame.display_window(false),
+                            crate::viewport::Mapping::normal(-1),
+                            self.srgb_target,
+                            identity,
+                        );
+                    }
                     Some(frame.native_display_extent())
                 } else {
                     let preview = if target {

@@ -40,7 +40,12 @@ impl Rig {
     }
     fn requests(&self, requests: Vec<Request>) {
         self.handle.set_view(view(&requests));
-        self.handle.overviews(requests, vec![], Instant::now());
+        let paths = requests
+            .iter()
+            .map(|request| request.path.clone())
+            .collect();
+        self.handle
+            .overviews(requests, paths, vec![], Instant::now());
         self.applied();
     }
     fn applied(&self) {
@@ -100,7 +105,12 @@ fn view(requests: &[Request]) -> ViewState {
         settings: active.settings.clone(),
         overviews: requests
             .iter()
-            .map(|request| (request.path.clone(), request.settings.clone()))
+            .map(|request| crate::rendering::delivery::PhotoView {
+                path: request.path.clone(),
+                settings: request.settings.clone(),
+                displayed_revision: None,
+                detail_revision: None,
+            })
             .collect(),
         displayed_revision: None,
         detail_revision: None,
@@ -300,4 +310,51 @@ fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_r
     ));
     rig.applied();
     assert_eq!(rig.tasks()[0].stamp.revision, 5);
+}
+
+#[test]
+fn complete_demand_retains_current_detail_but_removal_forgets_its_suppressed_intent() {
+    let rig = Rig::new();
+    let mut first = request("a.x3f", 1, 0.);
+    first.preview_policy = PreviewMode::Smart;
+    first.preview_quality = PreviewMode::Full;
+    first.settings.preview_region = Some([32, 32, 160, 160]);
+    let mut whole = first.clone();
+    whole.revision = 2;
+    whole.settings.preview_region = None;
+    let intent = Refinement {
+        first: first.clone(),
+        whole: Some(whole),
+    };
+    assert!(rig.handle.refine(intent.clone(), None, Instant::now()));
+    rig.handle.activate("b.x3f".into());
+    rig.handle.retire_before("a.x3f".into());
+    rig.handle.overviews(
+        vec![request("b.x3f", 3, 0.)],
+        vec!["a.x3f".into(), "b.x3f".into()],
+        vec![],
+        Instant::now(),
+    );
+    rig.applied();
+    assert_eq!(rig.tasks().len(), 2);
+    assert!(rig
+        .tasks()
+        .iter()
+        .any(|task| task.request.path == first.path
+            && task.request.settings.preview_region.is_some()));
+    assert!(
+        !rig.handle.refine(intent.clone(), None, Instant::now()),
+        "selection must preserve intent suppression along with work"
+    );
+    rig.handle
+        .retain(vec!["b.x3f".into()], vec!["a.x3f".into()]);
+    rig.applied();
+    assert!(!rig
+        .tasks()
+        .iter()
+        .any(|task| task.request.path == first.path));
+    assert!(
+        rig.handle.refine(intent, None, Instant::now()),
+        "re-adding a removed photo must republish its intent"
+    );
 }

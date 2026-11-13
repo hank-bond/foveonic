@@ -145,11 +145,9 @@ impl crate::App {
             self.navigator.resource_revision(),
             self.previews.resource_revision(),
         ];
-        for frame in [self.frame.as_ref(), self.detail.as_ref()] {
-            key.push(u64::from(frame.is_some()));
-            if let Some(frame) = frame {
-                frame_key(frame, &mut key);
-            }
+        key.push(u64::from(self.frame.is_some()));
+        if let Some(frame) = &self.frame {
+            frame_key(frame, &mut key);
         }
         if let Some(metadata) = &self.metadata {
             key.push(Arc::as_ptr(metadata) as usize as u64);
@@ -169,7 +167,7 @@ impl crate::App {
         }
         self.memory_key = key;
         let mut inventory = Inventory::default();
-        for frame in self.frame.iter().chain(self.detail.iter()) {
+        for frame in self.frame.iter() {
             inventory.frame(frame);
         }
         if let Some(metadata) = &self.metadata {

@@ -104,7 +104,6 @@ struct App {
     channel: i32,
     comparison: inspect::Comparison,
     frame: Option<worker::Frame>,
-    detail: Option<worker::Frame>,
     smart_qualities: std::collections::BTreeMap<PathBuf, preferences::PreviewMode>,
     preview_demand_changed: bool,
     scope_images: Option<scopes::Images>,
@@ -341,7 +340,6 @@ impl App {
             channel: -1,
             comparison: Default::default(),
             frame: None,
-            detail: None,
             smart_qualities: Default::default(),
             preview_demand_changed: false,
             scope_images: None,
@@ -448,7 +446,6 @@ impl App {
         self.capture.select(None);
         self.metadata = None;
         self.frame = None;
-        self.detail = None;
         self.cancel_smart();
         self.scope_images = None;
         self.scope_snapshot = None;
@@ -580,8 +577,6 @@ impl App {
                 frame.revision = self.revision;
             }
         }
-        self.detail = None;
-        self.cancel_smart();
         self.scope_key = None;
         viewport::clear(&self.render_state);
     }
@@ -604,7 +599,6 @@ impl App {
             && self.before.active == editor::Rendition::Current
             && self.output == "final"
             && !self.comparison.requested()
-            && !self.smart_refinement_active()
         {
             if let Some(path) = &self.selected {
                 self.multi_edit.invalidate_photo(path);
@@ -612,7 +606,9 @@ impl App {
             self.submit_photos();
             return;
         }
-        self.cancel_smart();
+        if self.before.active != editor::Rendition::Current {
+            self.cancel_smart();
+        }
         if export.is_none() && self.smart_refinement_active() {
             self.submit_smart_refinement();
         } else {
@@ -740,7 +736,7 @@ impl App {
                         .frame
                         .as_ref()
                         .into_iter()
-                        .chain(self.detail.as_ref())
+                        .chain(self.detail_frame())
                         .any(|frame| frame.revision == key.revision)
                         && self.scope_key == Some(key)
                     {
@@ -842,11 +838,10 @@ impl App {
                         );
                     }
                     if frame.rendition != editor::Rendition::Current {
-                        self.before
-                            .retain_current(&mut self.frame, &mut self.detail);
+                        self.before.retain_current(&mut self.frame);
                     }
                     if frame.rendition == editor::Rendition::Current
-                        && frame.artifact.settings.preview_region.is_none()
+                        && frame.requested.preview_region.is_none()
                         && !frame.is_photographic()
                     {
                         if let Some(previous) = self.frame.take() {
@@ -867,19 +862,22 @@ impl App {
                     self.update_browser_preview(&frame);
                     // Keep the last completed scopes until this frame has replacements.
                     self.scope_key = None;
-                    if frame.artifact.settings.preview_region.is_some() {
-                        self.detail = Some(frame);
+                    if frame.requested.preview_region.is_some() {
+                        if frame.rendition == editor::Rendition::Current {
+                            self.multi_edit.retain(frame);
+                        } else {
+                            self.before.detail = Some(frame);
+                        }
                     } else {
                         viewport::clear(&self.render_state);
-                        if (self.preferences.preview_quality != preferences::PreviewMode::Smart
-                            || frame.artifact.settings.working_scale
-                                != foveonic::render::Scale::NATIVE)
-                            && self
-                                .detail
-                                .as_ref()
-                                .is_none_or(|detail| frame.revision >= detail.revision)
-                        {
-                            self.detail = None;
+                        if frame.rendition == editor::Rendition::Current {
+                            self.multi_edit
+                                .supersede_detail(&frame.path, frame.content_revision());
+                        }
+                        if self.before.detail.as_ref().is_some_and(|detail| {
+                            frame.content_revision() >= detail.content_revision()
+                        }) {
+                            self.before.detail = None;
                         }
                         self.frame = Some(frame);
                     }
@@ -921,9 +919,7 @@ impl App {
         });
         let detail = self.smart_detail().filter(|detail| {
             self.preferences.scope_viewport
-                && visible.is_some_and(|visible| {
-                    smart::contains(detail.artifact.settings.preview_region.unwrap(), visible)
-                })
+                && visible.is_some_and(|visible| smart::contains(detail.detail_region(), visible))
         });
         let Some(frame) = detail.or(self.frame.as_ref()) else {
             self.scope_key = None;
@@ -1545,7 +1541,7 @@ impl App {
             let detail = self.smart_detail().map(|detail| {
                 (
                     detail.texture.clone(),
-                    detail.artifact.settings.preview_region.unwrap(),
+                    detail.detail_region(),
                     detail.diagnostic_identity(false),
                 )
             });
@@ -1791,8 +1787,9 @@ impl eframe::App for App {
             .show(ctx, &mut self.preferences.noise_profile);
         if !self.exporting && self.noise_calibration.take_changed() {
             self.multi_edit.invalidate();
+            self.multi_edit.clear_details();
+            self.before.detail = None;
             self.cancel_smart();
-            self.detail = None;
             let selected = self
                 .noise_calibration
                 .selected(self.preferences.noise_profile);
@@ -1910,7 +1907,8 @@ impl eframe::App for App {
         let tuning_changed = previous_limits != self.preferences.adaptive_tone_tuning;
         if tuning_changed {
             self.multi_edit.invalidate();
-            self.detail = None;
+            self.multi_edit.clear_details();
+            self.before.detail = None;
             self.browser.invalidate_previews();
             self.previews.invalidate();
         }

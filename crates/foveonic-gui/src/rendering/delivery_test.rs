@@ -15,6 +15,8 @@ fn view(settings: &Settings) -> ViewContext<'_> {
         settings,
         overview_visible: true,
         overview_settings: Some(settings),
+        overview_displayed_revision: None,
+        overview_detail_revision: None,
         displayed_revision: Some(10),
         detail_revision: None,
     }
@@ -348,4 +350,85 @@ fn overtaken_edit_advances_feedback_then_latest_group_settles_without_rewinding(
         Err(Rejection::Removed)
     );
     assert_eq!(context.displayed_revision, Some(12));
+}
+
+#[test]
+fn inactive_detail_uses_its_own_geometry_and_content_order() {
+    let settings = Settings::default();
+    let mut active = settings.clone();
+    active.rotation.turns = 1;
+    let mut context = view(&active);
+    context.active = Some(Path::new("b.x3f"));
+    context.displayed_revision = Some(100);
+    context.detail_revision = Some(101);
+    context.overview_settings = Some(&settings);
+    context.overview_displayed_revision = Some(10);
+    context.overview_detail_revision = Some(12);
+    let mut incoming = reply(&settings);
+    incoming.purpose = &Purpose::Detail;
+    incoming.image.as_mut().unwrap().regional = true;
+    assert_eq!(
+        classify(Completion::Superseded, &incoming, &context).destination,
+        Err(Rejection::Superseded)
+    );
+    incoming.image.as_mut().unwrap().revision = 13;
+    assert_eq!(
+        classify(Completion::Superseded, &incoming, &context).destination,
+        Ok(Destination::Overview)
+    );
+    // Detail identity survives a worker fallback to a whole-image artifact.
+    incoming.image.as_mut().unwrap().regional = false;
+    incoming.image.as_mut().unwrap().revision = 11;
+    assert_eq!(
+        classify(Completion::Superseded, &incoming, &context).destination,
+        Err(Rejection::Superseded)
+    );
+    incoming.purpose = &Purpose::Current;
+    assert_eq!(
+        classify(Completion::Superseded, &incoming, &context).destination,
+        Ok(Destination::Overview),
+        "a whole image can advance the base while a newer detail remains visible"
+    );
+    context.overview_displayed_revision = Some(14);
+    assert_eq!(
+        classify(Completion::Superseded, &incoming, &context).destination,
+        Err(Rejection::Superseded)
+    );
+}
+
+#[test]
+fn view_snapshot_keeps_each_photos_content_order_separate() {
+    let settings = Settings::default();
+    let snapshot = ViewState {
+        active: Some("b.x3f".into()),
+        rendition: Rendition::Camera,
+        output: "final".into(),
+        comparison: false,
+        framing_preview: false,
+        exporting: false,
+        calibration: None,
+        settings: settings.clone(),
+        overviews: vec![PhotoView {
+            path: "a.x3f".into(),
+            settings: settings.clone(),
+            displayed_revision: Some(10),
+            detail_revision: Some(12),
+        }],
+        displayed_revision: Some(100),
+        detail_revision: Some(101),
+    };
+    let mut incoming = reply(&settings);
+    incoming.purpose = &Purpose::Detail;
+    incoming.image.as_mut().unwrap().regional = true;
+    incoming.image.as_mut().unwrap().revision = 13;
+    assert_eq!(
+        classify(
+            Completion::Superseded,
+            &incoming,
+            &snapshot.context(incoming.path)
+        )
+        .destination,
+        Ok(Destination::Overview)
+    );
+    assert!(!snapshot.context(Path::new("removed.x3f")).overview_visible);
 }

@@ -124,8 +124,10 @@ impl RenderCoordinator {
         origin: Option<SourceOrigin>,
         queued_at: Instant,
     ) -> TaskId {
-        self.cancel_refinement_for(&request.path, Some(request.rendition));
         let target = Target::of(&request);
+        if !matches!(target.purpose, Purpose::Inspection(_, _) | Purpose::Export) {
+            self.cancel_refinement_for(&request.path, Some(request.rendition));
+        }
         self.desired.retain(|entry| {
             if target.purpose == Purpose::Current
                 && entry.task.stamp.target.path == target.path
@@ -145,10 +147,7 @@ impl RenderCoordinator {
                 || match &target.purpose {
                     Purpose::Camera | Purpose::Defaults => !matches!(
                         entry.task.stamp.target.purpose,
-                        Purpose::Camera
-                            | Purpose::Defaults
-                            | Purpose::Detail
-                            | Purpose::Inspection(_, _)
+                        Purpose::Camera | Purpose::Defaults | Purpose::Inspection(_, _)
                     ),
                     Purpose::Current | Purpose::Inspection(_, _) => {
                         !matches!(entry.task.stamp.target.purpose, Purpose::Inspection(_, _))
@@ -307,8 +306,8 @@ impl RenderCoordinator {
         None
     }
 
-    pub fn cancel_refinement(&mut self, path: &Path) {
-        self.cancel_refinement_for(path, None);
+    pub fn cancel_refinement(&mut self, path: &Path, rendition: crate::editor::Rendition) {
+        self.cancel_refinement_for(path, Some(rendition));
     }
 
     fn cancel_refinement_for(&mut self, path: &Path, rendition: Option<crate::editor::Rendition>) {
@@ -375,8 +374,10 @@ impl RenderCoordinator {
 
     pub fn retain_overviews(&mut self, paths: &[PathBuf], retained: &[PathBuf]) {
         self.desired.retain(|entry| {
-            let keep = entry.task.stamp.target.purpose != Purpose::Current
-                || paths.contains(&entry.task.stamp.target.path)
+            let keep = !matches!(
+                entry.task.stamp.target.purpose,
+                Purpose::Current | Purpose::Detail
+            ) || paths.contains(&entry.task.stamp.target.path)
                 || (entry.settled && retained.contains(&entry.task.stamp.target.path));
             if !keep {
                 retired(entry, "target_removed");
@@ -388,14 +389,12 @@ impl RenderCoordinator {
         if self.active.as_deref() == Some(path) {
             return;
         }
-        if let Some(previous) = self.active.clone() {
-            self.cancel_refinement(&previous);
-        }
         self.active = Some(path.to_owned());
         self.desired.retain(|entry| {
-            let keep = entry.task.stamp.target.purpose == Purpose::Current
-                || entry.task.stamp.target.purpose == Purpose::Export
-                || entry.task.stamp.target.path == path;
+            let keep = matches!(
+                entry.task.stamp.target.purpose,
+                Purpose::Current | Purpose::Detail | Purpose::Export
+            ) || entry.task.stamp.target.path == path;
             if !keep {
                 retired(entry, "active_photo_changed");
             }

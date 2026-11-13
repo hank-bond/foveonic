@@ -16,18 +16,23 @@ pub struct ViewState {
     pub exporting: bool,
     pub calibration: Option<String>,
     pub settings: Settings,
-    pub overviews: Vec<(PathBuf, Settings)>,
+    pub overviews: Vec<PhotoView>,
+    pub displayed_revision: Option<u64>,
+    pub detail_revision: Option<u64>,
+}
+
+/// Current photographic content ordering for one demanded photo.
+#[derive(Clone, PartialEq)]
+pub struct PhotoView {
+    pub path: PathBuf,
+    pub settings: Settings,
     pub displayed_revision: Option<u64>,
     pub detail_revision: Option<u64>,
 }
 
 impl ViewState {
     pub fn context(&self, path: &Path) -> ViewContext<'_> {
-        let overview_settings = self
-            .overviews
-            .iter()
-            .find(|(candidate, _)| candidate == path)
-            .map(|(_, settings)| settings);
+        let overview = self.overviews.iter().find(|photo| photo.path == path);
         ViewContext {
             active: self.active.as_deref(),
             rendition: self.rendition,
@@ -37,8 +42,10 @@ impl ViewState {
             exporting: self.exporting,
             calibration: self.calibration.as_deref(),
             settings: &self.settings,
-            overview_visible: overview_settings.is_some(),
-            overview_settings,
+            overview_visible: overview.is_some(),
+            overview_settings: overview.map(|photo| &photo.settings),
+            overview_displayed_revision: overview.and_then(|photo| photo.displayed_revision),
+            overview_detail_revision: overview.and_then(|photo| photo.detail_revision),
             displayed_revision: self.displayed_revision,
             detail_revision: self.detail_revision,
         }
@@ -66,7 +73,7 @@ impl<'a> From<&'a worker::Frame> for ImageInfo<'a> {
             framing_preview: frame.framing_preview,
             comparison: frame.comparison.is_some(),
             regional: frame.artifact.settings.preview_region.is_some(),
-            revision: frame.revision,
+            revision: frame.content_revision(),
         }
     }
 }
@@ -106,6 +113,8 @@ pub struct ViewContext<'a> {
     pub settings: &'a Settings,
     pub overview_visible: bool,
     pub overview_settings: Option<&'a Settings>,
+    pub overview_displayed_revision: Option<u64>,
+    pub overview_detail_revision: Option<u64>,
     pub displayed_revision: Option<u64>,
     pub detail_revision: Option<u64>,
 }
@@ -181,8 +190,8 @@ fn destination(
     reply: &ReplyInfo<'_>,
     view: &ViewContext<'_>,
 ) -> Result<Destination, Rejection> {
-    let current_overview =
-        reply.rendition == Rendition::Current && *reply.purpose == Purpose::Current;
+    let current_overview = reply.rendition == Rendition::Current
+        && matches!(reply.purpose, Purpose::Current | Purpose::Detail);
     if view.active != Some(reply.path)
         || (current_overview
             && (view.rendition != Rendition::Current || view.output != "final" || view.comparison))
@@ -191,11 +200,28 @@ fn destination(
             return Err(Rejection::NotVisible);
         }
         if reply.image.as_ref().is_some_and(|image| {
+            image.framing_preview || image.comparison || image.output != "final"
+        }) {
+            return Err(Rejection::FramingViewChanged);
+        }
+        if reply.image.as_ref().is_some_and(|image| {
             !view
                 .overview_settings
                 .is_some_and(|settings| matching::same_image_geometry(settings, image.requested))
         }) {
             return Err(Rejection::GeometryChanged);
+        }
+        if completion != Completion::Current
+            && !reply.image.as_ref().is_some_and(|image| {
+                view.overview_displayed_revision
+                    .is_none_or(|revision| image.revision > revision)
+                    && (*reply.purpose != Purpose::Detail
+                        || view
+                            .overview_detail_revision
+                            .is_none_or(|revision| image.revision > revision))
+            })
+        {
+            return Err(Rejection::Superseded);
         }
         return Ok(Destination::Overview);
     }
@@ -219,7 +245,7 @@ fn destination(
                 && view
                     .displayed_revision
                     .is_none_or(|revision| image.revision > revision)
-                && (!image.regional
+                && (!(image.regional || *reply.purpose == Purpose::Detail)
                     || view
                         .detail_revision
                         .is_none_or(|revision| image.revision > revision))
@@ -254,6 +280,32 @@ pub fn recheck(
 }
 
 impl App {
+    pub(crate) fn current_photo_frame(&self, path: &Path) -> Option<&worker::Frame> {
+        [
+            self.frame.as_ref(),
+            self.multi_edit.frame(path),
+            self.before.current_frame(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|frame| frame.path == path && frame.is_photographic())
+        .max_by_key(|frame| frame.content_revision())
+    }
+
+    fn photo_render_view(&self, path: &Path, settings: &Settings) -> PhotoView {
+        PhotoView {
+            path: path.to_owned(),
+            settings: settings.clone(),
+            displayed_revision: self
+                .current_photo_frame(path)
+                .map(worker::Frame::content_revision),
+            detail_revision: self
+                .multi_edit
+                .detail(path)
+                .map(worker::Frame::content_revision),
+        }
+    }
+
     pub(crate) fn publish_render_view(&self) {
         let calibration = self
             .noise_calibration
@@ -276,11 +328,11 @@ impl App {
                 .filter_map(|path| {
                     self.multi_edit
                         .settings(path)
-                        .map(|settings| (path.clone(), settings.clone()))
+                        .map(|settings| self.photo_render_view(path, settings))
                 })
                 .collect(),
-            displayed_revision: self.frame.as_ref().map(|frame| frame.revision),
-            detail_revision: self.detail.as_ref().map(|frame| frame.revision),
+            displayed_revision: self.frame.as_ref().map(worker::Frame::content_revision),
+            detail_revision: self.detail_frame().map(worker::Frame::content_revision),
         });
     }
 
@@ -303,15 +355,24 @@ impl App {
             settings: &self.settings,
             overview_visible: self.multi_edit.rendering(&reply.path),
             overview_settings: self.multi_edit.settings(&reply.path),
-            displayed_revision: self.frame.as_ref().map(|frame| frame.revision),
-            detail_revision: self.detail.as_ref().map(|frame| frame.revision),
+            overview_displayed_revision: self
+                .current_photo_frame(&reply.path)
+                .map(worker::Frame::content_revision),
+            overview_detail_revision: self
+                .multi_edit
+                .detail(&reply.path)
+                .map(worker::Frame::content_revision),
+            displayed_revision: self.frame.as_ref().map(worker::Frame::content_revision),
+            detail_revision: self.detail_frame().map(worker::Frame::content_revision),
         };
         let active_settings = self.view_settings();
         let inactive_settings = self
             .multi_edit
             .settings(&reply.path)
             .map(|settings| self.preferences.render_settings(settings));
-        let requested = if self.selected.as_ref() == Some(&reply.path) {
+        let requested = if self.selected.as_ref() == Some(&reply.path)
+            && reply.rendition == self.before.active
+        {
             Some(&active_settings)
         } else {
             inactive_settings.as_ref()

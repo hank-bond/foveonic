@@ -69,6 +69,25 @@ impl Frame {
             && !self.framing_preview
             && self.artifact.settings.color_range_preview.is_none()
             && self.artifact.settings.preview_region.is_none()
+            && self.requested.preview_region.is_none()
+    }
+    /// Request order stays stable when selection rebases presentation revisions.
+    pub fn content_revision(&self) -> u64 {
+        self.diagnostic_task.revision
+    }
+    pub fn is_current_detail(&self) -> bool {
+        self.rendition == crate::editor::Rendition::Current
+            && self.output == "final"
+            && !self.framing_preview
+            && self.comparison.is_none()
+            && self.artifact.settings.color_range_preview.is_none()
+            && self.requested.preview_region.is_some()
+    }
+    pub fn detail_region(&self) -> [u32; 4] {
+        self.artifact
+            .settings
+            .preview_region
+            .unwrap_or_else(|| self.display_window(false))
     }
     pub fn diagnostic_identity(&self, input: bool) -> Option<crate::timing::ImageIdentity> {
         crate::timing::enabled().then(|| {
@@ -936,17 +955,18 @@ impl Worker {
         let origin = self.cache.source_origin(&request.first.path);
         self.runtime.refine(request, origin, queued_at)
     }
-    pub fn cancel_refinement(&self, path: &std::path::Path) {
-        self.runtime.cancel_refinement(path.to_owned());
+    pub fn cancel_refinement(&self, path: &std::path::Path, rendition: crate::editor::Rendition) {
+        self.runtime.cancel_refinement(path.to_owned(), rendition);
     }
     pub fn set_overviews(
         &self,
         requests: Vec<Request>,
+        paths: &[PathBuf],
         retained: &[PathBuf],
         queued_at: std::time::Instant,
     ) {
         self.runtime
-            .overviews(requests, retained.to_vec(), queued_at);
+            .overviews(requests, paths.to_vec(), retained.to_vec(), queued_at);
     }
     pub fn retain_overviews(&self, paths: &[PathBuf], retained: &[PathBuf]) {
         self.runtime.retain(paths.to_vec(), retained.to_vec());
@@ -1251,7 +1271,12 @@ mod tests {
                     .requests
                     .borrow()
                     .iter()
-                    .map(|request| (request.path.clone(), request.settings.clone()))
+                    .map(|request| crate::rendering::delivery::PhotoView {
+                        path: request.path.clone(),
+                        settings: request.settings.clone(),
+                        displayed_revision: None,
+                        detail_revision: None,
+                    })
                     .collect(),
                 displayed_revision: None,
                 detail_revision: None,
@@ -1274,8 +1299,12 @@ mod tests {
             if let Some(active) = requests.first() {
                 self.publish_view(active);
             }
+            let paths = requests
+                .iter()
+                .map(|request| request.path.clone())
+                .collect::<Vec<_>>();
             self.worker
-                .set_overviews(requests, retained, std::time::Instant::now());
+                .set_overviews(requests, &paths, retained, std::time::Instant::now());
         }
     }
     pub(super) fn handle_result(
@@ -2411,6 +2440,180 @@ mod tests {
                 status.misses
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
+    fn multi_photo_details_keep_own_delivery_storage_order_and_bounded_retention() {
+        use crate::{
+            editor::{Before, Rendition},
+            memory::Inventory,
+            preferences::PreviewMode,
+            rendering::{delivery::Destination, request::Refinement},
+        };
+        use std::time::{Duration, Instant};
+        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let paths = [
+            root.join("blue-parking-sign.x3f"),
+            root.join("merrill-hazy-coast.x3f"),
+        ];
+        let context = eframe::egui::Context::default();
+        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), context.clone());
+        let mut photos = crate::multi_edit_runtime::Runtime::default();
+        let mut sidecars = crate::sidecars::Session::new(context, false, worker.cache.clone());
+        sidecars.set_memory_only(true);
+        photos.sync(&paths, 2, &mut sidecars);
+        let requests = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+                settings.reconstruction = Some(Default::default());
+                settings.exposure = index as f32 * 0.25;
+                photos.observe_active(path, &settings, None);
+                super::Request {
+                    path: path.clone(),
+                    revision: index as u64 + 1,
+                    settings,
+                    framing_preview: false,
+                    calibration: None,
+                    rendition: Rendition::Current,
+                    preview_quality: PreviewMode::Thumb,
+                    preview_policy: PreviewMode::Smart,
+                    output: "final".into(),
+                    comparison: false,
+                    export: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        worker.set_overviews(requests.clone(), &paths);
+        for _ in &paths {
+            photos.retain(receive(&worker).result.unwrap().unwrap());
+        }
+        let intents = requests
+            .iter()
+            .enumerate()
+            .map(|(index, request)| {
+                let mut first = request.clone();
+                first.revision = 10 + index as u64 * 10;
+                first.preview_quality = PreviewMode::Full;
+                first.settings.exposure += 0.125;
+                first.settings.preview_region = Some([100, 100, 512, 512]);
+                photos.observe_requested(&first.path, &first.settings);
+                let mut whole = first.clone();
+                whole.revision += 1;
+                whole.settings.preview_region = None;
+                Refinement {
+                    first,
+                    whole: Some(whole),
+                }
+            })
+            .collect::<Vec<_>>();
+        *worker.requests.borrow_mut() = intents.iter().map(|intent| intent.first.clone()).collect();
+        worker.publish_view(&intents[0].first);
+        let hold = worker.hold_delivery(paths[0].clone(), 10);
+        assert!(worker.refine(intents[0].clone(), Instant::now()));
+        hold.reached.recv_timeout(Duration::from_secs(30)).unwrap();
+        // Change the active photo after regional work finishes but before admission.
+        worker.activate(&paths[1]);
+        worker.publish_view(&intents[1].first);
+        worker
+            .runtime
+            .overviews(vec![], paths.to_vec(), paths.to_vec(), Instant::now());
+        assert!(worker.refine(intents[1].clone(), Instant::now()));
+        drop(hold);
+        let mut details = [false; 2];
+        let mut wholes = [false; 2];
+        for _ in 0..4 {
+            let reply = receive(&worker);
+            let index = paths.iter().position(|path| *path == reply.path).unwrap();
+            assert!(reply.handling.unwrap().current);
+            assert_eq!(
+                reply.handling.unwrap().destination,
+                Some(if index == 0 {
+                    Destination::Overview
+                } else {
+                    Destination::Active
+                })
+            );
+            let frame = reply.result.unwrap().unwrap();
+            if frame.is_current_detail() {
+                assert!(frame.artifact.settings.preview_region.is_some());
+                assert!(!frame.is_photographic());
+                let texture = frame.texture.clone();
+                photos.retain(frame);
+                details[index] = true;
+                let mut inventory = Inventory::default();
+                photos.memory_resources(&mut inventory);
+                assert!(inventory.contains_image_texture(&texture));
+                // Before owns only its transient view. Current detail remains in
+                // the bounded photo owner while the base is saved and restored.
+                let mut before = Before::default();
+                before.active = Rendition::Camera;
+                let mut base = photos.take_frame(&paths[index]);
+                before.retain_current(&mut base);
+                assert!(base.is_none());
+                let mut restored = before.take_current().unwrap().unwrap();
+                restored.revision = 1000;
+                photos.retain(restored);
+                assert_eq!(
+                    photos.detail(&paths[index]).unwrap().content_revision(),
+                    intents[index].first.revision
+                );
+                // Another authored edit may already be pending when Whole arrives.
+                let mut pending = intents[index].first.settings.clone();
+                pending.exposure += 0.125;
+                photos.observe_requested(&paths[index], &pending);
+            } else {
+                assert!(details[index]);
+                assert_eq!(
+                    frame.content_revision(),
+                    intents[index].whole.as_ref().unwrap().revision
+                );
+                photos.retain(frame);
+                assert!(
+                    photos.detail(&paths[index]).is_none(),
+                    "newer Whole must supersede detail despite a pending edit"
+                );
+                wholes[index] = true;
+            }
+        }
+        assert_eq!(details, [true; 2]);
+        assert_eq!(wholes, [true; 2]);
+        // One region-only result also exercises retained removal, re-add and eviction.
+        let mut retained = intents[1].clone();
+        retained.first.revision = 30;
+        retained.first.settings.exposure += 0.25;
+        retained.whole = None;
+        *worker.requests.borrow_mut() = vec![intents[0].first.clone(), retained.first.clone()];
+        worker.publish_view(&retained.first);
+        assert!(worker.refine(retained, Instant::now()));
+        photos.retain(receive(&worker).result.unwrap().unwrap());
+        assert!(photos.detail(&paths[1]).is_some());
+        let base_order = photos.frame(&paths[1]).unwrap().content_revision();
+        let mut fallback = intents[1].first.clone();
+        fallback.revision = 40;
+        fallback.preview_policy = PreviewMode::Thumb;
+        worker.submit(fallback);
+        let frame = receive(&worker).result.unwrap().unwrap();
+        assert!(frame.artifact.settings.preview_region.is_none());
+        assert!(frame.is_current_detail());
+        assert!(!frame.is_photographic());
+        photos.retain(frame);
+        assert_eq!(
+            photos.frame(&paths[1]).unwrap().content_revision(),
+            base_order
+        );
+        assert_eq!(photos.detail(&paths[1]).unwrap().content_revision(), 40);
+        photos.sync(&paths[..1], 2, &mut sidecars);
+        photos.sync(&paths, 2, &mut sidecars);
+        assert!(photos.detail(&paths[1]).is_some());
+        photos.sync(&paths[..1], 1, &mut sidecars);
+        assert!(photos.detail(&paths[1]).is_none());
+        photos.clear();
+        let mut inventory = Inventory::default();
+        photos.memory_resources(&mut inventory);
+        assert_eq!(inventory.reservation().exclusive_bytes, 0);
     }
 
     #[test]

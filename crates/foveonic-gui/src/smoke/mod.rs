@@ -759,7 +759,12 @@ impl App {
                     );
                     assert_eq!(frame.artifact.settings.crop, self.settings.crop);
                     if target == "crop-tile" && regional_smart {
-                        let detail = self.detail.as_ref().unwrap();
+                        let detail = crate::rendering::smart::detail_frame(
+                            &self.before,
+                            &self.multi_edit,
+                            self.selected.as_deref(),
+                        )
+                        .unwrap();
                         let visible = self
                             .viewports
                             .view(self.selected.as_deref())
@@ -1017,7 +1022,12 @@ impl App {
                     && regional_smart
                     && shown_detail.is_some();
                 let frame = if regional {
-                    self.detail.as_ref().unwrap()
+                    crate::rendering::smart::detail_frame(
+                        &self.before,
+                        &self.multi_edit,
+                        self.selected.as_deref(),
+                    )
+                    .unwrap()
                 } else {
                     self.frame.as_ref().unwrap()
                 };
@@ -2290,7 +2300,12 @@ impl App {
                 && smoke.targets[smoke.index] == "crop-tile"
                 && regional_smart
             {
-                self.detail.is_some()
+                crate::rendering::smart::detail_frame(
+                    &self.before,
+                    &self.multi_edit,
+                    self.selected.as_deref(),
+                )
+                .is_some()
             } else if smoke.targets == DEHAZE_TARGETS {
                 // These controls require the current photo, independently of ancillary panels.
                 !self.busy
@@ -2306,7 +2321,12 @@ impl App {
                 )
                 && regional_smart
             {
-                self.detail.is_some()
+                crate::rendering::smart::detail_frame(
+                    &self.before,
+                    &self.multi_edit,
+                    self.selected.as_deref(),
+                )
+                .is_some()
             } else {
                 !self.busy
                     && self.frame.as_ref().is_some_and(|frame| {
@@ -2341,7 +2361,12 @@ impl App {
                 && (smoke.targets != SMART_TARGETS
                     || match smoke.targets[smoke.index] {
                         "smart-detail" | "smart-edit-detail" if regional_smart => {
-                            self.detail.as_ref().is_some_and(|detail| {
+                            crate::rendering::smart::detail_frame(
+                                &self.before,
+                                &self.multi_edit,
+                                self.selected.as_deref(),
+                            )
+                            .is_some_and(|detail| {
                                 crate::rendering::matching::same_authored_edits(
                                     &detail.requested,
                                     &self.settings,
@@ -2473,7 +2498,12 @@ impl App {
                                 .is_some_and(|f| f.revision == self.revision && !f.framing_preview),
                             "crop-tile" => {
                                 if regional_smart {
-                                    self.detail.is_some()
+                                    crate::rendering::smart::detail_frame(
+                                        &self.before,
+                                        &self.multi_edit,
+                                        self.selected.as_deref(),
+                                    )
+                                    .is_some()
                                 } else {
                                     self.frame.as_ref().is_some_and(|f| {
                                         f.artifact.settings.working_scale

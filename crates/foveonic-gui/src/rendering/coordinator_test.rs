@@ -57,6 +57,8 @@ fn result_view(reply: &Reply) -> ViewContext<'_> {
         settings: &reply.settings,
         overview_visible: true,
         overview_settings: Some(&reply.settings),
+        overview_displayed_revision: None,
+        overview_detail_revision: None,
         displayed_revision: None,
         detail_revision: None,
     }
@@ -933,4 +935,75 @@ fn already_completed_whole_does_not_restart_progress_when_refinement_reuses_it()
     );
     assert!(started.is_none());
     assert!(!coordinator.busy());
+}
+
+#[test]
+fn demanded_current_details_and_continuations_survive_selection_and_sibling_refresh() {
+    let mut coordinator = RenderCoordinator::default();
+    let origin = SourceOrigin::default();
+    coordinator.activate(Path::new("a.x3f"));
+    let _ = coordinator.refine(
+        refinement(Rendition::Current, 1, true),
+        None,
+        Instant::now(),
+    );
+    let first_a = coordinator.plan().tasks[0].stamp.clone();
+    let mut b = refinement(Rendition::Current, 3, true);
+    b.first.path = "b.x3f".into();
+    b.whole.as_mut().unwrap().path = "b.x3f".into();
+    let _ = coordinator.refine(b, None, Instant::now());
+    let first_b = coordinator
+        .plan()
+        .tasks
+        .iter()
+        .find(|task| task.request.path == Path::new("b.x3f"))
+        .unwrap()
+        .stamp
+        .clone();
+    let _ = coordinator.refine(refinement(Rendition::Camera, 5, true), None, Instant::now());
+    coordinator.activate(Path::new("b.x3f"));
+    assert!(coordinator
+        .plan()
+        .tasks
+        .iter()
+        .all(|task| task.request.rendition == Rendition::Current));
+    regional_completion(&mut coordinator, &first_a, &origin);
+    let paths = ["a.x3f".into(), "b.x3f".into(), "c.x3f".into()];
+    coordinator.retain_overviews(&paths, &[]);
+    desire(&mut coordinator, request("c.x3f", 7, 0.25));
+    assert!(coordinator
+        .plan()
+        .tasks
+        .iter()
+        .any(|task| task.request.path == Path::new("a.x3f") && task.stamp.revision == 2));
+    assert!(coordinator
+        .plan()
+        .tasks
+        .iter()
+        .any(|task| task.stamp == first_b));
+    regional_completion(&mut coordinator, &first_b, &SourceOrigin::default());
+    assert!(coordinator
+        .plan()
+        .tasks
+        .iter()
+        .any(|task| task.request.path == Path::new("b.x3f") && task.stamp.revision == 4));
+    coordinator.retain_overviews(&paths[1..], &[paths[0].clone()]);
+    assert!(
+        !coordinator
+            .plan()
+            .tasks
+            .iter()
+            .any(|task| task.request.path == Path::new("a.x3f")),
+        "retained history cannot keep an undemanded continuation running"
+    );
+    coordinator.retain_overviews(&[], &[]);
+    assert!(coordinator.plan().tasks.is_empty());
+    let replacement = coordinator
+        .refine(
+            refinement(Rendition::Current, 9, true),
+            None,
+            Instant::now(),
+        )
+        .unwrap();
+    assert_eq!(replacement.stamp.revision, 9);
 }

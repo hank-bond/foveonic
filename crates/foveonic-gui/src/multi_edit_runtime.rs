@@ -16,6 +16,7 @@ struct Photo {
     reset_settings: Option<Settings>,
     defaults_basis: Option<Settings>,
     frame: Option<worker::Frame>,
+    detail: Option<worker::Frame>,
     dirty: bool,
     preview: Option<(
         crate::preferences::PreviewMode,
@@ -458,17 +459,50 @@ impl Runtime {
         }
     }
     pub fn retain(&mut self, frame: worker::Frame) {
-        if !frame.is_photographic() {
+        let regional = frame.is_current_detail();
+        if !frame.is_photographic() && !frame.is_current_detail() {
             return;
         }
-        if let Some(photo) = self.photos.get_mut(&frame.path) {
+        let Some(photo) = self.photos.get_mut(&frame.path) else {
+            return;
+        };
+        let slot = if regional {
+            &mut photo.detail
+        } else {
+            &mut photo.frame
+        };
+        if slot
+            .as_ref()
+            .is_none_or(|old| frame.content_revision() >= old.content_revision())
+        {
+            *slot = Some(frame);
+        }
+        if photo
+            .frame
+            .as_ref()
+            .zip(photo.detail.as_ref())
+            .is_some_and(|(base, detail)| base.content_revision() >= detail.content_revision())
+        {
+            photo.detail = None;
+        }
+    }
+    pub fn detail(&self, path: &Path) -> Option<&worker::Frame> {
+        self.photos.get(path)?.detail.as_ref()
+    }
+    pub fn supersede_detail(&mut self, path: &Path, order: u64) {
+        if let Some(photo) = self.photos.get_mut(path) {
             if photo
-                .frame
+                .detail
                 .as_ref()
-                .is_none_or(|old| frame.revision >= old.revision)
+                .is_some_and(|detail| detail.content_revision() <= order)
             {
-                photo.frame = Some(frame);
+                photo.detail = None;
             }
+        }
+    }
+    pub fn clear_details(&mut self) {
+        for photo in self.photos.values_mut() {
+            photo.detail = None;
         }
     }
     pub fn frame(&self, path: &Path) -> Option<&worker::Frame> {
@@ -485,7 +519,7 @@ impl Runtime {
             if let Some(metadata) = &photo.metadata {
                 inventory.metadata(metadata);
             }
-            if let Some(frame) = &photo.frame {
+            for frame in photo.frame.iter().chain(photo.detail.iter()) {
                 inventory.frame(frame);
             }
         }
@@ -495,7 +529,7 @@ impl Runtime {
             if let Some(metadata) = &photo.metadata {
                 key.push(Arc::as_ptr(metadata) as usize as u64);
             }
-            if let Some(frame) = &photo.frame {
+            for frame in photo.frame.iter().chain(photo.detail.iter()) {
                 crate::memory::frame_key(frame, key);
             }
         }
@@ -764,19 +798,49 @@ impl crate::App {
             self.multi_edit
                 .observe_preview(&path, policy, self.preview_quality_for(&path, policy));
         }
-        // Smart's regional request and whole-image continuation retain their
-        // existing active lifecycle. A set refresh must not start a competing Full.
-        let excluded = (!self.sidecars.ready()
-            || self.output != "final"
-            || self.comparison.requested()
-            || (self.before.active == crate::editor::Rendition::Current
-                && self.smart_refinement_active()))
-        .then(|| self.selected.clone())
-        .flatten();
+        let excluded =
+            (!self.sidecars.ready() || self.output != "final" || self.comparison.requested())
+                .then(|| self.selected.clone())
+                .flatten();
+        let mut refined = Vec::new();
+        for path in self.multi_edit.render_paths().to_vec() {
+            if excluded.as_ref() == Some(&path) {
+                continue;
+            }
+            let Some(settings) = self.multi_edit.settings(&path).cloned() else {
+                continue;
+            };
+            let Some(intent) = self.photo_refinement(&path, settings) else {
+                continue;
+            };
+            refined.push(path.clone());
+            let crate::rendering::smart::PhotoRefinement::Ready(refinement) = intent else {
+                continue;
+            };
+            let revision = refinement
+                .whole
+                .as_ref()
+                .unwrap_or(&refinement.first)
+                .revision;
+            let queued_at = self
+                .opening
+                .as_ref()
+                .filter(|_| self.selected.as_ref() == Some(&path))
+                .map_or_else(std::time::Instant::now, |opening| opening.began);
+            self.publish_render_view();
+            if self.worker.refine(*refinement, queued_at) {
+                self.revision = revision;
+                if self.selected.as_ref() == Some(&path) {
+                    crate::timing::requested(revision, &path, "final", &self.settings);
+                    self.opening = None;
+                }
+            }
+        }
         if !self.multi_edit.needs_render(excluded.as_deref()) {
             return;
         }
         let mut targets = self.multi_edit.request(excluded.as_deref());
+        targets.retain(|(path, _)| !refined.contains(path));
         targets.sort_by_key(|(path, _)| self.selected.as_ref() != Some(path));
         let covers_active = self.before.active == crate::editor::Rendition::Current
             && self.output == "final"
@@ -818,8 +882,6 @@ impl crate::App {
         self.busy = true;
         if covers_active {
             self.restore_photograph(self.revision);
-            self.detail = None;
-            self.cancel_smart();
         }
         let queued_at = if covers_active {
             self.opening.take().map(|opening| opening.began)
@@ -828,8 +890,12 @@ impl crate::App {
         }
         .unwrap_or_else(std::time::Instant::now);
         self.publish_render_view();
-        self.worker
-            .set_overviews(requests, &self.multi_edit.retained_paths(), queued_at);
+        self.worker.set_overviews(
+            requests,
+            self.multi_edit.render_paths(),
+            &self.multi_edit.retained_paths(),
+            queued_at,
+        );
         self.busy = self.worker.busy();
     }
 }
