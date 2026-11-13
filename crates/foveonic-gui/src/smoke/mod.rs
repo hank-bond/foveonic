@@ -31,7 +31,7 @@ const CROP_TARGETS: &[&str] = &[
     "crop-ready",
     "crop-drag",
     "crop-applied",
-    "crop-hand",
+    "crop-pointer",
     "crop-reopen",
     "crop-fast",
     "crop-smart",
@@ -1282,9 +1282,9 @@ impl App {
                     .view_mut(self.selected.as_deref())
                     .zoom_by(2.),
                 "crop-detail" => {}
-                "crop-ready" | "crop-reopen" | "crop-hand" => {
-                    let key = if smoke.targets[smoke.index] == "crop-hand" {
-                        egui::Key::H
+                "crop-ready" | "crop-reopen" | "crop-pointer" => {
+                    let key = if smoke.targets[smoke.index] == "crop-pointer" {
+                        egui::Key::V
                     } else {
                         egui::Key::C
                     };
@@ -2457,7 +2457,7 @@ impl App {
                                 !self.settings.crop.is_full()
                                     && self.frame.as_ref().is_some_and(|f| f.framing_preview)
                             }
-                            "crop-hand" => {
+                            "crop-pointer" => {
                                 !crate::crop_tool::active(ctx)
                                     && self.frame.as_ref().is_some_and(|f| !f.framing_preview)
                             }

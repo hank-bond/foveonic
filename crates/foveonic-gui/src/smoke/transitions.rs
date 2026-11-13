@@ -8,7 +8,7 @@ use std::path::PathBuf;
 enum Step {
     Select(usize),
     Edit(bool),
-    HandClick,
+    SpaceClick,
     SmartGroupFit,
     SmartGroupZoom,
     SmartGroupEdit,
@@ -88,7 +88,7 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::TileFit,
         Step::TilePointerZoom,
         Step::TileFit,
-        Step::HandClick,
+        Step::SpaceClick,
         Step::Single,
         Step::Quality(0),
         Step::Quality(1),
@@ -313,7 +313,7 @@ impl TransitionJourney {
             }
             Step::TilePan => {
                 if (view.pan - expected.pan).length() < 20. {
-                    return Err("inactive tile did not respond to Hand drag".into());
+                    return Err("inactive tile did not respond to Pointer drag".into());
                 }
                 expected.pan = view.pan;
             }
@@ -716,9 +716,9 @@ impl TransitionJourney {
                 }
             }
             self.check(app, paths)?;
-            if step == Step::HandClick {
-                if crate::photo_tools::selected(ctx) != crate::photo_tools::Tool::Hand {
-                    return Err("Hand tool changed after pointer input".into());
+            if step == Step::SpaceClick {
+                if crate::photo_tools::selected(ctx) != crate::photo_tools::Tool::Pointer {
+                    return Err("Pointer tool changed after temporary Space input".into());
                 }
                 crate::photo_tools::select(ctx, crate::photo_tools::Tool::Pointer);
             }
@@ -742,7 +742,7 @@ impl TransitionJourney {
                 return Ok(false);
             }
         }
-        self.events.push(serde_json::json!({"action":step,"coverage": if matches!(step, Step::Select(_) | Step::HandClick | Step::TileZoom | Step::TilePointerZoom | Step::TilePan | Step::TileSelect | Step::TileFit) {"egui-input"} else {"direct-command"}}));
+        self.events.push(serde_json::json!({"action":step,"coverage": if matches!(step, Step::Select(_) | Step::SpaceClick | Step::TileZoom | Step::TilePointerZoom | Step::TilePan | Step::TileSelect | Step::TileFit) {"egui-input"} else {"direct-command"}}));
         match step {
             Step::Select(index) => {
                 self.model.select(vec![index]);
@@ -846,15 +846,20 @@ impl TransitionJourney {
                     pan: view.pan,
                     task: (frame.diagnostic_task.id, frame.diagnostic_task.revision),
                 });
-                let tool = if step == Step::TilePointerZoom {
+                if step == Step::TilePointerZoom {
                     self.model.select(vec![index]);
-                    crate::photo_tools::Tool::Pointer
                 } else {
-                    crate::photo_tools::Tool::Hand
-                };
-                crate::photo_tools::select(ctx, tool);
+                    let pos = view.response().ok_or("tile is not drawn")?.rect.center();
+                    smoke
+                        .direct_events
+                        .push_back(vec![egui::Event::PointerMoved(pos), space_key(true)]);
+                }
+                crate::photo_tools::pointer(ctx);
                 for _ in 0..2 {
                     app.smoke_multi_click(ctx, smoke, index, egui::Modifiers::NONE);
+                }
+                if step != Step::TilePointerZoom {
+                    smoke.direct_events.push_back(vec![space_key(false)]);
                 }
                 smoke.direct_events.push_back(vec![]);
             }
@@ -895,21 +900,32 @@ impl TransitionJourney {
             }
             Step::TileFit => {
                 let index = self.tile_view.as_ref().ok_or("no tile view")?.index;
-                crate::photo_tools::select(ctx, crate::photo_tools::Tool::Hand);
+                crate::photo_tools::select(ctx, crate::photo_tools::Tool::Pointer);
                 for _ in 0..2 {
                     app.smoke_multi_click(ctx, smoke, index, egui::Modifiers::NONE);
                 }
                 smoke.direct_events.push_back(vec![]);
             }
-            Step::HandClick => {
+            Step::SpaceClick => {
                 let active = app
                     .selected
                     .as_ref()
                     .and_then(|p| paths.iter().position(|v| v == p))
                     .ok_or("active photo outside journey")?;
                 let other = (active + 1) % paths.len();
-                crate::photo_tools::select(ctx, crate::photo_tools::Tool::Hand);
+                crate::photo_tools::select(ctx, crate::photo_tools::Tool::Pointer);
+                let pos = app
+                    .viewports
+                    .view(Some(&paths[other]))
+                    .response()
+                    .ok_or("Space-click tile is not drawn")?
+                    .rect
+                    .center();
+                smoke
+                    .direct_events
+                    .push_back(vec![egui::Event::PointerMoved(pos), space_key(true)]);
                 app.smoke_multi_click(ctx, smoke, other, egui::Modifiers::NONE);
+                smoke.direct_events.push_back(vec![space_key(false)]);
                 smoke.direct_events.push_back(vec![]);
             }
             Step::Single => {
@@ -1053,6 +1069,16 @@ impl TransitionJourney {
         }
         self.pending = true;
         Ok(false)
+    }
+}
+
+fn space_key(pressed: bool) -> egui::Event {
+    egui::Event::Key {
+        key: egui::Key::Space,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: Default::default(),
     }
 }
 

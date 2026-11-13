@@ -1603,7 +1603,8 @@ fn viewport_tools_leave_browser_selection_and_pointer_behavior_ordinary() {
         for tool in [
             crate::photo_tools::Tool::Rotate,
             crate::photo_tools::Tool::Crop,
-            crate::photo_tools::Tool::Hand,
+            crate::photo_tools::Tool::Pointer,
+            crate::photo_tools::Tool::WhiteBalance,
         ] {
             let mut fixture = Fixture::new(mode);
             let frame = fixture.select_first();

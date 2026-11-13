@@ -268,7 +268,7 @@ pub fn navigator(os: OperatingSystem) -> String {
         "Ctrl"
     };
     format!(
-        "Drag the navigator's outlined region to pan. Double-click the main image or navigator to switch between Fit and your snap zoom (200% by default). Main-image zoom keeps the clicked point under the cursor. Navigator zoom centres the clicked image location. Click 100%, 200%, or 400% to zoom immediately. {modifier}-click a button to select the snap zoom without changing the current view. The colored underline marks the snap target, not the current zoom. Your choice is remembered across restarts. Percentages use display pixels per image pixel, including on Retina displays."
+        "With Pointer (V), click a photograph to select it or drag to pan without changing the editing selection. Space temporarily pans while another photograph tool is selected. Drag the navigator's outlined region to pan. Double-click the main image or navigator to switch between Fit and your snap zoom (200% by default). Main-image zoom keeps the clicked point under the cursor. Navigator zoom centres the clicked image location. Click 100%, 200%, or 400% to zoom immediately. {modifier}-click a button to select the snap zoom without changing the current view. The colored underline marks the snap target, not the current zoom. Your choice is remembered across restarts. Percentages use display pixels per image pixel, including on Retina displays."
     )
 }
 

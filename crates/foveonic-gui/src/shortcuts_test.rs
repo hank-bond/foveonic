@@ -13,7 +13,7 @@ fn available() -> Availability {
     }
 }
 #[test]
-fn pointer_and_hand_have_distinct_shortcuts_and_plain_clipboard_stays_with_widgets() {
+fn pointer_shortcut_leaves_h_and_plain_clipboard_with_widgets() {
     let ctx = egui::Context::default();
     let mut input = egui::RawInput {
         events: vec![
@@ -30,9 +30,13 @@ fn pointer_and_hand_have_distinct_shortcuts_and_plain_clipboard_stays_with_widge
             .iter()
             .map(|invocation| invocation.action)
             .collect::<Vec<_>>(),
-        [Action::Pointer, Action::Hand]
+        [Action::Pointer]
     );
-    assert_eq!(input.events.len(), 2);
+    assert_eq!(input.events.len(), 3);
+    assert!(matches!(
+        input.events[0],
+        egui::Event::Key { key: Key::H, .. }
+    ));
 }
 #[test]
 fn before_keys_select_camera_and_defaults_without_consuming_other_y_combinations() {
@@ -245,7 +249,6 @@ fn browser_space_picks_independently_of_the_viewport_tool() {
     let ctx = egui::Context::default();
     for tool in [
         crate::photo_tools::Tool::Pointer,
-        crate::photo_tools::Tool::Hand,
         crate::photo_tools::Tool::Crop,
         crate::photo_tools::Tool::Rotate,
         crate::photo_tools::Tool::ColorRange,

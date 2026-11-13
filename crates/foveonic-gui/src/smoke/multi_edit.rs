@@ -20,7 +20,7 @@ pub(super) const TARGETS: &[&str] = &[
     "multi-current",
     "multi-option-return",
     "multi-shift",
-    "multi-hand",
+    "multi-space",
     "multi-choice",
 ];
 
@@ -330,7 +330,7 @@ impl App {
                 );
             }
         }
-        if matches!(target, "multi-shift" | "multi-hand" | "multi-choice") {
+        if matches!(target, "multi-shift" | "multi-space" | "multi-choice") {
             assert_eq!(self.edit_selection.paths(), smoke.multi_paths);
         }
         if matches!(target, "multi-remove" | "multi-before" | "multi-current") {
@@ -340,10 +340,10 @@ impl App {
                 "removing another target or showing Before lost its latest edits"
             );
         }
-        if target == "multi-hand" {
+        if target == "multi-space" {
             assert_eq!(
                 crate::photo_tools::selected(&self.context),
-                crate::photo_tools::Tool::Hand
+                crate::photo_tools::Tool::Pointer
             );
         }
     }
@@ -427,9 +427,20 @@ impl App {
                 });
                 self.smoke_multi_click(ctx, smoke, 7, egui::Modifiers::SHIFT);
             }
-            "multi-hand" => {
-                crate::photo_tools::hand(ctx);
+            "multi-space" => {
+                crate::photo_tools::pointer(ctx);
+                let pos = self
+                    .viewports
+                    .view(Some(&smoke.multi_paths[1]))
+                    .response()
+                    .expect("Space-click tile is drawn")
+                    .rect
+                    .center();
+                smoke
+                    .direct_events
+                    .push_back(vec![egui::Event::PointerMoved(pos), space_key(true)]);
                 self.smoke_multi_click(ctx, smoke, 1, egui::Modifiers::NONE);
+                smoke.direct_events.push_back(vec![space_key(false)]);
             }
             "multi-choice" => {
                 crate::photo_tools::pointer(ctx);
@@ -526,5 +537,15 @@ impl App {
         self.submit_photos();
         smoke.multi_sweep_started = Some(started);
         true
+    }
+}
+
+fn space_key(pressed: bool) -> egui::Event {
+    egui::Event::Key {
+        key: egui::Key::Space,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: Default::default(),
     }
 }

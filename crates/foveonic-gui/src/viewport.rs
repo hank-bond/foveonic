@@ -733,12 +733,14 @@ impl Viewport {
         }
         self.response = Some(response.clone());
         let temporary_pan = ui.input(|i| i.key_down(egui::Key::Space));
-        let pan = crate::photo_tools::pans(ui.ctx()) || temporary_pan;
-        if pan && response.hovered() {
+        let pan = crate::photo_tools::selects_photos(ui.ctx()) || temporary_pan;
+        if pan && (response.hovered() || response.dragged()) {
             ui.ctx().set_cursor_icon(if response.dragged() {
                 egui::CursorIcon::Grabbing
-            } else {
+            } else if temporary_pan {
                 egui::CursorIcon::Grab
+            } else {
+                egui::CursorIcon::Default
             });
         }
         if response.dragged() && pan {
@@ -1964,7 +1966,6 @@ mod tests {
         let extent = [4704, 3136];
         for wheel_zoom in [false, true] {
             let ctx = egui::Context::default();
-            crate::photo_tools::hand(&ctx);
             let mut viewport = Viewport::default();
             let mut run = |size, time, events| {
                 let input = egui::RawInput {
@@ -2035,11 +2036,10 @@ mod tests {
     }
 
     #[test]
-    fn hand_or_temporary_space_pans_without_changing_the_selected_tool() {
+    fn pointer_or_temporary_space_pans_without_changing_the_selected_tool() {
         use crate::photo_tools::{self, Tool};
         for tool in [
             Tool::Pointer,
-            Tool::Hand,
             Tool::Crop,
             Tool::Rotate,
             Tool::ColorRange,
@@ -2099,7 +2099,7 @@ mod tests {
                 );
                 assert_eq!(
                     viewport.pan != egui::Vec2::ZERO,
-                    tool == Tool::Hand || space,
+                    tool == Tool::Pointer || space,
                     "{tool:?}, space={space}"
                 );
                 assert_eq!(photo_tools::selected(&ctx), tool);

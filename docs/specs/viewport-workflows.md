@@ -25,7 +25,7 @@ Viewport Shift ranges must follow displayed visual order from top to bottom and 
 
 An ongoing pointer gesture must retain its layout through the release frame. New dimensions and viewport resizing may reflow on the following frame. Changing displayed photograph membership may replace the layout immediately. Before renditions and temporary framing presentations must not change the saved-composition aspect ratio used for layout.
 
-Combine Pointer and Hand interaction so selecting a photograph does not require changing tools before panning it. Photograph tools must preserve the existing separation between viewport gestures and ordinary browser/editor interaction. Exact click, drag and modifier behavior remains to be reviewed.
+The owner approved combining Pointer selection and panning. Its click, drag, modifier and tool-isolation contract belongs to [multi-edit](./multi-edit.md#selection-and-tools).
 
 The owner approved per-photo persistent viewing in both single and multi-photo views. Its implemented contract belongs to [multi-edit](./multi-edit.md#per-photo-viewing) and the [workspace navigation requirements](./gui-workspace.md). A circular loupe must work in both single- and multi-photo views without leaving the current comparison layout or changing its editing targets.
 

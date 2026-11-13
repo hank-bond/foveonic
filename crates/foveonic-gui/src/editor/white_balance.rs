@@ -280,7 +280,7 @@ mod tests {
             assert_eq!(settings.white_balance_bias.neutral.is_some(), !stale);
             assert!(!pending(&ctx));
             toggle(&ctx);
-            crate::photo_tools::hand(&ctx);
+            crate::photo_tools::pointer(&ctx);
             assert!(!active(&ctx));
         }
     }

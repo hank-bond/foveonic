@@ -17,7 +17,7 @@ pub(super) const TARGETS: &[&str] = &[
     "rotate-quarter",
     "rotate-freehand-draft",
     "rotate-freehand",
-    "rotate-hand",
+    "rotate-pointer",
     "rotate-reopen",
     "rotate-fast",
     "rotate-smart",
@@ -76,7 +76,7 @@ pub(super) fn check(
             assert!(settings.rotation.degrees > smoke.authored.as_ref().unwrap().rotation.degrees);
             smoke.authored = Some(settings.clone());
         }
-        "rotate-hand" | "rotate-reopen" | "rotate-fast" | "rotate-smart" | "rotate-crop"
+        "rotate-pointer" | "rotate-reopen" | "rotate-fast" | "rotate-smart" | "rotate-crop"
         | "rotate-done" => {
             assert_eq!(settings.rotation, smoke.authored.as_ref().unwrap().rotation);
         }
@@ -124,10 +124,10 @@ impl App {
     pub(super) fn smoke_rotate_enter(&mut self) {
         let smoke = self.smoke.as_mut().unwrap();
         match smoke.targets[smoke.index] {
-            "rotate-ready" | "rotate-reopen" | "rotate-hand" | "rotate-crop" | "rotate-return"
-            | "rotate-done" => {
+            "rotate-ready" | "rotate-reopen" | "rotate-pointer" | "rotate-crop"
+            | "rotate-return" | "rotate-done" => {
                 let key = match smoke.targets[smoke.index] {
-                    "rotate-hand" | "rotate-done" => egui::Key::H,
+                    "rotate-pointer" | "rotate-done" => egui::Key::V,
                     "rotate-crop" => egui::Key::C,
                     _ => egui::Key::R,
                 };

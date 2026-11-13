@@ -179,3 +179,17 @@ The chosen geometry is cached by the shown photograph identities, saved-composit
 - [ ] Integrate and run related native comparison scenarios.
 
 Focused validation passes five layout/composition tests, six selection tests and three retained-view tests, plus formatting, whitespace and documentation/index checks. Independent review found that a Before rendition could lose the Current frame's authored aspect. Layout now takes camera dimensions from any same-photo frame and always applies the photograph's authored crop and rotation. The reviewer accepted the corrected implementation. Native checks remain an integration gate.
+
+
+## Combined Pointer selection and panning
+
+The owner approved combining Pointer V and Hand into one Pointer tool. Released clicks retain ordinary replacement, Option-toggle and Shift-range editing selection. Drags pan the hovered photograph while preserving the editing group and active photograph. Space temporarily pans while an editing tool is selected. Crop, Rotate and pickers keep their own ordinary clicks. Browser and editor interaction remain independent of viewport tools. Remove the Hand button, tool and H shortcut, including callers and maintained checks.
+
+- [x] Consolidate Pointer selection and pan routing and migrate obsolete Hand callers.
+- [x] Verify real egui click-versus-drag, modifiers, inactive tile gestures, double-click zoom and tool isolation.
+- [x] Complete independent design/Rust review.
+- [ ] Make the functional change available for owner testing.
+
+The design review accepted using egui's existing click-and-drag threshold and keeping selection on release. H becomes unbound rather than aliasing V. Browser Hide remains Delete/Backspace and browser Space remains Import pick outside the viewport. No rendering, processing, cache or scheduling ownership changes are included.
+
+Focused validation passed 46 GUI tests across photograph tools, per-photo views, viewport geometry, shortcut routing, browser tool isolation and WB/Dehaze lifecycle checks. Strict GUI Clippy, formatting and document generation/checks passed. Independent review caught a one-shot picker release changing its tool to Pointer during drawing. Selection now requires eligibility captured before tool drawing, and a real WB/Dehaze release regression covers that transition. The reviewer accepted the corrected design. Native and owner testing remain pending integration.

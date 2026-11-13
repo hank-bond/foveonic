@@ -1,9 +1,6 @@
 //! Fits browser-selected photographs into bounded comparison tiles with explicit viewport editing targets.
 
-use crate::{
-    viewport_selection::{Gesture, Request},
-    App,
-};
+use crate::{viewport_selection::Request, App};
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -150,7 +147,7 @@ impl App {
                 .unwrap_or_else(|| caption.clone());
             let clicked = response.clicked() || caption.clicked();
             let response = response.on_hover_text(if selecting {
-                "Click to edit this photo. Option-click toggles editing. Shift-click selects a range up to the editing limit."
+                "Click to edit this photo. Drag to pan without changing editing selection. Option-click toggles editing. Shift-click selects a range up to the editing limit."
             } else { "Photo tools preserve the viewport editing selection. Press V to select photographs." });
             if crate::timing::enabled()
                 && ui.input(|input| {
@@ -169,17 +166,12 @@ impl App {
                     "rect":[rect.min.x,rect.min.y,rect.max.x,rect.max.y]})
                 });
             }
-            if selecting && clicked {
-                let modifiers = ui.input(|input| input.modifiers);
+            if let Some(gesture) = crate::photo_tools::selection_gesture(&response, selecting)
+                .or_else(|| crate::photo_tools::selection_gesture(&caption, selecting))
+            {
                 self.comparison_selection = Some(Request {
                     path: path.clone(),
-                    gesture: if modifiers.shift {
-                        Gesture::Range
-                    } else if modifiers.alt {
-                        Gesture::Toggle
-                    } else {
-                        Gesture::Replace
-                    },
+                    gesture,
                 });
             }
             ui.painter().rect_stroke(

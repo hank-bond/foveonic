@@ -51,7 +51,19 @@ mod tests {
         paths: &[&Path],
         time: f64,
         events: Vec<egui::Event>,
-    ) {
+    ) -> Vec<crate::viewport_selection::Request> {
+        draw_with_modifiers(views, ctx, paths, time, events, egui::Modifiers::NONE)
+    }
+
+    fn draw_with_modifiers(
+        views: &mut PhotoViews,
+        ctx: &egui::Context,
+        paths: &[&Path],
+        time: f64,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> Vec<crate::viewport_selection::Request> {
+        let mut requests = Vec::new();
         let _ = ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -59,11 +71,14 @@ mod tests {
                     egui::vec2(800., 400.),
                 )),
                 time: Some(time),
+                modifiers,
                 events,
                 ..Default::default()
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
+                    let selecting = crate::photo_tools::selects_photos(ctx)
+                        && !ui.input(|input| input.key_down(egui::Key::Space));
                     let width = ui.available_width() / paths.len() as f32;
                     for (index, path) in paths.iter().enumerate() {
                         let rect = egui::Rect::from_min_size(
@@ -73,16 +88,26 @@ mod tests {
                         let mut child =
                             ui.new_child(egui::UiBuilder::new().id_salt(index).max_rect(rect));
                         let view = views.view_mut(Some(path));
+                        view.editing = crate::photo_tools::takes_pointer(ctx);
                         view.show_preview(
                             &mut child,
                             (egui::TextureId::User(index as u64), egui::vec2(200., 150.)),
                             [1600, 1200],
                             Default::default(),
                         );
+                        if let Some(gesture) = view.response().and_then(|response| {
+                            crate::photo_tools::selection_gesture(&response, selecting)
+                        }) {
+                            requests.push(crate::viewport_selection::Request {
+                                path: path.to_path_buf(),
+                                gesture,
+                            });
+                        }
                     }
                 });
             },
         );
+        requests
     }
 
     fn click(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
@@ -95,6 +120,152 @@ mod tests {
                 modifiers: Default::default(),
             },
         ]
+    }
+
+    #[test]
+    fn pointer_click_modifiers_select_on_release_and_drags_preserve_editing_targets() {
+        use crate::viewport_selection::{Gesture, Request, Selection};
+        for modifiers in [
+            egui::Modifiers::NONE,
+            egui::Modifiers::ALT,
+            egui::Modifiers::SHIFT,
+            egui::Modifiers::SHIFT.plus(egui::Modifiers::ALT),
+        ] {
+            for drag in [false, true] {
+                let mut views = PhotoViews::default();
+                let ctx = egui::Context::default();
+                let paths = [Path::new("a.x3f"), Path::new("b.x3f"), Path::new("c.x3f")];
+                let mut selection = Selection::default();
+                selection.sync_browser(&paths.map(Path::to_path_buf), 8);
+                selection.apply(
+                    Request {
+                        path: paths[0].into(),
+                        gesture: Gesture::Replace,
+                    },
+                    8,
+                );
+                draw(&mut views, &ctx, &paths, 0., vec![]);
+                let point = views.view(Some(paths[2])).response().unwrap().rect.center();
+                let before_zoom = views.view(Some(paths[2])).zoom_percent(1.);
+                let end = point
+                    + if drag {
+                        egui::vec2(40., 20.)
+                    } else {
+                        egui::vec2(1., 1.)
+                    };
+                let button = |pos, pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers,
+                };
+                let requests = draw_with_modifiers(
+                    &mut views,
+                    &ctx,
+                    &paths,
+                    0.1,
+                    vec![egui::Event::PointerMoved(point), button(point, true)],
+                    modifiers,
+                );
+                assert!(requests.is_empty(), "press must not select");
+                let requests = draw_with_modifiers(
+                    &mut views,
+                    &ctx,
+                    &paths,
+                    0.2,
+                    vec![egui::Event::PointerMoved(end)],
+                    modifiers,
+                );
+                assert!(requests.is_empty(), "movement must not select");
+                let requests = draw_with_modifiers(
+                    &mut views,
+                    &ctx,
+                    &paths,
+                    0.3,
+                    vec![button(end, false)],
+                    modifiers,
+                );
+                if drag {
+                    assert!(
+                        requests.is_empty(),
+                        "drag release must not select: {modifiers:?}"
+                    );
+                    assert!(views.view(Some(paths[2])).pan.length() > 30.);
+                    assert_eq!(selection.paths(), &[paths[0].to_path_buf()]);
+                } else {
+                    assert_eq!(requests.len(), 1);
+                    assert_eq!(requests[0].path, paths[2]);
+                    assert_eq!(
+                        requests[0].gesture,
+                        if modifiers.shift {
+                            Gesture::Range
+                        } else if modifiers.alt {
+                            Gesture::Toggle
+                        } else {
+                            Gesture::Replace
+                        }
+                    );
+                    selection.apply(requests.into_iter().next().unwrap(), 8);
+                    let expected = if modifiers.shift {
+                        vec![paths[0], paths[1], paths[2]]
+                    } else if modifiers.alt {
+                        vec![paths[0], paths[2]]
+                    } else {
+                        vec![paths[2]]
+                    };
+                    assert_eq!(
+                        selection.paths(),
+                        expected
+                            .into_iter()
+                            .map(Path::to_path_buf)
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(views.view(Some(paths[2])).zoom_percent(1.), before_zoom);
+                    assert_eq!(views.view(Some(paths[2])).pan, egui::Vec2::ZERO);
+                }
+                assert_eq!(views.view(Some(paths[0])).pan, egui::Vec2::ZERO);
+                assert_eq!(views.view(Some(paths[1])).pan, egui::Vec2::ZERO);
+                assert_eq!(
+                    crate::photo_tools::selected(&ctx),
+                    crate::photo_tools::Tool::Pointer
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_clicks_and_temporary_space_never_request_viewport_selection() {
+        use crate::photo_tools::{self, Tool};
+        for tool in [Tool::Pointer, Tool::Crop, Tool::Rotate, Tool::WhiteBalance] {
+            for space in [false, true] {
+                if tool == Tool::Pointer && !space {
+                    continue;
+                }
+                let mut views = PhotoViews::default();
+                let ctx = egui::Context::default();
+                photo_tools::select(&ctx, tool);
+                let paths = [Path::new("a.x3f"), Path::new("b.x3f")];
+                draw(&mut views, &ctx, &paths, 0., vec![]);
+                let point = views.view(Some(paths[1])).response().unwrap().rect.center();
+                let key = |pressed| egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                if space {
+                    draw(&mut views, &ctx, &paths, 0.05, vec![key(true)]);
+                }
+                assert!(draw(&mut views, &ctx, &paths, 0.1, click(point, true)).is_empty());
+                assert!(draw(&mut views, &ctx, &paths, 0.2, click(point, false)).is_empty());
+                if space {
+                    assert!(draw(&mut views, &ctx, &paths, 0.3, vec![key(false)]).is_empty());
+                }
+                assert_eq!(views.view(Some(paths[1])).pan, egui::Vec2::ZERO);
+                assert_eq!(photo_tools::selected(&ctx), tool);
+            }
+        }
     }
 
     #[test]
@@ -151,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn double_click_and_hand_drag_affect_only_the_hovered_photo() {
+    fn double_click_and_pointer_drag_affect_only_the_hovered_photo() {
         let mut views = PhotoViews::default();
         let ctx = egui::Context::default();
         let a = Path::new("a.x3f");
@@ -163,7 +334,6 @@ mod tests {
         }
         assert!(!views.view(Some(a)).explicit_zoom());
         assert!(views.view(Some(b)).explicit_zoom());
-        crate::photo_tools::select(&ctx, crate::photo_tools::Tool::Hand);
         draw(&mut views, &ctx, &[a, b], 1., click(point, true));
         draw(
             &mut views,
