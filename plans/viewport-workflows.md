@@ -4,6 +4,8 @@ summary: "Review small ownership and quality-policy changes supporting Smart com
 
 # Viewport workflow architecture
 
+The owner approved the remaining functional queue and subsequent isolated wide-execution investigation in the [overnight run](./viewport-overnight.md).
+
 Requirements under review: [viewport workflows](../docs/specs/viewport-workflows.md), [Smart preview](../docs/specs/smart-preview.md), [multi-edit](../docs/specs/multi-edit.md), [small previews](../docs/specs/small-previews.md) and [render orchestration](../docs/specs/render-orchestration.md). Apply the [three architecture goals](../docs/specs/render-orchestration.md#agreed-goals) to each slice. The owner approved the preview-quality slice. Later slices remain discussion until individually agreed.
 
 ## Checkpoint and review
