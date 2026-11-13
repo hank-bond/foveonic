@@ -137,6 +137,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[saturation-closeout](./saturation-closeout.md)** _(archived)._ Separated Tone, Saturation and Color Range with independent methods, presets, bypasses and exports.
 - **[scaled-editing-optimization](./scaled-editing-optimization.md)** _(archived)._ Integrate measured preparation reuse, bounded reduced sessions, faster decoding and scale-aware previews, then verify presentation-only framing and architectural ownership.
 - **[sd1-input](./sd1-input.md)** _(archived)._ Validate SD1 Merrill HI and LOW originals and make damaged-file failures actionable across input readers.
+- **[selection-context-lock](./selection-context-lock.md)** _(archived)._ Prevent coalesced Pointer clicks from reacquiring the egui context lock during selection bookkeeping.
 - **[shared-framing-plane](./shared-framing-plane.md)** _(archived)._ Unify Crop and Rotate presentation while keeping their drag controls independent.
 - **[shared-linear-edits](./shared-linear-edits.md)** _(archived)._ Shared pre-curve edits and DNG baking cover Classic, Merrill and Quattro with per-output section choices.
 - **[signed-releases](./signed-releases.md)** _(archived)._ Sign macOS release builds with Developer ID and upload unnotarized archives to draft GitHub Releases.

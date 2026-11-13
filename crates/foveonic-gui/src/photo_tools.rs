@@ -125,15 +125,15 @@ pub fn selection_gesture(
             input.key_down(egui::Key::Space),
         )
     });
+    // Response::clicked reads input through the context. Snapshot it before
+    // taking the data lock, including coalesced press/release frames.
+    let clicked = response.clicked();
+    let press_owned =
+        eligible_before_tools && !space && (response.is_pointer_button_down_on() || clicked);
     let id = response.id.with("selection press");
     let owned = response.ctx.data_mut(|data| {
         if pressed {
-            data.insert_temp(
-                id,
-                eligible_before_tools
-                    && !space
-                    && (response.is_pointer_button_down_on() || response.clicked()),
-            );
+            data.insert_temp(id, press_owned);
         }
         let owned = data.get_temp::<bool>(id).unwrap_or(false);
         if released {
@@ -141,7 +141,7 @@ pub fn selection_gesture(
         }
         owned
     });
-    if !owned || !eligible_before_tools || !response.clicked() || !selects_photos(&response.ctx) {
+    if !owned || !eligible_before_tools || !clicked || !selects_photos(&response.ctx) {
         return None;
     }
     response.ctx.input(|input| {
@@ -418,6 +418,87 @@ mod tests {
                 Some(crate::viewport_selection::Gesture::Replace)
             );
             assert_eq!(requests, 1, "{tool:?} performs its pick");
+        }
+    }
+
+    #[test]
+    fn coalesced_selection_clicks_complete_without_reentering_context_data() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        // A regression deadlocks its own egui context. Bound the test without
+        // joining that thread, so one failure cannot hang the entire suite.
+        std::thread::spawn(move || {
+            let ctx = egui::Context::default();
+            let pos = egui::pos2(100., 100.);
+            let mut observed = Vec::new();
+            for frame in 0..3 {
+                let events = if frame == 0 {
+                    Vec::new()
+                } else {
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]
+                };
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(400., 300.),
+                        )),
+                        time: Some(frame as f64 * 0.1),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let (_, response) = ui.allocate_exact_size(
+                                ui.available_size(),
+                                egui::Sense::click_and_drag(),
+                            );
+                            let clicked = response.clicked();
+                            let down = response.is_pointer_button_down_on();
+                            let edges = ctx.input(|input| {
+                                (
+                                    input.pointer.primary_pressed(),
+                                    input.pointer.primary_released(),
+                                )
+                            });
+                            let gesture = selection_gesture(&response, selects_photos(ctx));
+                            observed.push((clicked, down, edges, gesture));
+                        });
+                    },
+                );
+            }
+            let _ = tx.send(observed);
+        });
+        let observed = rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("selection handler did not finish the coalesced click frames");
+        assert!(
+            observed
+                .iter()
+                .filter(|(clicked, _, _, _)| *clicked)
+                .count()
+                >= 2
+        );
+        for (clicked, down, edges, gesture) in
+            observed.into_iter().filter(|(clicked, _, _, _)| *clicked)
+        {
+            assert!(clicked);
+            assert!(!down);
+            assert_eq!(edges, (true, true));
+            assert_eq!(gesture, Some(crate::viewport_selection::Gesture::Replace));
         }
     }
 
