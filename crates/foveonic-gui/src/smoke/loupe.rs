@@ -236,7 +236,7 @@ impl Driver {
             || app.preferences.processing_quality != ProcessingQuality::Speed
         {
             return Err(
-                "held loupe changed active photo, editing selection or explicit Thumb".into(),
+                "held loupe changed active photo, editing selection or Speed policy".into(),
             );
         }
         for (path, expected) in &self.main {
@@ -262,28 +262,66 @@ impl Driver {
         if gesture.path != self.target() {
             return Err("loupe gesture borrowed another photo's source".into());
         }
-        let Some(frame) = app.multi_edit.detail(self.target()) else {
-            return Ok(None);
-        };
         let settings = app
             .multi_edit
             .settings(self.target())
             .ok_or("loupe settings not resolved")?;
         let effective = app.preferences.render_settings(settings);
+        let Some(geometry) = app
+            .current_photo_frame(self.target())
+            .filter(|frame| matching::same_image_geometry(&frame.requested, &effective))
+            .or_else(|| {
+                app.multi_edit
+                    .detail(self.target())
+                    .filter(|frame| matching::same_image_geometry(&frame.requested, &effective))
+            })
+        else {
+            return Ok(None);
+        };
+        let (focus, required) = footprint(geometry, &gesture, ctx.pixels_per_point());
+        // Native Whole pixels can already belong to the main photograph. The
+        // loupe then reuses them without creating a separate detail resource.
+        let frame = if whole {
+            app.loupe_image(self.target(), &effective, required)
+                .filter(|frame| frame.artifact.settings.working_scale == Scale::NATIVE)
+        } else {
+            app.multi_edit.detail(self.target())
+        };
+        let Some(frame) = frame else {
+            return Ok(None);
+        };
         if !matching::same_authored_edits(&frame.requested, &effective) {
             return Ok(None);
         }
         if frame.path != self.target()
-            || !frame.is_current_detail()
+            || !(frame.is_current_detail() || (whole && frame.is_photographic()))
+            || frame.processing_quality != app.preferences.processing_quality
+            || frame.comparison.is_some()
+            || frame.artifact.settings.output_size.is_some()
             || frame.artifact.settings.working_scale != Scale::NATIVE
             || frame.artifact.settings.preview_region.is_none() != whole
         {
             return Err(
-                "loupe did not receive its own Full detail with the expected coverage".into(),
+                "loupe did not receive matching native pixels with the expected coverage".into(),
             );
         }
+        let calibration = app
+            .noise_calibration
+            .selected(app.preferences.noise_profile);
+        if frame.calibration_signature.as_deref()
+            != calibration.as_ref().map(|profile| profile.signature())
+            || app
+                .worker
+                .cache
+                .source_origin(self.target())
+                .is_some_and(|origin| origin != frame.origin)
+        {
+            return Err("loupe borrowed pixels from another source or calibration".into());
+        }
+        if whole && frame.is_photographic() && app.worker.busy() {
+            return Err("loupe requested new work despite complete native Whole coverage".into());
+        }
         let region = frame.detail_region();
-        let (focus, required) = footprint(frame, &gesture, ctx.pixels_per_point());
         if !contains(region, required) {
             if let Some(base) = app.current_photo_frame(self.target()).filter(|base| {
                 matching::same_authored_edits(&base.requested, &effective)
@@ -307,7 +345,7 @@ impl Driver {
             != Some(image_id(frame))
         {
             return Err(
-                "loupe drawing did not select the covered Full image with current edits".into(),
+                "loupe drawing did not select the covered native image with current edits".into(),
             );
         }
         Ok(Some(Detail {
@@ -450,7 +488,7 @@ impl Driver {
                 if !self.capture(ctx, smoke, "loupe.png")? {
                     return Ok(false);
                 }
-                self.events.push(json!({"observed":"Full regional detail","photo":self.target(),"task":first.image,"region":first.region}));
+                self.events.push(json!({"observed":"native regional detail","photo":self.target(),"task":first.image,"region":first.region}));
                 self.first = Some(first);
                 let frame = app.multi_edit.detail(self.target()).unwrap();
                 let radius = 40. * ctx.pixels_per_point();
@@ -616,7 +654,7 @@ impl Driver {
                     return Ok(false);
                 };
                 self.transient_extent = Some(frame.camera_extent());
-                self.events.push(json!({"observed":"composed Thumb prepared before transient eviction", "photo":self.target(),"source_extent":frame.camera_extent(),"display_extent":frame.native_display_extent()}));
+                self.events.push(json!({"observed":"composed overview prepared before transient eviction", "photo":self.target(),"source_extent":frame.camera_extent(),"display_extent":frame.native_display_extent()}));
                 let saved = self.saved.as_ref().unwrap();
                 app.preferences.multi_edit_limit = 1;
                 app.sync_viewport_paths();
@@ -670,7 +708,7 @@ impl Driver {
                 {
                     return Err("transient loupe borrowed the active photo's settings".into());
                 }
-                self.events.push(json!({"observed":"unowned photo resolved its own Full detail","photo":self.target(),"task":detail.image,"editing":app.edit_selection.paths()}));
+                self.events.push(json!({"observed":"unowned photo resolved its own native detail","photo":self.target(),"task":detail.image,"editing":app.edit_selection.paths()}));
                 self.release_pointer(smoke);
                 self.phase = Phase::TransientReleased;
             }
@@ -741,7 +779,7 @@ impl Driver {
                     return Ok(false);
                 };
                 self.first = Some(detail);
-                self.events.push(json!({"observed":"Full Adaptive regional detail preserved main Thumb","photo":self.target(),"task":detail.image}));
+                self.events.push(json!({"observed":"native Adaptive regional detail preserved the main overview","photo":self.target(),"task":detail.image}));
                 self.queue_pointer(app, smoke, [0.8, 0.8], None)?;
                 self.phase = Phase::AdaptiveDragged;
             }
@@ -780,10 +818,12 @@ impl Driver {
                     return Ok(false);
                 }
                 let frame = app.current_photo_frame(&path).unwrap();
-                self.single_whole = !app
-                    .preferences
-                    .render_settings(&app.settings)
-                    .regional_preview_available(&frame.artifact.metadata);
+                let effective = app.preferences.render_settings(&app.settings);
+                self.single_whole = (frame.artifact.settings.working_scale == Scale::NATIVE
+                    && frame.artifact.settings.output_size.is_none()
+                    && frame.comparison.is_none()
+                    && matching::same_authored_edits(&frame.requested, &effective))
+                    || !effective.regional_preview_available(&frame.artifact.metadata);
                 self.target = Some(path);
                 self.snapshot_main(app, paths);
                 loupe_tool::activate(ctx);
@@ -797,7 +837,12 @@ impl Driver {
                 if !self.capture(ctx, smoke, "loupe-single.png")? {
                     return Ok(false);
                 }
-                self.events.push(json!({"observed":"active single-photo Full loupe preserved main Thumb","photo":self.target(),"task":detail.image}));
+                let reused_main = app
+                    .current_photo_frame(self.target())
+                    .is_some_and(|frame| image_id(frame) == detail.image);
+                self.events.push(json!({"observed":"active single-photo native loupe preserved the main photograph",
+                    "photo":self.target(),"task":detail.image,"processing_quality":app.preferences.processing_quality,
+                    "resource":if reused_main {"overview"} else {"detail"}}));
                 self.first = Some(detail);
                 self.start_motion(app, smoke, "cached", 0.0005)?;
                 self.phase = Phase::SingleMotionCached;

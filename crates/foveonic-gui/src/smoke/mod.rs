@@ -29,6 +29,36 @@ pub use screenshot::{screenshot_active, screenshot_recipe};
 mod slider;
 mod transitions;
 
+/// Check display demand from observed geometry, independently of the application's resolver.
+fn automatic_scale_bound(
+    frame: &crate::rendering::worker::Frame,
+    view: &crate::viewport::Viewport,
+    policy: ProcessingQuality,
+    pixels_per_point: f32,
+) -> Result<foveonic::render::Scale, String> {
+    let (_, image) = view
+        .image_rectangles()
+        .ok_or("missing image display bounds")?;
+    let extent = frame.native_display_extent();
+    let density = (image.width() / extent[0] as f32).max(image.height() / extent[1] as f32)
+        * pixels_per_point;
+    let limit = match policy {
+        ProcessingQuality::Quality => 1.,
+        ProcessingQuality::Speed => 1.5,
+    };
+    let divisor = [8, 4, 2, 1]
+        .into_iter()
+        .find(|divisor| density * *divisor as f32 <= limit)
+        .unwrap_or(1);
+    if divisor == 8 {
+        foveonic::render::ControlCapabilities::from_metadata(&frame.artifact.metadata)
+            .map(|capabilities| capabilities.thumb_scale())
+            .map_err(|error| error.to_string())
+    } else {
+        Ok(foveonic::render::Scale::new(divisor).unwrap())
+    }
+}
+
 const CROP_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -734,6 +764,24 @@ impl App {
                             &self.settings,
                         )
                 });
+        let current_native_whole = self.frame.as_ref().is_some_and(|frame| {
+            self.selected.as_ref() == Some(&frame.path)
+                && frame.output == "final"
+                && frame.rendition == crate::editor::Rendition::Current
+                && frame.processing_quality == self.preferences.processing_quality
+                && frame.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
+                && frame.artifact.settings.preview_region.is_none()
+                && !frame.detail
+                && !frame.framing_preview
+                && frame.comparison.is_none()
+                && crate::rendering::matching::same_authored_edits(&frame.requested, &self.settings)
+                && self.worker.is_settled_and_admitted(frame)
+                && self
+                    .worker
+                    .cache
+                    .source_origin(&frame.path)
+                    .is_none_or(|origin| origin == frame.origin)
+        });
         let requested_preview_scale = self
             .selected
             .as_deref()
@@ -1143,6 +1191,21 @@ impl App {
                     .view(self.selected.as_deref())
                     .visible_pixels()
                     .unwrap();
+                assert_eq!(
+                    frame.processing_quality,
+                    self.preferences.processing_quality
+                );
+                let demanded_scale = automatic_scale_bound(
+                    frame,
+                    self.viewports.view(self.selected.as_deref()),
+                    self.preferences.processing_quality,
+                    ctx.pixels_per_point(),
+                )
+                .unwrap();
+                assert!(
+                    frame.artifact.settings.working_scale.divisor() <= demanded_scale.divisor(),
+                    "automatic preview is coarser than physical display demand"
+                );
                 let region = frame.artifact.settings.preview_region;
                 let regional = region.is_some();
                 if !quattro_smart || !matches!(target, "final" | "cache-reopen") {
@@ -1197,8 +1260,7 @@ impl App {
                 } else {
                     let full = matches!(
                         target,
-                        "final"
-                            | "smart-100"
+                        "smart-100"
                             | "smart-detail"
                             | "smart-full"
                             | "smart-pan"
@@ -1236,20 +1298,6 @@ impl App {
                             frame.artifact.settings.working_scale,
                             foveonic::render::Scale::NATIVE
                         );
-                    } else {
-                        let (_, image) = self
-                            .viewports
-                            .view(self.selected.as_deref())
-                            .image_rectangles()
-                            .unwrap();
-                        let extent = frame.native_display_extent();
-                        let density = (image.width() / extent[0] as f32)
-                            .max(image.height() / extent[1] as f32)
-                            * ctx.pixels_per_point();
-                        assert!(
-                            density * frame.artifact.settings.working_scale.divisor() as f32
-                                <= 1.5001
-                        );
                     }
                     assert_eq!(frame.artifact.settings.preview_region, None);
                     if target == "smart-pan" {
@@ -1267,7 +1315,13 @@ impl App {
                         | "smart-crop-leave"
                         | "smart-transition-full"
                 ) {
-                    assert_eq!(frame.revision, self.revision);
+                    if target == "smart-transition-full" {
+                        // An identical native Whole request may coalesce with the
+                        // admitted frame instead of producing a new presentation.
+                        assert!(current_native_whole);
+                    } else {
+                        assert_eq!(frame.revision, self.revision);
+                    }
                     assert!(crate::rendering::matching::same_authored_edits(
                         &frame.requested,
                         &self.settings
@@ -2473,18 +2527,18 @@ impl App {
                                 && smoke.smart_scrub_checked
                                 && self.settings.exposure == 0.75
                         }
-                        "smart-zoom-pending"
-                        | "smart-crop-enter"
-                        | "smart-crop-leave"
-                        | "smart-transition-full" => self.frame.as_ref().is_some_and(|frame| {
-                            frame.revision == self.revision
-                                && crate::rendering::matching::same_authored_edits(
-                                    &frame.requested,
-                                    &self.settings,
-                                )
-                                && frame.framing_preview
-                                    == (smoke.targets[smoke.index] == "smart-crop-enter")
-                        }),
+                        "smart-transition-full" => current_native_whole,
+                        "smart-zoom-pending" | "smart-crop-enter" | "smart-crop-leave" => {
+                            self.frame.as_ref().is_some_and(|frame| {
+                                frame.revision == self.revision
+                                    && crate::rendering::matching::same_authored_edits(
+                                        &frame.requested,
+                                        &self.settings,
+                                    )
+                                    && frame.framing_preview
+                                        == (smoke.targets[smoke.index] == "smart-crop-enter")
+                            })
+                        }
                         "smart-full" | "smart-edit" => self.frame.as_ref().is_some_and(|f| {
                             f.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
                         }),

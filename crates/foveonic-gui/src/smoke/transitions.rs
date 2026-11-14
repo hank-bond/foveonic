@@ -133,6 +133,14 @@ struct TileView {
     zoom: f32,
     pan: egui::Vec2,
     task: (u64, u64),
+    texture: std::sync::Weak<foveonic::image::ImageTexture>,
+    scale: foveonic::render::Scale,
+    demanded_scale: foveonic::render::Scale,
+    settings: foveonic::render::Settings,
+    policy: ProcessingQuality,
+    origin: foveonic::source::SourceOrigin,
+    native_extent: [u32; 2],
+    detail: Option<((u64, u64), [u32; 4])>,
 }
 
 pub(super) struct TransitionJourney {
@@ -325,8 +333,99 @@ impl TransitionJourney {
             app.multi_edit.frame(path)
         }
         .ok_or("missing tile photograph")?;
-        if (frame.diagnostic_task.id, frame.diagnostic_task.revision) != expected.task {
-            return Err("fixed-quality tile zoom or selection rendered unchanged pixels".into());
+        if frame.path != *path
+            || frame.rendition != crate::editor::Rendition::Current
+            || !frame.is_photographic()
+            || frame.processing_quality != expected.policy
+            || app.preferences.processing_quality != expected.policy
+            || frame.origin != expected.origin
+            || frame.native_display_extent() != expected.native_extent
+            || !crate::rendering::matching::same_authored_edits(
+                &frame.requested,
+                &expected.settings,
+            )
+        {
+            return Err(
+                "tile viewing changed photographic edits, policy, source or native geometry".into(),
+            );
+        }
+        let demanded_scale =
+            super::automatic_scale_bound(frame, view, expected.policy, ctx.pixels_per_point())?;
+        let demanded = demanded_scale.divisor();
+        let visible = view.visible_pixels().ok_or("missing tile visible pixels")?;
+        let window = frame.display_window(false);
+        let visible = [
+            visible.top_left[0] + window[0],
+            visible.top_left[1] + window[1],
+            visible.bottom_right[0] + 1 + window[0],
+            visible.bottom_right[1] + 1 + window[1],
+        ];
+        let detail = app.photo_detail(
+            path,
+            Some(frame),
+            &expected.settings,
+            crate::editor::Rendition::Current,
+        );
+        if let Some(detail) = detail {
+            if detail.processing_quality != expected.policy
+                || detail.origin != expected.origin
+                || !crate::rendering::matching::same_authored_edits(
+                    &detail.requested,
+                    &expected.settings,
+                )
+                || detail.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
+            {
+                return Err(
+                    "tile detail does not match its photographic policy, source and edits".into(),
+                );
+            }
+        }
+        let detail_snapshot = detail.map(|detail| {
+            (
+                (detail.diagnostic_task.id, detail.diagnostic_task.revision),
+                detail
+                    .artifact
+                    .settings
+                    .preview_region
+                    .unwrap_or_else(|| detail.display_window(false)),
+            )
+        });
+        if frame.artifact.settings.working_scale.divisor() > demanded
+            && !detail_snapshot
+                .is_some_and(|(_, coverage)| crate::rendering::smart::contains(coverage, visible))
+        {
+            return Err(
+                "tile viewing settled without sufficient sampling and visible native coverage"
+                    .into(),
+            );
+        }
+        let task = (frame.diagnostic_task.id, frame.diagnostic_task.revision);
+        let same_pixels = expected
+            .texture
+            .upgrade()
+            .is_some_and(|texture| std::sync::Arc::ptr_eq(&texture, &frame.texture));
+        let prior_refinement = expected.scale.divisor() > expected.demanded_scale.divisor()
+            || expected.detail.is_some();
+        let finer_needed = frame.artifact.settings.working_scale.divisor()
+            < expected.scale.divisor()
+            && (expected.scale.divisor() > demanded || prior_refinement);
+        // Relaxing demand reuses immutable finer pixels. A prior regional pass may
+        // still finish its Whole continuation, and zoom may need finer pixels.
+        if !same_pixels && !finer_needed {
+            return Err("tile viewing recomputed existing sufficient Whole pixels".into());
+        }
+        if let (Some((old_task, old_coverage)), Some((new_task, _))) =
+            (expected.detail, detail_snapshot)
+        {
+            if old_task != new_task
+                && crate::rendering::smart::contains(old_coverage, visible)
+                && detail.is_some_and(|detail| detail.artifact.settings.preview_region.is_some())
+            {
+                return Err(
+                    "tile viewing recomputed native detail already covering the visible region"
+                        .into(),
+                );
+            }
         }
         match step {
             Step::TileZoom | Step::TilePointerZoom => {
@@ -357,8 +456,18 @@ impl TransitionJourney {
             }
             _ => unreachable!(),
         }
-        self.events
-            .push(serde_json::json!({"tile_view":path,"zoom":zoom,"pan":[view.pan.x,view.pan.y]}));
+        expected.task = task;
+        expected.texture = std::sync::Arc::downgrade(&frame.texture);
+        expected.scale = frame.artifact.settings.working_scale;
+        expected.demanded_scale = demanded_scale;
+        expected.detail = detail_snapshot;
+        self.events.push(
+            serde_json::json!({"tile_view":path,"zoom":zoom,"pan":[view.pan.x,view.pan.y],
+                "processing_quality":expected.policy,"demanded_scale_divisor":demanded,
+                "overview_scale_divisor":expected.scale.divisor(),"overview_task":expected.task,
+                "reused_overview_pixels":same_pixels,"completed_refinement":!same_pixels && finer_needed,
+                "detail":expected.detail}),
+        );
         Ok(())
     }
 
@@ -404,7 +513,7 @@ impl TransitionJourney {
             app.preferences.processing_quality = ProcessingQuality::Speed;
             self.model.adjust_exposure(self.held_delta);
             super::scenarios::apply_exposure(app, f64::from(self.held_delta));
-            self.events.push(serde_json::json!({"action":"newer exposure and Draft", "delta":self.held_delta, "coverage":"direct-command"}));
+            self.events.push(serde_json::json!({"action":"newer exposure and Speed", "delta":self.held_delta, "coverage":"direct-command"}));
             self.release();
             self.events.push(serde_json::json!({"action":"release delivery", "coverage":"controlled harness wait"}));
             return Ok(false);
@@ -503,6 +612,17 @@ impl TransitionJourney {
                     | Step::TileSelect
                     | Step::TileFit
             ) {
+                let index = self
+                    .tile_view
+                    .as_ref()
+                    .ok_or("missing tile view expectation")?
+                    .index;
+                let view = app.viewports.view(Some(&paths[index]));
+                // Selection invalidates screen bounds until the next draw. Check
+                // the new observed geometry, rather than the previous layout.
+                if view.image_rectangles().is_none() || view.visible_pixels().is_none() {
+                    return Ok(false);
+                }
                 self.check_tile_view(app, ctx, paths, step)?;
             }
             if step == Step::Restore {
@@ -926,6 +1046,35 @@ impl TransitionJourney {
                         .ok_or("tile has no geometry")?,
                     pan: view.pan,
                     task: (frame.diagnostic_task.id, frame.diagnostic_task.revision),
+                    texture: std::sync::Arc::downgrade(&frame.texture),
+                    scale: frame.artifact.settings.working_scale,
+                    demanded_scale: super::automatic_scale_bound(
+                        frame,
+                        view,
+                        app.preferences.processing_quality,
+                        ctx.pixels_per_point(),
+                    )?,
+                    settings: frame.requested.clone(),
+                    policy: app.preferences.processing_quality,
+                    origin: frame.origin.clone(),
+                    native_extent: frame.native_display_extent(),
+                    detail: app
+                        .photo_detail(
+                            path,
+                            Some(frame),
+                            &frame.requested,
+                            crate::editor::Rendition::Current,
+                        )
+                        .map(|detail| {
+                            (
+                                (detail.diagnostic_task.id, detail.diagnostic_task.revision),
+                                detail
+                                    .artifact
+                                    .settings
+                                    .preview_region
+                                    .unwrap_or_else(|| detail.display_window(false)),
+                            )
+                        }),
                 });
                 if step == Step::TilePointerZoom {
                     self.model.select(vec![index]);
