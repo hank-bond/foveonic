@@ -49,6 +49,10 @@ enum Phase {
     AdaptiveReleased,
     SingleReady,
     SingleDetail,
+    SingleMotionCached,
+    SingleMotionCachedSettled,
+    SingleMotionSweep,
+    SingleMotionSweepSettled,
     SingleReleased,
     ZoomHeld,
     ZoomCapture,
@@ -197,6 +201,23 @@ impl Driver {
             }]);
         smoke.direct_events.push_back(vec![]);
     }
+    fn start_motion(
+        &self,
+        app: &App,
+        smoke: &mut super::Smoke,
+        name: &'static str,
+        width: f32,
+    ) -> Result<(), String> {
+        let view = app.viewports.view(Some(self.target()));
+        let center = view
+            .position_at_uv([0.5, 0.5])
+            .ok_or("motion center is outside the photo")?;
+        let edge = view
+            .position_at_uv([0.5 + width, 0.5])
+            .ok_or("motion edge is outside the photo")?;
+        smoke.pointer_motion = Some(super::motion::Motion::new(name, center, edge - center));
+        Ok(())
+    }
     fn snapshot_main(&mut self, app: &App, paths: &[PathBuf]) {
         self.expected_active = app.selected.clone();
         self.expected_editing = app.edit_selection.paths().to_vec();
@@ -343,6 +364,7 @@ impl Driver {
         if let Err(error) = &result {
             self.events.push(json!({"failure":error}));
             self.release();
+            smoke.pointer_motion = None;
             loupe_tool::cancel(ctx);
         }
         result
@@ -774,6 +796,54 @@ impl Driver {
                     return Ok(false);
                 }
                 self.events.push(json!({"observed":"active single-photo Full loupe preserved main Thumb","photo":self.target(),"task":detail.image}));
+                self.first = Some(detail);
+                self.start_motion(app, smoke, "cached", 0.0005)?;
+                self.phase = Phase::SingleMotionCached;
+            }
+            Phase::SingleMotionCached => {
+                if !smoke
+                    .pointer_motion
+                    .as_ref()
+                    .is_some_and(|motion| motion.finished())
+                {
+                    return Ok(false);
+                }
+                self.events
+                    .push(smoke.pointer_motion.take().unwrap().evidence());
+                // The final injected point still needs this frame's loupe draw.
+                smoke.direct_events.push_back(vec![]);
+                self.phase = Phase::SingleMotionCachedSettled;
+            }
+            Phase::SingleMotionCachedSettled => {
+                let Some(detail) = self.detail(app, ctx, self.single_whole)? else {
+                    return Err("cached motion lost its native coverage".into());
+                };
+                if detail.image != self.first.unwrap().image {
+                    return Err("cached motion unexpectedly replaced native detail".into());
+                }
+                self.start_motion(app, smoke, "sweep", 0.22)?;
+                self.phase = Phase::SingleMotionSweep;
+            }
+            Phase::SingleMotionSweep => {
+                if !smoke
+                    .pointer_motion
+                    .as_ref()
+                    .is_some_and(|motion| motion.finished())
+                {
+                    return Ok(false);
+                }
+                self.events
+                    .push(smoke.pointer_motion.take().unwrap().evidence());
+                smoke.direct_events.push_back(vec![]);
+                self.phase = Phase::SingleMotionSweepSettled;
+            }
+            Phase::SingleMotionSweepSettled => {
+                if app.worker.busy() {
+                    return Ok(false);
+                }
+                let Some(detail) = self.detail(app, ctx, self.single_whole)? else {
+                    return Ok(false);
+                };
                 self.first = Some(detail);
                 self.release_pointer(smoke);
                 self.phase = Phase::SingleReleased;

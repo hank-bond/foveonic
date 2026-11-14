@@ -367,6 +367,19 @@ impl Painter {
 
         let capture = !capture_data.is_empty();
         let mut vsync_sec = 0.0;
+        // end_pass has advanced the counter past the UI pass being painted.
+        let pass = self.context.cumulative_pass_nr().saturating_sub(1);
+        let observe = |stage, started, finished| {
+            if let Some(observer) = &self.configuration.on_paint_stage {
+                observer(crate::PaintTiming {
+                    stage,
+                    viewport: viewport_id,
+                    pass,
+                    started,
+                    finished,
+                });
+            }
+        };
 
         let Some(render_state) = self.render_state.as_mut() else {
             return vsync_sec;
@@ -413,7 +426,9 @@ impl Painter {
             // This is what vsync-waiting happens on my Mac.
             let start = web_time::Instant::now();
             let output_frame = surface_state.surface.get_current_texture();
-            vsync_sec += start.elapsed().as_secs_f32();
+            let end = web_time::Instant::now();
+            vsync_sec += (end - start).as_secs_f32();
+            observe(crate::PaintStage::SurfaceAcquire, start, end);
             output_frame
         };
 
@@ -517,7 +532,9 @@ impl Painter {
             render_state
                 .queue
                 .submit(user_cmd_bufs.into_iter().chain([encoded]));
-            vsync_sec += start.elapsed().as_secs_f32();
+            let end = web_time::Instant::now();
+            vsync_sec += (end - start).as_secs_f32();
+            observe(crate::PaintStage::QueueSubmit, start, end);
         };
 
         // Free textures marked for destruction **after** queue submit since they might still be used in the current frame.
@@ -547,7 +564,9 @@ impl Painter {
             // wgpu doesn't document where vsync can happen. Maybe here?
             let start = web_time::Instant::now();
             output_frame.present();
-            vsync_sec += start.elapsed().as_secs_f32();
+            let end = web_time::Instant::now();
+            vsync_sec += (end - start).as_secs_f32();
+            observe(crate::PaintStage::Present, start, end);
         }
 
         vsync_sec

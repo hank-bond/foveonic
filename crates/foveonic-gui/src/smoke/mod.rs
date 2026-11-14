@@ -17,6 +17,7 @@ mod damaged;
 mod journey;
 mod lifecycle;
 mod loupe;
+mod motion;
 mod multi_edit;
 mod rotate;
 mod scenarios;
@@ -372,6 +373,7 @@ pub struct Smoke {
     step_started: Option<(usize, std::time::Instant)>,
     awaiting: bool,
     direct_events: std::collections::VecDeque<Vec<egui::Event>>,
+    pointer_motion: Option<motion::Motion>,
     close_at: Option<std::time::Instant>,
     settled_frames: u8,
     fast_region: Option<crate::viewport::PixelRegion>,
@@ -437,6 +439,9 @@ impl Smoke {
             input.events.push(egui::Event::WindowFocused(true));
             input.events.extend(events);
             ctx.request_repaint();
+        }
+        if let Some(motion) = &mut self.pointer_motion {
+            motion.inject(input, ctx);
         }
     }
     pub fn from_env() -> Option<Self> {
@@ -505,6 +510,7 @@ impl Smoke {
             step_started: None,
             awaiting: false,
             direct_events: Default::default(),
+            pointer_motion: None,
             close_at: None,
             settled_frames: 0,
             fast_region: None,

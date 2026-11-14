@@ -1,5 +1,6 @@
 //! Connects GUI tasks, native drawing and existing measurements to the shared Perfetto capture.
 
+use eframe::egui_wgpu;
 use foveonic::{diagnostics as trace, profile::Mode};
 use serde_json::Value;
 use std::{
@@ -112,6 +113,15 @@ pub fn pointer_input(input: &eframe::egui::RawInput, pointer_tool: bool) {
         return;
     }
     for event in &input.events {
+        if let eframe::egui::Event::PointerMoved(pos) = event {
+            trace::event(trace::Category::Ui, "input.pointer_moved", |fields| {
+                fields
+                    .f64("x", pos.x as f64)
+                    .f64("y", pos.y as f64)
+                    .bool("focused", input.focused)
+                    .bool("pointer_tool", pointer_tool);
+            });
+        }
         if let eframe::egui::Event::PointerButton {
             pos,
             button,
@@ -133,6 +143,25 @@ pub fn pointer_input(input: &eframe::egui::RawInput, pointer_tool: bool) {
             });
         }
     }
+}
+pub fn paint_stage(timing: egui_wgpu::PaintTiming) {
+    let (Some(start), Some(end)) = (
+        trace::timestamp_at(timing.started),
+        trace::timestamp_at(timing.finished),
+    ) else {
+        return;
+    };
+    let name = match timing.stage {
+        egui_wgpu::PaintStage::SurfaceAcquire => "presentation.surface_acquire",
+        egui_wgpu::PaintStage::QueueSubmit => "presentation.queue_submit",
+        egui_wgpu::PaintStage::Present => "presentation.present",
+    };
+    trace::interval(trace::Category::Presentation, name, start, end, |fields| {
+        fields
+            .u64("viewport", timing.viewport.0.value())
+            .u64("pass", timing.pass)
+            .str("measurement", "host_elapsed");
+    });
 }
 pub fn selected(revision: u64, path: &std::path::Path) {
     trace::event(trace::Category::Ui, "photo_selected", |fields| {

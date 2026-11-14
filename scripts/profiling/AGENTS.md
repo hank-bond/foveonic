@@ -23,6 +23,7 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 - **[image_replay.py](./image_replay.py)** Validate captured image identity and compare its pixels with a fresh renderer execution.
 - **[inputs.py](./inputs.py)** Stage owned test inputs and recipes without modifying the supplied originals.
 - **[interaction_latency.py](./interaction_latency.py)** Describe comparable application workloads and summarize observed UI timing.
+- **[loupe_motion.py](./loupe_motion.py)** Check that native loupe measurements contain sustained input rather than coalesced external drags.
 - **[native.py](./native.py)** Record shared native captures and inject explicit macOS pointer drags without changing app scheduling.
 - **[prepare_inputs.py](./prepare_inputs.py)** Resolve tracked test recipes and explicit photo aliases into portable runner inputs.
 - **[render_matrix.py](./render_matrix.py)** Record or compare exact rendered samples across an explicit camera and preview matrix.

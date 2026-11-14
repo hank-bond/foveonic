@@ -3,6 +3,18 @@
 use super::*;
 
 #[test]
+fn painter_pass_identity_matches_the_last_completed_ui_pass() {
+    let ctx = eframe::egui::Context::default();
+    let observed = std::cell::Cell::new(0);
+    for _ in 0..2 {
+        let _ = ctx.run(Default::default(), |ctx| {
+            observed.set(ctx.cumulative_pass_nr())
+        });
+        assert_eq!(ctx.cumulative_pass_nr().saturating_sub(1), observed.get());
+    }
+}
+
+#[test]
 fn disabled_probes_do_not_create_spans_or_drawing_state() {
     let probe = DrawProbe(None);
     assert!(probe.prepare().0.is_none());

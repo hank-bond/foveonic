@@ -2185,6 +2185,7 @@ fn main() -> eframe::Result {
         event_loop_builder,
         wgpu_options: display::configure(egui_wgpu::WgpuConfiguration {
             wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
+            on_paint_stage: Some(Arc::new(timing::paint_stage)),
             ..Default::default()
         }),
         ..Default::default()

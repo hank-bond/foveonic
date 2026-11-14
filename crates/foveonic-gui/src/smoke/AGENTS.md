@@ -25,6 +25,7 @@ Run native checks serially on a quiet host. Keep controlled delivery pauses sepa
 - **[lifecycle.rs](./lifecycle.rs)** Exercises recipe persistence and import review in the running application.
 - **[loupe.rs](./loupe.rs)** Exercises held native-detail gestures, cancellation and transient photo ownership in the real app.
 - **[mod.rs](./mod.rs)** Captures opt-in native workspace checks and the recipe-driven README image using isolated real GPU frames.
+- **[motion.rs](./motion.rs)** Drives a timed pointer path across native input frames without slowing the path when drawing stalls.
 - **[multi_edit.rs](./multi_edit.rs)** Exercises bounded multi-photo selection, edits and retained image delivery.
 - **[rotate.rs](./rotate.rs)** Keeps rotation smoke gestures, readiness and assertions with their capture steps.
 - **[scenarios.rs](./scenarios.rs)** Runs declared native diagnostic cases through the existing application and capture controller.

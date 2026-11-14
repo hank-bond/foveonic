@@ -286,6 +286,24 @@ pub enum SurfaceErrorAction {
     RecreateSurface,
 }
 
+/// Host-side stages that can delay a native window frame.
+#[derive(Clone, Copy, Debug)]
+pub enum PaintStage {
+    SurfaceAcquire,
+    QueueSubmit,
+    Present,
+}
+
+/// Observed host interval. This is not a device timestamp or physical presentation time.
+#[derive(Clone, Copy, Debug)]
+pub struct PaintTiming {
+    pub stage: PaintStage,
+    pub viewport: egui::ViewportId,
+    pub pass: u64,
+    pub started: web_time::Instant,
+    pub finished: web_time::Instant,
+}
+
 /// Configuration for using wgpu with eframe or the egui-wgpu winit feature.
 #[derive(Clone)]
 pub struct WgpuConfiguration {
@@ -310,6 +328,10 @@ pub struct WgpuConfiguration {
 
     /// Callback for surface errors.
     pub on_surface_error: Arc<dyn Fn(wgpu::SurfaceError) -> SurfaceErrorAction + Send + Sync>,
+
+    /// Optional observer for the native painter's existing host timings.
+    /// Called after each stage. Keep the observer nonblocking.
+    pub on_paint_stage: Option<Arc<dyn Fn(PaintTiming) + Send + Sync>>,
 }
 
 #[test]
@@ -326,6 +348,7 @@ impl std::fmt::Debug for WgpuConfiguration {
             desired_maximum_frame_latency,
             wgpu_setup,
             on_surface_error: _,
+            on_paint_stage: _,
         } = self;
         f.debug_struct("WgpuConfiguration")
             .field("preferred_framebuffer_format", preferred_framebuffer_format)
@@ -346,6 +369,7 @@ impl Default for WgpuConfiguration {
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: None,
             wgpu_setup: Default::default(),
+            on_paint_stage: None,
             on_surface_error: Arc::new(|err| {
                 if err == wgpu::SurfaceError::Outdated {
                     // This error occurs when the app is minimized on Windows.
