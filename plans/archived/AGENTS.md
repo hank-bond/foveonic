@@ -74,6 +74,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[inspection-differences](./inspection-differences.md)** _(archived)._ Inspect operation inputs and outputs alongside amplified signed layer/channel differences.
 - **[inspection-popup-help](./inspection-popup-help.md)** _(archived)._ Prevent Quattro inspection menus from crashing when a stage lacks explanatory help.
 - **[keyboard-actions](./keyboard-actions.md)** _(archived)._ Centralize workspace shortcuts and apply copied editing recipes to highlighted photographs.
+- **[layered-detail-presentation](./layered-detail-presentation.md)** _(archived)._ Keep the latest native section visible over an overview while loupe and zoom request replacement coverage.
 - **[lens-correction-audit](./lens-correction-audit.md)** _(archived)._ Audit available lens corrections and defer chromatic aberration after finding no supported vignetting or distortion profile route.
 - **[lightness-inversion](./lightness-inversion.md)** _(archived)._ Remove the experimental lightness inversion controls, recipe fields and GPU operation after owner review.
 - **[merrill-chroma-outliers](./merrill-chroma-outliers.md)** _(archived)._ Investigate green shadow pixels that intensify with Chroma cleanup before selecting a narrowly scoped correction.

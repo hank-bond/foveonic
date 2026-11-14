@@ -37,7 +37,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[full-option-scaled-pipeline](./full-option-scaled-pipeline.md)** Replace recipe-wide scale exceptions with numeric working grids, graph-owned dependency cuts and complete downstream option support.
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
-- **[layered-detail-presentation](./layered-detail-presentation.md)** Keep the latest native section visible over an overview while loupe and zoom request replacement coverage.
+- **[loupe-motion-diagnostics](./loupe-motion-diagnostics.md)** Attribute loupe-motion stuttering through sustained input and native presentation timing before changing scheduling.
 - **[merrill-banding-width](./merrill-banding-width.md)** Compare scale-separated native row and column correction against the accepted fine-band baseline.
 - **[multi-edit-latency](./multi-edit-latency.md)** Reduce multi-edit application latency through work avoidance, reusable preparation, scale-aware execution and coordinated delivery.
 - **[multi-edit](./multi-edit.md)** Implement independent viewport editing selection, Pointer-only selection routing and shared mixed-value controls before finalizing memory policy.
