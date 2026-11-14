@@ -8,12 +8,12 @@ from interaction_latency import matched_workload, value_hash
 
 
 def workload():
-    manifest={'scenario':{'name':'warm-edit','photo_count':1,'quality':'thumb','repeats':3,'rapid_edits':12,'pressure_bytes':128,'disk_cache_bytes':10_000_000_000,'memory_cache_bytes':1073741824},
+    manifest={'scenario':{'name':'warm-edit','photo_count':1,'quality':'quality','repeats':3,'rapid_edits':12,'pressure_bytes':128,'disk_cache_bytes':10_000_000_000,'memory_cache_bytes':1073741824},
               'inputs':[{'sha256':'raw-sha','settings':'camera-defaults','staged_source':'/one/photo'}],
               'hardware':{'system':'test','machine':'test-cpu','logical_cpus':8},
               'measurement':{'input_kind':'baseline','scenario_poll_ms':20}}
     geometry={'window_points':[1200,800],'viewport_points':[800,600],'pixels_per_point':2.}
-    result={'geometry':geometry,'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10_000_000_000},'hardware':{'adapter':'Test GPU','backend':'Test','vendor':1,'device':2},'steps':[{'geometry':geometry,'action':'initial-selection','photos':[{'source':'/one/photo','settings':{'exposure':0.},'scale_divisor':8}]}]}
+    result={'geometry':geometry,'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10_000_000_000},'hardware':{'adapter':'Test GPU','backend':'Test','vendor':1,'device':2},'steps':[{'geometry':geometry,'action':'initial-selection','photos':[{'source':'/one/photo','settings':{'exposure':0.},'processing_quality':'quality','scale_divisor':8}]}]}
     return manifest,result
 
 

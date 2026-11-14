@@ -79,7 +79,7 @@ class ScenarioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);(root/'evidence').mkdir();(root/'capture').mkdir()
             native={'passed':True,'steps':[{'step':1,'action':'cached-switch','photos':[
-                {'source':'staged.x3f','family':'Merrill','scale_divisor':8}]}]}
+                {'source':'staged.x3f','family':'Merrill','processing_quality':'quality','display_density':0.1,'scale_divisor':8}]}]}
             (root/'evidence/scenario-result.json').write_text(json.dumps(native))
             inputs=[{'staged_source':'staged.x3f','source':'original.x3f','sha256':'raw-hash'}]
             for complete,behavior,expected in ((True,True,'passed'),(True,False,'failed'),(False,False,'incomplete')):
@@ -90,7 +90,7 @@ class ScenarioTests(unittest.TestCase):
                           'behavior_failures':[] if behavior else ['unexpected photographic dispatch']}
                 with patch('scenarios.analyze_capture',return_value=analysis):
                     trial=finish_trial(root,'wall',None)
-                result=application_result(native,'cached-switch','thumb',inputs)
+                result=application_result(native,'cached-switch','quality',inputs)
                 include_assertions(result,trial['trace_assertions'])
                 self.assertEqual(result['outcome'],expected)
                 if complete and not behavior:
@@ -121,14 +121,14 @@ class ScenarioTests(unittest.TestCase):
             paths=[Path(temporary)/f'{index}.x3f' for index in range(2)]
             for path in paths:path.write_bytes(b'original')
             cases=[{'source':str(path)} for path in paths]
-            self.assertEqual(len(selected_cases(cases,1,'draft','initial')),1)
-            self.assertEqual(len(selected_cases(cases,1,'full','initial')),1)
-            self.assertEqual(len(selected_cases(cases,1,'fast','initial')),1)
-            for quality in ('full','fast','draft','thumb'):
+            self.assertEqual(len(selected_cases(cases,1,'quality','initial')),1)
+            self.assertEqual(len(selected_cases(cases,1,'quality','initial')),1)
+            self.assertEqual(len(selected_cases(cases,1,'speed','initial')),1)
+            for quality in ('quality','speed'):
                 self.assertEqual(len(selected_cases(cases,2,quality,'initial')),2)
-            for count,quality,name in [(1,'thumb','cached-switch'),(1,'thumb','choice-journey'),(1,'thumb','source-loading'),(3,'thumb','initial')]:
+            for count,quality,name in [(1,'quality','cached-switch'),(1,'quality','choice-journey'),(1,'quality','source-loading'),(3,'quality','initial')]:
                 with self.assertRaises(ValueError):selected_cases(cases,count,quality,name)
-            with self.assertRaises(ValueError):selected_cases([cases[0],cases[0]],2,'thumb','initial')
+            with self.assertRaises(ValueError):selected_cases([cases[0],cases[0]],2,'quality','initial')
 
 
     def test_environment_cannot_inherit_another_smoke_or_capture(self):
@@ -143,7 +143,7 @@ class ScenarioTests(unittest.TestCase):
     def arguments(self,root):
         binary=root/'app';binary.write_bytes(b'executable')
         source=root/'source.x3f';source.write_bytes(b'raw')
-        args=SimpleNamespace(binary=binary,scenario='warm-edit',count=1,quality='thumb',mode='off',repeats=2,rapid_edits=3,pressure_mib=128,step_timeout=10,no_monitor=True,timeout=30,trace_processor=None,disk_cache_bytes=10_000_000_000,memory_cache_bytes=1024*1024*1024)
+        args=SimpleNamespace(binary=binary,scenario='warm-edit',count=1,quality='quality',mode='off',repeats=2,rapid_edits=3,pressure_mib=128,step_timeout=10,no_monitor=True,timeout=30,trace_processor=None,disk_cache_bytes=10_000_000_000,memory_cache_bytes=1024*1024*1024)
         return args,[{'source':str(source)}]
 
     def test_owned_process_result_and_manifest_keep_off_baseline_separate(self):
@@ -152,7 +152,7 @@ class ScenarioTests(unittest.TestCase):
             process=MagicMock();process.wait.return_value=0;process.poll.return_value=0
             def launch(_command,**kwargs):
                 env=kwargs['env'];evidence=Path(env['FOVEONIC_GUI_SMOKE_DIR'])
-                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1024*1024*1024,'disk_cache':{'enabled':True,'max_bytes':10_000_000_000},'steps':[{'action':'initial-selection','baseline_elapsed_ms':8.,'photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'family':'Merrill','settings':{'exposure':0.},'scale_divisor':8}]}]}))
+                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1024*1024*1024,'disk_cache':{'enabled':True,'max_bytes':10_000_000_000},'steps':[{'action':'initial-selection','baseline_elapsed_ms':8.,'photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'family':'Merrill','processing_quality':'quality','display_density':0.1,'settings':{'exposure':0.},'scale_divisor':8}]}]}))
                 return process
             with patch('scenarios.subprocess.Popen',side_effect=launch):
                 result=run_trial(args,cases,root/'run','tree-hash')
@@ -165,7 +165,7 @@ class ScenarioTests(unittest.TestCase):
             self.assertFalse((root/'run'/'capture'/'trace.pftrace').exists())
             manifest=json.loads((root/'run'/'launch.json').read_text())
             self.assertEqual(manifest['source_tree_sha256'],'tree-hash')
-            self.assertEqual(manifest['scenario']['quality'],'thumb')
+            self.assertEqual(manifest['scenario']['quality'],'quality')
             process.terminate.assert_not_called()
 
     def test_background_is_explicit_and_in_the_workload_identity(self):
@@ -175,7 +175,7 @@ class ScenarioTests(unittest.TestCase):
             def launch(_command,**kwargs):
                 env=kwargs['env'];self.assertEqual(env['FOVEONIC_GUI_SCENARIO_BACKGROUND'],'1')
                 evidence=Path(env['FOVEONIC_GUI_SMOKE_DIR'])
-                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10000000000},'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'family':'Merrill','settings':{},'scale_divisor':8}]}]}))
+                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10000000000},'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'family':'Merrill','processing_quality':'quality','display_density':0.1,'settings':{},'scale_divisor':8}]}]}))
                 return process
             with patch('scenarios.subprocess.Popen',side_effect=launch):
                 result=run_trial(args,cases,root/'run','tree-hash')
@@ -197,7 +197,7 @@ class ScenarioTests(unittest.TestCase):
             contention={'checked':True,'uncontended':False,'samples':3,'other_workloads':[{'pid':456,'executable':'rustc'}]}
             def launch(_command,**kwargs):
                 evidence=Path(kwargs['env']['FOVEONIC_GUI_SMOKE_DIR'])
-                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10000000000},'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'family':'Merrill','settings':{},'scale_divisor':8}]}]}))
+                (evidence/'scenario-result.json').write_text(json.dumps({'passed':True,'memory_cache_bytes':1073741824,'disk_cache':{'enabled':True,'max_bytes':10000000000},'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),'family':'Merrill','processing_quality':'quality','display_density':0.1,'settings':{},'scale_divisor':8}]}]}))
                 return process
             with patch('scenarios.workload_monitor',return_value=nullcontext()),patch('scenarios.concurrent_workloads',return_value=contention) as checked,patch('scenarios.subprocess.Popen',side_effect=launch):
                 result=run_trial(args,cases,root/'run','tree')
@@ -206,15 +206,15 @@ class ScenarioTests(unittest.TestCase):
             self.assertEqual(json.loads((root/'run'/'launch.json').read_text())['contention'],contention)
 
     def test_application_result_checks_the_same_classic_thumb_contract(self):
-        native={'passed':True,'steps':[{'action':'initial-selection','photos':[{'source':'sample.x3f','family':'Classic','scale_divisor':8}]}]}
-        result=application_result(native,'initial','thumb',[{'source':'sample.x3f','staged_source':'sample.x3f','sha256':'sample-hash'}])
+        native={'passed':True,'steps':[{'action':'initial-selection','photos':[{'source':'sample.x3f','family':'Classic','processing_quality':'quality','display_density':0.1,'scale_divisor':8}]}]}
+        result=application_result(native,'initial','quality',[{'source':'sample.x3f','staged_source':'sample.x3f','sha256':'sample-hash'}])
         self.assertEqual(result['outcome'],'failed')
         self.assertEqual(result['assertions'][0]['expected'],4)
         self.assertEqual(result['assertions'][0]['actual'],8)
 
     def test_application_result_requires_the_declared_source_identity(self):
-        native={'passed':True,'steps':[{'action':'initial-selection','photos':[{'source':'other.x3f','family':'Merrill','scale_divisor':8}]}]}
-        result=application_result(native,'initial','thumb',[{'source':'a.x3f','staged_source':'staged.x3f','sha256':'source-hash'}])
+        native={'passed':True,'steps':[{'action':'initial-selection','photos':[{'source':'other.x3f','family':'Merrill','processing_quality':'quality','display_density':0.1,'scale_divisor':8}]}]}
+        result=application_result(native,'initial','quality',[{'source':'a.x3f','staged_source':'staged.x3f','sha256':'source-hash'}])
         self.assertEqual(result['outcome'],'failed')
         self.assertIn('undeclared staged inputs',result['failure'])
 
@@ -227,7 +227,7 @@ class ScenarioTests(unittest.TestCase):
                 native={'passed':True,'memory_cache_bytes':1073741824,
                         'disk_cache':{'enabled':True,'max_bytes':10000000000},
                         'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),
-                            'family':'Classic','settings':{},'scale_divisor':8}]}]}
+                            'family':'Classic','processing_quality':'quality','display_density':0.1,'settings':{},'scale_divisor':8}]}]}
                 (evidence/'scenario-result.json').write_text(json.dumps(native))
                 return process
             with patch('scenarios.subprocess.Popen',side_effect=launch):
@@ -248,7 +248,7 @@ class ScenarioTests(unittest.TestCase):
                 native={'passed':True,'memory_cache_bytes':1073741824,
                         'disk_cache':{'enabled':True,'max_bytes':10000000000},
                         'steps':[{'action':'initial-selection','photos':[{'source':str(evidence.parent/'inputs'/'00-source.x3f'),
-                            'family':'Merrill','settings':{},'scale_divisor':8}]}]}
+                            'family':'Merrill','processing_quality':'quality','display_density':0.1,'settings':{},'scale_divisor':8}]}]}
                 (evidence/'scenario-result.json').write_text(json.dumps(native))
                 return process
             failure={'name':'image_samples','outcome':'failed'}

@@ -15,7 +15,7 @@ from native import recording_environment, source_tree_hash, workload_monitor
 from trace_analysis import analyze_capture, distribution
 from watch_workloads import require_quiet, concurrent_workloads
 from file_hash import digest
-from results import PREVIEW_QUALITIES, include_assertions, render_result
+from results import PROCESSING_QUALITIES, include_assertions, render_result
 from interaction_latency import matched_workload, summarize_ui_ticks
 from inputs import stage_inputs
 from scenario_checks import checked_scenario_images, pointer_value, same_numeric, validate_choice_recipes, check_cache_workflow
@@ -26,6 +26,8 @@ NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-sw
 
 
 def selected_cases(cases, count, quality, scenario):
+    if quality not in PROCESSING_QUALITIES:
+        raise ValueError('quality must be quality or speed')
     if not 1 <= count <= 8 or len(cases) < count:
         raise ValueError('supply one through eight declared photographs for the requested count')
     if scenario in ('cached-switch', 'source-loading') and count < 2:
@@ -103,9 +105,14 @@ def application_result(native_result, scenario, quality, inputs, binary_sha256=N
             source = sources.get(photo['source'])
             if source is None:
                 missing.append(photo['source'])
+            requested_quality = (photo.get('requested_processing_quality')
+                                 if scenario in ('transition-journey','cache-workflow') and step['action'] != 'initial-selection'
+                                 else quality)
             observations.append({'step':step['action'], 'source':source['source'] if source else photo['source'],
                                  'source_sha256':source['sha256'] if source else None,
-                                 'family':photo.get('family'), 'scale_divisor':photo.get('scale_divisor')})
+                                 'family':photo.get('family'), 'scale_divisor':photo.get('scale_divisor'),
+                                 **{key:photo[key] for key in ('processing_quality', 'display_density', 'display_size_points', 'native_extent', 'pixels_per_point') if key in photo},
+                                 'requested_processing_quality':requested_quality})
     failure = native_result.get('failure')
     if missing:
         failure = f'output references undeclared staged inputs: {missing}'
@@ -238,8 +245,8 @@ def run_trial(args, selected, directory, source_hash):
                        'capture_images_after_scenario':bool(getattr(args, 'compare_images', None))},
     }
     if args.scenario == 'cache-workflow':
-        manifest['measurement']['setup'] = (f'initial explicit {args.quality} selection starts with cold processing; disk may be primed. '
-            f"Smart Fit follows that selection, then {getattr(args, 'native_photo_count', None) or 1} native-detail viewport(s) and warm edits")
+        manifest['measurement']['setup'] = (f'initial {args.quality} selection starts with cold processing; disk may be primed. '
+            f"Automatic Fit sizing follows that selection, then {getattr(args, 'native_photo_count', None) or 1} native-detail viewport(s) and warm edits")
     manifest['measurement']['controlled_delivery'] = args.scenario in ('selection-journey','selection-pressure','transition-journey','source-loading')
     if args.scenario == 'cache-workflow':
         manifest['scenario']['native_photo_count'] = getattr(args, 'native_photo_count', None) or 1
@@ -388,8 +395,8 @@ def run(args):
         raise ValueError('save-on-exit needs an enabled capture and no post-scenario image readback')
     if args.disk_cache_bytes < 0 or (args.scenario in ('warm-disk', 'prefetched-selection') and args.disk_cache_bytes == 0):
         raise ValueError('disk cache budget must be nonnegative and the requested cache scenario requires an enabled disk cache')
-    if args.scenario == 'prefetched-selection' and (args.count < 2 or args.quality != 'thumb'):
-        raise ValueError('prefetched-selection requires at least two photographs at Thumb quality')
+    if args.scenario == 'prefetched-selection' and (args.count < 2):
+        raise ValueError('prefetched-selection requires at least two photographs')
     if args.memory_cache_bytes < 1:
         raise ValueError('memory cache budget must be positive')
     if args.scenario == 'slider-drag' and (not args.control_pointer.startswith('/') or args.drag_steps < 3 or not 0 < args.drag_fraction < 0.45):
@@ -469,7 +476,7 @@ def main():
     parser.add_argument('--scenario',choices=NAMES,required=True)
     parser.add_argument('--count',type=int)
     parser.add_argument('--native-photo-count',type=int,choices=[1,2],help='cache-workflow photos zoomed to native detail (default: 1)')
-    parser.add_argument('--quality',choices=PREVIEW_QUALITIES,default='thumb')
+    parser.add_argument('--quality',choices=PROCESSING_QUALITIES,default='quality')
     parser.add_argument('--disk-cache-bytes',type=int,default=10_000_000_000,
                         help='owned disk cache budget; zero measures retained processing after original loading')
     parser.add_argument('--memory-cache-bytes',type=int,default=2*1024*1024*1024,

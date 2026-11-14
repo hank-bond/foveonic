@@ -49,7 +49,7 @@ impl Run {
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self> {
         let mut args = args.into_iter();
         let mut run = Self {
-            destination: args.next().ok_or("usage: profile_editing REPORT.jsonl [--quality full|fast|draft|thumb | --scale-divisor N] [--workers N] [--repeats N] [--mode off|wall|gpu] [--capture-dir DIR] [--capture-mode wall|gpu] [--edit exposure|noise] [--cache-budget-mib N] [--verify] [--reduced] [--sidecars] [--gui-analysis] [--sweep] ORIGINAL... [-- RENDER_OPTIONS]")?.into(),
+            destination: args.next().ok_or("usage: profile_editing REPORT.jsonl [--resolution full|fast|draft|thumb | --scale-divisor N] [--workers N] [--repeats N] [--mode off|wall|gpu] [--capture-dir DIR] [--capture-mode wall|gpu] [--edit exposure|noise] [--cache-budget-mib N] [--verify] [--reduced] [--sidecars] [--gui-analysis] [--sweep] ORIGINAL... [-- RENDER_OPTIONS]")?.into(),
             sources: Vec::new(),
             scale: Scale::new(8)?,
             thumb: true,
@@ -82,7 +82,7 @@ impl Run {
                 Some("--capture-dir") => {
                     run.capture_dir = Some(args.next().ok_or("missing capture directory")?.into());
                 }
-                Some("--quality") => {
+                Some("--resolution") => {
                     let quality = args.next().and_then(|s| s.into_string().ok());
                     run.thumb = quality.as_deref() == Some("thumb");
                     run.scale = Scale::new(match quality.as_deref() {
@@ -90,7 +90,7 @@ impl Run {
                         Some("fast") => 2,
                         Some("draft") => 4,
                         Some("thumb") => 8,
-                        _ => return Err("quality must be full, fast, draft or thumb".into()),
+                        _ => return Err("resolution must be full, fast, draft or thumb".into()),
                     })?;
                 }
                 Some(
@@ -391,7 +391,7 @@ fn render(
         "source": photo.source, "execution":"session", "reduced_reloaded":reduced_reloaded, "started_ms":started_ms,
         "finished_ms":finished_ms, "completed_ms":completed_ms, "profile_started_ms":profile_started_ms,
         "requested_scale_divisor":settings.working_scale.divisor(), "effective_scale_divisor":effective.divisor(), "extent":extent,
-        "settings":settings, "cache_before_bytes":cache_before,
+        "settings":settings,"processing_quality":settings.processing_quality, "cache_before_bytes":cache_before,
         "cache_after_bytes":photo.session.cached_bytes(),
         "preparation_bytes":photo.session.cached_preparation_bytes(),
         "engine_preparation_bytes":photo.engine.cached_preparation_bytes(),
@@ -815,13 +815,13 @@ mod tests {
         assert!(parse(&["--workers", "2"], false).is_err());
         assert!(parse(&["--repeats", "0"], false).is_err());
         assert!(parse(&["--mode", "gpu", "--workers", "2"], true).is_err());
-        assert!(parse(&["--quality", "tiny"], false).is_err());
-        assert!(parse(&["--quality", "thumb"], false).unwrap().thumb);
-        let numeric = parse(&["--quality", "thumb", "--scale-divisor", "8"], false).unwrap();
+        assert!(parse(&["--resolution", "tiny"], false).is_err());
+        assert!(parse(&["--resolution", "thumb"], false).unwrap().thumb);
+        let numeric = parse(&["--resolution", "thumb", "--scale-divisor", "8"], false).unwrap();
         assert!(!numeric.thumb);
         assert_eq!(numeric.scale.divisor(), 8);
         assert!(
-            parse(&["--scale-divisor", "8", "--quality", "thumb"], false)
+            parse(&["--scale-divisor", "8", "--resolution", "thumb"], false)
                 .unwrap()
                 .thumb
         );

@@ -91,7 +91,8 @@ def matched_workload(manifest, native_result):
         photo=current.get(record['staged_source'])
         inputs.append({'sha256':record['sha256'],'declared_settings_sha256':value_hash(record['settings']),
                        'first_current_settings_sha256':None if photo is None else value_hash(photo['settings']),
-                       'first_current_scale':None if photo is None else photo['scale_divisor']})
+                       'first_current_scale':None if photo is None else photo['scale_divisor'],
+                       'first_current_processing_quality':None if photo is None else photo.get('processing_quality')})
     scenario=manifest['scenario']
     disk=native_result.get('disk_cache')
     expected=scenario['disk_cache_bytes']
@@ -110,7 +111,7 @@ def matched_workload(manifest, native_result):
                 'application_memory_cache_bytes':native_result.get('memory_cache_bytes'),
                 'cache_policy_matches':cache_policy_matches,
                 'geometry':geometry, 'step_geometry':step_geometry, 'geometry_complete':geometry_complete,
-                'first_current_complete':geometry_complete and cache_policy_matches and len(current)==len(inputs) and all(row['first_current_settings_sha256'] for row in inputs),
+                'first_current_complete':geometry_complete and cache_policy_matches and len(current)==len(inputs) and all(row['first_current_settings_sha256'] and row['first_current_processing_quality']==scenario['quality'] for row in inputs),
                 'measurement':manifest['measurement']}
     if scenario['name'] == 'cache-workflow':
         descriptor['scenario']['native_photo_count'] = scenario.get('native_photo_count', 1)

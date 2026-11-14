@@ -38,7 +38,7 @@ Use `--capture-float OUTPUT NEW_FILE` to render a named floating image output af
 
 Request `--profile gpu` for one additional synchronized diagnostic iteration after the ordinary warm repetitions. Its results remain in a separate mode group. Render and TIFF export have separate profiles/activity deltas. Optional `--goldens DIR` compares or creates full-float snapshots outside timed intervals; choose a distinct golden directory per intended recipe. Byte equality applies to output-equivalent optimizations, not to different denoisers or recovery methods. Evaluate photographic quality separately.
 
-## Smart preview transitions
+## Native-detail transitions
 
 Compare detail-first refinement with direct Full from equivalent Merrill or Quattro Fast sessions:
 
@@ -102,7 +102,7 @@ Coordinates are illustrative. External `pointer.jsonl` records dispatch evidence
 
 ## Scripted native scenarios
 
-The runner extends the existing opt-in native smoke driver. It launches the actual app and uses existing browser commands, edit descriptors and egui pointer dispatch. Each step labels `direct-command` versus `input-dispatch` coverage. These are not physical mouse tests. Native runs support one through eight Full, Fast, Draft or Thumb photographs. The transition journey also exercises Smart through the application’s current display geometry, fixed reduced-mode zoom and Smart zoom while viewing Before.
+The runner extends the existing opt-in native smoke driver. It launches the actual app and uses existing browser commands, edit descriptors and egui pointer dispatch. Each step labels `direct-command` versus `input-dispatch` coverage. These are not physical mouse tests. Native runs support one through eight photographs in Quality or Speed. Both modes choose working resolution from physical display demand. The transition journey checks both modes through zoom, selection, framing and Before viewing. Native detail retains the selected processing policy.
 
 Supply an existing `profile_editing` case array containing `source` and optional serialized `settings`, or repeat `--source INPUT.x3f` for camera defaults:
 
@@ -110,7 +110,7 @@ Supply an existing `profile_editing` case array containing `source` and optional
 python3 scripts/profiling/scenarios.py \
   --binary target/release/Foveonic.app/Contents/MacOS/foveonic-gui \
   --cases CASES.json --directory .local/native-warm-edit \
-  --scenario warm-edit --count 8 --quality thumb --mode wall \
+  --scenario warm-edit --count 8 --quality quality --mode wall \
   --trials 3 --repeats 5 --trace-processor PATH_TO_LOCAL_TRACE_PROCESSOR
 ```
 
@@ -124,7 +124,7 @@ For an original X3F, `source.original` separates file opening, metadata access, 
 | --- | --- |
 | `initial` | Select the declared group with processing state reset and disk state as found in the isolated namespace |
 | `warm-disk` | Select the group after local decoded inputs are ready, with processing state reset |
-| `prefetched-selection` | Wait for idle Thumb preparation of ready neighbors, then select the set without clearing retained processing state and repeat exposure edits |
+| `prefetched-selection` | Wait for idle small-grid preparation of ready neighbors, then select the set without clearing retained processing state and repeat exposure edits |
 | `warm-edit` | Initial selection followed by repeated relative exposure edits |
 | `cached-switch` | Cached selection changes, removal and re-addition around a pending edit |
 | `rapid-supersession` | Repeated edits without waiting for each intermediate result |
@@ -133,17 +133,19 @@ For an original X3F, `source.original` separates file opening, metadata access, 
 | `selection-journey` | Edit, retarget, remove and re-add viewport targets while a computed image is held at delivery, then check unchanged selection reuse |
 | `selection-pressure` | Run the selection journey, lower the memory budget, prove an inactive processing entry was evicted, then edit it and check rebuilding |
 | `background-edit` | Start a frozen TIFF import through the actual batch worker, edit while it is active, settle foreground results, then separately await batch completion |
-| `cache-workflow` | Fit two photos in Smart, zoom the first to 200%, edit both and return to Fit, measuring visible delivery separately from background Whole settlement |
+| `cache-workflow` | Fit two photos with automatic resolution, zoom the first to 200%, edit both and return to Fit, measuring visible delivery separately from background Whole settlement |
 
 `--rapid-edits`, `--pressure-mib`, `--repeats`, `--step-timeout` and `--timeout` control these existing actions. A single active image and device are set up before capture. Input hashing warms the OS filesystem cache, so `initial` does not claim a cold storage device. Warm disk means a ready local decoded entry, not a retained GPU checkpoint. Actual payload reads establish which input path ran.
 
-`prefetched-selection` requires at least two Thumb photographs and enabled disk and memory caches large enough for the declared set. All photographs must appear in the render worker's retained-source snapshot before selection. A matching retained native session may lend its immutable decoded source without being promoted. The measured selection must not read original or decoded payloads. This scenario validates foreground reuse after prework, independently of the time and resources spent preparing the set. Use `--memory-cache-bytes` to declare retained-memory capacity separately from `--disk-cache-bytes`. The workload key verifies the effective application settings.
+`prefetched-selection` requires at least two photographs and enabled disk and memory caches large enough for the declared set. All photographs must appear in the render worker's retained-source snapshot before selection. A matching retained native session may lend its immutable decoded source without being promoted. The measured selection must not read original or decoded payloads. This scenario validates foreground reuse after prework, independently of the time and resources spent preparing the set. Use `--memory-cache-bytes` to declare retained-memory capacity separately from `--disk-cache-bytes`. The workload key verifies the effective application settings.
 
 Each run uses a unique `FOVEONIC_DIAGNOSTICS_CACHE_NAMESPACE` by default, isolated from the owner's normal temporary cache. `--cache-namespace NAME` explicitly reuses a validated single-component namespace for controlled trials. The runner does not clear the global cache. A new staged source path may still require a new entry, so interpret reuse from the recorded identity and reads rather than the namespace name alone.
 
 Each trial saves the same shared capture files as manual recording, plus `evidence/scenario-result.json` and raw console output. The parent `regression.json` aggregates matched trial results. Use a separate new directory with `--mode off` for the baseline. Off results contain elapsed group measurements without a trace. Keep these results distinct from Wall/GPU attribution. Fresh numerical equality is not inferred from native frame/settings checks. Associate the same fixture/recipe manifest with a separate headless cached-versus-fresh verification outside timing.
 
-Each native trial also writes `evidence/test-result.json`. Headless render-matrix cases write the same result shape to `<case>.test-result.json`; both aggregate reports embed it as `test_result`. It identifies the driver and scenario, binary hash and GPU adapter, original source and hash, observed processing family and the scale reported by the rendered artifact, and assertion outcomes. Both paths use the same preview-scale assertion against the [preview contract](specs/small-previews.md): in particular, Classic Thumb uses divisor four and Merrill/Quattro Thumb use eight. Missing family or scale evidence is incomplete rather than a pass. An application fixture staged under another filename is mapped back to its declared original source and hash.
+Each native trial also writes `evidence/test-result.json`. Headless render-matrix cases write the same result shape to `<case>.test-result.json`, and both aggregate reports embed it as `test_result`. It identifies processing quality separately from numeric resolution, along with the driver, scenario, binary hash, GPU adapter, original source hash, observed processing family and artifact scale.
+
+Application checks compute expected sampling independently from drawn image bounds, native extent and display density. Quality permits at most one physical display pixel per working sample, while Speed permits 1.5. Same-policy completed finer images remain sufficient. Missing geometry, mode, family or scale evidence is incomplete. Headless fixed-resolution probes require their exact numeric grid, including Classic's divisor-four smallest grid and Merrill/Quattro's divisor-eight grid. An application fixture staged under another filename is mapped back to its declared original source and hash.
 
 The scale assertion verifies each artifact's reported scale; it does not independently measure image dimensions. The optional image assertion below compares complete floating storage and its geometry. The app scenario still owns its interaction and final-state checks. Neither assertion establishes physical input or screen-presentation coverage.
 
@@ -153,7 +155,7 @@ For a two-through-eight-photo slider gesture, add `--compare-images PATH_TO_PROF
 python3 scripts/profiling/scenarios.py \
   --binary target/release/foveonic-gui --cases CASES.json \
   --directory .local/slider-images --scenario slider-drag \
-  --quality thumb --mode off --trials 1 --background \
+  --quality quality --mode off --trials 1 --background \
   --compare-images target/release/examples/profile_pipeline
 ```
 
@@ -163,7 +165,7 @@ The shared `image_samples` assertion checks every byte, complete buffer length, 
 
 ### Cache workflow measurements
 
-`cache-workflow` requires exactly two declared manual exposures. It starts after the ordinary initial selection at the configured explicit quality. Smart Fit inherits that processing state. Shared edits apply offsets of +0.125, +0.25, +0.125 and +0.375 from each starting exposure. The test independently checks those edits, per-photo identity, rendition, demanded scale and native visible coverage. It uses direct application commands without delivery holds or timed image readbacks.
+`cache-workflow` requires exactly two declared manual exposures. It starts after the ordinary initial selection at the configured processing mode. Automatic Fit sizing inherits that processing state. Shared edits apply offsets of +0.125, +0.25, +0.125 and +0.375 from each starting exposure. The test independently checks those edits, per-photo identity, rendition, demanded scale and native visible coverage. It uses direct application commands without delivery holds or timed image readbacks.
 
 The default `--native-photo-count 1` zooms the first photo. Set `--native-photo-count 2` to zoom both to 200% and test two native processing working sets. The declared count is checked independently against app evidence and included in workload matching. Per-photo Whole observations in this workflow occur at group settlement; use Whole admission rows for individual delivery timing.
 
@@ -171,14 +173,14 @@ The default `--native-photo-count 1` zooms the first photo. Set `--native-photo-
 python3 scripts/profiling/scenarios.py \
   --binary target/release/foveonic-gui --cases REGIONAL_CASES.json \
   --directory .local/cache-workflow-2g --scenario cache-workflow \
-  --count 2 --quality thumb --mode off --trials 3 --background \
+  --count 2 --quality quality --mode off --trials 3 --background \
   --folder-mode browse --memory-cache-bytes 2147483648 --disk-cache-bytes 0 \
   --compare-images target/release/examples/profile_pipeline
 ```
 
 Resolve `REGIONAL_CASES.json` from the tracked `regional_cases` recipes through `prepare_inputs.py`. Repeat with 4294967296 bytes for 4 GB, and with an enabled disk budget for primed-disk/cold-initial-processing coverage. Verify actual storage reads in separate Wall captures; readiness alone does not establish which payload was used. Use new output directories and `--mode wall --trace-processor PATH_TO_LOCAL_TRACE_PROCESSOR` for attribution. Existing cache namespace isolation applies.
 
-Each trial's `cache_workflow` report separates per-photo first-current admissions from later retained-frame observations, foreground group completion and polled Whole settlement. Returning to Fit ends measurement; restoring the original explicit quality for shared final-image assertions is cleanup. The aggregate action duration is deliberately absent because it would include unrelated work. The Off comparison tool uses the workflow's individual milestones instead.
+Each trial's `cache_workflow` report separates per-photo first-current admissions from later retained-frame observations, foreground group completion and polled Whole settlement. Returning to Fit ends measurement; restoring the original processing mode for shared final-image assertions is cleanup. The aggregate action duration is deliberately absent because it would include unrelated work. The Off comparison tool uses the workflow's individual milestones instead.
 
 Wall reports associate worker `memory.snapshot` trim pairs with current action windows and newly admitted task/revision identities. They also report cache events, native-source decisions, payload reads and dispatch encoding. A source read belongs to its completion timestamp, so it may have started in an earlier action. Unattributed snapshots remain in the trace analysis. Per-image backing/texture sizes describe references that can alias other owners; only the global inventory deduplicates them. These logical boundary snapshots do not measure transient peaks, driver residency or whole-process footprint. No memory-usage UI is required.
 
@@ -194,7 +196,7 @@ For pressure coverage, select a budget small enough to evict inactive processing
 python3 scripts/profiling/scenarios.py \
   --binary target/release/foveonic-gui --cases MULTI_CASES.json \
   --directory .local/selection-pressure --scenario selection-pressure \
-  --quality thumb --mode wall --trials 1 --background \
+  --quality quality --mode wall --trials 1 --background \
   --disk-cache-bytes 0 --pressure-mib 64 \
   --trace-processor PATH_TO_LOCAL_TRACE_PROCESSOR \
   --compare-images target/release/examples/profile_pipeline
@@ -212,7 +214,7 @@ The `slider-drag` case requires at least two staged recipes. Supply different st
 python3 scripts/profiling/scenarios.py \
   --binary target/release/foveonic-gui --cases CASES.json \
   --directory .local/slider-exposure --scenario slider-drag \
-  --control-pointer /exposure --editing-section Tone --quality thumb --mode off --trials 1
+  --control-pointer /exposure --editing-section Tone --quality quality --mode off --trials 1
 ```
 
 The input is dispatched through the real widget. Use `--drag-pattern scrub` for a back-and-forth gesture instead of the default forward drag. The driver moves the requested section into view and scrolls to an offscreen control before dragging; this setup is programmatic navigation, not a physical pointer test. `evidence/slider-drag.json` records the exact gesture, per-frame painted text and bounds, settings, frame times, render task identities and the controls the app drew. The check independently verifies relative changes, repeated movement, readout formatting and stable geometry before checking the delivered final settings. A missing, disabled or unreachable control fails explicitly and records the observed controls. A failure also requests a screenshot. Off timings for this case include the opt-in widget observer and scripted gesture, so compare them only to matched runs with the same observation enabled. A Wall run records the same work with Perfetto; it is not an Off latency baseline.
@@ -228,7 +230,7 @@ python3 scripts/profiling/behavioral.py \
 
 Repeat `--family`, `--fixture`, `--case` or `--theme` to select more than one value. `--list` prints the selected runs without starting the app. Use an explicit `--full` for every declared combination, such as before a release; an unfiltered run is otherwise rejected. Select relevant cases for ordinary changes. Unknown or inapplicable selections fail rather than silently passing.
 
-The fixture file is an array such as `[{"name":"merrill-pair","family":"merrill","raw_size":"high","sources":["FIRST.x3f","SECOND.x3f"]}]`. Each fixture contains two through eight distinct source paths and each case provides a recipe for each selected photo. Camera families are `classic`, `merrill`, `quattro` and `tiger`. A fixture may describe a different RAW size in `raw_size`. The case file selects pointers, sections, optional applicable families and themes, and per-photo settings. Inputs and sidecars are staged into owned trial folders. Add `--compare-images PATH_TO_PROFILE_PIPELINE` to compare settled slider results with fresh processing. The matrix disables its decoded disk cache by default to avoid accumulating a new cache for every staged source. Use `--disk-cache-bytes` for an explicit cache budget, or the individual native scenarios for cache-specific checks. `behavioral-report.json` identifies each run, missing families and controls that were observed but not tested. Its inventory covers only the controls drawn by the declared recipes; it does not establish coverage of hidden modes, other RAW sizes or physical mouse input. A Tiger fixture made from two aliases of the same available original tests multi-photo interaction, not two independent sensor samples.
+The fixture file is an array such as `[{"name":"merrill-pair","family":"merrill","raw_size":"high","sources":["FIRST.x3f","SECOND.x3f"]}]`. Each fixture contains two through eight distinct source paths and each case provides a recipe for each selected photo. Camera families are `classic`, `merrill`, `quattro` and `tiger`. A fixture may describe a different RAW size in `raw_size`. The case file selects pointers, sections, optional applicable families and themes, per-photo settings, and `processing_qualities` containing `quality` and/or `speed`. The maintained cases run both modes. Each mode has separate outputs and coverage. Inputs and sidecars are staged into owned trial folders. Add `--compare-images PATH_TO_PROFILE_PIPELINE` to compare settled slider results with fresh processing. The matrix disables its decoded disk cache by default to avoid accumulating a new cache for every staged source. Use `--disk-cache-bytes` for an explicit cache budget, or the individual native scenarios for cache-specific checks. `behavioral-report.json` identifies each run, missing families and controls that were observed but not tested. Its inventory covers only the controls drawn by the declared recipes; it does not establish coverage of hidden modes, other RAW sizes or physical mouse input. A Tiger fixture made from two aliases of the same available original tests multi-photo interaction, not two independent sensor samples.
 
 Behavioral matrices request a background window by default. On macOS it stays below normal windows and does not request application activation. Pass `--foreground` to watch a run. Individual scenarios use a foreground window unless given `--background`. The selected window mode is recorded with the workload; compare latency only between runs with the same mode, since the operating system can schedule obscured windows differently.
 
@@ -245,7 +247,11 @@ python3 scripts/profiling/render_matrix.py --binary target/release/examples/prof
   --baseline .local/render-baseline --require-coverage
 ```
 
-`RENDER_CASES.json` is an array of objects with a unique `label`, a camera `family`, a `source`, and optional `raw_size`, `qualities` and `options`. The default covers Full, Fast, Draft and Thumb with Sunlight white balance and Standard color mode. The coverage gate requires three distinct source contents each for Classic, Merrill and Quattro, plus one for Tiger. A smaller matrix reports the omitted families and qualities. Family and RAW size come from the manifest and are not independently verified. Both recording and comparison use new directories and save per-case output and a manifest. Treat the first recording as a baseline only after repeating it successfully against itself. Exact output is a regression check, not a measure of visual quality; GPU or backend changes can affect bit equality.
+`RENDER_CASES.json` is an array of objects with a unique `label`, camera `family`, `source`, and optional `raw_size`, `resolutions`, `processing_qualities` and `options`. Numeric resolutions are `full`, `fast`, `draft` and `thumb`. They are internal size probes, separate from the application's two processing modes. The default crosses all four resolutions with `quality` and `speed`, using Sunlight white balance and Standard color mode. For example, `{"label":"merrill-haze","family":"merrill","source":"INPUT.x3f","resolutions":["full","fast"],"processing_qualities":["quality","speed"],"options":["--dehaze","35","--haze-color","auto"]}` declares both policies at two working grids. The runner owns `--resolution` and `--processing-quality`.
+
+The coverage gate requires three distinct source contents each for Classic, Merrill and Quattro, plus one for Tiger, with all resolutions and both modes for every case. Smaller matrices report omitted families, resolutions and modes. Family and RAW size come from the manifest and are not independently verified. Both recording and comparison use new directories and save per-case output and a manifest. The new schema rejects historical `qualities` fields instead of inferring their meaning.
+
+Exact comparisons use immutable approved outputs for the same resolution, processing mode, input and recipe. Repeating a newly recorded candidate against itself establishes reproducibility, not approval of a changed algorithm. The maintained test-input manifest retains all ten camera fixtures and adds Merrill adaptive, HDR, local-color and automatic Dehaze cases for dense-processing evaluation. Its source hashes remain unchanged. Paired Quality/Speed outputs report differing sample counts, maximum and mean absolute differences, RMS, image geometry and both hashes outside timed renders. These comparisons remain marked `visual_acceptance: unreviewed`. Any NaN or infinity fails the pair and matrix, with difference metrics withheld. Inspect representative crops before approving dense results. Their differences never replace a baseline or become an automatic pass for photographic quality. GPU/backend changes can affect bit equality.
 
 The [implementation plan](../plans/performance-diagnostics.md) records the native scenario, smoke, numerical and overhead checks. Physical manual-control verification remains pending desktop availability. Portable tests alone do not establish native behavior or latency.
 
@@ -321,7 +327,7 @@ Startup observations begin after eframe creates the native window and device. Th
 
 ## Cached multi-photo edits and host scheduling
 
-Named Thumb quality follows the application policy: Classic uses one-quarter dimensions, while Merrill and Quattro use one-eighth. Explicit `--scale-divisor` requests retain their numeric divisor. Mixed-family runs report each photograph's resolved working scale separately.
+The internal Thumb resolution uses camera-specific sizing: Classic uses one-quarter dimensions, while Merrill and Quattro use one-eighth. Explicit `--scale-divisor` requests retain their numeric divisor. Mixed-family runs report each photograph's resolved working scale separately.
 
 Build the maintained harness once in optimized mode. Use the same executable and distinct originals for each schedule. The example below uses shell placeholders for original paths:
 
@@ -330,13 +336,13 @@ cargo build --offline --release -p foveonic --example profile_editing
 shasum -a 256 target/release/examples/profile_editing
 mkdir -p .local/editing-profile
 target/release/examples/profile_editing .local/editing-profile/serial.jsonl \
-  --quality thumb --workers 1 --repeats 7 --verify PHOTO_A.x3f PHOTO_B.x3f
+  --resolution thumb --workers 1 --repeats 7 --verify PHOTO_A.x3f PHOTO_B.x3f
 target/release/examples/profile_editing .local/editing-profile/concurrent.jsonl \
-  --quality thumb --workers 2 --repeats 7 --verify PHOTO_A.x3f PHOTO_B.x3f
+  --resolution thumb --workers 2 --repeats 7 --verify PHOTO_A.x3f PHOTO_B.x3f
 python3 scripts/profiling/summarize.py --input-kind benchmark-json .local/editing-profile/serial.jsonl
 ```
 
-Add up to the intended real photo-set size. The runner rejects repeated canonical paths and existing report files. It loads each original and warms one retained session on its own executor. Executors share compiled kernels and the ordered device queue. A fixed Rayon pool schedules complete renders with the requested host concurrency. Each measured edit alternates exposure by ±0.25 EV around the supplied base, or chroma reconstruction strength between 1 and 2 with `--edit noise`. Warmup sets chroma to zero for the latter. Optional photographic CLI controls follow `--`. Use `--sidecars` to require each saved recipe and `--gui-analysis` to match the GUI’s automatic-analysis request. Use `--sweep` for unique exposure values instead of alternating two values. Named quality choices map to sensor divisors 1, 2, 4 and 8. `--scale-divisor N` accepts any positive power of two. Reports record requested and effective divisors with the exact settings.
+Add up to the intended real photo-set size. The runner rejects repeated canonical paths and existing report files. It loads each original and warms one retained session on its own executor. Executors share compiled kernels and the ordered device queue. A fixed Rayon pool schedules complete renders with the requested host concurrency. Each measured edit alternates exposure by ±0.25 EV around the supplied base, or chroma reconstruction strength between 1 and 2 with `--edit noise`. Warmup sets chroma to zero for the latter. Optional photographic CLI controls follow `--`. Use `--sidecars` to require each saved recipe and `--gui-analysis` to match the GUI’s automatic-analysis request. Use `--sweep` for unique exposure values instead of alternating two values. Named internal resolution choices map to sensor divisors 1, 2, 4 and 8. `--scale-divisor N` accepts any positive power of two. Reports record requested and effective divisors with the exact settings.
 
 The default mode is Off. Repeat a matched trial with `--mode wall` for attribution. GPU diagnostics require `--mode gpu --workers 1` because their timestamp resolution perturbs scheduling. Repeats share warm sessions, while separate invocations have independent warmups. Setup and first renders are reported separately from edits. Summaries also separate the first edit from later settled edits because restart-boundary cache priming may change its cost. `--verify` compares each final cached linear image byte for byte with an independent fresh render after the timed work. It also records CRC32 values for comparison across matched schedules. This checks cache/scheduling consistency for those samples. It does not establish photographic quality at reduced scales. Verification temporarily adds one fresh render's resources to the measured working set.
 

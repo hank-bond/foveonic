@@ -21,7 +21,7 @@ class BehavioralTests(unittest.TestCase):
         selected_fixtures, selected_cases, jobs=select(fixtures,cases,families=['merrill'],case_names=['speckle'],themes=['dark'])
         self.assertEqual([row['name'] for row in selected_fixtures],['m'])
         self.assertEqual([row['name'] for row in selected_cases],['speckle'])
-        self.assertEqual([(f['name'],c['name'],theme) for f,c,theme in jobs],[('m','speckle','dark')])
+        self.assertEqual([(f['name'],c['name'],theme) for f,c,theme in jobs],[('m','speckle','dark'),('m','speckle','dark')])
         with self.assertRaisesRegex(ValueError,'unknown or unavailable cases'):
             select(fixtures,cases,case_names=['typo'])
         with self.assertRaisesRegex(ValueError,'no applicable'):
@@ -58,10 +58,12 @@ class BehavioralTests(unittest.TestCase):
                 return 0
             with patch('behavioral.run_scenario',side_effect=fake_run), redirect_stdout(io.StringIO()):
                 report=run(binary,fixtures,cases,root/'result',compare_images=renderer)
-            self.assertTrue(report['passed']);self.assertEqual(len(report['results']),2)
+            self.assertTrue(report['passed']);self.assertEqual(len(report['results']),4)
             self.assertTrue(all(cmd[cmd.index('--compare-images')+1] == str(renderer.resolve()) for cmd in commands))
             self.assertEqual({row['theme'] for row in report['results']},{'dark','light'})
-            stored=json.loads((root/'result'/'merrill-pair--exposure--dark-inputs.json').read_text())
+            self.assertEqual({row['processing_quality'] for row in report['results']},{'quality','speed'})
+            self.assertEqual({cmd[cmd.index('--quality')+1] for cmd in commands},{'quality','speed'})
+            stored=json.loads((root/'result'/'merrill-pair--exposure--dark--quality-inputs.json').read_text())
             self.assertEqual([item['settings']['exposure'] for item in stored],[1,-1])
             self.assertFalse(report['coverage']['complete_for_observed_controls'])
 
@@ -110,7 +112,7 @@ class BehavioralTests(unittest.TestCase):
             self.assertIn('choose subset selectors',missing.stderr)
             listed=subprocess.run(command+['--list','--case','exposure','--theme','dark'],capture_output=True,text=True)
             self.assertEqual(listed.returncode,0)
-            self.assertEqual(json.loads(listed.stdout)['count'],1)
+            self.assertEqual(json.loads(listed.stdout)['count'],2)
 
 
 if __name__=='__main__':

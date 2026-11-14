@@ -108,7 +108,7 @@ class AcceptanceTests(unittest.TestCase):
             for quality in ('full', 'fast', 'draft'):
                 job=next(j for j in self.catalog['jobs'] if j['id']=='latency-warm-edit-'+quality+'-1')
                 cmd,_,_=acceptance.command(job,args,Path(tmp)/quality)
-                self.assertEqual(cmd[cmd.index('--quality')+1],quality)
+                self.assertEqual(cmd[cmd.index('--quality')+1],job['quality'])
 
     def test_smart_normal_and_low_memory_jobs_keep_explicit_budgets(self):
         class Args:

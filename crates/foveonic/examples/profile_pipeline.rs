@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     while let Some(arg) = args.next() {
         if arg == "--render-only" {
             render_only = true;
-        } else if arg == "--preview-quality" {
+        } else if arg == "--resolution" {
             scale_selected = true;
             let quality = args.next().and_then(|v| v.into_string().ok());
             thumb = quality.as_deref() == Some("thumb");
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Some("fast") => foveonic::render::Scale::new(2).unwrap(),
                 Some("draft") => foveonic::render::Scale::new(4).unwrap(),
                 Some("thumb") => foveonic::render::Scale::new(8).unwrap(),
-                _ => return Err("preview quality requires full, fast, draft or thumb".into()),
+                _ => return Err("resolution requires full, fast, draft or thumb".into()),
             };
         } else if arg == "--working-scale" {
             scale_selected = true;
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         profile::report(
             "session",
             mode,
-            serde_json::json!({"frontend":"completed_processing","render_only":render_only,"scale_divisor":working_scale.divisor(),"family":source.metadata.processing_family().ok(),"source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
+            serde_json::json!({"frontend":"completed_processing","render_only":render_only,"scale_divisor":working_scale.divisor(),"family":source.metadata.processing_family().ok(),"source":input,"adapter":engine.adapter_name(),"settings":settings,"processing_quality":settings.processing_quality,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
         )
     );
     println!(
@@ -167,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             profile::report(
                 "processing",
                 sample_mode,
-                serde_json::json!({"source":input,"settings":settings,"effective_scale_divisor":image.settings().working_scale.divisor(),"output":"final","execution":"fresh","iteration":iteration,"cold":iteration==0,"render_call_ms":render_call,"completed_ms":completed,"profile":profile,"activity":activity})
+                serde_json::json!({"source":input,"settings":settings,"processing_quality":settings.processing_quality,"effective_scale_divisor":image.settings().working_scale.divisor(),"output":"final","execution":"fresh","iteration":iteration,"cold":iteration==0,"render_call_ms":render_call,"completed_ms":completed,"profile":profile,"activity":activity})
             )
         );
         // Regional previews are useful numerical outputs but cannot be exported
@@ -184,7 +184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 profile::report(
                     "export",
                     sample_mode,
-                    serde_json::json!({"source":input,"settings":settings,"iteration":iteration,"destination":destination,"completed_ms":milliseconds(start),"profile":profile,"activity":engine.gpu_activity().since(before)})
+                    serde_json::json!({"source":input,"settings":settings,"processing_quality":settings.processing_quality,"iteration":iteration,"destination":destination,"completed_ms":milliseconds(start),"profile":profile,"activity":engine.gpu_activity().since(before)})
                 )
             );
         }
@@ -249,7 +249,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "capture",
                 Mode::Off,
                 serde_json::json!({
-                    "source": input, "settings": settings, "effective_scale_divisor": image.settings().working_scale.divisor(), "output": name, "file": path, "extent": description.extent,
+                    "source": input, "settings": settings, "processing_quality": settings.processing_quality, "effective_scale_divisor": image.settings().working_scale.divisor(), "output": name, "file": path, "extent": description.extent,
                     "dtype": "f32", "endianness": if cfg!(target_endian = "little") {"little"} else {"big"},
                     "layout": format!("{:?}", description.layout), "space": format!("{:?}", description.space),
                     "linear_white": description.linear_white, "view_crop": view.crop,

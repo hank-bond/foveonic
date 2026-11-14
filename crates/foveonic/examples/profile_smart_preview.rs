@@ -376,7 +376,7 @@ fn main() -> Result<()> {
             Mode::Gpu,
         )?);
     }
-    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "settings":settings, "separate_overview_session":separate_overview_session, "timing":if direct_only { "completed render and view preparation, source decode excluded, one warmup trial" } else { "completed render and view preparation, source decode excluded, alternating matched-session trials, one warmup pair" }, "timestamp_scope":"whole route, including prior overview and any verification", "runs":runs, "gpu_diagnostics":diagnostics});
+    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "settings":settings,"processing_quality":settings.processing_quality, "separate_overview_session":separate_overview_session, "timing":if direct_only { "completed render and view preparation, source decode excluded, one warmup trial" } else { "completed render and view preparation, source decode excluded, alternating matched-session trials, one warmup pair" }, "timestamp_scope":"whole route, including prior overview and any verification", "runs":runs, "gpu_diagnostics":diagnostics});
     std::fs::write(destination, serde_json::to_vec_pretty(&report)?)?;
     Ok(())
 }

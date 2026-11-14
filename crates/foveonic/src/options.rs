@@ -351,6 +351,13 @@ pub(crate) fn parse_settings_with_noise_defaults(
                     }
                 }
             }
+            "--processing-quality" => {
+                settings.processing_quality = match value.as_str() {
+                    "quality" => foveonic::render::ProcessingQuality::Quality,
+                    "speed" => foveonic::render::ProcessingQuality::Speed,
+                    _ => return Err("processing quality must be quality or speed".into()),
+                };
+            }
             "--size" => {
                 let (width, height) = value.split_once('x').ok_or("size requires WIDTHxHEIGHT")?;
                 settings.output_size = Some([width.parse()?, height.parse()?]);

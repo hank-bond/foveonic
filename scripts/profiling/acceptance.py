@@ -116,7 +116,7 @@ def command(job, args, out):
                '--cases', str(Path(args.cases).resolve()), '--directory', str(out), '--scenario', job['scenario'],
                '--count', str(job.get('count', 1)), '--mode', 'off', '--trials', str(args.latency_trials),
                '--disk-cache-bytes', str(job.get('disk_cache_bytes', 0))]
-        cmd += ['--quality', job.get('quality', 'thumb')]
+        cmd += ['--quality', job.get('quality', 'quality')]
         if 'memory_cache_bytes' in job:
             cmd += ['--memory-cache-bytes', str(job['memory_cache_bytes'])]
         if 'step_timeout' in job:

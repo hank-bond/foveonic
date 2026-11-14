@@ -60,7 +60,7 @@ def explain(events, work, memory, recorded_history_valid):
                                   else event['dur'] / 1e6 if event['dur'] >= 0 else None)})
             elif event['name'] == 'desired':
                 task['request'] = {name:fields[name] for name in
-                                   ('preview_quality', 'nominal_scale', 'output') if name in fields}
+                                   ('preview_scale', 'processing_quality', 'nominal_scale', 'output') if name in fields}
             elif event['name'] == 'processing':
                 facts = {name:fields[name] for name in
                     ('source', 'execution', 'status', 'scale', 'output', 'cache_before_bytes', 'cache_after_bytes')

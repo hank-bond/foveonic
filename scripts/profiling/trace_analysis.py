@@ -534,10 +534,12 @@ def analyze_tables(tables, capture_summary):
         issues = []
         if None in by_source or len(by_source) != expected_count:
             issues.append('not every expected photo has a current result')
-        if any(event['args'].get('expected_scale_divisor') is None
-               or event['args'].get('scale_divisor') != event['args']['expected_scale_divisor']
+        if any(type(event['args'].get('expected_scale_divisor')) is not int
+               or type(event['args'].get('scale_divisor')) is not int
+               or event['args']['scale_divisor'] <= 0
+               or event['args']['scale_divisor'] > event['args']['expected_scale_divisor']
                for event in current):
-            issues.append('an effective scale differs from its photo-specific requested scale')
+            issues.append('an effective scale is coarser than its photo-specific demand bound')
         if end['args'].get('worker_busy') is not False or end['args'].get('progress_running') is not False:
             issues.append('desired work or progress did not settle')
         work, work_issues = expected_work(window, begin['args'], {event['args'].get('photo') for event in current},
@@ -551,18 +553,18 @@ def analyze_tables(tables, capture_summary):
             if len(edits) != 1 or not overlapping:
                 issues.append('foreground edit did not overlap an actual batch photo operation')
         latencies = [(event['ts'] - begin['ts']) / 1e6 for event in by_source.values()]
-        expected_scales = {identity(event): event['args'].get('expected_scale_divisor')
+        artifact_scales = {identity(event): event['args'].get('scale_divisor')
                            for event in by_source.values()}
-        identities = set(expected_scales)
+        identities = set(artifact_scales)
         accepted = [event for event in window if event['name'] == 'image_accepted' and
                     identity(event) in identities]
         uses = [event for event in window if event['name'] == 'image_frame_use' and
                 identity(event) in identities]
-        if any(event['args'].get('scale') != expected_scales[identity(event)] for event in accepted):
-            issues.append('accepted artifact scale differs from the requested scale')
-        encoded = {identity(event) for event in uses if event['args'].get('scale') == expected_scales[identity(event)]}
+        if any(event['args'].get('scale') != artifact_scales[identity(event)] for event in accepted):
+            issues.append('accepted artifact scale differs from its current image identity')
+        encoded = {identity(event) for event in uses if event['args'].get('scale') == artifact_scales[identity(event)]}
         if any(None in value for value in identities) or identities - encoded:
-            issues.append('not every current photo identity reached native encoding at the requested scale')
+            issues.append('not every current photo identity reached native encoding at its actual artifact scale')
         peaks = defaultdict(list)
         for counter in tables['counters']:
             if begin['ts'] <= int(counter['ts']) <= end['ts']:
@@ -572,7 +574,7 @@ def analyze_tables(tables, capture_summary):
         steps.append({**work, 'step': step, 'action': begin['args'].get('action'),
                       'interactions': interaction_events(window, begin['ts']),
                       'coverage': begin['args'].get('action_kind', begin['args'].get('coverage')), 'photo_count': expected_count,
-                      'scale_divisors': sorted({value for value in expected_scales.values() if value is not None}),
+                      'scale_divisors': sorted({value for value in artifact_scales.values() if value is not None}),
                       'valid': not issues, 'issues': issues,
                       'first_current_observed_ms': min(latencies, default=None),
                       'all_current_observed_ms': max(latencies, default=None),

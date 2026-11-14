@@ -20,6 +20,16 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     },
     {
@@ -32,6 +42,16 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     },
     {
@@ -44,6 +64,16 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     },
     {
@@ -56,6 +86,16 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     },
     {
@@ -68,6 +108,16 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     },
     {
@@ -80,6 +130,16 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     },
     {
@@ -92,6 +152,16 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     },
     {
@@ -104,6 +174,16 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     },
     {
@@ -116,6 +196,16 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     },
     {
@@ -128,6 +218,122 @@
         "Sunlight",
         "--mode",
         "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "merrill-dense-adaptive",
+      "source": "merrill-hazy-coast.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--tone-method",
+        "universal",
+        "--base-response",
+        "natural"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "merrill-dense-hdr",
+      "source": "merrill-hazy-coast.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--tone-method",
+        "universal",
+        "--base-response",
+        "camera",
+        "--hdr-shadows",
+        "0.25",
+        "--hdr-highlights",
+        "-0.25"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "merrill-dense-color",
+      "source": "merrill-hazy-coast.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--color-sensitivity",
+        "0.25,-0.15,0,0.1,0,-0.1,0,0"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "merrill-dense-dehaze",
+      "source": "merrill-hazy-coast.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--dehaze",
+        "35",
+        "--haze-color",
+        "auto"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
       ]
     }
   ],
@@ -346,12 +552,21 @@
           "whites": -1.0
         }
       },
-      "native_region": [1403, 1305, 1724, 1544],
+      "native_region": [
+        1403,
+        1305,
+        1724,
+        1544
+      ],
       "edits": [
         {
           "label": "exposure",
-          "a": {"exposure": -0.15},
-          "b": {"exposure": 0.0}
+          "a": {
+            "exposure": -0.15
+          },
+          "b": {
+            "exposure": 0.0
+          }
         }
       ]
     },

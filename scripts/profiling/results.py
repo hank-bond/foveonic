@@ -1,38 +1,76 @@
 """Report shared preview-scale assertions and exact image comparisons across test drivers."""
 
 import hashlib
+import math
 
-PREVIEW_QUALITIES = ('full', 'fast', 'draft', 'thumb')
+RESOLUTIONS = ('full', 'fast', 'draft', 'thumb')
+PROCESSING_QUALITIES = ('quality', 'speed')
 IMAGE_GEOMETRY_FIELDS = ('extent', 'layout', 'space', 'linear_white', 'view_baked',
                          'view_extent', 'view_crop', 'view_rotation', 'endianness')
 
 
-# This is the workspace preview contract, kept independent of either renderer.
-# Tiger uses the Quattro processing family for this policy.
-def expected_preview_scale(quality, family):
-    if quality not in PREVIEW_QUALITIES:
-        raise ValueError(f'unknown preview quality: {quality}')
+# Numeric resolution probes are distinct from the application's automatic sizing.
+def expected_resolution_scale(resolution, family):
+    if resolution not in RESOLUTIONS:
+        raise ValueError(f'unknown resolution: {resolution}')
     if family not in ('Classic', 'Merrill', 'Quattro'):
         return None
     return {'full': 1, 'fast': 2, 'draft': 4,
-            'thumb': 4 if family == 'Classic' else 8}[quality]
+            'thumb': 4 if family == 'Classic' else 8}[resolution]
 
 
-def render_result(driver, scenario, quality, observations, execution_passed, failure=None, environment=None):
-    """Check each delivered image against the preview policy, retaining all observations."""
-    if quality not in PREVIEW_QUALITIES:
-        raise ValueError(f'unknown preview quality: {quality}')
+def expected_display_scale(processing_quality, family, density):
+    """Independent display-demand contract. Finer completed frames remain sufficient."""
+    if processing_quality not in PROCESSING_QUALITIES:
+        raise ValueError(f'unknown processing quality: {processing_quality}')
+    if family not in ('Classic', 'Merrill', 'Quattro') or not isinstance(density, (float, int)) or not math.isfinite(density) or density <= 0:
+        return None
+    limit = 1. if processing_quality == 'quality' else 1.5
+    for divisor in (8, 4, 2, 1):
+        if density * divisor <= limit or divisor == 1:
+            return min(divisor, 4) if family == 'Classic' else divisor
+
+
+def observation_density(observation):
+    """Compute physical sampling from raw drawn geometry when available."""
+    size, extent, dpr = (observation.get(key) for key in ('display_size_points', 'native_extent', 'pixels_per_point'))
+    if size is not None and extent is not None and dpr is not None:
+        if (not isinstance(size, (list, tuple)) or not isinstance(extent, (list, tuple))
+                or len(size) != 2 or len(extent) != 2
+                or any(not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0 for value in (*size, *extent, dpr))):
+            return None
+        return max(size[axis] / extent[axis] for axis in (0, 1)) * dpr
+    return observation.get('display_density')
+
+
+def render_result(driver, scenario, processing_quality, observations, execution_passed, failure=None, environment=None, resolution=None):
+    """Check selected processing mode and numeric or automatic working resolution."""
+    if processing_quality not in PROCESSING_QUALITIES:
+        raise ValueError(f'unknown processing quality: {processing_quality}')
+    if resolution is not None and resolution not in RESOLUTIONS:
+        raise ValueError(f'unknown resolution: {resolution}')
     assertions = []
     for observation in observations:
-        expected = expected_preview_scale(quality, observation.get('family'))
+        selected = observation.get('requested_processing_quality', processing_quality)
+        actual_quality = observation.get('processing_quality')
+        if selected not in PROCESSING_QUALITIES or actual_quality not in PROCESSING_QUALITIES:
+            quality_outcome = 'unverified'
+        else:
+            quality_outcome = 'passed' if selected == actual_quality else 'failed'
+        expected = (expected_resolution_scale(resolution, observation.get('family')) if resolution is not None
+                    else expected_display_scale(selected, observation.get('family'), observation_density(observation)) if selected in PROCESSING_QUALITIES else None)
         actual = observation.get('scale_divisor')
         if expected is None or type(actual) is not int:
             outcome = 'unverified'
         else:
-            outcome = 'passed' if actual == expected else 'failed'
-        assertions.append({'name': 'preview_scale', 'step': observation['step'],
-                           'source': observation['source'], 'expected': expected,
-                           'actual': actual, 'outcome': outcome})
+            sufficient = actual == expected if resolution is not None else actual in (1, 2, 4, 8) and actual <= expected
+            outcome = 'passed' if sufficient else 'failed'
+        assertions.extend([
+            {'name':'preview_scale', 'step':observation['step'], 'source':observation['source'],
+             'expected':expected, 'actual':actual, 'outcome':outcome},
+            {'name':'processing_quality', 'step':observation['step'], 'source':observation['source'],
+             'expected':selected, 'actual':actual_quality, 'outcome':quality_outcome},
+        ])
     outcomes = {assertion['outcome'] for assertion in assertions}
     if not execution_passed:
         outcome = 'failed'
@@ -41,15 +79,16 @@ def render_result(driver, scenario, quality, observations, execution_passed, fai
     elif 'failed' in outcomes:
         outcome = 'failed'
         if failure is None:
-            failure = 'a preview-scale assertion failed'
+            failure = 'a processing-mode or preview-scale assertion failed'
     elif not observations or 'unverified' in outcomes:
         outcome = 'incomplete'
         if failure is None:
-            failure = 'preview-scale evidence is incomplete'
+            failure = 'processing-mode or preview-scale evidence is incomplete'
     else:
         outcome = 'passed'
-    return {'schema_version': 1, 'driver': driver, 'scenario': scenario,
-            'quality': quality, 'environment': environment or {}, 'outcome': outcome, 'failure': failure,
+    return {'schema_version': 2, 'driver': driver, 'scenario': scenario,
+            'processing_quality': processing_quality, 'resolution': resolution,
+            'environment': environment or {}, 'outcome': outcome, 'failure': failure,
             'observations': observations, 'assertions': assertions}
 
 

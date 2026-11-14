@@ -373,6 +373,28 @@ class TraceAnalysisTests(unittest.TestCase):
                 fields['scale']=8
         self.assertFalse(analyze_tables(tables(rows),{'complete':True})['behavior_valid'])
 
+    def test_finer_retained_images_use_their_actual_scale_for_identity_checks(self):
+        rows=scenario()
+        for _,name,fields in rows:
+            if fields.get('photo') == 2:
+                if name == 'scenario.step':
+                    fields['scale_divisor']=2
+                    fields['expected_scale_divisor']=4
+                else:
+                    fields['scale']=2
+        result=analyze_tables(tables(rows),{'complete':True})
+        self.assertTrue(result['behavior_valid'])
+        self.assertEqual(result['steps'][0]['scale_divisors'],[2,8])
+        for _,name,fields in rows:
+            if name == 'image_frame_use' and fields.get('photo') == 2:
+                fields['scale']=4
+        self.assertFalse(analyze_tables(tables(rows),{'complete':True})['behavior_valid'])
+        for _,name,fields in rows:
+            if fields.get('photo') == 2:
+                if name == 'image_frame_use':fields['scale']=2
+                if name == 'image_accepted':fields['scale']=4
+        self.assertFalse(analyze_tables(tables(rows),{'complete':True})['behavior_valid'])
+
     def test_manual_capture_has_no_invented_behavior_result_or_group_clock(self):
         result=analyze_tables(tables([(10,'capture.start',{})]),{'complete':True})
         self.assertIsNone(result['behavior_valid'])

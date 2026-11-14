@@ -14,6 +14,14 @@ FAMILIES = ('classic', 'merrill', 'quattro', 'tiger')
 SECTIONS = ('WhiteBalance', 'Mix', 'Tone', 'Saturation', 'ColorEditor', 'Noise', 'Detail', 'Sharpening', 'Corrections')
 
 
+def processing_qualities(case):
+    policies = case.get('processing_qualities', ['quality','speed'])
+    if (not isinstance(policies, list) or not policies or len(set(policies)) != len(policies)
+            or any(policy not in ('quality','speed') for policy in policies)):
+        raise ValueError(f"{case['name']}: unsupported processing qualities")
+    return policies
+
+
 def select(fixtures, cases, fixture_names=(), families=(), case_names=(), themes=()):
     """Select declared work without silently accepting misspelled or empty selections."""
     known_fixtures = {row['name'] for row in fixtures}
@@ -33,8 +41,9 @@ def select(fixtures, cases, fixture_names=(), families=(), case_names=(), themes
         selected_themes = [theme for theme in case.get('themes', ['dark', 'light']) if not themes or theme in themes]
         if selected_themes:
             selected_cases.append({**case, 'themes':selected_themes})
-    jobs = [(fixture,case,theme) for fixture in selected_fixtures for case in selected_cases
-            if fixture['family'] in case.get('families', FAMILIES) for theme in case['themes']]
+    jobs = [(fixture,{**case,'processing_quality':policy},theme) for fixture in selected_fixtures for case in selected_cases
+            if fixture['family'] in case.get('families', FAMILIES) for theme in case['themes']
+            for policy in processing_qualities(case)]
     if not jobs:
         raise ValueError('the selection contains no applicable test runs')
     if case_names and set(case_names) - {case['name'] for _,case,_ in jobs}:
@@ -67,6 +76,7 @@ def validate(fixtures, cases):
             raise ValueError(f'{name}: specify a JSON pointer and mixed or equal initial values')
         if case.get('pattern', 'forward') not in ('forward', 'scrub'):
             raise ValueError(f'{name}: unsupported drag pattern')
+        processing_qualities(case)
         if case['section'] not in SECTIONS:
             raise ValueError(f'{name}: unsupported editing section')
         if any(theme not in ('dark', 'light') for theme in case.get('themes', ['dark', 'light'])):
@@ -84,7 +94,7 @@ def validate(fixtures, cases):
 def report_coverage(fixtures, results):
     tested, observed = set(), {}
     for result in results:
-        key = (result['fixture'], result['theme'])
+        key = (result['fixture'], result['theme'], result.get('processing_quality'))
         if result.get('passed'):
             tested.add((*key, result['pointer']))
         artifact = Path(result['directory'])/'trial-00/evidence/slider-drag.json'
@@ -97,7 +107,7 @@ def report_coverage(fixtures, results):
             continue
         for control in inventory:
             if control.get('pointer'):
-                row = {'fixture':key[0], 'theme':key[1], 'pointer':control['pointer'],
+                row = {'fixture':key[0], 'theme':key[1], 'processing_quality':key[2], 'pointer':control['pointer'],
                        'label':control['label'], 'enabled':control['enabled'], 'visible':control['visible']}
                 existing = observed.get((*key, control['pointer']))
                 if existing:
@@ -107,9 +117,12 @@ def report_coverage(fixtures, results):
     missing = sorted(set(FAMILIES)-{fixture['family'] for fixture in fixtures})
     untested_families = sorted(set(FAMILIES)-{row['family'] for row in results if row.get('passed')})
     untested = [row for key,row in sorted(observed.items()) if key not in tested]
-    return {'missing_families': missing, 'untested_families': untested_families, 'observed_controls': len(observed),
+    missing_modes = [{'fixture':fixture['name'], 'processing_quality':policy}
+                     for fixture in fixtures for policy in ('quality','speed')
+                     if not any(row['fixture']==fixture['name'] and row.get('processing_quality')==policy and row.get('passed') for row in results)]
+    return {'missing_processing_modes':missing_modes, 'missing_families': missing, 'untested_families': untested_families, 'observed_controls': len(observed),
             'tested_controls': len(tested), 'observed_untested': untested,
-            'complete_for_observed_controls': bool(observed) and not missing and not untested_families and not untested,
+            'complete_for_observed_controls': bool(observed) and not missing and not missing_modes and not untested_families and not untested,
             'limits': ['Only controls drawn by the declared recipes are inventoried.',
                        'Camera family and RAW size are supplied by the fixture manifest, not independently verified.',
                        'Other camera RAW sizes, modes and conditional controls require declared fixtures and cases.']}
@@ -152,47 +165,44 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
               'selection':selection, 'provenance':provenance, 'passed':False, 'results':[],
               'limits':['Passed describes the declared selected cases; inspect coverage for untested controls and configurations.']}
     try:
-        for fixture in fixtures:
-            for case in cases:
-                if fixture['family'] not in case.get('families', FAMILIES):
-                    continue
-                recipes = case['recipes']
-                for theme in case.get('themes', ['dark', 'light']):
-                    name = fixture['name']+'--'+case['name']+'--'+theme
-                    out = directory/name
-                    inputs = directory/(name+'-inputs.json')
-                    inputs.write_text(json.dumps([{'source':source,'settings':recipe} for source,recipe in zip(fixture['sources'],recipes)],indent=2)+'\n')
-                    cmd = [sys.executable, str(Path(__file__).with_name('scenarios.py')), '--binary',str(binary),
-                           '--cases',str(inputs), '--directory',str(out), '--scenario','slider-drag',
-                           '--control-pointer',case['pointer'], '--editing-section',case['section'],
-                           '--initial-values',case.get('initial_values','mixed'), '--theme',theme,
-                           '--drag-pattern',case.get('pattern','forward'),
-                           '--quality','thumb', '--mode',mode, '--trials','1', '--disk-cache-bytes',str(disk_cache_bytes)]
-                    if compare_images:
-                        cmd += ['--compare-images',str(compare_images)]
-                    if trace_processor:
-                        cmd += ['--trace-processor',str(trace_processor)]
-                    if background:
-                        cmd += ['--background']
-                    with (directory/(name+'.log')).open('w') as log:
-                        returncode = run_scenario(cmd, log)
-                    result_path = out/'trial-00/evidence/scenario-result.json'
-                    native = json.loads(result_path.read_text()) if result_path.exists() else {}
-                    failure = native.get('failure')
-                    shared_path = out/'trial-00/evidence/test-result.json'
-                    if not failure and shared_path.exists():
-                        failure = json.loads(shared_path.read_text()).get('failure')
-                    if not native:
-                        failure = 'scenario did not produce a result; inspect the log'
-                    elif returncode and not failure:
-                        failure = 'scenario runner failed; inspect the log'
-                    report['results'].append({'fixture':fixture['name'], 'family':fixture['family'],
-                        'raw_size':fixture.get('raw_size','unspecified'), 'case':case['name'], 'theme':theme,
-                        'pointer':case['pointer'], 'directory':str(out), 'passed':returncode==0 and native.get('passed') is True,
-                        'failure':failure})
-                    print(name+': '+('passed' if report['results'][-1]['passed'] else 'FAILED'),flush=True)
-                    report['coverage'] = report_coverage(fixtures, report['results'])
-                    (directory/'behavioral-report.json').write_text(json.dumps(report, indent=2)+'\n')
+        _,_,jobs = select(fixtures,cases)
+        for fixture,case,theme in jobs:
+            recipes = case['recipes']
+            name = fixture['name']+'--'+case['name']+'--'+theme+'--'+case['processing_quality']
+            out = directory/name
+            inputs = directory/(name+'-inputs.json')
+            inputs.write_text(json.dumps([{'source':source,'settings':recipe} for source,recipe in zip(fixture['sources'],recipes)],indent=2)+'\n')
+            cmd = [sys.executable, str(Path(__file__).with_name('scenarios.py')), '--binary',str(binary),
+                   '--cases',str(inputs), '--directory',str(out), '--scenario','slider-drag',
+                   '--control-pointer',case['pointer'], '--editing-section',case['section'],
+                   '--initial-values',case.get('initial_values','mixed'), '--theme',theme,
+                   '--drag-pattern',case.get('pattern','forward'),
+                   '--quality',case.get('processing_quality', 'quality'), '--mode',mode, '--trials','1', '--disk-cache-bytes',str(disk_cache_bytes)]
+            if compare_images:
+                cmd += ['--compare-images',str(compare_images)]
+            if trace_processor:
+                cmd += ['--trace-processor',str(trace_processor)]
+            if background:
+                cmd += ['--background']
+            with (directory/(name+'.log')).open('w') as log:
+                returncode = run_scenario(cmd, log)
+            result_path = out/'trial-00/evidence/scenario-result.json'
+            native = json.loads(result_path.read_text()) if result_path.exists() else {}
+            failure = native.get('failure')
+            shared_path = out/'trial-00/evidence/test-result.json'
+            if not failure and shared_path.exists():
+                failure = json.loads(shared_path.read_text()).get('failure')
+            if not native:
+                failure = 'scenario did not produce a result; inspect the log'
+            elif returncode and not failure:
+                failure = 'scenario runner failed; inspect the log'
+            report['results'].append({'fixture':fixture['name'], 'family':fixture['family'],
+                'raw_size':fixture.get('raw_size','unspecified'), 'case':case['name'], 'theme':theme,
+                'pointer':case['pointer'], 'processing_quality':case['processing_quality'], 'directory':str(out), 'passed':returncode==0 and native.get('passed') is True,
+                'failure':failure})
+            print(name+': '+('passed' if report['results'][-1]['passed'] else 'FAILED'),flush=True)
+            report['coverage'] = report_coverage(fixtures, report['results'])
+            (directory/'behavioral-report.json').write_text(json.dumps(report, indent=2)+'\n')
         report['passed'] = bool(report['results']) and all(row['passed'] for row in report['results'])
     finally:
         report['coverage'] = report_coverage(fixtures, report['results'])
@@ -227,7 +237,7 @@ def main():
         fixtures,cases,jobs=select(json.loads(args.fixtures.read_text()),json.loads(args.cases.read_text()),args.fixture,args.family,args.case,args.theme)
         if args.list:
             print(json.dumps({'count':len(jobs),'runs':[{'fixture':fixture['name'],'family':fixture['family'],
-                  'case':case['name'],'pointer':case['pointer'],'theme':theme} for fixture,case,theme in jobs]},indent=2))
+                  'case':case['name'],'pointer':case['pointer'],'theme':theme,'processing_quality':case['processing_quality']} for fixture,case,theme in jobs]},indent=2))
             return
         if args.binary is None or args.directory is None:
             raise ValueError('a run needs --binary and --directory')

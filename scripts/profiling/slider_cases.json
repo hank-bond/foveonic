@@ -12,6 +12,10 @@
         "exposure": -0.25,
         "exposure_auto": false
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -28,7 +32,11 @@
         "exposure_auto": false
       }
     ],
-    "pattern": "scrub"
+    "pattern": "scrub",
+    "processing_qualities": [
+      "quality",
+      "speed"
+    ]
   },
   {
     "name": "exposure-equal",
@@ -44,6 +52,10 @@
         "exposure": 0.0,
         "exposure_auto": false
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -60,6 +72,10 @@
         "exposure": -0.000785,
         "exposure_auto": false
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -77,6 +93,10 @@
           "contrast": -0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -94,6 +114,10 @@
           "shadows": -0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -111,6 +135,10 @@
           "highlights": -0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -128,6 +156,10 @@
           "warmth": -0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -145,6 +177,10 @@
           "tint": -0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -158,6 +194,10 @@
       {
         "saturation": 1.1
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -181,6 +221,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -224,6 +268,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -267,6 +315,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -310,6 +362,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -332,6 +388,10 @@
       "merrill",
       "quattro",
       "tiger"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -354,6 +414,10 @@
       "merrill",
       "quattro",
       "tiger"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -374,6 +438,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -396,6 +464,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -418,6 +490,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -442,6 +518,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -466,6 +546,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -490,6 +574,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -514,6 +602,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -535,6 +627,10 @@
     "families": [
       "quattro",
       "tiger"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -548,6 +644,10 @@
       {
         "sharpen_amount": 0.2
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -565,6 +665,10 @@
           "amount": 5.0
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -581,6 +685,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -598,6 +706,10 @@
     "families": [
       "quattro",
       "tiger"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -621,6 +733,10 @@
           "shadows": 0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -644,6 +760,10 @@
           "highlights": 0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -667,6 +787,10 @@
           "blacks": 0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -690,6 +814,10 @@
           "whites": 0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -709,6 +837,10 @@
           "brightness": 0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -728,6 +860,10 @@
           "local_contrast": 0.1
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -751,6 +887,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -786,6 +926,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -821,6 +965,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -856,6 +1004,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -879,6 +1031,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -902,6 +1058,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -924,6 +1084,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -946,6 +1110,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -968,6 +1136,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -986,6 +1158,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1009,6 +1185,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1032,6 +1212,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1054,6 +1238,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1097,6 +1285,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1140,6 +1332,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1183,6 +1379,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1226,6 +1426,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1269,6 +1473,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1312,6 +1520,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1355,6 +1567,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1398,6 +1614,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1441,6 +1661,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1484,6 +1708,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1527,6 +1755,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1570,6 +1802,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1613,6 +1849,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1656,6 +1896,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1699,6 +1943,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1742,6 +1990,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1785,6 +2037,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1828,6 +2084,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1871,6 +2131,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1914,6 +2178,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1957,6 +2225,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -1982,6 +2254,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2007,6 +2283,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2032,6 +2312,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2061,6 +2345,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2094,6 +2382,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2127,6 +2419,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2160,6 +2456,10 @@
           }
         }
       }
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2206,6 +2506,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2252,6 +2556,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2298,6 +2606,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2344,6 +2656,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2390,6 +2706,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2436,6 +2756,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2482,6 +2806,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2528,6 +2856,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2552,6 +2884,10 @@
       "merrill",
       "quattro",
       "tiger"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2574,6 +2910,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2593,6 +2933,10 @@
     "families": [
       "quattro",
       "tiger"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2619,6 +2963,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2645,6 +2993,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2671,6 +3023,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   },
   {
@@ -2697,6 +3053,10 @@
     ],
     "families": [
       "merrill"
+    ],
+    "processing_qualities": [
+      "quality",
+      "speed"
     ]
   }
 ]
