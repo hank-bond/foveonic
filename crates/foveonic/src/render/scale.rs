@@ -121,6 +121,17 @@ impl WorkingGrid {
         bounds
     }
 
+    /// Map normalized photograph coordinates from native crop edges to working
+    /// sample indices. Pooled samples sit at block centers, including the halo.
+    pub fn frame_mapping(self, native: [u32; 4]) -> [[f32; 4]; 2] {
+        let divisor = self.scale.divisor() as f32;
+        let [left, top, right, bottom] = native.map(|edge| edge as f32 / divisor);
+        [
+            [right - left, 0., left + self.origin[0] as f32 - 0.5, 1.],
+            [0., bottom - top, top + self.origin[1] as f32 - 0.5, 1.],
+        ]
+    }
+
     /// Padding repeats a covered edge cell, including its eligibility for
     /// filtering. Photographic framing still uses the unexpanded bounds above.
     pub fn filter_bounds(self, native: [u32; 4]) -> [u32; 4] {

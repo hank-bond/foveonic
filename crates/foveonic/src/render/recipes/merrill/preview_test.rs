@@ -15,6 +15,102 @@ fn encoding(rotation: u32) -> EncodeParams {
     }
 }
 
+fn framing(grid: &Grid) -> EncodeParams {
+    let mut graph = Graph::default();
+    let rgb = graph
+        .add(
+            Operation::RenderedInput {
+                data: crate::graph::DataType::LinearRgb(ColorSpace::Srgb),
+            },
+            &[],
+        )
+        .unwrap();
+    let mut recipe = BuiltRecipe {
+        graph,
+        final_id: rgb,
+        params: grid.encode,
+        rgb_extent: grid.grid.extent,
+        rgb_bounds: grid.encode.crop,
+    };
+    grid.frame(&mut recipe, ColorSpace::Srgb).unwrap();
+    let Operation::ResampleRgb { params, .. } = &recipe.graph.nodes.last().unwrap().operation
+    else {
+        panic!("missing reduced camera frame")
+    };
+    *params
+}
+
+#[test]
+fn reduced_camera_frame_places_pooled_pixel_centers_on_native_pixel_centers() {
+    for rotation in [0, 90, 180, 270] {
+        for divisor in [2, 4, 8, 16] {
+            let mut native = encoding(rotation);
+            native.crop[0] += 1;
+            native.crop[1] += 3;
+            let grid = Grid::new(native, None, Scale::new(divisor).unwrap()).unwrap();
+            let params = framing(&grid);
+            for uv in [[0.01_f32, 0.03_f32], [0.5, 0.5], [0.97, 0.99]] {
+                for axis in 0..2 {
+                    let row = params.mapping[axis];
+                    let working = row[0] * uv[0] + row[1] * uv[1] + row[2];
+                    // Pooling averages indices 0..d-1. Its first sample is at
+                    // native index (d-1)/2, not the block's left/top edge.
+                    let actual = (working - grid.grid.origin[axis] as f32) * divisor as f32
+                        + (divisor - 1) as f32 * 0.5;
+                    let expected = native.crop[axis] as f32
+                        + uv[axis] * (native.crop[axis + 2] - native.crop[axis]) as f32
+                        - 0.5;
+                    assert!((actual - expected).abs() < 0.001,
+                        "rotation {rotation}, divisor {divisor}, axis {axis}: native {actual}, expected {expected}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn pooled_ramps_keep_native_registration_through_camera_framing() {
+    use crate::{gpu::Gpu, nodes::finish::resize, profile::Profile};
+    let gpu = Gpu::new().unwrap();
+    let pixels: Vec<f32> = (0..96)
+        .flat_map(|y| (0..128).flat_map(move |x| [x as f32, y as f32, 1.]))
+        .collect();
+    let input = gpu.upload("Native registration ramps", &pixels).unwrap();
+    let native = EncodeParams {
+        source: [128, 96, 0, 0],
+        crop: [9, 7, 119, 87],
+        output: [110, 80, 0, 0],
+        mapping: [[0.; 4]; 2],
+    };
+    for divisor in [2, 4, 8] {
+        let grid = Grid::new(native, None, Scale::new(divisor).unwrap()).unwrap();
+        let pooled = pool::apply(&gpu, &input, &grid.reduction, &mut Profile::default()).unwrap();
+        let params = framing(&grid);
+        let (output, _) = resize::apply(&gpu, &pooled, &params, &mut Profile::default()).unwrap();
+        let bytes = gpu.readback(&output).unwrap();
+        let values: &[f32] = bytemuck::cast_slice(&bytes);
+        let [w, h, _, _] = params.output;
+        let mut maximum = 0_f32;
+        for y in 2..h - 2 {
+            for x in 2..w - 2 {
+                let expected = [
+                    9. + (x as f32 + 0.5) * 110. / w as f32 - 0.5,
+                    7. + (y as f32 + 0.5) * 80. / h as f32 - 0.5,
+                ];
+                for axis in 0..2 {
+                    maximum = maximum
+                        .max((values[((y * w + x) * 3) as usize + axis] - expected[axis]).abs());
+                }
+            }
+        }
+        eprintln!("divisor {divisor}: maximum native registration error {maximum}");
+        // The existing photographic interpolator has sixteen fractional phases.
+        // Allow its sub-cell approximation, never a half-cell framing displacement.
+        assert!(maximum < divisor as f32 * 0.125);
+    }
+}
+
 #[test]
 fn recovery_and_speckle_share_one_sensor_reduction_per_grid() {
     let mut graph = Graph::default();

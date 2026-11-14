@@ -13,7 +13,7 @@ Implement the approved [viewport presentation requirements](../docs/specs/viewpo
 - [x] Package the owner review build before resuming upstream work.
 - [ ] Obtain owner visual review before resuming upstream work.
 
-No numerical pipeline, scheduler or disk-cache change belongs to this slice. More than one retained native section remains deferred.
+The initial presentation change leaves numerical processing, scheduling and disk caching unchanged. The owner-reported registration correction below also fixes final reduced photographic framing. More than one retained native section remains deferred.
 
 ## Results
 
@@ -26,3 +26,19 @@ Validation passes 522 ordinary GUI tests and a real-worker GPU ownership check u
 The maintained two-photo native transition journey now holds replacement delivery while the loupe moves partly outside its native section, then checks retained overview/detail identities, incomplete overlapping coverage and a captured frame. Its single-photo Smart segment also zooms and pans while replacement is held. Both screenshots were produced and visually inspected. Python independently requires these observations and screenshots, checks distinct image identities and verifies partial overlap. Whole-only recipes explicitly report their exemption from the regional zoom check. The final Wall capture is complete, loss-free and uncontended. Controlled pauses verify behavior and are excluded from latency claims.
 
 Independent largest-model review found no remaining blockers. Strict release workspace/all-target Clippy, formatting, generated indexes and 156 Python profiling checks pass, with one platform-dependent Python check skipped. The packaged build is ready for owner testing. Upstream sectional optimization remains paused for that review.
+
+## Registration follow-up
+
+Owner testing found a visible shift when detail replaced the overview or previous section. Two failing regressions isolated independent coordinate errors. Merrill and Classic final reduced framing treated pooled centers as crop edges, displacing the photograph by half a working pixel. Separate GPU callback rectangles also rounded independently to physical pixels, creating smaller shifts between sections.
+
+- [x] Share native-edge to working-sample framing between Merrill and Classic. Keep Quattro's existing sample-index mapping.
+- [x] Draw layers through a common callback canvas so section coverage cannot change their raster alignment.
+- [x] Reproduce and correct pooled-center and raster-rounding regressions, including fractional crop edges, section bounds and pixel densities.
+- [x] Verify Full samples, retained-layer behavior and the packaged review build.
+- [x] Obtain independent largest-model design and Rust review.
+
+The GPU ramp check exercises actual pooling and photographic resampling at divisors two, four and eight. Its tolerance allows the existing sixteen-phase interpolator's sub-cell approximation while rejecting a half-cell displacement. Full analysis branches request internal linear outputs before final reduced framing, so this correction needs no legacy analysis path.
+
+Validation passes 557 processor tests and 523 GUI tests. All ten Full photographs remain bit-exact against the frozen camera-family matrix, as do the twelve additional Quattro and Tiger reduced outputs. Full Natural Adaptive Tone with Dehaze also remains bit-exact for the hazy coast and SD14. The real-app transition journey passes with fresh numerical comparisons, a complete uncontended trace and both held-overlap screenshots. Independent review found no blockers. Strict affected-package/all-target Clippy, formatting and documentation checks pass.
+
+The existing display-preview signature is advanced so persisted overviews cannot preserve the old framing. This regenerates cached embedded and rendered display previews across families while preserving decoded sensor entries. Owner review of the corrected replacement behavior remains pending.

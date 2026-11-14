@@ -425,6 +425,13 @@ struct LayerView {
     circle: Option<egui::Rect>,
 }
 impl LayerView {
+    fn rectangles(self, coverage: [u32; 4]) -> Option<(egui::Rect, egui::Rect)> {
+        let tile = self.placement(coverage)?;
+        // egui-wgpu rounds each callback viewport to physical pixels. Keep that
+        // viewport independent of section bounds so replacement cannot shift it.
+        tile.intersects(self.clip).then_some((self.clip, tile))
+    }
+
     fn placement(self, coverage: [u32; 4]) -> Option<egui::Rect> {
         if coverage[0] >= coverage[2] || coverage[1] >= coverage[3] {
             return None;
@@ -448,11 +455,11 @@ fn show_layer(
     mapping: Mapping,
     srgb_target: bool,
 ) {
-    let Some(tile) = view.placement(layer.coverage) else {
+    let Some((canvas, tile)) = view.rectangles(layer.coverage) else {
         return;
     };
     let Some((visible, mut params)) = Params::clipped(
-        view.clip.intersect(tile),
+        canvas,
         tile,
         painter.clip_rect().intersect(painter.ctx().screen_rect()),
         layer.texture.description().space,
@@ -1052,7 +1059,7 @@ impl Viewport {
                     (window[2] - window[0]) as f32,
                     (window[3] - window[1]) as f32,
                 ),
-            clip: canvas.intersect(image),
+            clip: canvas,
             circle: None,
         };
         show_layer(
@@ -2476,6 +2483,62 @@ mod loupe_tests {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100., 100.));
         let params = Params::new(rect, rect, Space::ToneMappedRgb(ColorSpace::Srgb), -1, true);
         assert_eq!(params.circle, [0.; 4]);
+    }
+
+    #[test]
+    fn replacement_sections_sample_the_same_native_point_after_gpu_viewport_rounding() {
+        let view = LayerView {
+            origin: egui::pos2(60.13, 100.27),
+            native_origin: egui::vec2(0.25, 0.35),
+            points_per_pixel: egui::Vec2::splat(0.87),
+            clip: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600., 600.)),
+            circle: None,
+        };
+        for clip in [
+            view.clip,
+            egui::Rect::from_min_size(egui::pos2(3.17, 7.31), egui::vec2(593.41, 587.23)),
+        ] {
+            let view = LayerView { clip, ..view };
+            for pixels_per_point in [1., 1.5, 2., 2.5] {
+                let physical_point = egui::pos2(270.5 * pixels_per_point, 310.5 * pixels_per_point);
+                let mut expected = None;
+                for coverage in [[0, 0, 900, 900], [100, 100, 500, 500], [150, 120, 550, 520]] {
+                    let (canvas, tile) = view.rectangles(coverage).unwrap();
+                    let (visible, params) = Params::clipped(
+                        canvas,
+                        tile,
+                        view.clip,
+                        Space::ToneMappedRgb(ColorSpace::Srgb),
+                        -1,
+                        true,
+                    )
+                    .unwrap();
+                    // egui-wgpu rounds callback viewports to physical pixel edges.
+                    // Test the actual raster viewport rather than ideal point-space math.
+                    let raster = egui::PaintCallbackInfo {
+                        viewport: visible,
+                        clip_rect: view.clip,
+                        pixels_per_point,
+                        screen_size_px: [1500, 1500],
+                    }
+                    .viewport_in_pixels();
+                    let uv = (physical_point
+                        - egui::pos2(raster.left_px as f32, raster.top_px as f32))
+                        / egui::vec2(raster.width_px as f32, raster.height_px as f32);
+                    let sample = (uv - egui::vec2(params.rect[0], params.rect[1]))
+                        / egui::vec2(params.rect[2], params.rect[3]);
+                    let actual = egui::vec2(coverage[0] as f32, coverage[1] as f32)
+                        + sample
+                            * egui::vec2(
+                                (coverage[2] - coverage[0]) as f32,
+                                (coverage[3] - coverage[1]) as f32,
+                            );
+                    let expected = *expected.get_or_insert(actual);
+                    assert!((actual-expected).length() < 0.001,
+                    "DPR {pixels_per_point}, section {coverage:?}: {actual:?}, expected {expected:?}");
+                }
+            }
+        }
     }
 
     #[test]

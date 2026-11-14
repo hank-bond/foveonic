@@ -73,8 +73,18 @@ fn grids_cover_all_scales_and_preserve_fractional_camera_framing() {
             let Operation::ResampleRgb { params, .. } = operation else {
                 panic!("missing photographic frame")
             };
-            assert_eq!(params.mapping[0], [242. / d, 0., 7. / d + 8., 1.]);
-            assert_eq!(params.mapping[1], [0., 182. / d, 5. / d + 8., 1.]);
+            let expected = [
+                [242. / d, 0., 7. / d + 7.5, 1.],
+                [0., 182. / d, 5. / d + 7.5, 1.],
+            ];
+            for (actual, expected) in params
+                .mapping
+                .into_iter()
+                .flatten()
+                .zip(expected.into_iter().flatten())
+            {
+                assert!((actual - expected).abs() < 0.000001);
+            }
             // Rotation is retained for presentation; this camera frame is unrotated.
             assert_eq!(params.output[..2], scale.extent([242, 182]));
         }

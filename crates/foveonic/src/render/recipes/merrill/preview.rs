@@ -133,14 +133,11 @@ impl Grid {
         if matches!(self.native.source[2], 90 | 270) {
             output.swap(0, 1);
         }
-        let d = self.grid.scale.divisor() as f32;
-        let [l, t, r, b] = self.native.crop.map(|v| v as f32 / d);
-        let [x, y] = self.grid.origin.map(|v| v as f32);
         let extent = [self.encode.source[0], self.encode.source[1]];
         recipe.final_id = recipe.graph.add(
             Operation::ResampleRgb {
                 params: EncodeParams {
-                    mapping: [[r - l, 0., l + x, 1.], [0., b - t, t + y, 1.]],
+                    mapping: self.grid.frame_mapping(self.native.crop),
                     source: [extent[0], extent[1], 0, 0],
                     crop: [0, 0, extent[0], extent[1]],
                     output: [output[0], output[1], 0, 0],
