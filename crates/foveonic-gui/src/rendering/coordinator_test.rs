@@ -1167,3 +1167,17 @@ fn demanded_current_details_and_continuations_survive_selection_and_sibling_refr
         .unwrap();
     assert_eq!(replacement.stamp.revision, 9);
 }
+
+#[test]
+fn relaxed_sampling_does_not_share_an_inflight_pixel_task() {
+    let mut coordinator = RenderCoordinator::default();
+    let mut first = request("a.x3f", 1, 0.).as_ref().clone();
+    first.preview_scale = foveonic::render::Scale::new(4).unwrap();
+    let old = desire(&mut coordinator, Arc::new(first.clone()));
+    first.revision = 2;
+    first.preview_scale = foveonic::render::Scale::new(8).unwrap();
+    let new = desire(&mut coordinator, Arc::new(first));
+    assert_ne!(old.id, new.id);
+    assert!(coordinator.desired(&new.target).unwrap().seed.is_none());
+    assert_eq!(coordinator.finish(&old), Completion::Superseded);
+}

@@ -91,10 +91,7 @@ struct Desired {
     admitted: u64,
     // Coverage of the admitted result. Admission must match the current stamp.
     regional: bool,
-    delivered: Option<(
-        TaskId,
-        Arc<crate::rendering::worker::presentation::Snapshot>,
-    )>,
+    delivered: Option<Arc<crate::rendering::worker::presentation::Snapshot>>,
 }
 fn retired(entry: &Desired, reason: &'static str) {
     crate::timing::task(
@@ -215,8 +212,14 @@ impl RenderCoordinator {
             origin.or_else(|| existing.and_then(|index| self.desired[index].task.origin.clone()));
         let seed = existing
             .and_then(|index| self.desired[index].delivered.as_ref())
-            .filter(|(pixel, _)| *pixel == id)
-            .map(|(_, seed)| seed.clone());
+            // A new sampling demand has its own task identity, but completed finer
+            // pixels can still satisfy it. The presenter checks their full contract.
+            .filter(|snapshot| {
+                origin
+                    .as_ref()
+                    .is_none_or(|origin| snapshot.origin() == origin)
+            })
+            .cloned();
         let task = Arc::new(Task {
             stamp,
             request,
@@ -655,7 +658,7 @@ impl RenderCoordinator {
             crate::rendering::worker::presentation::Snapshot::from_frame(frame, &entry.task.request)
         {
             let snapshot = Arc::new(snapshot);
-            entry.delivered = Some((stamp.id, snapshot.clone()));
+            entry.delivered = Some(snapshot.clone());
             let mut task = (*entry.task).clone();
             task.seed = Some(snapshot);
             entry.task = Arc::new(task);
@@ -691,12 +694,7 @@ impl RenderCoordinator {
     pub fn retained_images(&self) -> Vec<Arc<crate::rendering::worker::presentation::Snapshot>> {
         self.desired
             .iter()
-            .filter_map(|entry| {
-                entry
-                    .delivered
-                    .as_ref()
-                    .map(|(_, snapshot)| snapshot.clone())
-            })
+            .filter_map(|entry| entry.delivered.clone())
             .collect()
     }
     pub fn desired(&self, target: &Target) -> Option<&Arc<Task>> {

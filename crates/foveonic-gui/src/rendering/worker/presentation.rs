@@ -61,6 +61,9 @@ struct Whole {
 #[derive(Clone)]
 pub(crate) struct Snapshot(Whole);
 impl Snapshot {
+    pub fn origin(&self) -> &SourceOrigin {
+        &self.0.identity
+    }
     pub fn from_frame(frame: &super::Frame, request: &Request) -> Option<Self> {
         if request.detail
             || request.comparison
@@ -758,6 +761,136 @@ mod tests {
         assert_ne!(
             pixels(&verifier, &first.texture),
             pixels(&verifier, &changed.texture)
+        );
+    }
+}
+
+#[cfg(test)]
+mod completed_sampling_tests {
+    use super::*;
+    use crate::rendering::{
+        coordinator::{RenderCoordinator, Target},
+        worker::{tests::TestWorker, Frame},
+    };
+    use std::time::Instant;
+
+    #[test]
+    #[ignore = "requires GPU and MERRILL_X3F"]
+    fn completed_finer_snapshots_seed_new_sampling_tasks_without_changing_inflight_matching() {
+        let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
+        let worker = TestWorker::new(
+            foveonic::render::Engine::new().unwrap(),
+            eframe::egui::Context::default(),
+        );
+        let first = Request {
+            detail: false,
+            framing_preview: false,
+            calibration: None,
+            rendition: Rendition::Current,
+            revision: 1,
+            path: path.clone(),
+            settings: Settings {
+                processing_quality: ProcessingQuality::Speed,
+                ..Settings::new("Sunlight", "Standard")
+            },
+            preview_scale: Scale::new(4).unwrap(),
+            processing_quality: ProcessingQuality::Speed,
+            output: "final".into(),
+            comparison: false,
+            export: None,
+        };
+        worker.submit(first.clone());
+        let frame: Frame = super::super::tests::receive(&worker)
+            .result
+            .unwrap()
+            .unwrap();
+        let seeded = |next: Request, origin: SourceOrigin| {
+            let mut coordinator = RenderCoordinator::default();
+            let target = Target::of(&first);
+            coordinator.desire(
+                Arc::new(first.clone()),
+                Some(frame.origin.clone()),
+                Instant::now(),
+            );
+            let original = coordinator.desired(&target).unwrap().stamp.clone();
+            coordinator.finish(&original);
+            assert!(coordinator.admit(&original, &frame.origin));
+            coordinator.note_pixels(&original, &frame);
+            let target = Target::of(&next);
+            coordinator.desire(Arc::new(next), Some(origin), Instant::now());
+            let task = coordinator.desired(&target).unwrap().clone();
+            assert_ne!(task.stamp.id, original.id);
+            (coordinator, task)
+        };
+        let cache = DecodeCache::new();
+        let mut coarser = first.clone();
+        coarser.revision = 2;
+        coarser.preview_scale = Scale::new(8).unwrap();
+        let (_, task) = seeded(coarser.clone(), frame.origin.clone());
+        let mut presenter = Presentation::default();
+        presenter.seed(
+            task.seed
+                .as_deref()
+                .expect("completed pixels seed a new logical sampling task"),
+        );
+        let prepared = presenter.prepare(&task.request, &cache).unwrap().unwrap();
+        assert_eq!(prepared.working_scale, Scale::new(4).unwrap());
+        assert!(Arc::ptr_eq(
+            &prepared.display.unwrap().texture,
+            &frame.texture
+        ));
+
+        for (scale, policy, exposure) in [
+            (Scale::new(2).unwrap(), ProcessingQuality::Speed, 0.),
+            (Scale::new(8).unwrap(), ProcessingQuality::Quality, 0.),
+            (Scale::new(8).unwrap(), ProcessingQuality::Speed, 0.25),
+        ] {
+            let mut next = coarser.clone();
+            next.preview_scale = scale;
+            next.processing_quality = policy;
+            next.settings.processing_quality = policy;
+            next.settings.exposure = exposure;
+            let (_, task) = seeded(next, frame.origin.clone());
+            let mut presenter = Presentation::default();
+            presenter.seed(task.seed.as_deref().unwrap());
+            assert!(presenter.prepare(&task.request, &cache).unwrap().is_none());
+        }
+
+        let replaced = SourceOrigin::default();
+        let (mut coordinator, task) = seeded(coarser.clone(), replaced.clone());
+        assert!(task.seed.is_none());
+        let mut finer_replacement = coarser.clone();
+        finer_replacement.revision = 3;
+        finer_replacement.preview_scale = Scale::new(2).unwrap();
+        let target = Target::of(&finer_replacement);
+        coordinator.desire(Arc::new(finer_replacement), Some(replaced), Instant::now());
+        assert!(
+            coordinator.desired(&target).unwrap().seed.is_none(),
+            "a pending replacement must not revive an earlier source's snapshot"
+        );
+
+        worker.submit(coarser);
+        let retained = super::super::tests::receive(&worker)
+            .result
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            retained.artifact.settings.working_scale,
+            Scale::new(4).unwrap()
+        );
+        assert!(Arc::ptr_eq(&retained.texture, &frame.texture));
+        assert_eq!(
+            worker
+                .checks
+                .recipes
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|entry| entry.0 == 2)
+                .unwrap()
+                .1,
+            0,
+            "relaxing sampling must not dispatch photographic work"
         );
     }
 }
