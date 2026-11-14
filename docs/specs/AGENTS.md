@@ -54,6 +54,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[photographic-help](./photographic-help.md)** _(accepted, conforming, reference)._ Control help explains photographic effects in plain English, with reviewed A/B crops where they teach the adjustment clearly.
 - **[pipeline-inspection](./pipeline-inspection.md)** _(accepted, incomplete, reference)._ Pipeline inspection requests named node outputs, executes their dependencies, and retains only selected artifacts and checkpoints.
 - **[processing-graphs](./processing-graphs.md)** _(accepted, incomplete, reference)._ Internal processing DAGs use typed connections, shared metadata, node settings, and selectable algorithms for sensor and tone processing.
+- **[processing-quality](./processing-quality.md)** _(accepted, incomplete, reference)._ Quality and Speed select processing fidelity independently of automatic image resolution and regional bounds.
 - **[profiling](./profiling.md)** _(accepted, conforming, reference)._ Profiling separates ordinary completed work, synchronized GPU diagnostics, and native feedback with reproducible context.
 - **[quattro-fast-preview](./quattro-fast-preview.md)** _(accepted, conforming, reference)._ An optional Quattro Fast preview reduces rendering resolution while preserving Full exports and native viewport coordinates.
 - **[quattro-input](./quattro-input.md)** _(accepted, conforming, reference)._ Quattro input preserves mixed-resolution sensor codes and exposes independently sized inspection planes.

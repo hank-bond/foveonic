@@ -97,6 +97,8 @@ pub fn report(event: &str, mode: Mode, data: impl serde::Serialize) -> serde_jso
 pub struct RenderSettingsSnapshot {
     settings: crate::render::Settings,
     working_scale: crate::render::Scale,
+    #[serde(default)]
+    processing_quality: crate::render::ProcessingQuality,
     preview_region: Option<[u32; 4]>,
     color_range_preview: Option<usize>,
     dehaze_estimate: bool,
@@ -109,6 +111,7 @@ impl From<&crate::render::Settings> for RenderSettingsSnapshot {
         Self {
             settings: settings.clone(),
             working_scale: settings.working_scale,
+            processing_quality: settings.processing_quality,
             preview_region: settings.preview_region,
             color_range_preview: settings.color_range_preview,
             dehaze_estimate: settings.dehaze_estimate,
@@ -122,6 +125,7 @@ impl RenderSettingsSnapshot {
     pub fn into_settings(self) -> crate::render::Settings {
         crate::render::Settings {
             working_scale: self.working_scale,
+            processing_quality: self.processing_quality,
             preview_region: self.preview_region,
             color_range_preview: self.color_range_preview,
             dehaze_estimate: self.dehaze_estimate,

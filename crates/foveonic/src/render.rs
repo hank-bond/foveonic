@@ -20,6 +20,7 @@ mod edits;
 mod execute;
 mod memory;
 mod preparation;
+mod quality;
 mod recipes;
 mod reduced;
 mod scale;
@@ -27,6 +28,7 @@ mod settings;
 mod source_preparation;
 mod working_set;
 pub use memory::{MemoryReservation, MemoryResources, MemoryTrim};
+pub use quality::ProcessingQuality;
 pub use reduced::{
     NeedsOriginal, ParameterResources, ReducedPreparation, ReducedRender, ReducedSession,
     SessionResources,

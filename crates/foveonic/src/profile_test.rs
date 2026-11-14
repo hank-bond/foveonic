@@ -52,6 +52,7 @@ fn wall_collects_current_host_stages_and_serializable_settings() {
 #[test]
 fn render_settings_snapshot_preserves_transient_render_inputs() {
     let mut settings = crate::render::Settings::new("Sunlight", "Standard");
+    settings.processing_quality = crate::render::ProcessingQuality::Speed;
     settings.exposure = -0.75;
     settings.working_scale = crate::render::Scale::new(8).unwrap();
     settings.preview_region = Some([1, 2, 3, 4]);

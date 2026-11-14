@@ -84,6 +84,9 @@ pub struct Settings {
     /// Sensor sampling for this render, excluded from per-photo editing sidecars.
     #[serde(skip)]
     pub working_scale: Scale,
+    /// Transient processing policy, independent of image resolution and authored edits.
+    #[serde(skip)]
+    pub processing_quality: super::ProcessingQuality,
     /// Transient oriented native-pixel rectangle for regional preview processing.
     #[serde(skip)]
     pub preview_region: Option<[u32; 4]>,
@@ -167,6 +170,7 @@ impl Default for Settings {
             dehaze_estimate: false,
             processing_sections: Default::default(),
             working_scale: Scale::NATIVE,
+            processing_quality: Default::default(),
             preview_region: None,
             color_range_preview: None,
             adaptive_tone_tuning: Default::default(),
@@ -594,12 +598,24 @@ impl Settings {
         Ok(())
     }
 
+    /// Source exports choose Quality independently of any preview request.
+    pub fn for_export(&self) -> Self {
+        let mut settings = self.clone();
+        settings.processing_quality = super::ProcessingQuality::Quality;
+        settings.working_scale = Scale::NATIVE;
+        settings.preview_region = None;
+        settings.color_range_preview = None;
+        settings.dehaze_estimate = false;
+        settings
+    }
+
     /// Select native technical DNG processing. Shared linear edits are baked separately.
     pub(crate) fn dng_settings(&self) -> Self {
         // Resolve the selected method before removing shared photographic controls,
         // so inactive Reference Shadows/Highlights cannot reappear in DNG metadata.
         let mut settings = self.active_tone_settings().into_owned();
         settings.working_scale = Scale::NATIVE;
+        settings.processing_quality = super::ProcessingQuality::Quality;
         settings.preview_region = None;
         settings.color_range_preview = None;
         settings.output_size = None;
