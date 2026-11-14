@@ -221,6 +221,11 @@ impl Engine {
     pub fn queue(&self) -> &wgpu::Queue {
         &self.gpu.queue
     }
+    /// Wait off the UI thread for previously submitted work, allowing other
+    /// threads to keep submitting through the shared device.
+    pub fn wait_for_submitted_work(&self) -> Result<()> {
+        self.gpu.wait_for_submitted_work()
+    }
     /// Cumulative engine-owned submissions/transfers/allocations, excluding other queue users.
     pub fn gpu_activity(&self) -> crate::profile::GpuActivity {
         self.gpu.activity()

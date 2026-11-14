@@ -2318,7 +2318,7 @@ impl Engine {
                     "complete graph submission window"
                 };
                 let wait = profile.mode.enabled().then(Instant::now);
-                profile.measure(label, || gpu.device.poll(wgpu::Maintain::Wait));
+                profile.measure(label, || gpu.wait_for_submitted_work())?;
                 if let Some((observation, _, _)) = &mut diagnostic {
                     observation.completion_wait_ms =
                         wait.map(|start| start.elapsed().as_secs_f64() * 1000.);

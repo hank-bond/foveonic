@@ -14,6 +14,7 @@ Keep raw buffers inside the GPU/storage layer. Reads borrow tracked ownership an
 
 ### Source files
 
+- **[completion.rs](./completion.rs)** Services completion notifications while parking the caller outside wgpu's device locks.
 - **[diagnostics.rs](./diagnostics.rs)** Resolves bounded capture-only GPU timestamps asynchronously on the device's normal polling path.
 - **[field.rs](./field.rs)** Compiles optional color-field kernels lazily and reflects their exact guarded resource access.
 - **[kernels.rs](./kernels.rs)** Registers compute kernels and builds pipelines from the owning node shaders.

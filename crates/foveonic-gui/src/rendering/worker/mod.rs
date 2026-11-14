@@ -777,7 +777,7 @@ impl Worker {
                     }
                     if reused_display.is_none() {
                         let _span = crate::timing::Span::new(request.revision, "view_completion_wait");
-                        engine.device().poll(eframe::wgpu::Maintain::Wait);
+                        engine.wait_for_submitted_work()?;
                     }
                     if let Some(before)=view_before{foveonic::diagnostics::event(foveonic::diagnostics::Category::Presentation,"view",|fields| {
                         fields.u64("revision",request.revision).str("source",&request.path.to_string_lossy()).str("output",root);

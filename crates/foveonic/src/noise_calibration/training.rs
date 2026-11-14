@@ -198,7 +198,7 @@ fn measure_group(
             &mut trace,
         );
         gpu.finish_capture_trace(&trace)?;
-        gpu.device.poll(wgpu::Maintain::Wait);
+        gpu.wait_for_submitted_work()?;
     }
     if cancelled() {
         return Err("Calibration training cancelled".into());

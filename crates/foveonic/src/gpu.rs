@@ -4,6 +4,7 @@ use crate::profile::{Profile, Timing};
 use crate::source::Result;
 use wgpu::util::DeviceExt;
 
+mod completion;
 mod diagnostics;
 mod field;
 mod kernels;
@@ -113,6 +114,21 @@ impl Gpu {
         *self.activity.lock().expect("GPU activity counter")
     }
 
+    /// Complete the current queue prefix without holding wgpu locks while idle.
+    /// This parks the calling worker and must not run on the UI thread.
+    pub fn wait_for_submitted_work(&self) -> Result<()> {
+        let _wait = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Gpu,
+            "gpu.wait",
+            |fields| {
+                fields
+                    .str("reason", "submitted-work")
+                    .bool("blocking_poll", false);
+            },
+        );
+        completion::submitted(&self.device, &self.queue)
+    }
+
     fn submit(&self, encoder: wgpu::CommandEncoder) {
         self.submit_buffer(encoder, false);
     }
@@ -133,7 +149,7 @@ impl Gpu {
             .lock()
             .expect("GPU activity counter")
             .submissions += 1;
-        let submitted = {
+        {
             let _scope = crate::diagnostics::scope_with(
                 crate::diagnostics::Category::Gpu,
                 "gpu.submit",
@@ -144,7 +160,7 @@ impl Gpu {
                         .bool("diagnostic", diagnostic);
                 },
             );
-            self.queue.submit(Some(command))
+            self.queue.submit(Some(command));
         };
         if !diagnostic
             && crate::background::context().is_some()
@@ -156,11 +172,11 @@ impl Gpu {
                 |fields| {
                     fields
                         .u64("submission", id)
-                        .str("reason", "existing-foreground-gate");
+                        .str("reason", "existing-foreground-gate")
+                        .bool("blocking_poll", false);
                 },
             );
-            self.device
-                .poll(wgpu::Maintain::WaitForSubmissionIndex(submitted));
+            completion::submitted(&self.device, &self.queue).expect("GPU submission completion");
         }
         id
     }
@@ -684,15 +700,15 @@ impl Gpu {
 }
 
 /// Map a submitted staging buffer for CPU reading. The caller unmaps it after use.
-/// Background work yields through its existing priority gate and uses nonblocking
-/// device polls so it cannot hold a device-wide completion wait over new interaction.
+/// Shared nonblocking polling keeps completion waits outside device locks.
+/// Background readback retains its existing priority and interruption policy.
 pub fn map_readback(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<()> {
     let background = crate::background::context().is_some();
     let _wait =
         crate::diagnostics::scope_with(crate::diagnostics::Category::Gpu, "gpu.wait", |fields| {
             fields
                 .str("reason", "readback")
-                .bool("blocking_poll", !background);
+                .bool("blocking_poll", false);
         });
     let (tx, rx) = std::sync::mpsc::channel();
     buffer
@@ -700,23 +716,13 @@ pub fn map_readback(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<()> 
         .map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-    if !background {
-        device.poll(wgpu::Maintain::Wait);
-        rx.recv()??;
-        return Ok(());
-    }
-    loop {
-        crate::background::checkpoint_or_cancel()?;
-        device.poll(wgpu::Maintain::Poll);
-        match rx.recv_timeout(std::time::Duration::from_millis(1)) {
-            Ok(result) => {
-                result?;
-                return Ok(());
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(error) => return Err(error.into()),
+    completion::wait(device, rx, || {
+        if background {
+            crate::background::checkpoint_or_cancel()?;
         }
-    }
+        Ok(())
+    })??;
+    Ok(())
 }
 
 #[cfg(test)]

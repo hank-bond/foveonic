@@ -44,10 +44,12 @@ impl Drop for BackgroundStage<'_> {
                 crate::diagnostics::Category::Gpu,
                 "gpu.wait",
                 |fields| {
-                    fields.str("reason", "background-stage-unwind");
+                    fields
+                        .str("reason", "background-stage-unwind")
+                        .bool("blocking_poll", false);
                 },
             );
-            self.gpu.device.poll(wgpu::Maintain::Wait);
+            let _ = super::completion::submitted(&self.gpu.device, &self.gpu.queue);
             self.complete();
         }
     }

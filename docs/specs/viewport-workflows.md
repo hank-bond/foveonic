@@ -41,6 +41,8 @@ The native loupe latency target is 400 ms from the user's request to usable nati
 
 The coordinator must own sequencing between region and whole-image requests. The engine executes requested processing and owns numerical reuse, alignment and required support. Completion of a region is not itself a request to render the whole image. Region-only rendering is a complete useful outcome. A whole-image continuation is chosen only when current view needs or useful preparation justify it, and must remain subordinate to immediate interaction. Loupe movement must not unconditionally start a whole-image render.
 
+Worker completion waits must park outside the shared GPU device locks so window submission can continue. They must preserve completed-stage, cancellation, publication and resource-retirement boundaries. Completion must cover a finite submitted prefix rather than waiting for a globally idle queue while the UI keeps submitting frames.
+
 UI interaction owns persistent zoom, pan and loupe position. Processing caches do not own viewing state. Layout reordering must not move one photograph's view state onto another photograph.
 
 Native decoded data, reduced processing inputs, regional/full photographic output and display textures have distinct ownership and memory costs. Preparing native detail must use explicit source identity and current edits. Keep the existing memory-accounting and foreground-priority requirements. Preloading is not actual cache use. A new decoded-RAM retention policy requires evidence that it addresses the measured detail latency.
