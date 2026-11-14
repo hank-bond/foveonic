@@ -3,6 +3,8 @@
 use super::worker::Pending;
 use crate::progress::{Reporter, Tracker};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+#[cfg(test)]
+use foveonic::render::ProcessingQuality;
 use foveonic::{decode_cache::Cache, diagnostics as trace, source::Source};
 use std::{
     collections::VecDeque,
@@ -300,7 +302,6 @@ mod tests {
     fn a_shared_load_failure_settles_both_current_and_camera_requests() {
         use crate::{
             editor::Rendition,
-            preferences::PreviewMode,
             rendering::{
                 coordinator::{Cursor, RenderCoordinator},
                 request::Request as RenderRequest,
@@ -334,8 +335,8 @@ mod tests {
                     settings: foveonic::render::Settings::new("Sunlight", "Standard"),
                     framing_preview: false,
                     calibration: None,
-                    preview_quality: PreviewMode::Full,
-                    preview_policy: PreviewMode::Full,
+                    preview_scale: foveonic::render::Scale::NATIVE,
+                    processing_quality: ProcessingQuality::Quality,
                     output: "final".into(),
                     comparison: false,
                     export: None,

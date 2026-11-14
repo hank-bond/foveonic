@@ -1,8 +1,9 @@
 //! Proves a ready photo can be edited and rendered while another source load is held.
 
 use super::{journey::ExposureJourney, scenarios::apply_exposure, App, Smoke};
-use crate::{editor::Rendition, preferences::PreviewMode, rendering::request::Request};
+use crate::{editor::Rendition, rendering::request::Request};
 use eframe::egui;
+use foveonic::render::ProcessingQuality;
 use std::path::PathBuf;
 
 pub(super) struct SourceLoading {
@@ -79,8 +80,8 @@ impl SourceLoading {
                     calibration: app
                         .noise_calibration
                         .selected(app.preferences.noise_profile),
-                    preview_quality: PreviewMode::Full,
-                    preview_policy: PreviewMode::Full,
+                    preview_scale: foveonic::render::Scale::NATIVE,
+                    processing_quality: ProcessingQuality::Quality,
                     export: None,
                 });
                 self.events

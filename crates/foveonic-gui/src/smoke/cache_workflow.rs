@@ -1,7 +1,8 @@
 //! Measures Smart detail viewports while two photos receive shared exposure edits.
 
-use crate::{preferences::PreviewMode, rendering::worker::Frame, App};
+use crate::{rendering::worker::Frame, App};
 use eframe::egui;
+use foveonic::render::ProcessingQuality;
 use std::{path::PathBuf, time::Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -75,7 +76,7 @@ pub(super) struct Driver {
     regional: [bool; 2],
     foreground_ready: bool,
     fit_scales: Option<[u32; 2]>,
-    initial_quality: Option<PreviewMode>,
+    initial_quality: Option<ProcessingQuality>,
     rows: Vec<serde_json::Value>,
 }
 
@@ -345,11 +346,11 @@ impl Driver {
                 self.trace_origin_ns = foveonic::diagnostics::timestamp_at(self.started)
                     .map(|timestamp| timestamp.nanoseconds());
                 self.begin("fit-smart", app);
-                self.initial_quality = Some(app.preferences.preview_quality);
+                self.initial_quality = Some(app.preferences.processing_quality);
                 for path in paths {
                     app.viewports.view_mut(Some(path)).reset();
                 }
-                app.preferences.preview_quality = PreviewMode::Smart;
+                app.preferences.processing_quality = ProcessingQuality::Speed;
                 app.multi_edit.invalidate();
                 app.submit(None);
                 self.step = Step::Fit;
@@ -360,15 +361,14 @@ impl Driver {
                     let frame = app
                         .current_photo_frame(path)
                         .ok_or("missing Smart Fit image")?;
-                    let quality = app.preview_quality_for(path, PreviewMode::Smart);
+                    let preview_scale = app.preview_scale_for(path, ProcessingQuality::Quality);
                     let scale = crate::rendering::request::camera_preview_scale(
-                        quality,
+                        preview_scale,
                         &frame.artifact.metadata,
                     )
                     .map_err(|error| error.to_string())?;
                     demanded_scales[index] = scale.divisor();
                     if !crate::rendering::quality::accepts_scale(
-                        PreviewMode::Smart,
                         scale,
                         frame.artifact.settings.working_scale,
                     ) {
@@ -438,7 +438,7 @@ impl Driver {
                     "elapsed_ms":self.started.elapsed().as_secs_f64()*1000.,
                     "action_elapsed_ms":self.action_started.elapsed().as_secs_f64()*1000.}),
                 );
-                app.preferences.preview_quality =
+                app.preferences.processing_quality =
                     self.initial_quality.ok_or("missing initial quality")?;
                 app.submit(None);
                 self.step = Step::Cleanup;
@@ -453,13 +453,14 @@ impl Driver {
                         return Ok(false);
                     };
                     let scale = crate::rendering::request::camera_preview_scale(
-                        quality,
+                        app.preview_scale_for(path, quality),
                         &frame.artifact.metadata,
                     )
                     .map_err(|error| error.to_string())?;
                     if frame.artifact.settings.exposure != self.model.exposures()[index]
                         || !app.reusable_photograph(path, frame, settings)
-                        || frame.artifact.settings.working_scale != scale
+                        || frame.processing_quality != quality
+                        || frame.artifact.settings.working_scale.divisor() > scale.divisor()
                     {
                         return Ok(false);
                     }

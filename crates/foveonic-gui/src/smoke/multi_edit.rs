@@ -265,8 +265,11 @@ impl App {
             frame.is_some_and(|frame| {
                 expected.is_none_or(|expected| {
                     crate::rendering::matching::same_authored_edits(&frame.requested, expected)
-                }) && foveonic::render::ControlCapabilities::from_metadata(&frame.artifact.metadata)
-                    .is_ok_and(|caps| frame.artifact.settings.working_scale == caps.thumb_scale())
+                }) && frame.processing_quality == self.preferences.processing_quality
+                    && frame.artifact.settings.working_scale.divisor()
+                        <= self
+                            .preview_scale_for(path, self.preferences.processing_quality)
+                            .divisor()
             })
         })
     }

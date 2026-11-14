@@ -4,12 +4,12 @@ use crate::{
     editor::Rendition,
     loupe_tool::{self, Options, Size, Zoom},
     photo_tools,
-    preferences::PreviewMode,
     rendering::{matching, worker},
     viewport_selection::{Gesture, Request},
     App,
 };
 use eframe::egui;
+use foveonic::render::ProcessingQuality;
 use foveonic::render::{BaseResponse, PhotographicMethod, Scale, Settings};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -69,7 +69,7 @@ enum Phase {
 struct Saved {
     active: PathBuf,
     editing: Vec<PathBuf>,
-    quality: PreviewMode,
+    quality: ProcessingQuality,
     limit: usize,
     options: Options,
     organizer: crate::preferences::Organizer,
@@ -233,7 +233,7 @@ impl Driver {
     fn check_main(&self, app: &App) -> Result<(), String> {
         if app.selected != self.expected_active
             || app.edit_selection.paths() != self.expected_editing
-            || app.preferences.preview_quality != PreviewMode::Thumb
+            || app.preferences.processing_quality != ProcessingQuality::Speed
         {
             return Err(
                 "held loupe changed active photo, editing selection or explicit Thumb".into(),
@@ -415,14 +415,14 @@ impl Driver {
                 self.saved = Some(Saved {
                     active,
                     editing: app.edit_selection.paths().to_vec(),
-                    quality: app.preferences.preview_quality,
+                    quality: app.preferences.processing_quality,
                     limit: app.preferences.multi_edit_limit,
                     options: app.preferences.loupe,
                     organizer: app.preferences.organizer,
                     settings,
                 });
                 self.target = Some(target.clone());
-                app.preferences.preview_quality = PreviewMode::Thumb;
+                app.preferences.processing_quality = ProcessingQuality::Speed;
                 app.preferences.loupe = Options {
                     size: Size::Small,
                     zoom: Zoom::Percent200,
@@ -931,7 +931,7 @@ impl Driver {
                     self.restore_browser(app);
                 } else {
                     self.hold_next(app);
-                    app.preferences.preview_quality = PreviewMode::Smart;
+                    app.preferences.processing_quality = ProcessingQuality::Speed;
                     photo_tools::pointer(ctx);
                     let view = app.viewports.view_mut(Some(self.target()));
                     let current = view
@@ -990,7 +990,7 @@ impl Driver {
                 }
                 self.events.push(json!({"observed":"zoom movement retained overview and native section while replacement held", "overview":overview,"detail":first.image,"region":first.region,"required":required}));
                 self.release();
-                app.preferences.preview_quality = PreviewMode::Thumb;
+                app.preferences.processing_quality = ProcessingQuality::Speed;
                 app.viewports.view_mut(Some(self.target())).reset();
                 app.submit_photos();
                 self.phase = Phase::ZoomReleased;
@@ -1068,7 +1068,7 @@ impl Driver {
             app.sidecars.apply(path.clone(), settings.clone());
             app.multi_edit.observe_requested(path, settings);
         }
-        app.preferences.preview_quality = saved.quality;
+        app.preferences.processing_quality = saved.quality;
         app.preferences.multi_edit_limit = saved.limit;
         app.preferences.loupe = saved.options;
         app.preferences.organizer = saved.organizer;
@@ -1095,10 +1095,11 @@ fn thumb_ready(app: &App, path: &Path) -> bool {
                 &frame.requested,
                 &app.preferences.render_settings(settings),
             )
-        }) && foveonic::render::ControlCapabilities::from_metadata(&frame.artifact.metadata)
-            .is_ok_and(|capabilities| {
-                frame.artifact.settings.working_scale == capabilities.thumb_scale()
-            })
+        }) && frame.processing_quality == app.preferences.processing_quality
+            && frame.artifact.settings.working_scale.divisor()
+                <= app
+                    .preview_scale_for(path, app.preferences.processing_quality)
+                    .divisor()
     })
 }
 fn image_id(frame: &worker::Frame) -> ImageId {

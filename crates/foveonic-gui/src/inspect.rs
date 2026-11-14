@@ -1,10 +1,10 @@
-//! Groups viewport background, preview quality, pipeline views, and display-only comparisons.
+//! Groups viewport background, processing quality, pipeline views, and display-only comparisons.
 
 use crate::{help, sections, widgets};
 use eframe::egui;
 use foveonic::{
     inspection::{self, Channels},
-    render::Settings,
+    render::{ProcessingQuality, Settings},
     source::{Metadata, ProcessingFamily},
 };
 
@@ -310,23 +310,19 @@ impl Comparison {
 }
 
 /// Preview quality is a workspace choice, independent of photo edits and export.
-pub fn preview_quality(
+pub fn processing_quality(
     ui: &mut egui::Ui,
     enabled: bool,
-    selected: &mut crate::preferences::PreviewMode,
+    selected: &mut ProcessingQuality,
 ) -> bool {
-    use crate::preferences::PreviewMode;
     let mut changed = false;
-    let explanation = "Fast uses half the sensor width and height. Draft uses one quarter. Thumb uses one eighth on Merrill and Quattro, and one quarter on Classic. Smart chooses a resolution for each photo's displayed pixel size, allowing up to 1.5× enlargement before choosing a higher resolution. Explicit modes keep their resolution when zooming. Every mode runs the selected processing controls; exports use Full.";
+    let explanation = "Quality preserves the selected processing controls at the displayed resolution. Speed uses faster processing for interactive work. Both adapt resolution to each photo's displayed pixel size. The loupe always shows native detail. Exports use Quality.";
     widgets::button_group(ui, |ui| {
         widgets::centered_control_row(ui, |ui| {
             ui.label("Preview");
             for (quality, label) in [
-                (PreviewMode::Full, "Full"),
-                (PreviewMode::Fast, "Fast"),
-                (PreviewMode::Smart, "Smart"),
-                (PreviewMode::Draft, "Draft"),
-                (PreviewMode::Thumb, "Thumb"),
+                (ProcessingQuality::Quality, "Quality"),
+                (ProcessingQuality::Speed, "Speed"),
             ] {
                 let response = ui
                     .add_enabled_ui(enabled, |ui| {

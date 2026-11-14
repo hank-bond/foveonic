@@ -385,7 +385,7 @@ fn fresh_merrill_capture_defaults_enable_noise_before_rendering() {
 
 #[test]
 #[ignore = "requires MERRILL_X3F"]
-fn merrill_preview_quality_does_not_save_defaults_or_reenable_saved_off() {
+fn merrill_preview_scale_does_not_save_defaults_or_reenable_saved_off() {
     let directory = Directory::new();
     let path = directory.input("merrill.x3f");
     fs::hard_link(std::env::var_os("MERRILL_X3F").unwrap(), &path).unwrap();

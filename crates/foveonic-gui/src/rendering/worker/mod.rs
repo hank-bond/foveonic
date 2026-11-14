@@ -22,7 +22,7 @@ use foveonic::{
     image::{ImageTexture, RenderedImage},
     inspection::{Artifact, Content},
     profile::Profile,
-    render::{Engine, RenderSession, Scale, SessionUse, Settings},
+    render::{Engine, ProcessingQuality, RenderSession, Scale, SessionUse, Settings},
     source::Metadata,
 };
 use std::{
@@ -47,11 +47,10 @@ struct Checks {
     yielded: (Mutex<Vec<super::coordinator::Stamp>>, Condvar),
 }
 #[cfg(test)]
-use crate::preferences::PreviewMode;
-#[cfg(test)]
 thread_local! { static CHECKS: std::cell::RefCell<Option<Arc<Checks>>> = const { std::cell::RefCell::new(None) }; }
 
 pub struct Frame {
+    pub processing_quality: ProcessingQuality,
     pub detail: bool,
     pub diagnostic_task: crate::timing::DeliveredTask,
     pub origin: foveonic::source::SourceOrigin,
@@ -75,6 +74,7 @@ impl Frame {
     pub fn can_overlay(&self, base: &Self) -> bool {
         self.path == base.path
             && self.origin == base.origin
+            && self.processing_quality == base.processing_quality
             && self.output == base.output
             && self.rendition == base.rendition
             && self.calibration_signature == base.calibration_signature
@@ -192,12 +192,9 @@ impl Frame {
         }
     }
     pub fn quality_label(&self) -> String {
-        match self.artifact.settings.working_scale.divisor() {
-            1 => "Full".into(),
-            2 => "Fast".into(),
-            4 => "Draft".into(),
-            8 => "Thumb".into(),
-            divisor => format!("1/{divisor}"),
+        match self.processing_quality {
+            ProcessingQuality::Quality => "Quality".into(),
+            ProcessingQuality::Speed => "Speed".into(),
         }
     }
     /// Keep the output visible until its matching input is ready.
@@ -641,7 +638,7 @@ impl Worker {
                         else { photos.native(&request.path).unwrap().source().origin().clone() };
                     defaults_errors = resolve_camera_settings(&mut settings, metadata.as_ref().unwrap());
                     if let Some(composed) = &composed {
-                        settings.working_scale = composed.quality;
+                        settings.working_scale = composed.working_scale;
                         settings.preview_region = None;
                     } else {
                         request.apply_preview(&mut settings, metadata.as_ref().unwrap())?;
@@ -792,7 +789,8 @@ impl Worker {
                         native_extent,
                         calibration_signature: request.calibration.as_ref().map(|p| p.signature().to_owned()),
                         rendition: request.rendition,
-                        requested: request.settings.clone(),
+                        processing_quality: artifact.settings.processing_quality,
+                        requested: { let mut requested = request.settings.clone(); requested.processing_quality = artifact.settings.processing_quality; requested },
                         path: request.path.clone(),
                         output: request.output.clone(),
                         artifact,
@@ -1290,6 +1288,7 @@ fn analyze_scopes(
 
 #[cfg(test)]
 mod tests {
+    use foveonic::render::{ProcessingQuality, Scale};
     pub(super) struct TestWorker {
         worker: super::Worker,
         requests: std::cell::RefCell<Vec<super::Request>>,
@@ -1309,6 +1308,14 @@ mod tests {
         }
         fn publish_view(&self, active: &super::Request) {
             self.worker.set_view(crate::rendering::delivery::ViewState {
+                processing_quality: if active.output == "final"
+                    && !active.comparison
+                    && active.export.is_none()
+                {
+                    active.processing_quality
+                } else {
+                    ProcessingQuality::Quality
+                },
                 active: Some(active.path.clone()),
                 rendition: active.rendition,
                 output: active.output.clone(),
@@ -1429,8 +1436,8 @@ mod tests {
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
-                preview_quality: crate::preferences::PreviewMode::Full,
-                preview_policy: crate::preferences::PreviewMode::Full,
+                preview_scale: Scale::NATIVE,
+                processing_quality: ProcessingQuality::Quality,
                 revision: index as u64 + 1,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -1495,8 +1502,8 @@ mod tests {
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
-                preview_quality: crate::preferences::PreviewMode::Full,
-                preview_policy: crate::preferences::PreviewMode::Full,
+                preview_scale: Scale::NATIVE,
+                processing_quality: ProcessingQuality::Quality,
                 revision,
                 path: path.clone(),
                 settings: foveonic::render::Settings::new("", ""),
@@ -1525,8 +1532,8 @@ mod tests {
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
-            preview_quality: crate::preferences::PreviewMode::Full,
-            preview_policy: crate::preferences::PreviewMode::Full,
+            preview_scale: Scale::NATIVE,
+            processing_quality: ProcessingQuality::Quality,
             revision: 21,
             path: path.clone(),
             settings: foveonic::render::Settings::new("", ""),
@@ -1549,8 +1556,8 @@ mod tests {
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
-            preview_quality: crate::preferences::PreviewMode::Full,
-            preview_policy: crate::preferences::PreviewMode::Full,
+            preview_scale: Scale::NATIVE,
+            processing_quality: ProcessingQuality::Quality,
             revision: 22,
             path,
             settings: foveonic::render::Settings::new("", ""),
@@ -1599,8 +1606,8 @@ mod tests {
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
-                preview_quality: crate::preferences::PreviewMode::Full,
-                preview_policy: crate::preferences::PreviewMode::Full,
+                preview_scale: Scale::NATIVE,
+                processing_quality: ProcessingQuality::Quality,
                 revision,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -1636,8 +1643,8 @@ mod tests {
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
-            preview_quality: crate::preferences::PreviewMode::Full,
-            preview_policy: crate::preferences::PreviewMode::Full,
+            preview_scale: Scale::NATIVE,
+            processing_quality: ProcessingQuality::Quality,
             revision: 9,
             path: path.clone(),
             settings: settings.clone(),
@@ -1658,8 +1665,8 @@ mod tests {
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
-                preview_quality: crate::preferences::PreviewMode::Full,
-                preview_policy: crate::preferences::PreviewMode::Full,
+                preview_scale: Scale::NATIVE,
+                processing_quality: ProcessingQuality::Quality,
                 revision,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -1786,8 +1793,8 @@ mod tests {
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
-                preview_quality: crate::preferences::PreviewMode::Full,
-                preview_policy: crate::preferences::PreviewMode::Full,
+                preview_scale: Scale::NATIVE,
+                processing_quality: ProcessingQuality::Quality,
                 revision,
                 path: path.clone(),
                 settings: settings.clone(),
@@ -1883,8 +1890,8 @@ mod tests {
                     framing_preview: false,
                     calibration: None,
                     rendition: Default::default(),
-                    preview_quality: crate::preferences::PreviewMode::Full,
-                    preview_policy: crate::preferences::PreviewMode::Full,
+                    preview_scale: Scale::NATIVE,
+                    processing_quality: ProcessingQuality::Quality,
                     revision,
                     path: path.clone(),
                     settings,
@@ -2015,8 +2022,8 @@ mod tests {
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
-            preview_quality: crate::preferences::PreviewMode::Full,
-            preview_policy: crate::preferences::PreviewMode::Full,
+            preview_scale: Scale::NATIVE,
+            processing_quality: ProcessingQuality::Quality,
             revision: 1,
             path,
             settings: foveonic::render::Settings::new("Sunlight", "Standard"),
@@ -2065,7 +2072,7 @@ mod tests {
     #[test]
     #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with blue-parking-sign.x3f"]
     fn detail_layers_keep_only_the_latest_section_and_preserve_compatible_overviews() {
-        use crate::{editor::Rendition, memory::Inventory, preferences::PreviewMode};
+        use crate::{editor::Rendition, memory::Inventory};
         let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
         let path = root.join("blue-parking-sign.x3f");
         let context = eframe::egui::Context::default();
@@ -2081,8 +2088,8 @@ mod tests {
             worker.submit(super::Request {
                 revision,
                 settings,
-                preview_quality: quality,
-                preview_policy: PreviewMode::Smart,
+                preview_scale: quality,
+                processing_quality: ProcessingQuality::Quality,
                 detail: region.is_some(),
                 framing_preview: false,
                 calibration: None,
@@ -2094,14 +2101,14 @@ mod tests {
             });
             receive(&worker).result.unwrap().unwrap()
         };
-        photos.retain(render(1, PreviewMode::Thumb, None, 0.));
-        let first = render(2, PreviewMode::Full, Some([100, 100, 512, 512]), 0.);
+        photos.retain(render(1, Scale::new(8).unwrap(), None, 0.));
+        let first = render(2, Scale::NATIVE, Some([100, 100, 512, 512]), 0.);
         let old_texture = first.texture.clone();
         photos.retain(first);
         // Change quality to produce a real later overview. An identical settled
         // request is correctly coalesced without another delivery.
-        photos.retain(render(3, PreviewMode::Draft, None, 0.));
-        let mut refresh = render(4, PreviewMode::Thumb, None, 0.);
+        photos.retain(render(3, Scale::new(4).unwrap(), None, 0.));
+        let mut refresh = render(4, Scale::new(8).unwrap(), None, 0.);
         let detail = photos.detail(&path).unwrap();
         assert!(detail.can_overlay(&refresh));
         assert!(!refresh.supersedes_detail(detail));
@@ -2122,18 +2129,18 @@ mod tests {
         photos.retain(refresh);
         assert_eq!(photos.detail(&path).unwrap().content_revision(), 2);
 
-        photos.retain(render(5, PreviewMode::Full, Some([400, 400, 812, 812]), 0.));
+        photos.retain(render(5, Scale::NATIVE, Some([400, 400, 812, 812]), 0.));
         assert_eq!(photos.detail(&path).unwrap().content_revision(), 5);
         let mut inventory = Inventory::default();
         photos.memory_resources(&mut inventory);
         assert!(!inventory.contains_image_texture(&old_texture));
-        photos.retain(render(6, PreviewMode::Full, None, 0.));
+        photos.retain(render(6, Scale::NATIVE, None, 0.));
         assert!(
             photos.detail(&path).is_none(),
             "complete native overview replaces the section"
         );
-        photos.retain(render(7, PreviewMode::Full, Some([100, 100, 512, 512]), 0.));
-        photos.retain(render(8, PreviewMode::Thumb, None, 0.5));
+        photos.retain(render(7, Scale::NATIVE, Some([100, 100, 512, 512]), 0.));
+        photos.retain(render(8, Scale::new(8).unwrap(), None, 0.5));
         assert!(
             photos.detail(&path).is_none(),
             "newer edits must replace old detail"
@@ -2143,7 +2150,6 @@ mod tests {
     #[test]
     #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
     fn mixed_native_and_reduced_edits_preserve_warm_native_work() {
-        use crate::preferences::PreviewMode;
         use foveonic::{inspection::Content, render::Settings};
         use std::sync::atomic::Ordering;
         let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
@@ -2158,7 +2164,7 @@ mod tests {
         let mut full = Settings::new("Sunlight", "Standard");
         let mut thumb = full.clone();
         thumb.reconstruction = Some(Default::default());
-        let render = |revision, index: usize, quality: PreviewMode, settings: &Settings| {
+        let render = |revision, index: usize, quality: Scale, settings: &Settings| {
             worker.submit(super::Request {
                 detail: false,
                 path: paths[index].clone(),
@@ -2167,8 +2173,8 @@ mod tests {
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
-                preview_quality: quality,
-                preview_policy: PreviewMode::Smart,
+                preview_scale: quality,
+                processing_quality: ProcessingQuality::Quality,
                 output: "final".into(),
                 comparison: false,
                 export: None,
@@ -2179,20 +2185,20 @@ mod tests {
             assert_eq!(frame.path, paths[index]);
             assert_eq!(
                 frame.artifact.settings.working_scale.divisor(),
-                quality.working_scale().divisor()
+                quality.divisor()
             );
             frame
         };
-        render(1, 0, PreviewMode::Full, &full);
+        render(1, 0, Scale::NATIVE, &full);
         full.exposure = 0.125;
-        render(2, 0, PreviewMode::Full, &full);
+        render(2, 0, Scale::NATIVE, &full);
         let warm_dispatches = worker.checks.recipes.lock().unwrap().last().unwrap().1;
         assert!(warm_dispatches > 0);
-        render(3, 1, PreviewMode::Thumb, &thumb); // Cold reduced acquisition.
+        render(3, 1, Scale::new(8).unwrap(), &thumb); // Cold reduced acquisition.
         assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 2);
         for round in 0..3 {
             full.exposure += 0.125;
-            render(4 + round * 2, 0, PreviewMode::Full, &full);
+            render(4 + round * 2, 0, Scale::NATIVE, &full);
             assert_eq!(
                 worker.checks.source_loads.load(Ordering::Relaxed),
                 2,
@@ -2204,14 +2210,14 @@ mod tests {
                 "mixed edits must retain the native photograph's warm graph checkpoints"
             );
             thumb.exposure += 0.125;
-            render(5 + round * 2, 1, PreviewMode::Thumb, &thumb); // Cached reduced edits.
+            render(5 + round * 2, 1, Scale::new(8).unwrap(), &thumb); // Cached reduced edits.
             assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 2);
         }
         // A finer reduced grid recovers its own original, retaining the other photo.
-        let reduced_frame = render(10, 1, PreviewMode::Draft, &thumb);
+        let reduced_frame = render(10, 1, Scale::new(4).unwrap(), &thumb);
         assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 3);
         full.exposure += 0.125;
-        let native_frame = render(11, 0, PreviewMode::Full, &full);
+        let native_frame = render(11, 0, Scale::NATIVE, &full);
         assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 3);
         assert_eq!(
             worker.checks.recipes.lock().unwrap().last().unwrap().1,
@@ -2237,7 +2243,7 @@ mod tests {
             };
             let captured = captures.path().join(format!("{}.f32", frame.revision));
             worker
-                .capture_image((**actual).clone(), captured.clone())
+                .capture_image(actual.as_ref().clone(), captured.clone())
                 .recv_timeout(std::time::Duration::from_secs(20))
                 .unwrap()
                 .unwrap();
@@ -2257,10 +2263,7 @@ mod tests {
             root.join("blue-parking-sign.x3f"),
             root.join("merrill-hazy-coast.x3f"),
         ];
-        for quality in [
-            crate::preferences::PreviewMode::Thumb,
-            crate::preferences::PreviewMode::Full,
-        ] {
+        for quality in [Scale::new(8).unwrap(), Scale::NATIVE] {
             let worker = TestWorker::new(
                 foveonic::render::Engine::new().unwrap(),
                 eframe::egui::Context::default(),
@@ -2276,8 +2279,8 @@ mod tests {
                 revision,
                 path: paths[index].clone(),
                 settings: settings.clone(),
-                preview_quality: quality,
-                preview_policy: quality,
+                preview_scale: quality,
+                processing_quality: ProcessingQuality::Quality,
                 output: "final".into(),
                 comparison: false,
                 export: None,
@@ -2289,10 +2292,7 @@ mod tests {
                 assert_eq!(reply.revision, round as u64 + 1);
                 let frame = reply.result.unwrap().unwrap();
                 assert_eq!(frame.path, paths[index]);
-                assert_eq!(
-                    frame.artifact.settings.working_scale,
-                    quality.working_scale()
-                );
+                assert_eq!(frame.artifact.settings.working_scale, quality);
                 assert_eq!(
                     worker.checks.source_loads.load(Ordering::Relaxed),
                     [1, 2, 2][round]
@@ -2314,7 +2314,7 @@ mod tests {
     #[test]
     #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
     fn shared_source_consumption_resumes_current_before_and_pick() {
-        use crate::{editor::Rendition, preferences::PreviewMode};
+        use crate::editor::Rendition;
         use std::sync::atomic::Ordering;
         let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f");
@@ -2331,21 +2331,21 @@ mod tests {
             settings: settings.clone(),
             framing_preview: false,
             calibration: None,
-            preview_quality: quality,
-            preview_policy: quality,
+            preview_scale: quality,
+            processing_quality: ProcessingQuality::Quality,
             output: "final".into(),
             comparison: false,
             export: None,
         };
-        worker.submit(request(1, Rendition::Current, PreviewMode::Thumb));
+        worker.submit(request(1, Rendition::Current, Scale::new(8).unwrap()));
         assert!(receive(&worker).result.unwrap().is_some());
         worker.checks.deferred.0.lock().unwrap().clear();
         let hold = worker.hold_source(path.clone());
-        worker.submit(request(2, Rendition::Current, PreviewMode::Full));
+        worker.submit(request(2, Rendition::Current, Scale::NATIVE));
         hold.reached
             .recv_timeout(std::time::Duration::from_secs(20))
             .unwrap();
-        worker.submit(request(3, Rendition::Camera, PreviewMode::Full));
+        worker.submit(request(3, Rendition::Camera, Scale::NATIVE));
         let (lock, wake) = &worker.checks.deferred;
         let (deferred, timeout) = wake
             .wait_timeout_while(
@@ -2413,7 +2413,6 @@ mod tests {
     fn refinement_continues_without_ui_receipt_and_keeps_regional_admission() {
         use crate::{
             editor::Rendition,
-            preferences::PreviewMode,
             rendering::{delivery, request::Refinement},
         };
         use std::time::{Duration, Instant};
@@ -2448,8 +2447,8 @@ mod tests {
                 framing_preview: false,
                 calibration: None,
                 export: None,
-                preview_quality: PreviewMode::Full,
-                preview_policy: PreviewMode::Smart,
+                preview_scale: Scale::NATIVE,
+                processing_quality: ProcessingQuality::Quality,
             };
             let whole = continuation.then(|| {
                 let mut whole = first.clone();
@@ -2481,6 +2480,7 @@ mod tests {
                 Some(delivery::Destination::Active)
             );
             let view = delivery::ViewState {
+                processing_quality: first.processing_quality,
                 active: Some(path.clone()),
                 rendition,
                 output: "final".into(),
@@ -2522,7 +2522,7 @@ mod tests {
     #[test]
     #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
     fn speculative_whole_yields_to_new_foreground_then_completes() {
-        use crate::{editor::Rendition, preferences::PreviewMode, rendering::request::Refinement};
+        use crate::{editor::Rendition, rendering::request::Refinement};
         use std::time::{Duration, Instant};
         let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
         let paths = [
@@ -2543,8 +2543,8 @@ mod tests {
             revision: 1,
             path: paths[0].clone(),
             settings,
-            preview_quality: PreviewMode::Full,
-            preview_policy: PreviewMode::Smart,
+            preview_scale: Scale::NATIVE,
+            processing_quality: ProcessingQuality::Quality,
             output: "final".into(),
             comparison: false,
             export: None,
@@ -2576,7 +2576,7 @@ mod tests {
         let mut foreground = whole.clone();
         foreground.path = paths[1].clone();
         foreground.revision = 3;
-        foreground.preview_quality = PreviewMode::Thumb;
+        foreground.preview_scale = Scale::new(8).unwrap();
         *worker.requests.borrow_mut() = vec![first.clone(), foreground.clone()];
         worker.publish_view(&foreground);
         worker.worker.submit(foreground);
@@ -2650,8 +2650,8 @@ mod tests {
                         revision,
                         path: path.clone(),
                         settings,
-                        preview_quality: crate::preferences::PreviewMode::Thumb,
-                        preview_policy: crate::preferences::PreviewMode::Thumb,
+                        preview_scale: Scale::new(8).unwrap(),
+                        processing_quality: ProcessingQuality::Quality,
                         output: "final".into(),
                         comparison: false,
                         export: None,
@@ -2691,7 +2691,6 @@ mod tests {
         use crate::{
             editor::{Before, Rendition},
             memory::Inventory,
-            preferences::PreviewMode,
             rendering::{delivery::Destination, request::Refinement},
         };
         use std::time::{Duration, Instant};
@@ -2722,8 +2721,8 @@ mod tests {
                     framing_preview: false,
                     calibration: None,
                     rendition: Rendition::Current,
-                    preview_quality: PreviewMode::Thumb,
-                    preview_policy: PreviewMode::Smart,
+                    preview_scale: Scale::new(8).unwrap(),
+                    processing_quality: ProcessingQuality::Quality,
                     output: "final".into(),
                     comparison: false,
                     export: None,
@@ -2740,7 +2739,7 @@ mod tests {
             .map(|(index, request)| {
                 let mut first = request.clone();
                 first.revision = 10 + index as u64 * 10;
-                first.preview_quality = PreviewMode::Full;
+                first.preview_scale = Scale::NATIVE;
                 first.settings.exposure += 0.125;
                 first.detail = true;
                 first.settings.preview_region = Some([100, 100, 512, 512]);
@@ -2839,7 +2838,7 @@ mod tests {
         let base_order = photos.frame(&paths[1]).unwrap().content_revision();
         let mut adaptive = intents[1].first.clone();
         adaptive.revision = 40;
-        adaptive.preview_policy = PreviewMode::Thumb;
+        adaptive.processing_quality = ProcessingQuality::Quality;
         adaptive.settings.photographic.tone_method =
             foveonic::render::PhotographicMethod::Universal;
         adaptive.settings.photographic.base_response = foveonic::render::BaseResponse::Natural;
@@ -2896,8 +2895,8 @@ mod tests {
                         revision,
                         path: path.clone(),
                         settings,
-                        preview_quality: crate::preferences::PreviewMode::Thumb,
-                        preview_policy: crate::preferences::PreviewMode::Thumb,
+                        preview_scale: Scale::new(8).unwrap(),
+                        processing_quality: ProcessingQuality::Quality,
                         output: "final".into(),
                         comparison: false,
                         export: None,
@@ -2999,10 +2998,10 @@ mod preview_tests {
             }
         };
         for (index, (mode, format)) in [
-            (PreviewMode::Fast, ExportFormat::Tiff),
-            (PreviewMode::Fast, ExportFormat::Dng),
-            (PreviewMode::Smart, ExportFormat::Tiff),
-            (PreviewMode::Smart, ExportFormat::Dng),
+            (ProcessingQuality::Quality, ExportFormat::Tiff),
+            (ProcessingQuality::Quality, ExportFormat::Dng),
+            (ProcessingQuality::Speed, ExportFormat::Tiff),
+            (ProcessingQuality::Speed, ExportFormat::Dng),
         ]
         .into_iter()
         .enumerate()
@@ -3020,8 +3019,8 @@ mod preview_tests {
                 revision: index as u64 + 1,
                 path: path.clone(),
                 settings: export_settings,
-                preview_quality: mode,
-                preview_policy: mode,
+                preview_scale: Scale::new(2).unwrap(),
+                processing_quality: mode,
                 output: "sensor.rgb".into(),
                 comparison: false,
                 export: Some(Export {
@@ -3036,6 +3035,11 @@ mod preview_tests {
             let exported = receive();
             assert!(exported.result.unwrap().is_none());
             assert_eq!(exported.exported.map(|e| e.format), Some(format));
+            assert_eq!(
+                exported.settings.processing_quality,
+                ProcessingQuality::Quality
+            );
+            assert_eq!(exported.settings.working_scale, Scale::NATIVE);
             assert_eq!(
                 exported.settings.tiff_color_space,
                 Some(foveonic::render::TiffColorSpace::ProPhotoRgb)
@@ -3054,8 +3058,8 @@ mod preview_tests {
             revision: 5,
             path,
             settings,
-            preview_quality: crate::preferences::PreviewMode::Fast,
-            preview_policy: crate::preferences::PreviewMode::Fast,
+            preview_scale: Scale::new(2).unwrap(),
+            processing_quality: ProcessingQuality::Quality,
             output: "final".into(),
             comparison: false,
             export: None,
@@ -3099,8 +3103,8 @@ mod color_pick_tests {
             revision: 1,
             path: path.clone(),
             settings: settings.clone(),
-            preview_quality: PreviewMode::Full,
-            preview_policy: PreviewMode::Full,
+            preview_scale: Scale::NATIVE,
+            processing_quality: ProcessingQuality::Quality,
             output: "final".into(),
             comparison: false,
             export: None,

@@ -5,9 +5,9 @@ use crate::rendering::request::Request;
 use crate::{
     editor::Rendition,
     export::resolve_camera_settings,
-    preferences::PreviewMode,
     rendering::matching::{same_calibration_snapshot, same_pixel_settings},
 };
+use foveonic::render::ProcessingQuality;
 use foveonic::{
     decode_cache::Cache as DecodeCache,
     image::{ImageTexture, RenderedImage},
@@ -51,7 +51,7 @@ struct Whole {
     rendition: Rendition,
     comparison: bool,
     calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
-    policy: PreviewMode,
+    policy: ProcessingQuality,
     settings: Settings,
     framing: bool,
     identity: SourceOrigin,
@@ -78,7 +78,7 @@ impl Snapshot {
             rendition: frame.rendition,
             comparison: false,
             calibration: request.calibration.clone(),
-            policy: request.preview_policy,
+            policy: request.processing_quality,
             settings: frame.artifact.settings.clone(),
             framing: frame.framing_preview,
             identity: frame.origin.clone(),
@@ -109,7 +109,7 @@ pub(super) struct Presentation {
 pub(super) struct Prepared {
     pub metadata: Arc<Metadata>,
     pub origin: SourceOrigin,
-    pub quality: Scale,
+    pub working_scale: Scale,
     pub artifacts: Vec<Artifact>,
     pub display: Option<Display>,
 }
@@ -170,7 +170,7 @@ impl Presentation {
             && whole.root == request.output
             && whole.rendition == request.rendition
             && whole.comparison == request.comparison
-            && whole.policy == request.preview_policy
+            && whole.policy == request.processing_quality
             && same_calibration_snapshot(&whole.calibration, &request.calibration)
             && ((whole.framing && request.framing_preview)
                 || whole.framing != request.framing_preview
@@ -189,7 +189,7 @@ impl Presentation {
             || whole.root != request.output
             || whole.rendition != request.rendition
             || whole.comparison != request.comparison
-            || whole.policy != request.preview_policy
+            || whole.policy != request.processing_quality
             || !same_calibration_snapshot(&whole.calibration, &request.calibration)
         {
             return Ok(None);
@@ -231,7 +231,7 @@ impl Presentation {
         Ok(Some(Prepared {
             metadata: whole.images[0].metadata.clone(),
             origin: whole.identity.clone(),
-            quality: whole.images[0].image.settings().working_scale,
+            working_scale: whole.images[0].image.settings().working_scale,
             artifacts: whole
                 .images
                 .iter()
@@ -281,7 +281,7 @@ impl Presentation {
             rendition: request.rendition,
             comparison: request.comparison,
             calibration: request.calibration.clone(),
-            policy: request.preview_policy,
+            policy: request.processing_quality,
             settings: settings.clone(),
             framing: request.framing_preview,
             identity: origin.clone(),
@@ -317,17 +317,20 @@ mod tests {
     fn request(
         path: &std::path::Path,
         revision: u64,
-        pass: PreviewMode,
-        policy: PreviewMode,
+        pass: Scale,
+        policy: ProcessingQuality,
         settings: &Settings,
         framing: bool,
     ) -> Request {
         Request {
             path: path.to_owned(),
             revision,
-            settings: settings.clone(),
-            preview_quality: pass,
-            preview_policy: policy,
+            settings: Settings {
+                processing_quality: policy,
+                ..settings.clone()
+            },
+            preview_scale: pass,
+            processing_quality: policy,
             detail: settings.preview_region.is_some(),
             framing_preview: framing,
             calibration: None,
@@ -400,6 +403,7 @@ mod tests {
     fn matches_fresh(engine: &Engine, frame: &Frame, path: &std::path::Path, settings: &Settings) {
         let mut settings = settings.clone();
         settings.working_scale = frame.artifact.settings.working_scale;
+        settings.processing_quality = frame.processing_quality;
         settings.preview_region = None;
         let fresh = engine
             .render(
@@ -428,10 +432,10 @@ mod tests {
         let worker = Worker::new(engine, egui::Context::default());
         let settings = Settings::new("Sunlight", "Standard");
         for (index, quality) in [
-            PreviewMode::Thumb,
-            PreviewMode::Draft,
-            PreviewMode::Fast,
-            PreviewMode::Full,
+            Scale::new(8).unwrap(),
+            Scale::new(4).unwrap(),
+            Scale::new(2).unwrap(),
+            Scale::NATIVE,
         ]
         .into_iter()
         .enumerate()
@@ -441,15 +445,12 @@ mod tests {
                 &path,
                 revision,
                 quality,
-                PreviewMode::Smart,
+                ProcessingQuality::Quality,
                 &settings,
                 false,
             ));
             let frame = receive(&worker, revision);
-            assert_eq!(
-                frame.artifact.settings.working_scale,
-                quality.working_scale()
-            );
+            assert_eq!(frame.artifact.settings.working_scale, quality);
             assert!(dispatches(&worker, revision) > 0);
             matches_fresh(&verifier, &frame, &path, &settings);
         }
@@ -465,8 +466,8 @@ mod tests {
         worker.submit(request(
             &path,
             1,
-            PreviewMode::Thumb,
-            PreviewMode::Thumb,
+            Scale::new(8).unwrap(),
+            ProcessingQuality::Speed,
             &settings,
             false,
         ));
@@ -477,8 +478,8 @@ mod tests {
         let mut detail = request(
             &path,
             2,
-            PreviewMode::Full,
-            PreviewMode::Thumb,
+            Scale::NATIVE,
+            ProcessingQuality::Speed,
             &settings,
             false,
         );
@@ -494,17 +495,14 @@ mod tests {
         worker.submit(request(
             &path,
             3,
-            PreviewMode::Thumb,
-            PreviewMode::Thumb,
+            Scale::new(8).unwrap(),
+            ProcessingQuality::Speed,
             &settings,
             false,
         ));
         let main = receive(&worker, 3);
         assert!(!main.detail);
-        assert_eq!(
-            main.artifact.settings.working_scale,
-            PreviewMode::Thumb.working_scale()
-        );
+        assert_eq!(main.artifact.settings.working_scale, Scale::new(8).unwrap());
         matches_fresh(&verifier, &main, &path, &settings);
     }
 
@@ -512,46 +510,43 @@ mod tests {
     #[ignore = "requires GPU and MERRILL_X3F"]
     fn crop_and_rotate_reuse_thumb_smart_fit_and_smart_full_without_numerical_dispatches() {
         let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
-        for policy in [PreviewMode::Thumb, PreviewMode::Smart] {
+        for policy in [ProcessingQuality::Speed, ProcessingQuality::Quality] {
             let engine = Engine::new().unwrap();
             let verifier = engine.executor();
             let worker = Worker::new(engine, egui::Context::default());
             let mut settings = Settings::new("Sunlight", "Standard");
             settings.reconstruction = Some(Default::default());
-            worker.submit(request(&path, 1, policy, policy, &settings, false));
+            worker.submit(request(
+                &path,
+                1,
+                if policy == ProcessingQuality::Speed {
+                    Scale::new(8).unwrap()
+                } else {
+                    Scale::new(2).unwrap()
+                },
+                policy,
+                &settings,
+                false,
+            ));
             let base = receive(&worker, 1);
             let quality = base.artifact.settings.working_scale;
             assert_eq!(
                 quality,
-                if policy == PreviewMode::Thumb {
+                if policy == ProcessingQuality::Speed {
                     Scale::new(8).unwrap()
                 } else {
                     Scale::new(2).unwrap()
                 }
             );
             let loads = worker.checks.source_loads.load(Ordering::Relaxed);
-            if policy == PreviewMode::Smart {
+            if policy == ProcessingQuality::Quality {
                 let mut region = settings.clone();
                 region.preview_region = Some([100, 100, 400, 500]);
-                worker.submit(request(
-                    &path,
-                    2,
-                    PreviewMode::Smart,
-                    policy,
-                    &region,
-                    false,
-                ));
+                worker.submit(request(&path, 2, Scale::NATIVE, policy, &region, false));
                 let tile = receive(&worker, 2);
                 assert!(tile.artifact.settings.preview_region.is_some());
             }
-            worker.submit(request(
-                &path,
-                3,
-                PreviewMode::Full,
-                policy,
-                &settings,
-                true,
-            ));
+            worker.submit(request(&path, 3, Scale::NATIVE, policy, &settings, true));
             let plane = receive(&worker, 3);
             assert_eq!(
                 plane.artifact.settings.working_scale, quality,
@@ -564,38 +559,31 @@ mod tests {
                 turns: 1,
                 degrees: 7.,
             };
-            worker.submit(request(&path, 4, policy, policy, &settings, true));
+            worker.submit(request(&path, 4, Scale::NATIVE, policy, &settings, true));
             let draft = receive(&worker, 4);
             assert!(
                 Arc::ptr_eq(&plane.texture, &draft.texture),
                 "drag/commit keeps the untrimmed texture"
             );
             assert_eq!(dispatches(&worker, 4), 0);
-            worker.submit(request(&path, 5, policy, policy, &settings, false));
+            worker.submit(request(&path, 5, Scale::NATIVE, policy, &settings, false));
             let committed = receive(&worker, 5);
             assert_eq!(committed.artifact.settings.working_scale, quality);
             assert_eq!(dispatches(&worker, 5), 0);
             assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), loads);
             matches_fresh(&verifier, &committed, &path, &settings);
             // A deliberate zoom asks for a new Full pass despite unchanged controls.
-            worker.submit(request(
-                &path,
-                6,
-                PreviewMode::Full,
-                policy,
-                &settings,
-                false,
-            ));
+            worker.submit(request(&path, 6, Scale::NATIVE, policy, &settings, false));
             let full = receive(&worker, 6);
             assert_eq!(full.artifact.settings.working_scale, Scale::NATIVE);
             assert!(dispatches(&worker, 6) > 0);
             let full_loads = worker.checks.source_loads.load(Ordering::Relaxed);
-            worker.submit(request(&path, 7, policy, policy, &settings, true));
+            worker.submit(request(&path, 7, Scale::NATIVE, policy, &settings, true));
             let full_plane = receive(&worker, 7);
             assert_eq!(full_plane.artifact.settings.working_scale, Scale::NATIVE);
             assert_eq!(dispatches(&worker, 7), 0);
             settings.rotation.degrees = -4.;
-            worker.submit(request(&path, 8, policy, policy, &settings, false));
+            worker.submit(request(&path, 8, Scale::NATIVE, policy, &settings, false));
             let full_composed = receive(&worker, 8);
             assert_eq!(full_composed.artifact.settings.working_scale, Scale::NATIVE);
             assert_eq!(dispatches(&worker, 8), 0);
@@ -616,8 +604,8 @@ mod tests {
         worker.submit(request(
             &path,
             1,
-            PreviewMode::Thumb,
-            PreviewMode::Thumb,
+            Scale::new(8).unwrap(),
+            ProcessingQuality::Speed,
             &settings,
             true,
         ));
@@ -628,8 +616,8 @@ mod tests {
         worker.submit(request(
             &path,
             2,
-            PreviewMode::Full,
-            PreviewMode::Thumb,
+            Scale::NATIVE,
+            ProcessingQuality::Speed,
             &settings,
             true,
         ));
@@ -645,8 +633,8 @@ mod tests {
     fn composition_keeps_pending_exposure_and_explicit_quality_changes_are_numerical() {
         let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
         for (pass, policy, initially_framing) in [
-            (PreviewMode::Thumb, PreviewMode::Thumb, false),
-            (PreviewMode::Full, PreviewMode::Smart, true),
+            (Scale::new(8).unwrap(), ProcessingQuality::Speed, false),
+            (Scale::NATIVE, ProcessingQuality::Quality, true),
         ] {
             let engine = Engine::new().unwrap();
             let verifier = engine.executor();
@@ -678,7 +666,7 @@ mod tests {
             worker.submit(request(
                 &path,
                 3,
-                policy,
+                Scale::new(2).unwrap(),
                 policy,
                 &settings,
                 !initially_framing,
@@ -705,8 +693,8 @@ mod tests {
             worker.submit(request(
                 &path,
                 4,
-                PreviewMode::Full,
-                PreviewMode::Full,
+                Scale::NATIVE,
+                ProcessingQuality::Quality,
                 &settings,
                 true,
             ));
@@ -733,8 +721,8 @@ mod tests {
         worker.submit(request(
             &path,
             1,
-            PreviewMode::Thumb,
-            PreviewMode::Thumb,
+            Scale::new(8).unwrap(),
+            ProcessingQuality::Speed,
             &settings,
             false,
         ));
@@ -744,8 +732,8 @@ mod tests {
         worker.submit(request(
             &path,
             2,
-            PreviewMode::Full,
-            PreviewMode::Full,
+            Scale::NATIVE,
+            ProcessingQuality::Quality,
             &settings,
             false,
         ));
@@ -755,8 +743,8 @@ mod tests {
         worker.submit(request(
             &path,
             3,
-            PreviewMode::Thumb,
-            PreviewMode::Thumb,
+            Scale::new(8).unwrap(),
+            ProcessingQuality::Speed,
             &settings,
             false,
         ));

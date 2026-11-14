@@ -1,7 +1,8 @@
 //! Exercises real coordinator handoffs with a controlled executor and bounded image queues.
 
 use super::*;
-use crate::{preferences::PreviewMode, rendering::coordinator::Task};
+use crate::rendering::coordinator::Task;
+use foveonic::render::ProcessingQuality;
 use foveonic::render::Settings;
 use std::time::Duration;
 
@@ -86,8 +87,8 @@ fn request(path: &str, revision: u64, exposure: f32) -> Request {
         framing_preview: false,
         calibration: None,
         rendition: Default::default(),
-        preview_quality: PreviewMode::Thumb,
-        preview_policy: PreviewMode::Thumb,
+        preview_scale: foveonic::render::Scale::new(8).unwrap(),
+        processing_quality: ProcessingQuality::Speed,
         output: "final".into(),
         comparison: false,
         export: None,
@@ -96,6 +97,7 @@ fn request(path: &str, revision: u64, exposure: f32) -> Request {
 fn view(requests: &[Request]) -> ViewState {
     let active = &requests[0];
     ViewState {
+        processing_quality: active.processing_quality,
         active: Some(active.path.clone()),
         rendition: active.rendition,
         output: active.output.clone(),
@@ -280,8 +282,8 @@ fn a_failure_in_transit_cannot_overwrite_a_newer_ui_edit() {
 fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_revision() {
     let rig = Rig::new();
     let mut first = request("a.x3f", 1, 0.);
-    first.preview_policy = PreviewMode::Smart;
-    first.preview_quality = PreviewMode::Full;
+    first.processing_quality = ProcessingQuality::Quality;
+    first.preview_scale = foveonic::render::Scale::NATIVE;
     first.detail = true;
     first.settings.preview_region = Some([0, 0, 128, 128]);
     rig.handle.set_view(view(&[first.clone()]));
@@ -300,8 +302,8 @@ fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_r
     assert_eq!(rig.tasks()[0].stamp.revision, 1);
     assert_eq!(rig.progress.snapshot().unwrap().revision, 1);
     let mut replacement = request("a.x3f", 5, 0.);
-    replacement.preview_policy = PreviewMode::Smart;
-    replacement.preview_quality = PreviewMode::Full;
+    replacement.processing_quality = ProcessingQuality::Quality;
+    replacement.preview_scale = foveonic::render::Scale::NATIVE;
     replacement.detail = true;
     replacement.settings.preview_region = Some([0, 0, 128, 128]);
     assert!(rig.handle.refine(
@@ -320,8 +322,8 @@ fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_r
 fn complete_demand_retains_current_detail_but_removal_forgets_its_suppressed_intent() {
     let rig = Rig::new();
     let mut first = request("a.x3f", 1, 0.);
-    first.preview_policy = PreviewMode::Smart;
-    first.preview_quality = PreviewMode::Full;
+    first.processing_quality = ProcessingQuality::Quality;
+    first.preview_scale = foveonic::render::Scale::NATIVE;
     first.detail = true;
     first.settings.preview_region = Some([32, 32, 160, 160]);
     let mut whole = first.clone();

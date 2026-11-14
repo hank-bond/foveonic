@@ -5,6 +5,7 @@ use crate::{
     App,
 };
 use eframe::egui;
+use foveonic::render::ProcessingQuality;
 use std::path::PathBuf;
 
 mod background;
@@ -733,6 +734,10 @@ impl App {
                             &self.settings,
                         )
                 });
+        let requested_preview_scale = self
+            .selected
+            .as_deref()
+            .map(|path| self.preview_scale_for(path, self.preferences.processing_quality));
         let Some(smoke) = &mut self.smoke else {
             return;
         };
@@ -1010,18 +1015,18 @@ impl App {
             }
             if smoke.targets == SMART_TARGETS && smoke.preview_pending() {
                 assert_eq!(
-                    self.preferences.preview_quality,
-                    crate::preferences::PreviewMode::Smart
+                    self.preferences.processing_quality,
+                    foveonic::render::ProcessingQuality::Quality
                 );
                 assert_eq!(
-                    self.preferences.preview_quality.working_scale(),
+                    requested_preview_scale.unwrap(),
                     foveonic::render::Scale::new(2).unwrap()
                 );
                 let preview = self
                     .browser
                     .thumbnail(self.selected.as_ref().unwrap())
                     .unwrap();
-                let report = serde_json::json!({"preview_choice":"Smart", "render_received":self.frame.is_some(), "requested_scale_divisor":self.preferences.preview_quality.working_scale().divisor(),"native_extent":preview.native_extent,"thumbnail_extent":preview.texture.size()});
+                let report = serde_json::json!({"processing_quality":"Quality", "render_received":self.frame.is_some(), "requested_scale_divisor":requested_preview_scale.unwrap().divisor(),"native_extent":preview.native_extent,"thumbnail_extent":preview.texture.size()});
                 std::fs::write(
                     smoke.directory.join("preview.json"),
                     serde_json::to_vec_pretty(&report).unwrap(),
@@ -1070,19 +1075,15 @@ impl App {
             if smoke.targets == FAST_PREVIEW_TARGETS && !smoke.preview_pending() {
                 let frame = self.frame.as_ref().unwrap();
                 let target = smoke.targets[smoke.index];
-                let fast = target.starts_with("fast");
                 assert_eq!(
-                    frame.artifact.settings.working_scale,
-                    if fast {
-                        foveonic::render::Scale::new(2).unwrap()
-                    } else {
-                        foveonic::render::Scale::NATIVE
-                    }
+                    frame.processing_quality,
+                    self.preferences.processing_quality
                 );
                 let native = frame.display_extent(false);
+                let divisor = frame.artifact.settings.working_scale.divisor();
                 assert_eq!(
                     frame.texture.description().extent,
-                    if fast { native.map(|v| v / 2) } else { native }
+                    native.map(|value| value / divisor)
                 );
                 let visible = self
                     .viewports
@@ -1400,10 +1401,10 @@ impl App {
                 target if target.starts_with("rotate-") => self.smoke_rotate_enter(),
                 "crop-fast" => {
                     crate::crop_tool::exit(ctx);
-                    self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;
+                    self.preferences.processing_quality = ProcessingQuality::Speed;
                 }
                 "crop-smart" => {
-                    self.preferences.preview_quality = crate::preferences::PreviewMode::Smart;
+                    self.preferences.processing_quality = ProcessingQuality::Speed;
                     self.viewports.view_mut(self.selected.as_deref()).one_to_one = true;
                     self.submit(None);
                 }
@@ -2046,12 +2047,12 @@ impl App {
                     self.submit(None);
                 }
                 "final" if smoke.targets == SMART_TARGETS => {
-                    self.preferences.preview_quality = crate::preferences::PreviewMode::Full;
+                    self.preferences.processing_quality = ProcessingQuality::Quality;
                     self.submit(None);
                 }
                 "final" => {}
                 "smart-overview" => {
-                    self.preferences.preview_quality = crate::preferences::PreviewMode::Smart;
+                    self.preferences.processing_quality = ProcessingQuality::Speed;
                     self.preferences.scope_viewport = true;
                     self.settings.reconstruction = Some(Default::default());
                     self.submit(None);
@@ -2107,7 +2108,7 @@ impl App {
                     crate::crop_tool::exit(ctx);
                 }
                 "smart-transition-full" => {
-                    self.submit_with_quality(None, None, crate::preferences::PreviewMode::Full)
+                    self.submit_with_quality(None, None, self.preferences.processing_quality)
                 }
                 "smart-adaptive-edit" => {
                     self.settings.photographic.tone_method =
@@ -2154,12 +2155,12 @@ impl App {
                     );
                 }
                 "fast" | "fast-again" => {
-                    self.preferences.preview_quality = crate::preferences::PreviewMode::Fast;
+                    self.preferences.processing_quality = ProcessingQuality::Speed;
                     self.preferences.scope_viewport = true;
                     self.submit(None);
                 }
                 "full-again" => {
-                    self.preferences.preview_quality = crate::preferences::PreviewMode::Full;
+                    self.preferences.processing_quality = ProcessingQuality::Quality;
                     self.submit(None);
                 }
                 "fast-zoom" => {
@@ -2583,8 +2584,8 @@ impl App {
                             "crop-fast" => self.frame.as_ref().is_some_and(|f| {
                                 !f.framing_preview
                                     && f.revision == self.revision
-                                    && f.artifact.settings.working_scale
-                                        == foveonic::render::Scale::new(2).unwrap()
+                                    && f.processing_quality
+                                        == foveonic::render::ProcessingQuality::Speed
                             }),
                             "crop-smart" => self
                                 .frame

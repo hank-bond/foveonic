@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 /// Immutable viewport facts supplied to the coordinator when their values change.
 #[derive(Clone, PartialEq)]
 pub struct ViewState {
+    /// Workspace policy. Active Current inspection independently requires Quality.
+    pub processing_quality: foveonic::render::ProcessingQuality,
     pub active: Option<PathBuf>,
     pub rendition: Rendition,
     pub output: String,
@@ -34,6 +36,7 @@ impl ViewState {
     pub fn context(&self, path: &Path) -> ViewContext<'_> {
         let overview = self.overviews.iter().find(|photo| photo.path == path);
         ViewContext {
+            processing_quality: self.processing_quality,
             active: self.active.as_deref(),
             rendition: self.rendition,
             output: &self.output,
@@ -103,6 +106,7 @@ impl<'a> From<&'a worker::Reply> for ReplyInfo<'a> {
 }
 
 pub struct ViewContext<'a> {
+    pub processing_quality: foveonic::render::ProcessingQuality,
     pub active: Option<&'a Path>,
     pub rendition: Rendition,
     pub output: &'a str,
@@ -130,6 +134,7 @@ pub enum Rejection {
     CalibrationChanged,
     NotVisible,
     GeometryChanged,
+    ProcessingQualityChanged,
     FramingViewChanged,
     RenditionChanged,
     Superseded,
@@ -141,6 +146,7 @@ impl Rejection {
             Self::CalibrationChanged => "calibration_changed",
             Self::NotVisible => "not_visible",
             Self::GeometryChanged => "geometry_changed",
+            Self::ProcessingQualityChanged => "processing_quality_changed",
             Self::FramingViewChanged => "framing_view_changed",
             Self::RenditionChanged => "rendition_changed",
             Self::Superseded => "superseded_view",
@@ -160,6 +166,10 @@ pub struct Decision {
 pub fn classify(completion: Completion, reply: &ReplyInfo<'_>, view: &ViewContext<'_>) -> Decision {
     let rejection = if completion == Completion::Removed {
         Some(Rejection::Removed)
+    } else if reply.image.as_ref().is_some_and(|image| {
+        image.requested.processing_quality != expected_processing_quality(reply, view)
+    }) {
+        Some(Rejection::ProcessingQualityChanged)
     } else if !reply.exported
         && reply
             .image
@@ -182,6 +192,25 @@ pub fn classify(completion: Completion, reply: &ReplyInfo<'_>, view: &ViewContex
         retain_pixels: reply.image.is_some(),
         update_photo: completion == Completion::Current,
         destination: destination(completion, reply, view),
+    }
+}
+
+fn expected_processing_quality(
+    reply: &ReplyInfo<'_>,
+    view: &ViewContext<'_>,
+) -> foveonic::render::ProcessingQuality {
+    if view.active == Some(reply.path)
+        && reply.rendition == Rendition::Current
+        && matches!(reply.purpose, Purpose::Inspection(_, _))
+    {
+        super::quality::for_view(
+            view.processing_quality,
+            view.rendition,
+            view.output,
+            view.comparison,
+        )
+    } else {
+        view.processing_quality
     }
 }
 
@@ -288,7 +317,11 @@ impl App {
         ]
         .into_iter()
         .flatten()
-        .filter(|frame| frame.path == path && frame.is_photographic())
+        .filter(|frame| {
+            frame.path == path
+                && frame.is_photographic()
+                && frame.processing_quality == self.preferences.processing_quality
+        })
         .max_by_key(|frame| frame.content_revision())
     }
 
@@ -311,6 +344,7 @@ impl App {
             .noise_calibration
             .selected(self.preferences.noise_profile);
         self.worker.set_view(ViewState {
+            processing_quality: self.preferences.processing_quality,
             active: self.selected.clone(),
             rendition: self.before.active,
             output: self.output.clone(),
@@ -344,6 +378,7 @@ impl App {
             .noise_calibration
             .selected(self.preferences.noise_profile);
         let view = ViewContext {
+            processing_quality: self.preferences.processing_quality,
             active: self.selected.as_deref(),
             rendition: self.before.active,
             output: &self.output,

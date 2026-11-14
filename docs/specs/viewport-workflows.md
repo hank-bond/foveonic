@@ -9,13 +9,13 @@ implementation: conforming
 
 The [viewport plan](../../plans/viewport-workflows.md) records the reviewed implementation slices. [Smart](./smart-preview.md) specifies automatic preview quality and [multi-edit](./multi-edit.md) specifies selection and persistent per-photo viewing.
 
-## Preview quality
+## Processing quality
 
-The owner refined the initial count-based proposal: Smart should choose by physical display-pixel demand, independently for every displayed photograph. Its concrete policy now belongs to [Smart preview](./smart-preview.md). Photo count is not a quality input. Camera-specific working scales remain governed by [small previews](./small-previews.md).
+The workspace offers exactly **Quality** and **Speed**, independently of authored photograph edits. Quality is the default. Both choose the main preview's working resolution from physical display-pixel demand for each photograph, including zoom. Quality should use at most one physical display pixel per working sample before selecting a finer grid. Speed may allow up to 1.5. Photograph count is not a quality input. Camera-specific working scales remain governed by [small previews](./small-previews.md).
 
-Explicit Full, Fast, Draft and Thumb modes must retain their selected processing resolution through viewport zoom and selection changes. Smart alone changes the main preview's requested resolution automatically. Presentation-only framing continues to reuse compatible pixels.
+Processing quality and working resolution must remain distinct. Native viewport zoom, regional detail and whole-image continuation preserve the selected processing policy. A region does not imply either policy. Export and pipeline inspection explicitly use Quality.
 
-The loupe must request Full detail independently of the selected main preview mode. Using the loupe must not promote or replace an explicitly reduced main preview with Full.
+The loupe always requests native RGB detail with the selected processing policy. Its detail resource must not replace the main overview merely because it has finer sampling. Images from different policies must not replace or overlay one another, even when their working resolutions match. Completed older edits may continue progressive feedback within the same policy.
 
 ## Layout and interaction
 

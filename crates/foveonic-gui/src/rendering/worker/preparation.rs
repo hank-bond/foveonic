@@ -2,8 +2,8 @@
 
 use super::processing::Photos;
 use crate::{
-    export::resolve_camera_settings, preferences::PreviewMode,
-    rendering::request::camera_preview_scale, sidecars::CachedRecipes,
+    export::resolve_camera_settings, rendering::request::camera_preview_scale,
+    sidecars::CachedRecipes,
 };
 use foveonic::{
     decode_cache::Cache,
@@ -125,8 +125,10 @@ impl Preparation {
                 if !resolve_camera_settings(&mut settings, &source.metadata).is_empty() {
                     return Ok(false);
                 }
-                settings.working_scale =
-                    camera_preview_scale(PreviewMode::Thumb, &source.metadata)?;
+                settings.working_scale = camera_preview_scale(
+                    foveonic::render::Scale::new(8).unwrap(),
+                    &source.metadata,
+                )?;
                 settings.preview_region = None;
                 settings.color_range_preview = None;
                 settings.dehaze_estimate = settings.dehaze_auto();

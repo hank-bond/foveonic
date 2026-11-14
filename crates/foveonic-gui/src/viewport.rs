@@ -2366,7 +2366,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod preview_quality_tests {
+mod preview_scale_tests {
     use super::*;
     #[test]
     fn scopes_use_fast_pixels_without_changing_native_zoom_and_pan() {

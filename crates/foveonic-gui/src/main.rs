@@ -1,5 +1,6 @@
 //! Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 
+use foveonic::render::ProcessingQuality;
 mod actions;
 mod activity;
 mod application_settings;
@@ -107,7 +108,8 @@ struct App {
     channel: i32,
     comparison: inspect::Comparison,
     frame: Option<worker::Frame>,
-    smart_qualities: std::collections::BTreeMap<PathBuf, preferences::PreviewMode>,
+    preview_scales: std::collections::BTreeMap<PathBuf, foveonic::render::Scale>,
+    preview_densities: std::collections::BTreeMap<PathBuf, f32>,
     preview_demand_changed: bool,
     scope_images: Option<scopes::Images>,
     scope_snapshot: Option<worker::ScopeSnapshot>,
@@ -176,7 +178,7 @@ impl App {
             .collect();
         serde_json::json!({"workspace_mode":if self.browser.import_mode {"import"} else {"browse"},
             "active_photo":self.selected,"targets":self.edit_selection.paths(),"photos":photos,
-            "settings":self.settings,"preview_policy":self.preferences.preview_quality,
+            "settings":self.settings,"processing_quality":self.preferences.processing_quality,
             "displayed":self.frame.as_ref().map(|frame|serde_json::json!({"source":frame.path,
                 "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
                 "presentation_revision":frame.revision,"artifact":frame.artifact.name,
@@ -206,7 +208,9 @@ impl App {
                 .processing_selection(self.selected.as_deref())
                 .into();
             self.viewport_paths_key = Some(key);
-            self.smart_qualities
+            self.preview_scales
+                .retain(|path, _| self.viewport_paths.contains(path));
+            self.preview_densities
                 .retain(|path, _| self.viewport_paths.contains(path));
         }
         if changed || self.viewport_paths_limit != self.preferences.multi_edit_limit {
@@ -278,7 +282,7 @@ impl App {
         }
         editor::direct_color::configure(&cc.egui_ctx, preferences.direct_color);
         if std::env::var_os("FOVEONIC_GUI_SMOKE_SMART").is_some() {
-            preferences.preview_quality = preferences::PreviewMode::Smart;
+            preferences.processing_quality = ProcessingQuality::Quality;
         }
         viewport::set_gamut(rs, preferences.display_gamut);
         let training_engine = engine.executor();
@@ -344,7 +348,8 @@ impl App {
             channel: -1,
             comparison: Default::default(),
             frame: None,
-            smart_qualities: Default::default(),
+            preview_scales: Default::default(),
+            preview_densities: Default::default(),
             preview_demand_changed: false,
             scope_images: None,
             scope_snapshot: None,
@@ -468,6 +473,7 @@ impl App {
         let settings = self.preferences.render_settings(settings);
         frame.path == path
             && frame.is_photographic()
+            && frame.requested.processing_quality == self.preferences.processing_quality
             && matching::same_authored_edits(&frame.requested, &settings)
             && frame.calibration_signature.as_deref()
                 == self
@@ -481,15 +487,11 @@ impl App {
                 .source_origin(path)
                 .is_none_or(|origin| origin == frame.origin)
             && request::camera_preview_scale(
-                self.preview_quality_for(path, self.preferences.preview_quality),
+                self.preview_scale_for(path, self.preferences.processing_quality),
                 &frame.artifact.metadata,
             )
             .is_ok_and(|scale| {
-                rendering::quality::accepts_scale(
-                    self.preferences.preview_quality,
-                    scale,
-                    frame.artifact.settings.working_scale,
-                )
+                rendering::quality::accepts_scale(scale, frame.artifact.settings.working_scale)
             })
     }
 
@@ -616,17 +618,17 @@ impl App {
         if export.is_none() && self.smart_refinement_active() {
             self.submit_smart_refinement();
         } else {
-            self.submit_with_quality(export, None, self.preferences.preview_quality);
+            self.submit_with_quality(export, None, self.preferences.processing_quality);
         }
     }
     fn submit_request(&mut self, export: Option<export::Export>, region: Option<[u32; 4]>) {
-        self.submit_with_quality(export, region, self.preferences.preview_quality);
+        self.submit_with_quality(export, region, self.preferences.processing_quality);
     }
     fn submit_with_quality(
         &mut self,
         export: Option<export::Export>,
         region: Option<[u32; 4]>,
-        quality: preferences::PreviewMode,
+        quality: ProcessingQuality,
     ) {
         if !self.sidecars.ready() {
             return;
@@ -656,16 +658,27 @@ impl App {
         revision: u64,
         export: Option<export::Export>,
         region: Option<[u32; 4]>,
-        quality: preferences::PreviewMode,
+        quality: ProcessingQuality,
     ) -> Option<request::Request> {
         let path = self.selected.as_ref()?;
+        let quality = if export.is_some() {
+            ProcessingQuality::Quality
+        } else {
+            rendering::quality::for_view(
+                quality,
+                self.before.active,
+                &self.output,
+                self.comparison.requested(),
+            )
+        };
         let mut requested = self.view_settings();
+        requested.processing_quality = quality;
         requested.working_scale = foveonic::render::Scale::NATIVE;
         requested.preview_region = region;
-        let quality = if region.is_some() {
-            preferences::PreviewMode::Full
+        let preview_scale = if region.is_some() {
+            foveonic::render::Scale::NATIVE
         } else {
-            self.preview_quality_for(path, quality)
+            self.preview_scale_for(path, quality)
         };
         Some(request::Request {
             detail: region.is_some(),
@@ -677,8 +690,8 @@ impl App {
             revision,
             path: path.clone(),
             settings: requested,
-            preview_quality: quality,
-            preview_policy: self.preferences.preview_quality,
+            preview_scale,
+            processing_quality: quality,
             output: if self.before.active == editor::Rendition::Current {
                 self.output.clone()
             } else {
@@ -1364,10 +1377,10 @@ impl App {
             ui,
             background_width,
             |ui| {
-                changed |= inspect::preview_quality(
+                changed |= inspect::processing_quality(
                     ui,
                     !self.exporting,
-                    &mut self.preferences.preview_quality,
+                    &mut self.preferences.processing_quality,
                 );
                 widgets::button_group(ui, |ui| {
                     widgets::centered_control_row(ui, |ui| {

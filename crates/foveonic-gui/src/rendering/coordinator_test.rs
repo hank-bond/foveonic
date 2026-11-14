@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::editor::Rendition;
-use crate::preferences::PreviewMode;
+use foveonic::render::ProcessingQuality;
 use foveonic::render::Settings;
 
 fn request(path: &str, revision: u64, exposure: f32) -> Arc<Request> {
@@ -16,8 +16,8 @@ fn request(path: &str, revision: u64, exposure: f32) -> Arc<Request> {
         revision,
         path: path.into(),
         settings,
-        preview_quality: PreviewMode::Thumb,
-        preview_policy: PreviewMode::Thumb,
+        preview_scale: foveonic::render::Scale::new(8).unwrap(),
+        processing_quality: ProcessingQuality::Speed,
         output: "final".into(),
         comparison: false,
         export: None,
@@ -48,6 +48,7 @@ fn render_result(stamp: Stamp, request: &Request) -> Reply {
 
 fn result_view(reply: &Reply) -> ViewContext<'_> {
     ViewContext {
+        processing_quality: foveonic::render::ProcessingQuality::Quality,
         active: Some(&reply.path),
         rendition: reply.rendition,
         output: "final",
@@ -501,7 +502,7 @@ fn an_explicit_native_pass_without_composition_change_gets_new_pixel_work() {
     let mut coordinator = RenderCoordinator::default();
     let old = desire(&mut coordinator, request("a.x3f", 1, 0.));
     let mut native = Arc::try_unwrap(request("a.x3f", 2, 0.)).ok().unwrap();
-    native.preview_quality = PreviewMode::Full;
+    native.preview_scale = foveonic::render::Scale::NATIVE;
     let new = desire(&mut coordinator, Arc::new(native));
     assert_ne!(old.id, new.id);
     assert_eq!(coordinator.finish(&old), Completion::Superseded);
@@ -675,8 +676,8 @@ fn wrong_source_cannot_advance_admission_or_settle_the_replacement() {
 fn refinement(rendition: Rendition, revision: u64, continue_whole: bool) -> Refinement {
     let mut first = (*request("a.x3f", revision, 0.)).clone();
     first.rendition = rendition;
-    first.preview_policy = PreviewMode::Smart;
-    first.preview_quality = PreviewMode::Full;
+    first.processing_quality = ProcessingQuality::Quality;
+    first.preview_scale = foveonic::render::Scale::NATIVE;
     first.detail = true;
     first.settings.preview_region = Some([32, 32, 160, 160]);
     let whole = continue_whole.then(|| {

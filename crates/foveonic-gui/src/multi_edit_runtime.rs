@@ -1,7 +1,10 @@
 //! Owns bounded photo settings and images with independent editing selection and render demand.
 
 use crate::{multi_edit_controls, rendering::request, rendering::worker, sidecars};
-use foveonic::{render::Settings, source::Metadata};
+use foveonic::{
+    render::{ProcessingQuality, Settings},
+    source::Metadata,
+};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -18,10 +21,7 @@ struct Photo {
     frame: Option<worker::Frame>,
     detail: Option<worker::Frame>,
     dirty: bool,
-    preview: Option<(
-        crate::preferences::PreviewMode,
-        crate::preferences::PreviewMode,
-    )>,
+    preview: Option<(foveonic::render::ProcessingQuality, foveonic::render::Scale)>,
     error: Option<String>,
 }
 
@@ -211,8 +211,8 @@ impl Runtime {
     pub fn observe_preview(
         &mut self,
         path: &Path,
-        policy: crate::preferences::PreviewMode,
-        quality: crate::preferences::PreviewMode,
+        policy: ProcessingQuality,
+        quality: foveonic::render::Scale,
     ) {
         if let Some(photo) = self.photos.get_mut(path) {
             let preview = Some((policy, quality));
@@ -855,10 +855,10 @@ impl crate::App {
         }
         self.sync_multi_edit();
         self.sync_render_demand();
-        let policy = self.preferences.preview_quality;
+        let policy = self.preferences.processing_quality;
         for path in self.multi_edit.render_paths().to_vec() {
             self.multi_edit
-                .observe_preview(&path, policy, self.preview_quality_for(&path, policy));
+                .observe_preview(&path, policy, self.preview_scale_for(&path, policy));
         }
         let excluded =
             (!self.sidecars.ready() || self.output != "final" || self.comparison.requested())
@@ -925,7 +925,7 @@ impl crate::App {
                 settings.preview_region = None;
                 let framing_preview =
                     self.selected.as_ref() == Some(&path) && self.framing_preview_active();
-                let preview_quality = self.preview_quality_for(&path, policy);
+                let preview_scale = self.preview_scale_for(&path, policy);
                 request::Request {
                     detail: false,
                     framing_preview,
@@ -934,8 +934,8 @@ impl crate::App {
                     revision: self.revision,
                     path,
                     settings,
-                    preview_quality,
-                    preview_policy: policy,
+                    preview_scale,
+                    processing_quality: policy,
                     output: "final".into(),
                     comparison: false,
                     export: None,
@@ -1183,19 +1183,35 @@ mod tests {
 
     #[test]
     fn quality_changes_request_work_without_photographic_edits() {
-        use crate::preferences::PreviewMode;
+        use foveonic::render::ProcessingQuality;
         let mut runtime = runtime();
         let path = runtime.editing_paths[0].clone();
         let original = runtime.settings(&path).unwrap().clone();
-        runtime.observe_preview(&path, PreviewMode::Smart, PreviewMode::Thumb);
+        runtime.observe_preview(
+            &path,
+            ProcessingQuality::Quality,
+            foveonic::render::Scale::new(2).unwrap(),
+        );
         assert!(runtime.needs_render(None));
         runtime.request(None);
-        runtime.observe_preview(&path, PreviewMode::Smart, PreviewMode::Thumb);
+        runtime.observe_preview(
+            &path,
+            ProcessingQuality::Quality,
+            foveonic::render::Scale::new(2).unwrap(),
+        );
         assert!(!runtime.needs_render(None));
-        runtime.observe_preview(&path, PreviewMode::Smart, PreviewMode::Draft);
+        runtime.observe_preview(
+            &path,
+            ProcessingQuality::Quality,
+            foveonic::render::Scale::new(4).unwrap(),
+        );
         assert!(runtime.needs_render(None));
         runtime.request(None);
-        runtime.observe_preview(&path, PreviewMode::Draft, PreviewMode::Draft);
+        runtime.observe_preview(
+            &path,
+            ProcessingQuality::Speed,
+            foveonic::render::Scale::new(2).unwrap(),
+        );
         assert!(
             runtime.needs_render(None),
             "workspace policy also participates in reuse"
@@ -1205,7 +1221,7 @@ mod tests {
 
     #[test]
     fn displayed_photos_keep_rendering_when_only_one_is_edited() {
-        use crate::preferences::PreviewMode;
+        use foveonic::render::ProcessingQuality;
         let mut runtime = runtime();
         let mut sidecars = session();
         let displayed = runtime.editing_paths.clone();
@@ -1219,7 +1235,11 @@ mod tests {
         runtime.observe_active(&displayed[0], &edited, None);
         assert_eq!(runtime.settings(&displayed[1]), Some(&untouched));
         runtime.request(None);
-        runtime.observe_preview(&displayed[1], PreviewMode::Fast, PreviewMode::Fast);
+        runtime.observe_preview(
+            &displayed[1],
+            ProcessingQuality::Speed,
+            foveonic::render::Scale::new(2).unwrap(),
+        );
         assert!(runtime.needs_render(None));
         assert_eq!(
             runtime.request(None).len(),
@@ -1267,18 +1287,26 @@ mod tests {
 
     #[test]
     fn redisplaying_a_hidden_unfinished_upgrade_restarts_its_demand() {
-        use crate::preferences::PreviewMode;
+        use foveonic::render::ProcessingQuality;
         let mut runtime = runtime();
         let mut sidecars = session();
         let paths = runtime.editing_paths.clone();
         runtime.sync(&paths[..1], 2, &mut sidecars);
         runtime.sync_render_paths(&paths);
-        runtime.observe_preview(&paths[1], PreviewMode::Smart, PreviewMode::Fast);
+        runtime.observe_preview(
+            &paths[1],
+            ProcessingQuality::Quality,
+            foveonic::render::Scale::new(2).unwrap(),
+        );
         runtime.request(None);
         runtime.sync_render_paths(&paths[..1]);
         assert!(!runtime.rendering(&paths[1]));
         runtime.sync_render_paths(&paths);
-        runtime.observe_preview(&paths[1], PreviewMode::Smart, PreviewMode::Fast);
+        runtime.observe_preview(
+            &paths[1],
+            ProcessingQuality::Quality,
+            foveonic::render::Scale::new(2).unwrap(),
+        );
         assert!(runtime.needs_render(None));
         assert!(runtime
             .request(None)

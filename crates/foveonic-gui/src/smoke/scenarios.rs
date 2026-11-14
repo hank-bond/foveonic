@@ -3,10 +3,11 @@
 use super::Smoke;
 use crate::{
     multi_edit_controls::{self, Edit, Mapping, NumberChange},
-    preferences::{FolderMode, PreviewMode},
+    preferences::FolderMode,
     App,
 };
 use eframe::egui;
+use foveonic::render::ProcessingQuality;
 use foveonic::{profile::Mode, render::Settings};
 use serde::Deserialize;
 use std::{
@@ -60,11 +61,10 @@ impl Case {
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Quality {
-    Full,
-    Fast,
-    Draft,
-    Thumb,
+    Quality,
+    Speed,
 }
+
 fn default_folder_mode() -> FolderMode {
     FolderMode::Import
 }
@@ -78,30 +78,14 @@ fn read_folder_mode<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Folder
     }
 }
 impl Quality {
-    fn preview(self) -> PreviewMode {
+    fn preview(self) -> ProcessingQuality {
         match self {
-            Self::Full => PreviewMode::Full,
-            Self::Fast => PreviewMode::Fast,
-            Self::Draft => PreviewMode::Draft,
-            Self::Thumb => PreviewMode::Thumb,
-        }
-    }
-    fn divisor(self) -> u32 {
-        self.preview().working_scale().divisor()
-    }
-    fn expected_scale(
-        self,
-        metadata: &foveonic::source::Metadata,
-    ) -> Option<foveonic::render::Scale> {
-        if matches!(self, Self::Thumb) {
-            foveonic::render::ControlCapabilities::from_metadata(metadata)
-                .ok()
-                .map(|caps| caps.thumb_scale())
-        } else {
-            Some(self.preview().working_scale())
+            Self::Quality => ProcessingQuality::Quality,
+            Self::Speed => ProcessingQuality::Speed,
         }
     }
 }
+
 #[derive(Deserialize)]
 struct Config {
     name: Case,
@@ -537,7 +521,7 @@ impl Scenario {
         })
     }
     fn marker(&self, phase: &str, extra: serde_json::Value) {
-        let mut fields = serde_json::json!({"scenario":self.manifest["scenario"]["name"],"action":self.action.map_or("setup",Action::name),"phase":phase,"step":self.step,"photo_count":self.targets.len(),"nominal_scale_divisor":self.config.quality.divisor()});
+        let mut fields = serde_json::json!({"scenario":self.manifest["scenario"]["name"],"action":self.action.map_or("setup",Action::name),"phase":phase,"step":self.step,"photo_count":self.targets.len(),"processing_quality":format!("{:?}",self.config.quality.preview())});
         fields
             .as_object_mut()
             .unwrap()
@@ -591,7 +575,7 @@ impl Scenario {
                 }
                 app.preferences.multi_edit_limit = self.config.photo_count;
                 app.preferences.memory_cache_bytes = self.config.memory_cache_bytes;
-                app.preferences.preview_quality = self.config.quality.preview();
+                app.preferences.processing_quality = self.config.quality.preview();
                 if matches!(self.config.name, Case::ChoiceJourney | Case::BackgroundEdit) {
                     app.preferences.collapsed = [
                         crate::preferences::Section::Navigator,
@@ -1062,7 +1046,7 @@ impl Scenario {
                         .filter(|frame| self.matches(app, path, frame, self.minimum_revision))
                     {
                         if !self.observed.contains_key(path) {
-                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":self.config.quality.expected_scale(&frame.artifact.metadata).map(|scale|scale.divisor())}));
+                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.config.quality.preview()), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
                             self.observed.insert(path.clone(), frame.diagnostic_task.id);
                         }
                     }
@@ -1123,7 +1107,19 @@ impl Scenario {
                 );
                 let photos = self.targets.iter().map(|path| {
                     let frame = self.frame(app, path).unwrap();
+                    let display_size_points = app.viewports.view(Some(path)).image_rectangles()
+                        .map(|(_, image)| [image.width(), image.height()]);
+                    let native_extent = frame.native_display_extent();
+                    let pixels_per_point = ctx.pixels_per_point();
+                    let display_density = display_size_points.map(|size| {
+                        (size[0] / native_extent[0].max(1) as f32)
+                            .max(size[1] / native_extent[1].max(1) as f32) * pixels_per_point
+                    });
                     serde_json::json!({"source":path,"family":frame.artifact.metadata.processing_family().ok(),
+                        "processing_quality":frame.processing_quality,
+                        "requested_processing_quality":app.preferences.processing_quality,
+                        "display_density":display_density,"display_size_points":display_size_points,
+                        "native_extent":native_extent,"pixels_per_point":pixels_per_point,
                         "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
                         "presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),
                         "settings":self.settings(app,path)})
@@ -1434,8 +1430,11 @@ impl Scenario {
             && (matches!(self.action, Some(Action::CacheWorkflow))
                 || frame.diagnostic_task.revision >= minimum)
             && (matches!(self.action, Some(Action::CacheWorkflow))
-                || Some(frame.artifact.settings.working_scale)
-                    == self.config.quality.expected_scale(&frame.artifact.metadata))
+                || frame.processing_quality == self.config.quality.preview()
+                    && frame.artifact.settings.working_scale.divisor()
+                        <= app
+                            .preview_scale_for(path, self.config.quality.preview())
+                            .divisor())
             && crate::rendering::matching::same_authored_edits(
                 &frame.requested,
                 self.expected

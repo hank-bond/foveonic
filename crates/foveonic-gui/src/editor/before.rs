@@ -67,7 +67,8 @@ impl App {
         if self.before.active == target {
             self.exit_before();
             if self.frame.as_ref().is_none_or(|f| {
-                f.framing_preview != self.framing_preview_active()
+                f.processing_quality != self.current_processing_quality()
+                    || f.framing_preview != self.framing_preview_active()
                     || !crate::rendering::matching::same_authored_edits(
                         &f.requested,
                         &self.settings,
@@ -88,14 +89,19 @@ impl App {
         }
         self.before.active = Rendition::Current;
         self.before.detail = None;
+        let processing_quality = self.current_processing_quality();
         if let Some(frame) = self.before.take_current() {
-            self.frame = frame;
+            self.frame = frame.filter(|frame| frame.processing_quality == processing_quality);
         }
         self.revision += 1;
         if let Some(path) = &self.selected {
             self.worker.retire_before(path);
             if self.output == "final" && !self.comparison.requested() {
-                if let Some(frame) = self.multi_edit.take_frame(path) {
+                if let Some(frame) = self
+                    .multi_edit
+                    .take_frame(path)
+                    .filter(|frame| frame.processing_quality == processing_quality)
+                {
                     if self
                         .frame
                         .as_ref()

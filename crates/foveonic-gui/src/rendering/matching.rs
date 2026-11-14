@@ -1,6 +1,7 @@
 //! Defines shared settings and request comparisons without selecting work or admitting results.
 
 use super::request::Request;
+use foveonic::render::ProcessingQuality;
 use foveonic::{
     noise_calibration::Calibration,
     render::{Scale, Settings},
@@ -21,12 +22,14 @@ pub(crate) fn can_overlay_edits(
     detail: &Settings,
     detail_revision: u64,
 ) -> bool {
-    detail_revision > base_revision || same_authored_edits(base, detail)
+    base.processing_quality == detail.processing_quality
+        && (detail_revision > base_revision || same_authored_edits(base, detail))
 }
 
 fn authored_edits(settings: &Settings) -> Settings {
     let mut edits = settings.clone();
     edits.working_scale = Scale::NATIVE;
+    edits.processing_quality = ProcessingQuality::Quality;
     edits.preview_region = None;
     edits.dehaze_estimate = false;
     edits.photographic.color_editor.advanced.clear_names();
@@ -42,6 +45,9 @@ pub(crate) fn same_image_geometry(a: &Settings, b: &Settings) -> bool {
 /// Crop and rotation can reframe existing pixels. Output size remains numerical.
 /// Source, processing grid and consumer context must be checked by the caller.
 pub(crate) fn same_pixel_settings(a: &Settings, b: &Settings) -> bool {
+    if a.processing_quality != b.processing_quality {
+        return false;
+    }
     let a = authored_edits(a);
     let mut b = authored_edits(b);
     b.crop = a.crop;
@@ -68,7 +74,7 @@ pub(crate) fn same_request_context(a: &Request, b: &Request) -> bool {
         && a.output == b.output
         && a.rendition == b.rendition
         && a.comparison == b.comparison
-        && a.preview_policy == b.preview_policy
+        && a.processing_quality == b.processing_quality
         && a.export.is_none()
         && b.export.is_none()
         && same_calibration_snapshot(&a.calibration, &b.calibration)
@@ -87,7 +93,7 @@ pub(crate) fn can_share_pixel_work(a: &Request, b: &Request) -> bool {
     same_request_context(a, b)
         && same_pixel_settings(&a.settings, &b.settings)
         && (presentation_changed(a, b)
-            || (a.preview_quality == b.preview_quality
+            || (a.preview_scale == b.preview_scale
                 && a.settings.preview_region == b.settings.preview_region))
 }
 
@@ -97,13 +103,13 @@ pub(crate) fn same_delivery_request(a: &Request, b: &Request) -> bool {
     same_request_context(a, b)
         && a.framing_preview == b.framing_preview
         && a.settings == b.settings
-        && a.preview_quality == b.preview_quality
+        && a.preview_scale == b.preview_scale
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{editor::Rendition, preferences::PreviewMode};
+    use crate::editor::Rendition;
 
     #[test]
     fn overlay_feedback_preserves_same_edits_and_never_covers_newer_edits_with_old_detail() {
@@ -128,8 +134,8 @@ mod tests {
             revision: 1,
             path: "test.x3f".into(),
             settings: Settings::new("Sunlight", "Standard"),
-            preview_quality: PreviewMode::Thumb,
-            preview_policy: PreviewMode::Smart,
+            preview_scale: foveonic::render::Scale::new(8).unwrap(),
+            processing_quality: ProcessingQuality::Quality,
             output: "final".into(),
             comparison: false,
             export: None,
@@ -141,7 +147,7 @@ mod tests {
         let a = request();
         let mut b = a.clone();
         b.revision += 1;
-        b.preview_quality = PreviewMode::Smart;
+        b.preview_scale = foveonic::render::Scale::new(2).unwrap();
         b.framing_preview = true;
         b.settings.crop.bounds = [0.1, 0.2, 0.9, 0.8];
         b.settings.rotation.degrees = 7.;
@@ -153,9 +159,9 @@ mod tests {
         b.settings.exposure = 0.5;
         assert!(!same_pixel_settings(&a.settings, &b.settings));
         b.settings = a.settings.clone();
-        b.preview_policy = PreviewMode::Full;
+        b.processing_quality = ProcessingQuality::Speed;
         assert!(!same_request_context(&a, &b));
-        b.preview_policy = PreviewMode::Smart;
+        b.processing_quality = ProcessingQuality::Quality;
         b.path = "another.x3f".into();
         assert!(!same_request_context(&a, &b));
     }
@@ -188,7 +194,7 @@ mod tests {
         assert!(!same_delivery_request(&a, &b));
         b.settings.crop.bounds = [0.1, 0.2, 0.9, 0.8];
         b.settings.rotation.degrees = 7.;
-        b.preview_quality = PreviewMode::Full;
+        b.preview_scale = foveonic::render::Scale::NATIVE;
         assert!(!same_authored_edits(&a.settings, &b.settings));
         assert!(!same_image_geometry(&a.settings, &b.settings));
         assert!(same_pixel_settings(&a.settings, &b.settings));
@@ -205,12 +211,37 @@ mod tests {
         let mut b = a.clone();
         b.revision += 1;
         assert!(same_delivery_request(&a, &b));
-        b.preview_quality = PreviewMode::Full;
+        b.preview_scale = foveonic::render::Scale::NATIVE;
         assert!(!same_delivery_request(&a, &b));
-        b.preview_quality = a.preview_quality;
+        b.preview_scale = a.preview_scale;
         b.settings.exposure = 0.25;
         assert!(same_image_geometry(&a.settings, &b.settings));
         assert!(!same_authored_edits(&a.settings, &b.settings));
         assert!(!can_share_pixel_work(&a, &b));
+    }
+}
+
+#[cfg(test)]
+mod quality_tests {
+    use super::*;
+
+    #[test]
+    fn processing_quality_is_transient_but_changes_pixels_and_overlay_compatibility() {
+        let quality = Settings::default();
+        let mut speed = quality.clone();
+        speed.processing_quality = ProcessingQuality::Speed;
+        assert!(same_authored_edits(&quality, &speed));
+        assert!(!same_pixel_settings(&quality, &speed));
+        assert!(!can_overlay_edits(&quality, 1, &speed, 2));
+        speed.exposure = 0.5;
+        assert!(can_overlay_edits(
+            &quality,
+            1,
+            &Settings {
+                exposure: 0.5,
+                ..quality.clone()
+            },
+            2
+        ));
     }
 }

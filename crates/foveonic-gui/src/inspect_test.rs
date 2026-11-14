@@ -675,11 +675,11 @@ fn early_quattro_hint_keeps_final_unavailable_without_merrill_menu_choices() {
 mod preview_tests {
     use super::*;
     #[test]
-    fn all_numeric_workspace_modes_are_visible_and_fast_selection_changes_state() {
-        use crate::preferences::PreviewMode;
+    fn both_processing_modes_are_visible_and_speed_selection_changes_state() {
+        use foveonic::render::ProcessingQuality;
         let ctx = egui::Context::default();
         widgets::install_style(&ctx);
-        let mut quality = PreviewMode::Full;
+        let mut quality = ProcessingQuality::Quality;
         let mut draw = |events| {
             let mut changed = false;
             let output = ctx.run(
@@ -693,7 +693,7 @@ mod preview_tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        changed = preview_quality(ui, true, &mut quality);
+                        changed = processing_quality(ui, true, &mut quality);
                     });
                 },
             );
@@ -706,7 +706,7 @@ mod preview_tests {
             .iter()
             .find_map(|s| {
                 if let egui::Shape::Text(t) = &s.shape {
-                    (t.galley.job.text == "Fast").then(|| t.pos + t.galley.size() * 0.5)
+                    (t.galley.job.text == "Speed").then(|| t.pos + t.galley.size() * 0.5)
                 } else {
                     None
                 }
@@ -718,12 +718,12 @@ mod preview_tests {
             pressed,
             modifiers: Default::default(),
         };
-        for label in ["Full", "Fast", "Smart", "Draft", "Thumb"] {
+        for label in ["Quality", "Speed"] {
             assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                 egui::Shape::Text(text) if text.galley.job.text == label)));
         }
         draw(vec![egui::Event::PointerMoved(point), button(true)]);
         assert!(draw(vec![button(false)]).0);
-        assert_eq!(quality, PreviewMode::Fast);
+        assert_eq!(quality, ProcessingQuality::Speed);
     }
 }

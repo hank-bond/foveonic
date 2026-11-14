@@ -1,10 +1,10 @@
-//! Publishes Smart detail intent and preserves compatible image presentation without sequencing jobs.
+//! Publishes native-detail intent and preserves compatible image presentation without sequencing jobs.
 
 use super::{
     matching::{same_authored_edits, same_image_geometry},
     worker,
 };
-use crate::{preferences, App};
+use crate::App;
 use foveonic::render::{Scale, Settings};
 use std::path::Path;
 // Keep a small margin around the clicked viewport while the whole frame catches up.
@@ -55,14 +55,12 @@ impl App {
     }
 
     pub(crate) fn smart_refinement_active(&self) -> bool {
-        self.preferences.preview_quality == preferences::PreviewMode::Smart
-            && !self.framing_preview_active()
+        !self.framing_preview_active()
             && self.output == "final"
             && !self.comparison.requested()
             && (self.viewport().explicit_zoom() || self.detail_frame().is_some())
             && self.selected.as_ref().is_some_and(|path| {
-                self.preview_quality_for(path, preferences::PreviewMode::Smart)
-                    == preferences::PreviewMode::Full
+                self.preview_scale_for(path, self.preferences.processing_quality) == Scale::NATIVE
             })
     }
 
@@ -74,9 +72,7 @@ impl App {
         requested: &Settings,
         rendition: crate::editor::Rendition,
     ) -> Option<&worker::Frame> {
-        if self.preferences.preview_quality != preferences::PreviewMode::Smart
-            || self.loupe_inspecting(path)
-        {
+        if self.loupe_inspecting(path) {
             return None;
         }
         self.compatible_detail(path, base, requested, rendition)
@@ -104,6 +100,7 @@ impl App {
             && detail.rendition == rendition
             && !detail.framing_preview
             && detail.comparison.is_none()
+            && detail.requested.processing_quality == self.preferences.processing_quality
             && same_image_geometry(&detail.requested, requested)
             && detail.calibration_signature.as_deref()
                 == calibration.as_ref().map(|profile| profile.signature())
@@ -151,6 +148,7 @@ impl App {
                 && frame.comparison.is_none()
                 && frame.artifact.settings.output_size.is_none()
                 && requested.output_size.is_none()
+                && frame.requested.processing_quality == self.preferences.processing_quality
                 && same_image_geometry(&frame.requested, requested)
                 && frame.calibration_signature.as_deref()
                     == calibration.as_ref().map(|profile| profile.signature())
@@ -180,19 +178,15 @@ impl App {
         path: &Path,
         mut settings: Settings,
     ) -> Option<PhotoRefinement> {
-        if self.preferences.preview_quality == preferences::PreviewMode::Smart
-            && self.loupe_inspecting(path)
-        {
+        if self.loupe_inspecting(path) {
             return Some(PhotoRefinement::Deferred);
         }
-        if self.preferences.preview_quality != preferences::PreviewMode::Smart
-            || !self
-                .displayed_paths
-                .iter()
-                .any(|displayed| displayed == path)
+        if !self
+            .displayed_paths
+            .iter()
+            .any(|displayed| displayed == path)
             || !self.viewports.view(Some(path)).explicit_zoom()
-            || self.preview_quality_for(path, preferences::PreviewMode::Smart)
-                != preferences::PreviewMode::Full
+            || self.preview_scale_for(path, self.preferences.processing_quality) != Scale::NATIVE
             || (self.selected.as_deref() == Some(path) && self.framing_preview_active())
         {
             return None;
@@ -224,8 +218,8 @@ impl App {
             revision: self.revision + 1,
             path: path.to_owned(),
             settings,
-            preview_quality: preferences::PreviewMode::Full,
-            preview_policy: preferences::PreviewMode::Smart,
+            preview_scale: foveonic::render::Scale::NATIVE,
+            processing_quality: self.preferences.processing_quality,
             output: "final".into(),
             comparison: false,
             export: None,
@@ -264,7 +258,7 @@ impl App {
             self.revision + 1,
             None,
             region,
-            preferences::PreviewMode::Full,
+            self.preferences.processing_quality,
         ) else {
             return;
         };
@@ -305,14 +299,13 @@ impl App {
             return;
         }
         if self.framing_preview_active() {
-            if zoomed && self.preferences.preview_quality == preferences::PreviewMode::Smart {
+            if zoomed {
                 if let Some(path) = &self.selected {
-                    let quality = self.preview_quality_for(path, preferences::PreviewMode::Smart);
+                    let quality = self.preview_scale_for(path, self.preferences.processing_quality);
                     if self.frame.as_ref().is_some_and(|frame| {
-                        frame.artifact.settings.working_scale.divisor()
-                            > quality.working_scale().divisor()
+                        frame.artifact.settings.working_scale.divisor() > quality.divisor()
                     }) {
-                        self.submit_with_quality(None, None, quality);
+                        self.submit_with_quality(None, None, self.preferences.processing_quality);
                     }
                 }
             }

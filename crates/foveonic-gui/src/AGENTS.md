@@ -48,7 +48,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[diagnostics.rs](./diagnostics.rs)** Controls bounded manual and scripted captures through the shared background recorder.
 - **[display.rs](./display.rs)** Declares the window's display encoding and tags its native Metal layer for host color matching.
 - **[display_image.rs](./display_image.rs)** Uploads bounded linear-light photographic previews without clipping them to sRGB.
-- **[export.rs](./export.rs)** Shares camera-choice resolution and Full photographic and DNG exports between interactive and batch workers.
+- **[export.rs](./export.rs)** Shares camera-choice resolution and Quality photographic and DNG exports between interactive and batch workers.
 - **[folder_loader.rs](./folder_loader.rs)** Discovers folder snapshots away from the UI and publishes only the newest request.
 - **[framing.rs](./framing.rs)** Shares the rotated editing plane, crop frame, exterior shading and dimensions across framing tools.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
@@ -56,7 +56,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[icon.rs](./icon.rs)** Loads the window icon while leaving macOS Dock appearances to the app bundle.
 - **[import_review.rs](./import_review.rs)** Prepares frozen processing selections and tracks destination-scoped import review and batch status.
 - **[information.rs](./information.rs)** Shows selectable capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
-- **[inspect.rs](./inspect.rs)** Groups viewport background, preview quality, pipeline views, and display-only comparisons.
+- **[inspect.rs](./inspect.rs)** Groups viewport background, processing quality, pipeline views, and display-only comparisons.
 - **[loupe_tool.rs](./loupe_tool.rs)** Owns transient source-anchored loupe gestures, persisted options and independent lens geometry.
 - **[loupe_view.rs](./loupe_view.rs)** Presents transient native-detail inspection through the existing photo owner and render coordinator.
 - **[main.rs](./main.rs)** Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.

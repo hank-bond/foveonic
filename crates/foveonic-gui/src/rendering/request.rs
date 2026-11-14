@@ -1,6 +1,7 @@
 //! Describes photo render requests and resolves their purpose and preview geometry independently of execution.
 
-use crate::{editor::Rendition, export::Export, preferences::PreviewMode};
+use crate::{editor::Rendition, export::Export};
+use foveonic::render::ProcessingQuality;
 use foveonic::{
     render::{ControlCapabilities, Scale, Settings},
     source::{Metadata, Result},
@@ -17,9 +18,9 @@ pub struct Request {
     pub revision: u64,
     pub path: PathBuf,
     pub settings: Settings,
-    pub preview_quality: PreviewMode,
-    /// Workspace choice, independent of Smart refinement passes.
-    pub preview_policy: PreviewMode,
+    pub preview_scale: Scale,
+    /// Processing policy, independent of preview resolution and refinement passes.
+    pub processing_quality: ProcessingQuality,
     pub output: String,
     pub comparison: bool,
     pub export: Option<Export>,
@@ -37,7 +38,7 @@ impl Refinement {
     pub fn same_sequence(&self, other: &Self) -> bool {
         super::matching::same_request_context(&self.first, &other.first)
             && super::matching::same_authored_edits(&self.first.settings, &other.first.settings)
-            && self.first.preview_policy == other.first.preview_policy
+            && self.first.processing_quality == other.first.processing_quality
             && self.whole.is_some() == other.whole.is_some()
     }
 }
@@ -73,33 +74,34 @@ impl Request {
         self.export.is_none() && self.output == "final" && !self.comparison
     }
 
-    /// Requested processing scale before camera-specific Thumb sizing or reuse
+    /// Requested processing scale before camera-specific smallest-grid sizing or reuse
     /// of an existing framing plane. Inspection, comparison, export and detail
     /// require native samples, independently of the workspace preview choice.
     pub fn nominal_working_scale(&self) -> Scale {
         if !self.photographic_preview() || self.detail {
             Scale::NATIVE
         } else {
-            self.preview_quality.working_scale()
+            self.preview_scale
         }
     }
 
-    /// Reduced final views share the reduced working set, including Smart,
+    /// Reduced final views share the reduced working set, including both policies,
     /// Camera and Defaults. Native detail recovers its source through the loader.
     pub fn uses_reduced_session(&self) -> bool {
-        matches!(
-            self.preview_quality,
-            PreviewMode::Fast | PreviewMode::Draft | PreviewMode::Thumb
-        ) && self.photographic_preview()
-            && !self.detail
+        self.preview_scale.is_reduced() && self.photographic_preview() && !self.detail
     }
 
     /// Apply processing geometry to camera-resolved settings without changing
     /// authored controls or the workspace preview policy.
     pub fn apply_preview(&self, settings: &mut Settings, metadata: &Metadata) -> Result<()> {
+        settings.processing_quality = if self.photographic_preview() {
+            self.processing_quality
+        } else {
+            ProcessingQuality::Quality
+        };
         settings.working_scale = self.nominal_working_scale();
         if settings.working_scale.is_reduced() {
-            settings.working_scale = camera_preview_scale(self.preview_quality, metadata)?;
+            settings.working_scale = camera_preview_scale(self.preview_scale, metadata)?;
         }
         if self.photographic_preview() && self.detail {
             // Detail is sampled in native image coordinates, independently of final output sizing.
@@ -111,27 +113,22 @@ impl Request {
         Ok(())
     }
 
-    /// Smart can display an already completed finer image without processing it
-    /// again. Explicit modes require their selected grid. Composition changes
-    /// separately preserve the existing photographic pixels.
+    /// Both policies can display completed finer sampling without processing it again.
+    /// Composition changes separately preserve compatible photographic pixels.
     pub fn accepts_scale(&self, scale: Scale, metadata: &Metadata) -> Result<bool> {
         let mut settings = self.settings.clone();
         self.apply_preview(&mut settings, metadata)?;
-        Ok(super::quality::accepts_scale(
-            self.preview_policy,
-            settings.working_scale,
-            scale,
-        ))
+        Ok(super::quality::accepts_scale(settings.working_scale, scale))
     }
 }
 
 /// Foreground requests and idle preparation use the same camera scale policy.
 /// Camera interpretation remains owned by the processing capabilities.
-pub(crate) fn camera_preview_scale(quality: PreviewMode, metadata: &Metadata) -> Result<Scale> {
-    if quality == PreviewMode::Thumb {
+pub(crate) fn camera_preview_scale(scale: Scale, metadata: &Metadata) -> Result<Scale> {
+    if scale.divisor() == 8 {
         Ok(ControlCapabilities::from_metadata(metadata)?.thumb_scale())
     } else {
-        Ok(quality.working_scale())
+        Ok(scale)
     }
 }
 

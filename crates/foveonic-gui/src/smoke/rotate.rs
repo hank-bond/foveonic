@@ -3,6 +3,7 @@
 use super::{App, Smoke};
 use crate::{rendering::worker::Frame, viewport::Viewport};
 use eframe::egui;
+use foveonic::render::ProcessingQuality;
 use foveonic::render::Settings;
 
 pub(super) const TARGETS: &[&str] = &[
@@ -82,13 +83,14 @@ pub(super) fn check(
         }
         _ => {}
     }
-    if target == "rotate-fast" {
-        assert!(frame.artifact.settings.working_scale.is_reduced());
-    }
-    if target == "rotate-smart" {
+    if matches!(target, "rotate-fast" | "rotate-smart") {
         assert_eq!(
-            frame.artifact.settings.working_scale,
-            foveonic::render::Scale::new(2).unwrap()
+            frame.processing_quality,
+            if target == "rotate-fast" {
+                ProcessingQuality::Speed
+            } else {
+                ProcessingQuality::Quality
+            }
         );
         assert!(frame.artifact.settings.preview_region.is_none());
     }
@@ -152,10 +154,11 @@ impl App {
                     .pan_to(egui::vec2(0.57, 0.45));
             }
             "rotate-fast" | "rotate-smart" => {
-                self.preferences.preview_quality = if smoke.targets[smoke.index] == "rotate-fast" {
-                    crate::preferences::PreviewMode::Fast
+                self.preferences.processing_quality = if smoke.targets[smoke.index] == "rotate-fast"
+                {
+                    foveonic::render::ProcessingQuality::Speed
                 } else {
-                    crate::preferences::PreviewMode::Smart
+                    foveonic::render::ProcessingQuality::Quality
                 };
                 self.submit(None);
             }

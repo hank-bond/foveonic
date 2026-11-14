@@ -144,7 +144,7 @@ impl RenderCoordinator {
                 && entry.task.stamp.target.path == target.path
                 && entry.task.stamp.target.purpose == Purpose::Detail
                 && (entry.settled
-                    || entry.task.request.preview_policy != request.preview_policy
+                    || entry.task.request.processing_quality != request.processing_quality
                     || !crate::rendering::matching::same_pixel_settings(
                         &entry.task.request.settings,
                         &request.settings,
@@ -226,7 +226,7 @@ impl RenderCoordinator {
             speculative: false,
         });
         crate::timing::task(&task.stamp, "desired", || {
-            json!({"nominal_scale":task.request.preview_quality.working_scale().divisor(),"preview_quality":format!("{:?}",task.request.preview_quality),
+            json!({"nominal_scale":task.request.preview_scale.divisor(),"preview_scale":format!("{:?}",task.request.preview_scale),
             "output":task.request.output,"settings":task.request.settings,"preview_region":task.request.settings.preview_region,"pixel_reuse":compatible})
         });
         if let Some(index) = existing {

@@ -2,9 +2,11 @@
 
 use super::*;
 use crate::rendering::request;
+use foveonic::render::ProcessingQuality;
 
 fn view(settings: &Settings) -> ViewContext<'_> {
     ViewContext {
+        processing_quality: foveonic::render::ProcessingQuality::Quality,
         active: Some(Path::new("a.x3f")),
         rendition: Rendition::Current,
         output: "final",
@@ -279,7 +281,7 @@ fn frozen_export_completion_survives_calibration_changes() {
 
 #[test]
 fn overtaken_edit_advances_feedback_then_latest_group_settles_without_rewinding() {
-    use crate::{preferences::PreviewMode, rendering::coordinator::RenderCoordinator};
+    use crate::rendering::coordinator::RenderCoordinator;
     use foveonic::source::SourceOrigin;
     use std::{sync::Arc, time::Instant};
 
@@ -296,8 +298,8 @@ fn overtaken_edit_advances_feedback_then_latest_group_settles_without_rewinding(
             output: "final".into(),
             framing_preview: false,
             calibration: None,
-            preview_quality: PreviewMode::Thumb,
-            preview_policy: PreviewMode::Thumb,
+            preview_scale: foveonic::render::Scale::new(8).unwrap(),
+            processing_quality: ProcessingQuality::Speed,
             comparison: false,
             export: None,
         })
@@ -401,6 +403,7 @@ fn inactive_detail_uses_its_own_geometry_and_content_order() {
 fn view_snapshot_keeps_each_photos_content_order_separate() {
     let settings = Settings::default();
     let snapshot = ViewState {
+        processing_quality: foveonic::render::ProcessingQuality::Quality,
         active: Some("b.x3f".into()),
         rendition: Rendition::Camera,
         output: "final".into(),
@@ -432,4 +435,125 @@ fn view_snapshot_keeps_each_photos_content_order_separate() {
         Ok(Destination::Overview)
     );
     assert!(!snapshot.context(Path::new("removed.x3f")).overview_visible);
+}
+
+#[test]
+fn another_policy_cannot_replace_pixel_history_or_photo_feedback_at_the_same_native_scale() {
+    let quality = Settings::default();
+    let mut speed = quality.clone();
+    speed.processing_quality = ProcessingQuality::Speed;
+    for completion in [Completion::Current, Completion::Superseded] {
+        let decision = classify(completion, &reply(&speed), &view(&quality));
+        assert_eq!(
+            decision,
+            Decision {
+                retain_pixels: false,
+                update_photo: false,
+                destination: Err(Rejection::ProcessingQualityChanged),
+            }
+        );
+    }
+}
+
+#[test]
+fn speed_background_overviews_remain_admissible_while_the_active_photo_shows_inspection() {
+    let mut speed = Settings::default();
+    speed.processing_quality = ProcessingQuality::Speed;
+    let mut context = view(&speed);
+    context.processing_quality = ProcessingQuality::Speed;
+    context.active = Some(Path::new("b.x3f"));
+    context.output = "sensor.rgb";
+    let incoming = reply(&speed);
+    assert_eq!(
+        classify(Completion::Current, &incoming, &context),
+        Decision {
+            retain_pixels: true,
+            update_photo: true,
+            destination: Ok(Destination::Overview),
+        }
+    );
+    context.active = Some(incoming.path);
+    // The active photograph's ordinary overview can also advance behind its inspector.
+    assert_eq!(
+        classify(Completion::Current, &incoming, &context).destination,
+        Ok(Destination::Overview)
+    );
+
+    let quality = Settings::default();
+    let wrong = reply(&quality);
+    assert_eq!(
+        classify(Completion::Current, &wrong, &context),
+        Decision {
+            retain_pixels: false,
+            update_photo: false,
+            destination: Err(Rejection::ProcessingQualityChanged),
+        }
+    );
+}
+
+#[test]
+fn active_current_inspection_requires_quality_in_a_speed_workspace() {
+    let quality = Settings::default();
+    for (output, comparison) in [("sensor.rgb", false), ("final", true)] {
+        let purpose = Purpose::Inspection(output.into(), comparison);
+        let mut context = view(&quality);
+        context.processing_quality = ProcessingQuality::Speed;
+        context.output = output;
+        context.comparison = comparison;
+        let mut incoming = reply(&quality);
+        incoming.purpose = &purpose;
+        incoming.image.as_mut().unwrap().output = output;
+        incoming.image.as_mut().unwrap().comparison = comparison;
+        assert_eq!(
+            classify(Completion::Current, &incoming, &context),
+            Decision {
+                retain_pixels: true,
+                update_photo: true,
+                destination: Ok(Destination::Active),
+            }
+        );
+        let mut speed = quality.clone();
+        speed.processing_quality = ProcessingQuality::Speed;
+        incoming.image.as_mut().unwrap().requested = &speed;
+        assert_eq!(
+            classify(Completion::Current, &incoming, &context),
+            Decision {
+                retain_pixels: false,
+                update_photo: false,
+                destination: Err(Rejection::ProcessingQualityChanged),
+            }
+        );
+    }
+}
+
+#[test]
+fn before_photographic_renditions_use_speed_even_when_the_saved_current_root_is_inspection() {
+    let mut speed = Settings::default();
+    speed.processing_quality = ProcessingQuality::Speed;
+    for (rendition, purpose) in [
+        (Rendition::Camera, Purpose::Camera),
+        (Rendition::Defaults, Purpose::Defaults),
+    ] {
+        let mut context = view(&speed);
+        context.processing_quality = ProcessingQuality::Speed;
+        context.rendition = rendition;
+        context.output = "sensor.rgb";
+        let mut incoming = reply(&speed);
+        incoming.purpose = &purpose;
+        incoming.rendition = rendition;
+        assert_eq!(
+            classify(Completion::Current, &incoming, &context),
+            Decision {
+                retain_pixels: true,
+                update_photo: true,
+                destination: Ok(Destination::Active),
+            }
+        );
+        let quality = Settings::default();
+        incoming.image.as_mut().unwrap().requested = &quality;
+        assert_eq!(
+            classify(Completion::Current, &incoming, &context).destination,
+            Err(Rejection::ProcessingQualityChanged)
+        );
+    }
 }

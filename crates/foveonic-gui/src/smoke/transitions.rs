@@ -1,7 +1,8 @@
 //! Runs replayable transitions through the existing native scenario.
 
-use crate::{preferences::PreviewMode, App};
+use crate::App;
 use eframe::egui;
+use foveonic::render::ProcessingQuality;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -79,17 +80,17 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::SmartGroupEnd,
         Step::Quality(0),
         Step::Quality(1),
-        Step::Quality(2),
-        Step::Quality(3),
-        Step::Quality(4),
-        Step::Quality(2),
+        Step::Quality(0),
+        Step::Quality(0),
+        Step::Quality(0),
+        Step::Quality(0),
         Step::Before,
         Step::RefreshOverviews,
         Step::After,
         Step::Inspection,
         Step::RefreshInspection,
         Step::Photograph,
-        Step::Quality(4),
+        Step::Quality(0),
         Step::TileZoom,
         Step::TilePan,
         Step::TileSelect,
@@ -101,14 +102,14 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::Single,
         Step::Quality(0),
         Step::Quality(1),
-        Step::Quality(2),
-        Step::Quality(3),
-        Step::Quality(4),
-        Step::Quality(3),
+        Step::Quality(0),
+        Step::Quality(0),
+        Step::Quality(0),
+        Step::Quality(0),
         Step::Zoom,
         Step::Pan,
         Step::Fit,
-        Step::Quality(4),
+        Step::Quality(0),
         Step::Zoom,
         Step::Pan,
         Step::ViewportScopes,
@@ -395,7 +396,7 @@ impl TransitionJourney {
                 self.release();
                 return Ok(false);
             }
-            app.preferences.preview_quality = PreviewMode::Draft;
+            app.preferences.processing_quality = ProcessingQuality::Speed;
             self.model.adjust_exposure(self.held_delta);
             super::scenarios::apply_exposure(app, f64::from(self.held_delta));
             self.events.push(serde_json::json!({"action":"newer exposure and Draft", "delta":self.held_delta, "coverage":"direct-command"}));
@@ -510,42 +511,15 @@ impl TransitionJourney {
                     Some(frame) if frame.rendition == crate::editor::Rendition::Current => frame,
                     _ => return Ok(false),
                 };
-                let divisor = match which {
-                    0 => 1,
-                    1 => 2,
-                    2 => {
-                        let (_, image) = app
-                            .viewport()
-                            .image_rectangles()
-                            .ok_or("missing Smart display geometry")?;
-                        let extent = frame.display_extent(false);
-                        let density = (image.width() / extent[0] as f32)
-                            .max(image.height() / extent[1] as f32)
-                            * ctx.pixels_per_point();
-                        let nominal = [8, 4, 2, 1]
-                            .into_iter()
-                            .find(|divisor| density * *divisor as f32 <= 1.5)
-                            .unwrap_or(1);
-                        if nominal == 8 {
-                            foveonic::render::ControlCapabilities::from_metadata(
-                                &frame.artifact.metadata,
-                            )
-                            .map_err(|e| e.to_string())?
-                            .thumb_scale()
-                            .divisor()
-                        } else {
-                            nominal
-                        }
-                    }
-                    3 => 4,
-                    _ => foveonic::render::ControlCapabilities::from_metadata(
-                        &frame.artifact.metadata,
-                    )
-                    .map_err(|e| e.to_string())?
-                    .thumb_scale()
-                    .divisor(),
-                };
-                if frame.artifact.settings.working_scale.divisor() != divisor
+                let _ = which;
+                let divisor = crate::rendering::request::camera_preview_scale(
+                    app.preview_scale_for(&frame.path, app.preferences.processing_quality),
+                    &frame.artifact.metadata,
+                )
+                .map_err(|e| e.to_string())?
+                .divisor();
+                if frame.processing_quality != app.preferences.processing_quality
+                    || frame.artifact.settings.working_scale.divisor() > divisor
                     || !crate::rendering::matching::same_authored_edits(
                         &frame.requested,
                         &app.settings,
@@ -561,34 +535,22 @@ impl TransitionJourney {
                         let Some(frame) = app.multi_edit_frame(path) else {
                             return Ok(false);
                         };
-                        let expected = match which {
-                            0 => 1,
-                            1 => 2,
-                            3 => 4,
-                            2 => crate::rendering::request::camera_preview_scale(
-                                app.preview_quality_for(path, PreviewMode::Smart),
-                                &frame.artifact.metadata,
-                            )
-                            .map_err(|e| e.to_string())?
-                            .divisor(),
-                            _ => foveonic::render::ControlCapabilities::from_metadata(
-                                &frame.artifact.metadata,
-                            )
-                            .map_err(|e| e.to_string())?
-                            .thumb_scale()
-                            .divisor(),
-                        };
+                        let expected = crate::rendering::request::camera_preview_scale(
+                            app.preview_scale_for(path, app.preferences.processing_quality),
+                            &frame.artifact.metadata,
+                        )
+                        .map_err(|e| e.to_string())?
+                        .divisor();
                         let actual = frame.artifact.settings.working_scale.divisor();
-                        if (if which == 2 {
-                            actual > expected
-                        } else {
-                            actual != expected
-                        }) || !app.multi_edit.settings(path).is_some_and(|settings| {
-                            crate::rendering::matching::same_authored_edits(
-                                &frame.requested,
-                                settings,
-                            )
-                        }) {
+                        if frame.processing_quality != app.preferences.processing_quality
+                            || actual > expected
+                            || !app.multi_edit.settings(path).is_some_and(|settings| {
+                                crate::rendering::matching::same_authored_edits(
+                                    &frame.requested,
+                                    settings,
+                                )
+                            })
+                        {
                             return Ok(false);
                         }
                         self.events.push(serde_json::json!({"quality_photo":path,"expected_divisor":expected,"actual_divisor":actual}));
@@ -674,7 +636,7 @@ impl TransitionJourney {
                     Some(frame) if frame.rendition == crate::editor::Rendition::Current => frame,
                     _ => return Ok(false),
                 };
-                if frame.artifact.settings.working_scale.divisor() != 4
+                if frame.processing_quality != app.preferences.processing_quality
                     || !crate::rendering::matching::same_authored_edits(
                         &frame.requested,
                         &app.settings,
@@ -825,7 +787,7 @@ impl TransitionJourney {
                 for path in paths {
                     app.viewports.view_mut(Some(path)).reset();
                 }
-                app.preferences.preview_quality = PreviewMode::Smart;
+                app.preferences.processing_quality = ProcessingQuality::Speed;
                 self.model.select((0..paths.len()).collect());
                 // Change viewport editing targets through their ordinary command API.
                 for (path, gesture) in [
@@ -1037,13 +999,8 @@ impl TransitionJourney {
             }
             Step::Quality(which) => {
                 app.viewport_mut().reset();
-                app.preferences.preview_quality = [
-                    PreviewMode::Full,
-                    PreviewMode::Fast,
-                    PreviewMode::Smart,
-                    PreviewMode::Draft,
-                    PreviewMode::Thumb,
-                ][which as usize];
+                app.preferences.processing_quality =
+                    [ProcessingQuality::Quality, ProcessingQuality::Speed][which as usize];
                 app.submit(None);
             }
             Step::Zoom => {
@@ -1108,7 +1065,7 @@ impl TransitionJourney {
                 }
             }
             Step::BeforeZoom => {
-                app.preferences.preview_quality = PreviewMode::Smart;
+                app.preferences.processing_quality = ProcessingQuality::Speed;
                 app.viewport_mut().zoom_by(20.);
                 app.submit(None);
             }
@@ -1145,7 +1102,7 @@ impl TransitionJourney {
                 app.submit(None);
             }
             Step::Restore => {
-                app.preferences.preview_quality = PreviewMode::Thumb;
+                app.preferences.processing_quality = ProcessingQuality::Speed;
                 app.browser.set_actions(vec![(
                     crate::shortcuts::BrowserAction::SelectAll,
                     egui::Modifiers::COMMAND,

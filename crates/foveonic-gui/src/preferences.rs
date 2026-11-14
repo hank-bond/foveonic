@@ -1,5 +1,6 @@
 //! Persists workspace, display, cache and per-mode processing preferences separately from image edits.
 
+use foveonic::render::ProcessingQuality;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 // Separate review bundles can retain their own workspace and recipe defaults.
@@ -63,29 +64,6 @@ pub enum FolderMode {
     Browse,
     Import,
 }
-/// Workspace policy. Smart selects a processing level for the displayed pixel size.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PreviewMode {
-    #[default]
-    Full,
-    Fast,
-    Smart,
-    Draft,
-    Thumb,
-}
-impl PreviewMode {
-    /// Nominal workspace scale before render requests resolve camera-specific Thumb sizing.
-    pub fn working_scale(self) -> foveonic::render::Scale {
-        let divisor = match self {
-            Self::Full => 1,
-            Self::Fast | Self::Smart => 2,
-            Self::Draft => 4,
-            Self::Thumb => 8,
-        };
-        foveonic::render::Scale::new(divisor).expect("workspace scales are powers of two")
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Scope {
     #[default]
@@ -166,7 +144,7 @@ pub struct Preferences {
     pub scope_viewport: bool,
     pub zoom_snap: ZoomPreset,
     pub loupe: crate::loupe_tool::Options,
-    pub preview_quality: PreviewMode,
+    pub processing_quality: ProcessingQuality,
     pub white_viewport_background: bool,
     pub decode_cache: foveonic::decode_cache::Settings,
     pub memory_cache_bytes: u64,
@@ -196,7 +174,7 @@ impl Default for Preferences {
             scope_viewport: true,
             zoom_snap: ZoomPreset::default(),
             loupe: Default::default(),
-            preview_quality: PreviewMode::Full,
+            processing_quality: ProcessingQuality::Quality,
             white_viewport_background: false,
             decode_cache: Default::default(),
             memory_cache_bytes: DEFAULT_MEMORY_CACHE_BYTES,
@@ -218,6 +196,7 @@ impl Preferences {
     ) -> foveonic::render::Settings {
         let mut settings = authored.clone();
         settings.adaptive_tone_tuning = self.adaptive_tone_tuning;
+        settings.processing_quality = self.processing_quality;
         settings
     }
 
@@ -609,10 +588,13 @@ mod preview_tests {
         assert_eq!(invalid.memory_cache_bytes, *MEMORY_BYTES_RANGE.end());
     }
     #[test]
-    fn preview_quality_defaults_full_and_round_trips_as_workspace_state() {
-        assert_eq!(Preferences::default().preview_quality, PreviewMode::Full);
+    fn processing_quality_defaults_to_quality_and_round_trips_as_workspace_state() {
+        assert_eq!(
+            Preferences::default().processing_quality,
+            ProcessingQuality::Quality
+        );
         let prefs = Preferences {
-            preview_quality: PreviewMode::Fast,
+            processing_quality: ProcessingQuality::Speed,
             white_viewport_background: true,
             ..Default::default()
         };
@@ -623,9 +605,9 @@ mod preview_tests {
         );
     }
     #[test]
-    fn smart_and_cache_configuration_roundtrip_without_changing_photo_settings() {
+    fn processing_and_cache_configuration_roundtrip_without_changing_photo_settings() {
         let prefs = Preferences {
-            preview_quality: PreviewMode::Smart,
+            processing_quality: ProcessingQuality::Speed,
             decode_cache: foveonic::decode_cache::Settings {
                 enabled: false,
                 max_bytes: 5_000_000_000,

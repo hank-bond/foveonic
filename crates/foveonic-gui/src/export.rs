@@ -1,11 +1,11 @@
-//! Shares camera-choice resolution and Full photographic and DNG exports between interactive and batch workers.
+//! Shares camera-choice resolution and Quality photographic and DNG exports between interactive and batch workers.
 
 use foveonic::diagnostics as trace;
 use foveonic::{
     importing::ConflictPolicy,
     inspection::Content,
     profile::Profile,
-    render::{Engine, RenderSession, Scale, Settings},
+    render::{Engine, RenderSession, Settings},
     source::Metadata,
 };
 use std::{collections::HashSet, path::PathBuf};
@@ -44,7 +44,7 @@ pub fn next_path(
     Err("no free output filename".into())
 }
 
-/// Publish complete single-photo and batch outputs using the same Full recipes.
+/// Publish complete single-photo and batch outputs using the same Quality recipes.
 pub fn write(
     engine: &Engine,
     session: &mut RenderSession,
@@ -58,13 +58,9 @@ pub fn write(
             .str("destination", &export.path.to_string_lossy())
             .str("format", export.format.extension());
     });
-    let mut settings = settings.clone();
+    let mut settings = settings.for_export();
     settings.processing_sections = export.sections;
     settings.tiff_color_space = export.tiff_color_space;
-    settings.working_scale = Scale::NATIVE;
-    settings.preview_region = None;
-    settings.color_range_preview = None;
-    settings.dehaze_estimate = false;
     let errors = resolve_camera_settings(&mut settings, session.metadata());
     if !errors.is_empty() {
         return Err(errors.join("; ").into());

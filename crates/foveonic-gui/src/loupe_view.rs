@@ -3,11 +3,12 @@
 use crate::{
     editor::Rendition,
     loupe_tool::{self, Geometry},
-    preferences::PreviewMode,
     rendering::{matching, request::Request, smart, worker::Frame},
     viewport, App,
 };
 use eframe::egui;
+#[cfg(test)]
+use foveonic::render::ProcessingQuality;
 use foveonic::{
     render::{Scale, Settings},
     source::SourceOrigin,
@@ -127,6 +128,7 @@ impl App {
             .noise_calibration
             .selected(self.preferences.noise_profile);
         frame.path == path
+            && frame.processing_quality == self.preferences.processing_quality
             && frame.rendition == Rendition::Current
             && frame.output == "final"
             && !frame.framing_preview
@@ -338,8 +340,8 @@ impl App {
             revision: self.revision + 1,
             path: path.clone(),
             settings,
-            preview_quality: PreviewMode::Full,
-            preview_policy: self.preferences.preview_quality,
+            preview_scale: foveonic::render::Scale::NATIVE,
+            processing_quality: self.preferences.processing_quality,
             output: "final".into(),
             comparison: false,
             export: None,
@@ -378,8 +380,8 @@ mod tests {
             revision: 1,
             path: "photo.x3f".into(),
             settings,
-            preview_quality: PreviewMode::Full,
-            preview_policy: PreviewMode::Thumb,
+            preview_scale: foveonic::render::Scale::NATIVE,
+            processing_quality: ProcessingQuality::Speed,
             output: "final".into(),
             comparison: false,
             export: None,
