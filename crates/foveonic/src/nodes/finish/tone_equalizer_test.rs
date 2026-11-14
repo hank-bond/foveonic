@@ -930,3 +930,32 @@ fn gpu_quality_cascade_matches_whole_with_an_unaligned_crop_origin() {
         }
     }
 }
+
+#[test]
+fn guide_workspace_keeps_one_scalar_base_and_three_moment_images() {
+    for extent in [[1, 1], [25, 3], [257, 193], [4800, 3200]] {
+        for quality in [ProcessingQuality::Quality, ProcessingQuality::Speed] {
+            let guide =
+                Guide::new(extent, radius_for_scale(1.), ColorSpace::Srgb, quality).unwrap();
+            let storage = GuideStorage::new(guide);
+            let cells = u64::from(guide.storage_extent()[0]) * u64::from(guide.storage_extent()[1]);
+            assert_eq!(storage.mask, cells * 4);
+            assert_eq!(storage.moments, cells * 16);
+            let coarse = if quality == ProcessingQuality::Speed {
+                let coarse_cells =
+                    u64::from(extent[0].div_ceil(8)) * u64::from(extent[1].div_ceil(8));
+                Some(coarse_cells * 16)
+            } else {
+                None
+            };
+            assert_eq!(storage.coarse_moments, coarse);
+            let allocated =
+                storage.mask + 3 * storage.moments + storage.coarse_moments.unwrap_or(0);
+            assert_eq!(allocated, cells * 52 + coarse.unwrap_or(0));
+            assert!(!guide.stages().is_empty());
+        }
+    }
+    for quality in [ProcessingQuality::Quality, ProcessingQuality::Speed] {
+        assert!(Guide::new([1, 1], 0, ColorSpace::Srgb, quality).is_err());
+    }
+}

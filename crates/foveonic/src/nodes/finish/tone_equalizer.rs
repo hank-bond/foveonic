@@ -308,6 +308,28 @@ pub(crate) fn guide_storage_bytes(extent: [u32; 2], step: u32) -> u64 {
     u64::from(extent[0].div_ceil(step)) * u64::from(extent[1].div_ceil(step)) * 4
 }
 
+/// The scalar base is initialized by fine reduction, updated in place, and
+/// finally encoded in the same buffer. Only moment filters need vec4 storage.
+struct GuideStorage {
+    mask: u64,
+    moments: u64,
+    coarse_moments: Option<u64>,
+}
+impl GuideStorage {
+    fn new(guide: Guide) -> Self {
+        let mask = guide_storage_bytes(guide.extent(), guide.cell_step());
+        let coarse_moments = (guide.cell_step() != 1).then(|| {
+            let step = guide.cell_step() * COARSE_SCALE;
+            u64::from(guide.shape[0].div_ceil(step)) * u64::from(guide.shape[1].div_ceil(step)) * 16
+        });
+        Self {
+            mask,
+            moments: mask * 4,
+            coarse_moments,
+        }
+    }
+}
+
 pub(crate) fn build_guide(
     gpu: &Gpu,
     input: &ReadGuard,
@@ -318,23 +340,19 @@ pub(crate) fn build_guide(
     if input.size() != pixels * 12 {
         return Err("HDR mask input extent mismatch".into());
     }
-    let compact_pixels = u64::from(guide.shape[2]) * u64::from(guide.shape[3]);
-    let mut output = gpu.storage("Compact HDR brightness base", compact_pixels * 4)?;
+    let storage = GuideStorage::new(guide);
+    let mut output = gpu.storage("Compact HDR brightness base", storage.mask)?;
     let fine_groups = [guide.shape[2].div_ceil(8), guide.shape[3].div_ceil(8)];
     let speed = guide.cell_step() != 1;
     let stages = guide.stages();
     let passes = 2 + u32::from(speed) + PASSES_PER_SCALE * stages.len() as u32;
     let mut trace = gpu.trace(profile.mode.gpu(), passes);
-    let bytes = u64::from(guide.shape[2]) * u64::from(guide.shape[3]) * 16;
-    let mut fine = gpu.storage("HDR original fine guide", bytes)?;
+    let mut fine = gpu.storage("HDR original fine guide", storage.moments)?;
     let coarse_guide = guide.at_scale(true, 8, 0, 0, false);
-    let coarse_bytes =
-        u64::from(coarse_guide.sampling[0]) * u64::from(coarse_guide.sampling[1]) * 16;
-    let mut coarse = if speed {
-        Some(gpu.storage("HDR original coarse guide", coarse_bytes)?)
-    } else {
-        None
-    };
+    let mut coarse = storage
+        .coarse_moments
+        .map(|bytes| gpu.storage("HDR original coarse guide", bytes))
+        .transpose()?;
     for (parameters, target) in [(guide, Some(&mut fine)), (coarse_guide, coarse.as_mut())] {
         let Some(target) = target else { continue };
         gpu.dispatch(
@@ -343,6 +361,7 @@ pub(crate) fn build_guide(
                 (0, Read(input)),
                 (1, Read(&gpu.uniform(&parameters))),
                 (3, Write(target.write())),
+                (5, Write(output.write())),
             ],
             [
                 parameters.sampling[0].div_ceil(8),
@@ -351,11 +370,8 @@ pub(crate) fn build_guide(
             &mut trace,
         );
     }
-    let mut a = gpu.storage("HDR statistics and coefficients", bytes)?;
-    let mut b = gpu.storage("HDR horizontal means", bytes)?;
-    let mut base_a = gpu.storage("HDR accumulated base A", bytes)?;
-    let mut base_b = gpu.storage("HDR accumulated base B", bytes)?;
-    let mut iterations = 0;
+    let mut a = gpu.storage("HDR statistics and coefficients", storage.moments)?;
+    let mut b = gpu.storage("HDR horizontal means", storage.moments)?;
     for (index, &(radius, residual_radius)) in stages.iter().enumerate() {
         let largest = index + 1 == stages.len();
         let reduced = speed && radius / GUIDE_SCALE > COARSE_THRESHOLD;
@@ -432,38 +448,20 @@ pub(crate) fn build_guide(
             groups,
             &mut trace,
         );
-        let (previous, next) = if iterations == 0 {
-            (&fine, &mut base_a)
-        } else if iterations % 2 == 0 {
-            (&base_b, &mut base_a)
-        } else {
-            (&base_a, &mut base_b)
-        };
         gpu.dispatch(
             Kernel::ToneMaskUpdate,
             &mut [
                 (1, Read(&gpu.uniform(&parameters))),
                 (2, Read(&a)),
-                (3, Write(next.write())),
-                (9, Read(previous)),
+                (5, Write(output.write())),
             ],
             fine_groups,
             &mut trace,
         );
-        iterations += 1;
     }
-    let previous = if iterations % 2 == 0 {
-        &base_b
-    } else {
-        &base_a
-    };
     gpu.dispatch(
         Kernel::ToneMaskFinish,
-        &mut [
-            (1, Read(&gpu.uniform(&guide))),
-            (5, Write(output.write())),
-            (9, Read(previous)),
-        ],
+        &mut [(1, Read(&gpu.uniform(&guide))), (5, Write(output.write()))],
         fine_groups,
         &mut trace,
     );

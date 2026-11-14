@@ -133,6 +133,9 @@ fn trace_graph_outputs(
 // Allocation traffic bounds how far stateless work can queue ahead. This is
 // not a residency limit. A single node and retained outputs can exceed it.
 const SUBMISSION_ALLOCATION_WINDOW_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+// Bound completed spare retention separately from live graph and cache ownership.
+// Queued stateless work retains scratch reuse until its existing completion boundary.
+const COMPLETED_SCRATCH_SPARE_BYTES: u64 = 128 * 1024 * 1024;
 
 fn allocated_bytes(activity: crate::profile::GpuActivity) -> u64 {
     activity.storage_bytes + activity.upload_bytes + activity.uniform_bytes
@@ -2311,9 +2314,9 @@ impl Engine {
             // Background graph work uses this same completed-operation boundary.
             let pending_allocation_bytes =
                 allocated_bytes(gpu.activity()).saturating_sub(completed_allocation_bytes);
-            if execution.cancel.is_some()
-                || pending_allocation_bytes >= SUBMISSION_ALLOCATION_WINDOW_BYTES
-            {
+            let completed_stage = execution.cancel.is_some()
+                || pending_allocation_bytes >= SUBMISSION_ALLOCATION_WINDOW_BYTES;
+            if completed_stage {
                 // Stateless exports also need bounded temporary resource overlap.
                 // Preserve interactive cancellation's existing stage boundaries.
                 let label = if execution.cancel.is_some() {
@@ -2352,6 +2355,11 @@ impl Engine {
                         }
                     }
                 }
+            }
+            if completed_stage {
+                // Newly retired inputs belong to this completed stage too. Trimming
+                // earlier would leave those large spares outside the retention cap.
+                scratch.trim_completed(COMPLETED_SCRATCH_SPARE_BYTES);
             }
             if let Some((mut observation, started, shared_range)) = diagnostic {
                 observation.retirement_ms =

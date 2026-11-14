@@ -12,7 +12,6 @@ struct Adjustment { shape: vec4<u32>, amounts: vec4<f32>, luma: vec4<f32>, pivot
 @group(0) @binding(6) var<uniform> adjustment: Adjustment;
 @group(0) @binding(7) var<storage, read_write> output_rgb: array<f32>;
 @group(0) @binding(8) var<storage, read> original: array<vec4<f32>>;
-@group(0) @binding(9) var<storage, read> previous_base: array<vec4<f32>>;
 @group(0) @binding(10) var<storage, read_write> output_gain: array<f32>;
 @group(0) @binding(11) var<storage, read> gains: array<f32>;
 @group(0) @binding(12) var<uniform> guide_sampling: BrightnessGuideSampling;
@@ -44,7 +43,11 @@ fn encode_mask(ev: f32) -> f32 { return (ev - MASK_FLOOR_EV) / MASK_SPAN_EV; }
 fn reduce_guide(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= guide.sampling.xy) { return; }
     let ev = cell_exposure(id.xy, guide.sampling.z, guide.shape.xy, guide.luma.xyz);
-    filtered[id.y * guide.sampling.x + id.x] = vec4<f32>(ev, ev * ev, 0.0, 0.0);
+    let i = id.y * guide.sampling.x + id.x;
+    filtered[i] = vec4<f32>(ev, ev * ev, 0.0, 0.0);
+    // Fine cells initialize the pointwise base with the same original EV.
+    // Coarse cells only prepare their independent coefficient signal.
+    if guide.sampling.z == u32(guide.smoothing.w) { output_mask[i] = ev; }
 }
 fn at(point: vec2<i32>) -> vec4<f32> {
     let p = vec2<u32>(clamp(point, vec2<i32>(0), vec2<i32>(guide.sampling.xy) - 1));
@@ -118,13 +121,15 @@ fn update_base(@builtin(global_invocation_id) id: vec3<u32>) {
     let ratio = f32(guide.sampling.z) / guide.smoothing.w;
     let coefficients = interpolated_coefficients((vec2<f32>(id.xy) + 0.5) / ratio - 0.5);
     let i = id.y * guide.shape.z + id.x;
-    filtered[i] = vec4<f32>(coefficients.x * previous_base[i].x + coefficients.y, 0.0, 0.0, 0.0);
+    // Every invocation owns one scalar. No neighboring base is read, so the
+    // existing accumulated value can be overwritten after this calculation.
+    output_mask[i] = coefficients.x * output_mask[i] + coefficients.y;
 }
 @compute @workgroup_size(8, 8)
 fn finish_mask(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= guide.shape.zw) { return; }
     let i = id.y * guide.shape.z + id.x;
-    output_mask[i] = encode_mask(previous_base[i].x);
+    output_mask[i] = encode_mask(output_mask[i]);
 }
 @compute @workgroup_size(8, 8)
 fn expand_mask(@builtin(global_invocation_id) id: vec3<u32>) {
