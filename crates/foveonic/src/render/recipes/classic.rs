@@ -84,6 +84,7 @@ fn compose(
                     graph,
                     final_id,
                     params,
+                    rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
                     rgb_extent: [params.source[0], params.source[1]],
                     rgb_bounds: params.crop,
                 });
@@ -287,6 +288,7 @@ fn compose(
             graph,
             final_id,
             params,
+            rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
             rgb_extent: [params.source[0], params.source[1]],
             rgb_bounds: params.crop,
         });
@@ -315,6 +317,11 @@ fn compose(
             graph,
             final_id,
             params,
+            rgb_to_native: preview
+                .as_ref()
+                .map_or([[1., 0., 0.], [0., 1., 0.]], |grid| {
+                    grid.grid.native_mapping()
+                }),
             rgb_extent: [params.source[0], params.source[1]],
             rgb_bounds: params.crop,
         };
@@ -411,6 +418,7 @@ fn compose(
         graph,
         final_id,
         params,
+        rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
         rgb_extent: [params.source[0], params.source[1]],
         rgb_bounds: params.crop,
     })

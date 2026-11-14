@@ -11,7 +11,7 @@ use crate::{
 use std::sync::Arc;
 
 #[test]
-fn regional_tonal_support_shares_the_native_guide_grid_at_each_rotation() {
+fn regional_tonal_support_preserves_the_gain_grid_at_each_rotation() {
     for rotation in [0, 90, 180, 270] {
         let encode = calibration::EncodeParams {
             mapping: [[0.; 4]; 2],
@@ -25,7 +25,13 @@ fn regional_tonal_support_shares_the_native_guide_grid_at_each_rotation() {
         };
         for rect in [[0, 0, 400, 300], [600, 800, 1100, 1300]] {
             let ordinary = super::region::Prepared::new(encode, rect).unwrap();
-            let tonal = super::region::Prepared::with_tonal_support(encode, rect).unwrap();
+            let tonal = super::region::Prepared::with_finish_support(
+                encode,
+                rect,
+                2 + super::region::FINISH_SUPPORT,
+                crate::nodes::finish::tone_equalizer::GUIDE_ALIGNMENT,
+            )
+            .unwrap();
             for axis in 0..2 {
                 assert!(tonal.physical[axis]
                     .is_multiple_of(crate::nodes::finish::tone_equalizer::GUIDE_ALIGNMENT));
@@ -103,7 +109,6 @@ fn gpu_tonal_ranges_match_cached_reduced_and_regional_rendering() {
             .unwrap();
         let bytes = engine.readback_image(&regional).unwrap();
         let local: &[f32] = bytemuck::cast_slice(&bytes);
-        let full: &[f32] = bytemuck::cast_slice(&full_bytes);
         let pixel = |image: &RenderedImage, x, y| {
             let view = image.view();
             let [x, y] = view
@@ -118,19 +123,34 @@ fn gpu_tonal_ranges_match_cached_reduced_and_regional_rendering() {
             regional.view().extent,
             [rect[2] - rect[0], rect[3] - rect[1]]
         );
+        let cached_region =
+            session_image(&engine, &mut session, &settings, &mut Profile::default());
+        assert_eq!(
+            bytes,
+            engine.readback_image(&cached_region).unwrap(),
+            "cached regional HDR"
+        );
+        // Sections share a reduced whole-photo guide. Check their common native
+        // samples rather than requiring the approximation to equal native guidance.
+        let shifted_rect = [620, 820, 1120, 1320];
+        settings.preview_region = Some(shifted_rect);
+        let shifted = engine
+            .render(&source, &settings, &mut Profile::default())
+            .unwrap();
+        let shifted_bytes = engine.readback_image(&shifted).unwrap();
+        let shifted_pixels: &[f32] = bytemuck::cast_slice(&shifted_bytes);
         let mut maximum = 0_f32;
-        // Compare displayed samples independently of the chosen backing origin.
-        for y in 0..rect[3] - rect[1] {
-            for x in 0..rect[2] - rect[0] {
-                let dst = pixel(&regional, x, y);
-                let src = pixel(&fresh, x + rect[0], y + rect[1]);
+        for y in shifted_rect[1]..rect[3] {
+            for x in shifted_rect[0]..rect[2] {
+                let a = pixel(&regional, x - rect[0], y - rect[1]);
+                let b = pixel(&shifted, x - shifted_rect[0], y - shifted_rect[1]);
                 for c in 0..3 {
-                    assert!(local[dst + c].is_finite() && full[src + c].is_finite());
-                    maximum = maximum.max((local[dst + c] - full[src + c]).abs());
+                    assert!(local[a + c].is_finite() && shifted_pixels[b + c].is_finite());
+                    maximum = maximum.max((local[a + c] - shifted_pixels[b + c]).abs());
                 }
             }
         }
-        assert!(maximum < 0.00001, "regional HDR: {maximum}");
+        assert!(maximum < 0.00001, "overlapping regional HDR: {maximum}");
         settings.preview_region = None;
         let mut exposure_profile = Profile::new(Mode::Wall);
         settings.exposure = 0.5;

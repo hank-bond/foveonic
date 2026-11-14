@@ -654,3 +654,216 @@ fn blacks_rescue_only_structured_near_black_without_flattening_or_touching_visib
     }
     assert_eq!(before, gpu.readback(&input).unwrap());
 }
+
+#[test]
+#[ignore = "requires GPU"]
+fn mapped_application_guide_keeps_fit_and_overlapping_sections_aligned() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [64, 64];
+    let values: Vec<f32> = (0..64)
+        .flat_map(|y| {
+            (0..64).flat_map(move |x| {
+                let v = 4095. * (-11. + (x + y) as f32 / 16.).exp2();
+                [v, v * 0.9, v * 0.8]
+            })
+        })
+        .collect();
+    let input = gpu.upload("Native structured RGB", &values).unwrap();
+    let analysis_values: Vec<f32> = (0..256).flat_map(|i| [16. + i as f32; 3]).collect();
+    let analysis_rgb = gpu.upload("Analysis RGB", &analysis_values).unwrap();
+    let mask_values: Vec<f32> = (0..64).map(|i| 0.2 + i as f32 / 128.).collect();
+    let mask = gpu.upload("Compact analysis guide", &mask_values).unwrap();
+    let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
+    let params = Params::new(
+        extent,
+        [0, 0, 64, 64],
+        4095.,
+        ColorSpace::Srgb,
+        BaseResponse::Natural,
+        Tuning::default(),
+        &curve,
+    )
+    .unwrap();
+    let analysis_params = params
+        .with_geometry([16, 16], [0, 0, 16, 16], 0.25)
+        .unwrap();
+    let native_mask_values: Vec<f32> = (0..1024).map(|i| 0.2 + i as f32 / 2048.).collect();
+    let native_mask = gpu
+        .upload("Nonconstant native guide", &native_mask_values)
+        .unwrap();
+    let mut identity_outputs = Vec::new();
+    for application in [
+        params,
+        params
+            .with_application_guide(params, [[1., 0., 0., 0.], [0., 1., 0., 0.]])
+            .unwrap(),
+    ] {
+        let result = apply_with_analysis(
+            &gpu,
+            Samples {
+                rgb: &input,
+                mask: &native_mask,
+            },
+            Samples {
+                rgb: &analysis_rgb,
+                mask: &mask,
+            },
+            &curve,
+            application,
+            analysis_params,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        identity_outputs.push(gpu.readback(&result.rgb).unwrap());
+    }
+    assert_ne!(
+        identity_outputs[0],
+        bytemuck::cast_slice::<f32, u8>(&values),
+        "fixture needs an active correction"
+    );
+    assert_eq!(
+        identity_outputs[0], identity_outputs[1],
+        "mapped identity shifted compact guide centers"
+    );
+    for mapping in [
+        [[0.25, 0., -0.375, 0.], [0., 0.25, -0.375, 0.]],
+        [[0., 0.25, -0.375, 0.], [-0.25, 0., 15.375, 0.]],
+    ] {
+        let whole = apply_with_analysis(
+            &gpu,
+            Samples {
+                rgb: &input,
+                mask: &mask,
+            },
+            Samples {
+                rgb: &analysis_rgb,
+                mask: &mask,
+            },
+            &curve,
+            params
+                .with_application_guide(analysis_params, mapping)
+                .unwrap(),
+            analysis_params,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let cropped: Vec<f32> = (16..48)
+            .flat_map(|y| values[(y * 64 + 16) * 3..(y * 64 + 48) * 3].iter().copied())
+            .collect();
+        let cropped = gpu.upload("Regional native RGB", &cropped).unwrap();
+        let mut regional_mapping = mapping;
+        for row in &mut regional_mapping {
+            row[2] += 16. * (row[0] + row[1]);
+        }
+        let region = apply_with_analysis(
+            &gpu,
+            Samples {
+                rgb: &cropped,
+                mask: &mask,
+            },
+            Samples {
+                rgb: &analysis_rgb,
+                mask: &mask,
+            },
+            &curve,
+            params
+                .with_geometry([32, 32], [0, 0, 32, 32], 1.)
+                .unwrap()
+                .with_application_guide(analysis_params, regional_mapping)
+                .unwrap(),
+            analysis_params,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            gpu.readback(&whole.amounts).unwrap(),
+            gpu.readback(&region.amounts).unwrap(),
+            "application geometry changed fitted amounts"
+        );
+        let whole = gpu.readback(&whole.rgb).unwrap();
+        let region = gpu.readback(&region.rgb).unwrap();
+        let whole: &[f32] = bytemuck::cast_slice(&whole);
+        let region: &[f32] = bytemuck::cast_slice(&region);
+        for y in 4..28 {
+            for x in 4..28 {
+                let w = ((y + 16) * 64 + x + 16) * 3;
+                let r = (y * 32 + x) * 3;
+                assert_eq!(
+                    &whole[w..w + 3],
+                    &region[r..r + 3],
+                    "overlap shifted at {x},{y}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn mapped_application_guide_clamps_probes_to_photo_cells_inside_padding() {
+    let gpu = Gpu::new().unwrap();
+    let values: Vec<f32> = (0..32)
+        .flat_map(|y| (0..32).flat_map(move |x| [4095. * (-13. + (x + y) as f32 / 5.).exp2(); 3]))
+        .collect();
+    let input = gpu.upload("Native edge RGB", &values).unwrap();
+    let analysis_values: Vec<f32> = (0..16)
+        .flat_map(|y| (0..16).flat_map(move |x| [4095. * (-13. + (x + y) as f32 / 2.5).exp2(); 3]))
+        .collect();
+    let analysis_rgb = gpu.upload("Padded analysis RGB", &analysis_values).unwrap();
+    let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
+    let params = Params::new(
+        [32, 32],
+        [0, 0, 32, 32],
+        4095.,
+        ColorSpace::Srgb,
+        BaseResponse::Natural,
+        Tuning::default(),
+        &curve,
+    )
+    .unwrap();
+    let analysis = params
+        .with_geometry([16, 16], [4, 4, 12, 12], 0.25)
+        .unwrap();
+    let params = params
+        .with_application_guide(analysis, [[0.25, 0., 4., 0.], [0., 0.25, 4., 0.]])
+        .unwrap();
+    let mut outputs = Vec::new();
+    for padding in [0_f32, 1_f32] {
+        let mask: Vec<_> = (0..8)
+            .flat_map(|y| {
+                (0..8).map(move |x| {
+                    if (2..6).contains(&x) && (2..6).contains(&y) {
+                        0.3
+                    } else {
+                        padding
+                    }
+                })
+            })
+            .collect();
+        let mask = gpu.upload("Guide with inactive margin", &mask).unwrap();
+        let result = apply_with_analysis(
+            &gpu,
+            Samples {
+                rgb: &input,
+                mask: &mask,
+            },
+            Samples {
+                rgb: &analysis_rgb,
+                mask: &mask,
+            },
+            &curve,
+            params,
+            analysis,
+            &mut Profile::default(),
+        )
+        .unwrap();
+        outputs.push((
+            gpu.readback(&result.rgb).unwrap(),
+            gpu.readback(&result.amounts).unwrap(),
+        ));
+    }
+    assert_eq!(
+        outputs[0], outputs[1],
+        "inactive margins affected edge application or fit"
+    );
+}

@@ -8,6 +8,7 @@ struct Context {
     limits: vec4<f32>, // applied caps, independent of scene fitting
     natural_limits: vec4<f32>, // Natural caps for feasible shadow protection
     toe: vec4<f32>, // near-black input EV including Exposure, toe slope, fine/broad working-pixel probes
+    guide: BrightnessGuideSampling,
 };
 @group(0) @binding(0) var<storage, read> source_rgb: array<f32>;
 @group(0) @binding(1) var<storage, read> base_mask: array<f32>;
@@ -32,6 +33,16 @@ fn ev_at(p: vec2<i32>) -> f32 {
 }
 fn encoded_guide(point: vec2<u32>) -> f32 {
     return base_mask[brightness_cell_index(point, context.shape.xy)];
+}
+// Estimation keeps its original integer lookup. Only application samples a
+// different grid, with bilinear interpolation between compact cell centers.
+// Gain anchors name a 2 by 2 block. Map its center before changing lattices.
+fn application_guide(point: vec2<f32>) -> f32 {
+    if context.guide.shape.z == 0u { return encoded_guide(vec2<u32>(point)); }
+    let sample = brightness_sample(point+0.5, context.guide);
+    let top = mix(base_mask[sample.indices.x],base_mask[sample.indices.y],sample.phase.x);
+    let bottom = mix(base_mask[sample.indices.z],base_mask[sample.indices.w],sample.phase.x);
+    return mix(top,bottom,sample.phase.y);
 }
 fn light_gradient(p: vec2<i32>, radius: i32) -> vec2<f32> {
     let x = vec2<i32>(radius, 0);
@@ -159,6 +170,7 @@ fn refine(@builtin(global_invocation_id) id:vec3<u32>) {
 }
 fn guide_ev(point:vec2<i32>)->f32 {
     let p=vec2<u32>(clamp(point,vec2<i32>(context.bounds.xy),vec2<i32>(context.bounds.zw)-1));
+    if context.guide.shape.z != 0u { return application_guide(vec2<f32>(point))*8.0-8.0; }
     return encoded_guide(p)*8.0-8.0;
 }
 fn local_structure(point:vec2<u32>)->f32 {
@@ -194,7 +206,7 @@ fn adaptive_gain(@builtin(global_invocation_id) id: vec3<u32>) {
         brightness += dot(pixel(min(point+vec2<u32>(dx,dy),context.shape.xy-1u)),context.luma.xyz);
     } }
     let light = log2(max(brightness/(4.0*context.values.x),exp2(-16.0)));
-    let base = encoded_guide(point)*8.0-8.0;
+    let base = application_guide(vec2<f32>(point))*8.0-8.0;
     let amounts=capped(vec4<f32>(0.0,chosen[0],chosen[1],chosen[2]),context.limits);
     var gain=hdr_gain(light-context.values.y,base-context.values.y,amounts);
     let transition=smoothstep(0.20,0.35,tone(light));

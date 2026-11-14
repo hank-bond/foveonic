@@ -63,6 +63,7 @@ fn grids_cover_all_scales_and_preserve_fractional_camera_framing() {
                 graph,
                 final_id: rgb,
                 params: grid.encode,
+                rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
                 rgb_extent: grid.extent(),
                 rgb_bounds: grid.encode.crop,
             };

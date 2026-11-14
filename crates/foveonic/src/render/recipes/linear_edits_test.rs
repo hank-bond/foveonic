@@ -1482,3 +1482,79 @@ fn original_reference_saturation_policy_changes_all_families_and_invalidates_cac
         );
     }
 }
+
+#[test]
+fn application_guide_mapping_preserves_sensor_phase_and_quarter_turns() {
+    use super::guide_mapping;
+    let input = [[1., 0., 928.], [0., 1., 112.]];
+    // Eightfold pooling with a 16-pixel halo centers cell zero at -124.5.
+    let pooled = [[8., 0., -124.5], [0., 8., -124.5]];
+    let mapping = guide_mapping(input, pooled).unwrap();
+    assert_eq!(
+        mapping,
+        [[0.125, 0., 131.5625, 0.], [0., 0.125, 29.5625, 0.]]
+    );
+    // A camera-cropped guide can rotate either axis and use Q16 step values.
+    let guide = [[0., 8. + 1. / 65536., 64.], [-8., 0., 1023.]];
+    let mapping = guide_mapping(input, guide).unwrap();
+    for point in [[0., 0.], [37., 91.], [998., 1002.]] {
+        let sample = mapping
+            .map(|r| f64::from(r[0]) * point[0] + f64::from(r[1]) * point[1] + f64::from(r[2]));
+        let native = guide.map(|r| r[0] * sample[0] + r[1] * sample[1] + r[2]);
+        assert!((native[0] - point[0] - 928.).abs() < 0.0002);
+        assert!((native[1] - point[1] - 112.).abs() < 0.0002);
+    }
+    assert!(guide_mapping(input, [[0.; 3]; 2]).is_err());
+}
+
+#[test]
+#[ignore = "requires GPU, FOVEONIC_FINISH_SOURCE and optional FOVEONIC_FINISH_SETTINGS snapshot"]
+fn original_dynamic_range_guide_reuses_across_moving_sections() {
+    let source =
+        Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
+    let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
+    let mut settings = if let Some(path) = std::env::var_os("FOVEONIC_FINISH_SETTINGS") {
+        serde_json::from_slice::<crate::profile::RenderSettingsSnapshot>(
+            &std::fs::read(path).unwrap(),
+        )
+        .unwrap()
+        .into_settings()
+    } else {
+        caps.editing_defaults(&source.metadata, Rendering::Color)
+            .unwrap()
+    };
+    settings.tonal_ranges.shadows = 0.5;
+    settings.tonal_ranges.highlights = -0.5;
+    settings.working_scale = Scale::NATIVE;
+    settings.output_size = None;
+    assert!(settings.regional_preview_available(&source.metadata));
+    let extent = crate::render::native_extent(&source.metadata).unwrap();
+    assert!(extent[0] >= 1024 && extent[1] >= 512);
+    let origin = [(extent[0] - 1024) / 2, (extent[1] - 512) / 2];
+    let engine = Engine::new().unwrap();
+    let mut session = RenderSession::new(source);
+    for step in 0..4 {
+        let x = origin[0] + step * 128;
+        let region = [x, origin[1], x + 512, origin[1] + 512];
+        settings.preview_region = Some(region);
+        let mut profile = Profile::new(Mode::Wall);
+        let mut artifacts = engine
+            .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+            .unwrap()
+            .unwrap();
+        let Content::Image(image) = artifacts.remove(0).content else {
+            panic!("image")
+        };
+        assert_eq!(image.settings().preview_region, Some(region));
+        let built_guide = profile
+            .host
+            .iter()
+            .any(|timing| timing.stage == "submit tonal brightness mask");
+        assert_eq!(
+            built_guide,
+            step == 0,
+            "Dynamic Range must build its guide once, then reuse it while moving: {:?}",
+            profile.host
+        );
+    }
+}

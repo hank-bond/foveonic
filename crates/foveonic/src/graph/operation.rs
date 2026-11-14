@@ -273,6 +273,7 @@ pub enum Operation {
         space: ColorSpace,
     },
     TonalRanges {
+        sampling: Option<crate::nodes::finish::tone_equalizer::GuideSampling>,
         window: crate::nodes::finish::image_region::Window,
         white: f32,
         controls: crate::render::TonalRanges,
@@ -341,6 +342,24 @@ impl Operation {
                 }
                 Demand::Unused => Ok(Demand::Unused),
             },
+            Self::TonalRanges {
+                sampling: Some(_), ..
+            } if slot == 1 => Ok(if demand == Demand::Unused {
+                Demand::Unused
+            } else {
+                Demand::Whole
+            }),
+            Self::TonalRanges {
+                sampling: Some(_), ..
+            } => match demand {
+                Demand::Region(bounds) => Ok(Demand::Region([
+                    bounds[0].saturating_sub(2) / 2 * 2,
+                    bounds[1].saturating_sub(2) / 2 * 2,
+                    bounds[2].saturating_add(2).div_ceil(2) * 2,
+                    bounds[3].saturating_add(2).div_ceil(2) * 2,
+                ])),
+                other => Ok(other),
+            },
             Self::TonalRanges { .. } if slot == 1 => match demand {
                 Demand::Region(bounds) => Ok(Demand::Region([
                     bounds[0].saturating_sub(2),
@@ -399,6 +418,7 @@ impl Operation {
                 Ok(None)
             }
             Self::TonalRanges {
+                sampling,
                 white,
                 controls,
                 pivot,
@@ -407,6 +427,7 @@ impl Operation {
             } => {
                 if let Some((_, Demand::Region(bounds))) = demands.first() {
                     Ok(Some(Self::TonalRanges {
+                        sampling: *sampling,
                         white: *white,
                         controls: *controls,
                         pivot: *pivot,
@@ -481,8 +502,18 @@ impl Operation {
         &mut self,
         storage: &[Option<[u32; 4]>],
     ) -> crate::source::Result<()> {
-        if let Self::TonalRanges { window, .. } = self {
-            if storage.first() != storage.get(1) {
+        if let Self::TonalRanges {
+            window, sampling, ..
+        } = self
+        {
+            if let Some(mapping) = sampling {
+                if storage.get(1).copied().flatten().is_some() {
+                    return Err("mapped HDR guide requires whole guide storage".into());
+                }
+                if let Some(bounds) = storage.first().copied().flatten() {
+                    *mapping = mapping.with_input_origin([bounds[0], bounds[1]]);
+                }
+            } else if storage.first() != storage.get(1) {
                 return Err("HDR RGB and guide require matching available bounds".into());
             }
             window.input = storage.first().copied().flatten();
@@ -670,12 +701,20 @@ impl Operation {
                 ..
             } => window.key(params.key().join(analysis.key()).join(curve.key())),
             Self::TonalRanges {
+                sampling,
                 window,
                 controls,
                 pivot,
                 white,
                 ..
-            } => window.key(Key::pod(&controls.amounts()).with(pivot).with(white)),
+            } => {
+                let key = Key::pod(&controls.amounts()).with(pivot).with(white);
+                window.key(if let Some(sampling) = sampling {
+                    key.join(sampling.key())
+                } else {
+                    key
+                })
+            }
             Self::Tone {
                 curve, exposure, ..
             } => Key::pod(exposure).join(curve.key()),

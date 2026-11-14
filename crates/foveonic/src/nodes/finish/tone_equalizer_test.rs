@@ -63,6 +63,7 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
         &field,
         extent,
         Response {
+            sampling: None,
             controls: Controls::default(),
             pivot: 0.,
             space: ColorSpace::Srgb,
@@ -115,6 +116,7 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
             &field,
             extent,
             Response {
+                sampling: None,
                 controls,
                 pivot: 0.,
                 space: ColorSpace::Srgb,
@@ -150,6 +152,7 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
             &field,
             extent,
             Response {
+                sampling: None,
                 controls: Controls {
                     blacks: amount,
                     shadows: amount,
@@ -216,6 +219,7 @@ fn gpu_hdr_preserves_native_control_coupling_and_detail_direction() {
             &field,
             extent,
             Response {
+                sampling: None,
                 controls: Controls {
                     blacks: amount,
                     shadows: amount,
@@ -339,6 +343,7 @@ fn gpu_hdr_matches_across_declared_linear_code_units() {
         )
         .unwrap();
         let response = || Response {
+            sampling: None,
             controls: Controls {
                 shadows: 0.5,
                 highlights: -0.4,
@@ -419,6 +424,178 @@ fn gpu_compact_guide_expands_exactly_over_odd_edges() {
                 let pixel = (y * width + x) as usize * 4;
                 assert_eq!(&expanded[pixel..pixel + 4], &compact[cell..cell + 4]);
             }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_mapped_hdr_guide_preserves_identity_and_overlapping_sections() {
+    use crate::nodes::finish::image_region;
+    let gpu = Gpu::new().unwrap();
+    let extent = [80, 64];
+    let data: Vec<f32> = (0..extent[0] * extent[1])
+        .flat_map(|p| {
+            let level = 10. + (p * 37 % 4095) as f32;
+            [level, level * 0.7, level * 1.1]
+        })
+        .collect();
+    let input = gpu.upload("Mapped HDR input", &data).unwrap();
+    let guide = Guide::new(extent, 8, ColorSpace::Srgb).unwrap();
+    let mask = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
+    let sampling =
+        GuideSampling::new(extent, [0, 0, 80, 64], [[1., 0., 0., 0.], [0., 1., 0., 0.]]).unwrap();
+    let response = |sampling| Response {
+        sampling,
+        controls: Controls {
+            shadows: 0.5,
+            highlights: -0.5,
+            blacks: 0.25,
+            whites: -0.25,
+        },
+        pivot: -2.,
+        space: ColorSpace::Srgb,
+    };
+    let whole = apply(
+        &gpu,
+        &input,
+        &mask,
+        extent,
+        response(None),
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let mapped = apply(
+        &gpu,
+        &input,
+        &mask,
+        extent,
+        response(Some(sampling)),
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let whole = gpu.readback(&whole).unwrap();
+    assert_eq!(
+        whole,
+        gpu.readback(&mapped).unwrap(),
+        "identity guide changed HDR"
+    );
+    for bounds in [[16, 16, 64, 48], [24, 16, 72, 48]] {
+        let prepared = image_region::Prepared::new(extent, bounds, 3).unwrap();
+        let local = image_region::apply(&gpu, &input, &prepared).unwrap();
+        let local_extent = [bounds[2] - bounds[0], bounds[3] - bounds[1]];
+        let result = apply(
+            &gpu,
+            &local,
+            &mask,
+            local_extent,
+            response(Some(sampling.with_input_origin([bounds[0], bounds[1]]))),
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let bytes = gpu.readback(&result).unwrap();
+        for y in 2..local_extent[1] - 2 {
+            for x in 2..local_extent[0] - 2 {
+                let local = ((y * local_extent[0] + x) * 12) as usize;
+                let native = (((y + bounds[1]) * extent[0] + x + bounds[0]) * 12) as usize;
+                assert_eq!(
+                    &bytes[local..local + 12],
+                    &whole[native..native + 12],
+                    "shifted HDR at {x},{y}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_scaled_hdr_guide_clamps_padding_and_keeps_fractional_phase() {
+    use crate::nodes::finish::image_region;
+    let gpu = Gpu::new().unwrap();
+    let extent = [24, 20];
+    let input: Vec<f32> = (0..extent[0] * extent[1])
+        .flat_map(|p| [20. + (p * 37 % 4095) as f32; 3])
+        .collect();
+    let input = gpu.upload("Scaled HDR RGB", &input).unwrap();
+    let mut cells = vec![0.; 42];
+    for y in 0..5 {
+        for x in 1..6 {
+            cells[y * 7 + x] = 0.2 + x as f32 * 0.03 + y as f32 * 0.05;
+        }
+    }
+    let mask = gpu.upload("Odd valid HDR cells", &cells).unwrap();
+    let sampling = GuideSampling::new(
+        [13, 11],
+        [3, 1, 12, 10],
+        [[0.5, 0., 0.25, 0.], [0., 0.5, -0.25, 0.]],
+    )
+    .unwrap();
+    let response = |sampling| Response {
+        sampling: Some(sampling),
+        controls: Controls {
+            shadows: 0.5,
+            highlights: -0.5,
+            ..Default::default()
+        },
+        pivot: -2.,
+        space: ColorSpace::Srgb,
+    };
+    let whole = apply(
+        &gpu,
+        &input,
+        &mask,
+        extent,
+        response(sampling),
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let whole = gpu.readback(&whole).unwrap();
+    for y in 0..6 {
+        for x in 0..7 {
+            if x == 0 || x == 6 || y == 5 {
+                cells[y * 7 + x] = 100.;
+            }
+        }
+    }
+    let padded = gpu.upload("Inactive HDR padding", &cells).unwrap();
+    let result = apply(
+        &gpu,
+        &input,
+        &padded,
+        extent,
+        response(sampling),
+        &mut Profile::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        whole,
+        gpu.readback(&result).unwrap(),
+        "inactive padding affected HDR"
+    );
+    let bounds = [4, 4, 20, 16];
+    let prepared = image_region::Prepared::new(extent, bounds, 3).unwrap();
+    let local = image_region::apply(&gpu, &input, &prepared).unwrap();
+    let local_extent = [16, 12];
+    let result = apply(
+        &gpu,
+        &local,
+        &mask,
+        local_extent,
+        response(sampling.with_input_origin([4, 4])),
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let bytes = gpu.readback(&result).unwrap();
+    for y in 2..10 {
+        for x in 2..14 {
+            let a = ((y * 16 + x) * 12) as usize;
+            let b = (((y + 4) * 24 + x + 4) * 12) as usize;
+            assert_eq!(
+                &bytes[a..a + 12],
+                &whole[b..b + 12],
+                "fractional guide phase changed"
+            );
         }
     }
 }

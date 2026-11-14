@@ -94,12 +94,7 @@ pub(super) fn expand_shared_edits(
     let Some(rect) = settings.preview_region else {
         return Ok(None);
     };
-    let margin = super::super::linear_edits::support(settings)
-        + if !settings.tonal_ranges.is_neutral() {
-            tone_equalizer::support()
-        } else {
-            0
-        };
+    let margin = super::super::linear_edits::support(settings);
     if margin == 0 {
         return Ok(None);
     }
@@ -146,6 +141,9 @@ pub(super) fn crop_shared_edits(
         &[recipe.final_id],
     )?;
     let extent = [rect[2] - rect[0], rect[3] - rect[1]];
+    for row in &mut recipe.rgb_to_native {
+        row[2] += row[0] * f64::from(rect[0]) + row[1] * f64::from(rect[1]);
+    }
     recipe.rgb_extent = extent;
     recipe.params.output[..2].copy_from_slice(&extent);
     recipe.params.crop = [0, 0, extent[0], extent[1]];

@@ -430,7 +430,50 @@ pub(crate) fn expand_mask(
     Ok(output)
 }
 
+/// Map RGB sample centers into an independently prepared compact brightness guide.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct GuideSampling {
+    shape: [u32; 4],
+    bounds: [u32; 4],
+    mapping: [[f32; 4]; 2],
+}
+impl GuideSampling {
+    pub(crate) fn new(extent: [u32; 2], bounds: [u32; 4], mapping: [[f32; 4]; 2]) -> Result<Self> {
+        if extent.contains(&0)
+            || bounds[0] >= bounds[2]
+            || bounds[1] >= bounds[3]
+            || bounds[2] > extent[0]
+            || bounds[3] > extent[1]
+            || mapping.iter().flatten().any(|v| !v.is_finite())
+        {
+            return Err("invalid brightness guide sampling".into());
+        }
+        Ok(Self {
+            shape: [extent[0], extent[1], 1, 0],
+            bounds,
+            mapping,
+        })
+    }
+    pub(crate) fn with_input_origin(mut self, origin: [u32; 2]) -> Self {
+        for row in &mut self.mapping {
+            row[2] += row[0] * origin[0] as f32 + row[1] * origin[1] as f32;
+        }
+        self
+    }
+    pub(crate) fn key(self) -> Key {
+        Key::pod(&self)
+    }
+    pub(crate) fn extent(self) -> [u32; 2] {
+        [self.shape[0], self.shape[1]]
+    }
+    pub(crate) fn is_mapped(self) -> bool {
+        self.shape[2] != 0
+    }
+}
+
 pub(crate) struct Response {
+    pub sampling: Option<GuideSampling>,
     pub controls: Controls,
     pub pivot: f32,
     pub space: ColorSpace,
@@ -449,12 +492,13 @@ pub(crate) fn apply_with_white(
         controls,
         pivot,
         space,
+        sampling,
     } = response;
     controls.validate()?;
     let pixels = u64::from(extent[0]) * u64::from(extent[1]);
     if extent.contains(&0)
         || input.size() != pixels * 12
-        || mask.size() != guide_storage_bytes(extent)
+        || mask.size() != guide_storage_bytes(sampling.map_or(extent, GuideSampling::extent))
         || !pivot.is_finite()
     {
         return Err("invalid HDR input geometry or pivot".into());
@@ -491,6 +535,7 @@ pub(crate) fn apply_with_white(
             (4, Read(mask)),
             (6, Read(&uniform)),
             (10, Write(gains.write())),
+            (12, Read(&gpu.uniform(&sampling.unwrap_or_default()))),
         ],
         [half[0].div_ceil(8), half[1].div_ceil(8)],
         &mut trace,

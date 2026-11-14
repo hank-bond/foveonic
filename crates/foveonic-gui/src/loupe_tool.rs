@@ -15,14 +15,16 @@ pub enum Size {
     #[default]
     Medium,
     Large,
+    ExtraLarge,
 }
 impl Size {
-    pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
+    pub const ALL: [Self; 4] = [Self::Small, Self::Medium, Self::Large, Self::ExtraLarge];
     pub fn diameter(self) -> f32 {
         match self {
             Self::Small => 160.,
             Self::Medium => 240.,
             Self::Large => 320.,
+            Self::ExtraLarge => 400.,
         }
     }
     fn label(self) -> &'static str {
@@ -30,6 +32,7 @@ impl Size {
             Self::Small => "Small",
             Self::Medium => "Medium",
             Self::Large => "Large",
+            Self::ExtraLarge => "Extra Large",
         }
     }
 }
@@ -42,13 +45,15 @@ pub enum Zoom {
     #[default]
     Percent100,
     Percent200,
+    Percent400,
 }
 impl Zoom {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Percent25,
         Self::Percent50,
         Self::Percent100,
         Self::Percent200,
+        Self::Percent400,
     ];
     pub fn multiple(self) -> f32 {
         match self {
@@ -56,6 +61,7 @@ impl Zoom {
             Self::Percent50 => 0.5,
             Self::Percent100 => 1.,
             Self::Percent200 => 2.,
+            Self::Percent400 => 4.,
         }
     }
     fn label(self) -> &'static str {
@@ -64,6 +70,7 @@ impl Zoom {
             Self::Percent50 => "50%",
             Self::Percent100 => "100%",
             Self::Percent200 => "200%",
+            Self::Percent400 => "400%",
         }
     }
 }

@@ -197,6 +197,16 @@ pub(super) fn build(
         execution.check()?;
     }
     recipe.final_id = linear;
+    recipe.rgb_to_native = grid.map_or_else(
+        || {
+            let origin = region.map_or([0, 0], |r| [r.physical[0], r.physical[1]]);
+            [
+                [1., 0., f64::from(origin[0])],
+                [0., 1., f64::from(origin[1])],
+            ]
+        },
+        |grid| grid.grid.native_mapping(),
+    );
     if let Some(region) = region {
         recipe.rgb_bounds = region.rgb_bounds;
     }

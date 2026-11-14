@@ -27,6 +27,9 @@ struct Completed {
     milliseconds: f64,
     extent: [u32; 2],
     actual_region: Option<[u32; 4]>,
+    session_checkpoint_gpu_bytes: u64,
+    image_reference_bytes: u64,
+    texture_reference_bytes: u64,
     activity: GpuActivity,
     profile: Profile,
 }
@@ -51,12 +54,18 @@ fn route(
     source: Arc<Source>,
     initial_settings: &Settings,
     progressive: bool,
+    separate_overview_session: bool,
     mode: Mode,
 ) -> Result<serde_json::Value> {
     let mut settings = initial_settings.clone();
-    let mut session = RenderSession::new(source);
+    let mut overview_session = RenderSession::new(source.clone());
     settings.working_scale = Scale::new(2).unwrap();
-    let (overview, _overview_texture) = completed(engine, &mut session, &settings, Mode::Off)?;
+    let (overview, _overview_texture, _overview_image) =
+        completed_image(engine, &mut overview_session, &settings, Mode::Off)?;
+    // Keep the reduced owner alive while native detail uses an independent cache,
+    // matching the app's split owners without reopening or decoding the source.
+    let mut native_session = separate_overview_session.then(|| RenderSession::new(source));
+    let session = native_session.as_mut().unwrap_or(&mut overview_session);
     let [width, height] = overview.extent.map(|v| v * 2);
     // Match the central 200% viewport in the native landscape smoke, including overscan.
     let tile = [992.min(width), 1002.min(height)];
@@ -65,14 +74,15 @@ fn route(
         let x = (width - tile[0]) / 2;
         let y = (height - tile[1]) / 2;
         settings.preview_region = Some([x, y, x + tile[0], y + tile[1]]);
-        let (detail, _detail_texture) = completed(engine, &mut session, &settings, mode)?;
+        let (detail, _detail_texture, _detail_image) =
+            completed_image(engine, session, &settings, mode)?;
         settings.preview_region = None;
-        let (full, _full_texture) = completed(engine, &mut session, &settings, mode)?;
+        let (full, _full_texture, _full_image) = completed_image(engine, session, &settings, mode)?;
         Ok(
             serde_json::json!({"route":"detail-first", "overview":overview, "first_detail":detail, "full_continuation":full, "total_full_ms":detail.milliseconds + full.milliseconds}),
         )
     } else {
-        let (full, _full_texture) = completed(engine, &mut session, &settings, mode)?;
+        let (full, _full_texture, _full_image) = completed_image(engine, session, &settings, mode)?;
         Ok(serde_json::json!({"route":"direct-full", "overview":overview, "full":full}))
     }
 }
@@ -80,7 +90,7 @@ fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let source_path = PathBuf::from(
         args.next()
-            .ok_or("usage: profile_smart_preview ORIGINAL.x3f REPORT.json [--region-first [fresh|exposure|noise] | --direct-only | --full-edit exposure|noise | --warm-edits] [--region-only (with --warm-edits)] [--settings-snapshot FILE] [--fractions LIST] [--repeats N] [--benchmark-off] [--diagnostic wall|gpu | --diagnostic-only wall|gpu] [-- RENDER_OPTIONS]")?,
+            .ok_or("usage: profile_smart_preview ORIGINAL.x3f REPORT.json [--region-first [fresh|exposure|noise] | --direct-only | --full-edit exposure|noise | --warm-edits] [--region-only (with --warm-edits)] [--separate-overview-session] [--settings-snapshot FILE] [--fractions LIST] [--repeats N] [--benchmark-off] [--diagnostic wall|gpu | --diagnostic-only wall|gpu] [-- RENDER_OPTIONS]")?,
     );
     let destination = PathBuf::from(args.next().ok_or("missing report destination")?);
     if destination.exists() {
@@ -103,6 +113,7 @@ fn main() -> Result<()> {
     let mut full_edit: Option<String> = None;
     let mut region_mode = false;
     let mut direct_only = false;
+    let mut separate_overview_session = false;
     let mut warm_edits = false;
     let mut region_only = false;
     let mut settings_snapshot = None;
@@ -115,6 +126,7 @@ fn main() -> Result<()> {
     while let Some(arg) = runner.next() {
         match arg.to_str() {
             Some("--direct-only") => direct_only = true,
+            Some("--separate-overview-session") => separate_overview_session = true,
             Some("--warm-edits") => warm_edits = true,
             Some("--region-only") => region_only = true,
             Some("--settings-snapshot") => {
@@ -232,6 +244,11 @@ fn main() -> Result<()> {
     if region_only && !warm_edits {
         return Err("region-only requires warm-edits".into());
     }
+    if separate_overview_session && (warm_edits || region_mode || full_edit.is_some()) {
+        return Err(
+            "separate-overview-session requires the Fast-to-native transition route".into(),
+        );
+    }
     let source = Arc::new(Source::open(&source_path)?);
     let settings = if let Some(path) = settings_snapshot {
         if !controls.is_empty() {
@@ -328,17 +345,38 @@ fn main() -> Result<()> {
         };
         for &progressive in routes {
             let start_epoch_ms = epoch_millis()?;
-            let result = route(&engine, source.clone(), &settings, progressive, Mode::Off)?;
+            let result = route(
+                &engine,
+                source.clone(),
+                &settings,
+                progressive,
+                separate_overview_session,
+                Mode::Off,
+            )?;
             let end_epoch_ms = epoch_millis()?;
             eprintln!("round {round}: {}", result);
             runs.push(serde_json::json!({"warmup":round == 0, "round":round, "start_epoch_ms":start_epoch_ms, "end_epoch_ms":end_epoch_ms, "result":result}));
         }
     }
-    let mut diagnostics = vec![route(&engine, source.clone(), &settings, false, Mode::Gpu)?];
+    let mut diagnostics = vec![route(
+        &engine,
+        source.clone(),
+        &settings,
+        false,
+        separate_overview_session,
+        Mode::Gpu,
+    )?];
     if !direct_only {
-        diagnostics.push(route(&engine, source, &settings, true, Mode::Gpu)?);
+        diagnostics.push(route(
+            &engine,
+            source,
+            &settings,
+            true,
+            separate_overview_session,
+            Mode::Gpu,
+        )?);
     }
-    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "settings":settings, "timing":if direct_only { "completed render and view preparation, source decode excluded, one warmup trial" } else { "completed render and view preparation, source decode excluded, alternating matched-session trials, one warmup pair" }, "timestamp_scope":"whole route, including prior overview and any verification", "runs":runs, "gpu_diagnostics":diagnostics});
+    let report = serde_json::json!({"source":source_path, "adapter":engine.adapter_name(), "settings":settings, "separate_overview_session":separate_overview_session, "timing":if direct_only { "completed render and view preparation, source decode excluded, one warmup trial" } else { "completed render and view preparation, source decode excluded, alternating matched-session trials, one warmup pair" }, "timestamp_scope":"whole route, including prior overview and any verification", "runs":runs, "gpu_diagnostics":diagnostics});
     std::fs::write(destination, serde_json::to_vec_pretty(&report)?)?;
     Ok(())
 }
@@ -493,9 +531,15 @@ fn completed_image(
     };
     let texture = engine.view_texture(&image, None, &mut profile)?;
     engine.device().poll(wgpu::Maintain::Wait);
+    let milliseconds = started.elapsed().as_secs_f64() * 1000.;
+    // Logical retained/reference bytes, not peak residency. The image may also
+    // be a cached checkpoint, so these owners must not simply be added together.
     Ok((
         Completed {
-            milliseconds: started.elapsed().as_secs_f64() * 1000.,
+            milliseconds,
+            session_checkpoint_gpu_bytes: session.cached_bytes(),
+            image_reference_bytes: image.description().byte_len(),
+            texture_reference_bytes: texture.description().byte_len(),
             extent: texture.description().extent,
             actual_region: image.settings().preview_region,
             activity: engine.gpu_activity().since(before),

@@ -29,6 +29,7 @@ fn framing(grid: &Grid) -> EncodeParams {
         graph,
         final_id: rgb,
         params: grid.encode,
+        rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
         rgb_extent: grid.grid.extent,
         rgb_bounds: grid.encode.crop,
     };

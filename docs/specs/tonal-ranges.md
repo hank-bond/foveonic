@@ -2,7 +2,7 @@
 summary: "Shared HDR controls use a multiscale spatial base before camera tone and bake their brightness response into DNG."
 kind: reference
 status: accepted
-implementation: conforming
+implementation: incomplete
 ---
 
 # Tonal ranges
@@ -26,5 +26,9 @@ The original X3F and sidecar remain the editable source. DNG is an edited deriva
 ## Evaluation
 
 Review portraits, bright skies, textured objects and deep shadows. Check exact neutral output, range selectivity, native response samples, finite signed/headroom samples, region/full consistency, cached/fresh equality, and completed rendering cost. The spatial response has owner photographic approval. Further tuning remains possible.
+
+### Regional guide evaluation
+
+The owner requested testing a smaller independent Dynamic Range guide for native sectional previews. The candidate prepares that guide at Fast scale after the preceding edits, while retaining native local brightness measurements and photographic pixels. Whole Full, fixed preview modes and exports must preserve their established output. Sections using the same guide must preserve sampling alignment, overlapping pixels and cached/fresh equality. The reduced guide is an appearance approximation, so equivalence to the native Whole guide is measured separately. Its photographic acceptance remains pending in the [loupe investigation](../../plans/loupe-motion-diagnostics.md#separate-reduced-dynamic-range-guide).
 
 Implementation, source-study findings and measured limitations belong in the [experiment plan](../../plans/tonal-ranges.md).

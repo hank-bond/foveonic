@@ -86,6 +86,8 @@ pub(super) struct BuiltRecipe {
     pub(super) graph: Graph,
     pub(super) final_id: usize,
     pub(super) params: calibration::EncodeParams,
+    /// Shared RGB sample indices to native sensor sample indices, before authored rotation.
+    pub(super) rgb_to_native: [[f64; 3]; 2],
     /// Working RGB grid at the shared photographic boundary, before output encoding.
     pub(super) rgb_extent: [u32; 2],
     /// Valid image bounds on that RGB grid, independent of sensor/output framing.

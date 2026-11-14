@@ -268,6 +268,7 @@ fn finishing_graph() -> (Graph, usize, usize, usize, usize) {
     let hdr = graph
         .add(
             Operation::TonalRanges {
+                sampling: None,
                 window: Default::default(),
                 white: 4095.,
                 controls: tone_equalizer::Controls {
@@ -495,4 +496,72 @@ fn extraction_requests_its_complete_authored_rect_until_it_can_materialize_a_sub
     };
     assert_eq!(prepared.extent(), [1400, 1400]);
     assert_eq!(prepared.input_bounds(None).unwrap(), [0, 0, 1400, 1400]);
+}
+
+#[test]
+fn mapped_hdr_keeps_its_guide_whole_and_requests_only_local_rgb() {
+    use crate::{color_space::ColorSpace, graph::DataType, nodes::finish::tone_equalizer};
+    let space = ColorSpace::Srgb;
+    let mut graph = Graph::default();
+    let rgb = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::LinearRgb(space),
+            },
+            &[],
+        )
+        .unwrap();
+    let mask = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::BrightnessGuide,
+            },
+            &[],
+        )
+        .unwrap();
+    let hdr = graph
+        .add(
+            Operation::TonalRanges {
+                sampling: Some(
+                    tone_equalizer::GuideSampling::new(
+                        [1024, 768],
+                        [0, 0, 1024, 768],
+                        [[0.5, 0., 0., 0.], [0., 0.5, 0., 0.]],
+                    )
+                    .unwrap(),
+                ),
+                window: Default::default(),
+                white: 4095.,
+                pivot: -2.,
+                space,
+                controls: tone_equalizer::Controls {
+                    shadows: 0.5,
+                    ..Default::default()
+                },
+            },
+            &[rgb, mask],
+        )
+        .unwrap();
+    let requested = [101, 203, 301, 403];
+    let demands = graph
+        .resolve_regions(&[(hdr, Demand::Region(requested))], |_, _| false)
+        .unwrap();
+    assert_eq!(demands[rgb], Demand::Region([98, 200, 304, 406]));
+    assert_eq!(demands[mask], Demand::Whole);
+    let Operation::TonalRanges { window, .. } = &graph.nodes[graph.outputs[hdr].producer].operation
+    else {
+        panic!("HDR")
+    };
+    // RenderedInput already owns Whole storage. A compact producer can supply
+    // just the requested RGB without changing the independent guide's storage.
+    assert_eq!(window.input, None);
+    let compact = &mut graph.nodes[graph.outputs[hdr].producer].operation;
+    compact
+        .resolve_input_storage(&[Some([98, 200, 304, 406]), None])
+        .unwrap();
+    let Operation::TonalRanges { window, .. } = compact else {
+        panic!("HDR")
+    };
+    assert_eq!(window.input, Some([98, 200, 304, 406]));
+    assert_eq!(window.output, Some(requested));
 }

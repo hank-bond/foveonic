@@ -130,6 +130,17 @@ impl Prepared {
         self.kernel = interpolation_kernel(FIXED_ONE / f64::from(dx), FIXED_ONE / f64::from(dy));
         Ok(self)
     }
+    /// Output sample centers on the input lattice, including Q16 step truncation.
+    pub(crate) fn input_mapping(&self) -> [[f64; 3]; 2] {
+        std::array::from_fn(|axis| {
+            [
+                f64::from(self.params.column[axis + 2] as i32) / FIXED_ONE,
+                f64::from(self.params.row[axis] as i32) / FIXED_ONE,
+                f64::from(self.params.column[axis]) / FIXED_ONE,
+            ]
+        })
+    }
+
     pub(crate) fn input_extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
     }

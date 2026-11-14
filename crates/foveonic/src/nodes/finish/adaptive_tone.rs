@@ -15,8 +15,10 @@ use crate::{
     source::Result,
 };
 
-/// Regional application needs the brightness guide, its broad structure probe
-/// and the neighboring half-grid gain used during interpolation.
+/// Native RGB supports the fine structure probe and half-grid gain interpolation.
+/// The broad probe samples an independently prepared whole-photo guide.
+pub(crate) const REGIONAL_SUPPORT: u32 = 2 + 2;
+
 pub(crate) fn support() -> u32 {
     tone_equalizer::support() + 8 + 2
 }
@@ -32,6 +34,7 @@ pub(crate) struct Params {
     limits: [f32; 4],
     natural_limits: [f32; 4],
     toe: [f32; 4],
+    guide: tone_equalizer::GuideSampling,
 }
 impl Params {
     pub(crate) fn new(
@@ -72,6 +75,7 @@ impl Params {
             limits: tuning.for_response(response).values(),
             natural_limits: tuning.natural.values(),
             toe: [toe, toe_slope, 2., 8.],
+            guide: Default::default(),
         })
     }
     pub(crate) fn with_exposure(mut self, exposure: f32) -> Result<Self> {
@@ -108,6 +112,25 @@ impl Params {
         self.toe[3] = (8. * scale).round().max(1.);
         Ok(self)
     }
+    /// Map main RGB sample centers to sample centers in a separate guide image.
+    /// Its compact mask still stores one scalar per 2 by 2 guide-image pixels.
+    pub(crate) fn with_application_guide(
+        mut self,
+        guide: Self,
+        mapping: [[f32; 4]; 2],
+    ) -> Result<Self> {
+        self.guide = tone_equalizer::GuideSampling::new(guide.extent(), guide.bounds, mapping)?;
+        Ok(self)
+    }
+
+    fn guide_extent(self) -> [u32; 2] {
+        if !self.guide.is_mapped() {
+            self.extent()
+        } else {
+            self.guide.extent()
+        }
+    }
+
     pub(crate) fn extent(self) -> [u32; 2] {
         [self.shape[0], self.shape[1]]
     }
@@ -180,9 +203,9 @@ pub(crate) fn apply_with_analysis(
     for (samples, geometry) in [(&input, &params), (&analysis, &analysis_params)] {
         let extent = [geometry.shape[0], geometry.shape[1]];
         if samples.rgb.size() != u64::from(extent[0]) * u64::from(extent[1]) * 12
-            || samples.mask.size() != tone_equalizer::guide_storage_bytes(extent)
+            || samples.mask.size() != tone_equalizer::guide_storage_bytes(geometry.guide_extent())
         {
-            return Err("adaptive RGB and compact brightness guide do not share a domain".into());
+            return Err("adaptive RGB or compact brightness guide has an unexpected size".into());
         }
     }
     let Samples { rgb: input, mask } = input;

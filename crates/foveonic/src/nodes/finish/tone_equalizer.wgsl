@@ -15,6 +15,7 @@ struct Adjustment { shape: vec4<u32>, amounts: vec4<f32>, luma: vec4<f32>, pivot
 @group(0) @binding(9) var<storage, read> previous_base: array<vec4<f32>>;
 @group(0) @binding(10) var<storage, read_write> output_gain: array<f32>;
 @group(0) @binding(11) var<storage, read> gains: array<f32>;
+@group(0) @binding(12) var<uniform> guide_sampling: BrightnessGuideSampling;
 
 const NOMINAL_WHITE: f32 = 4095.0;
 const MIN_LUMINANCE: f32 = 0.0000152587890625; // 2^-16, stabilizes the guide only.
@@ -136,7 +137,16 @@ fn calculate_gain(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= adjustment.shape.zw) { return; }
     let sample = u32(adjustment.pivot.y);
     let light = cell_exposure(id.xy, sample, adjustment.shape.xy, adjustment.luma.xyz) - adjustment.pivot.x;
-    let base = brightness_mask[id.y * adjustment.shape.z + id.x] * MASK_SPAN_EV + MASK_FLOOR_EV - adjustment.pivot.x;
+    var encoded = 0.0;
+    if guide_sampling.shape.z == 0u {
+        encoded = brightness_mask[id.y * adjustment.shape.z + id.x];
+    } else {
+        let sample = brightness_sample(vec2<f32>(id.xy * sample) + 0.5, guide_sampling);
+        let top = mix(brightness_mask[sample.indices.x], brightness_mask[sample.indices.y], sample.phase.x);
+        let bottom = mix(brightness_mask[sample.indices.z], brightness_mask[sample.indices.w], sample.phase.x);
+        encoded = mix(top, bottom, sample.phase.y);
+    }
+    let base = encoded * MASK_SPAN_EV + MASK_FLOOR_EV - adjustment.pivot.x;
     output_gain[id.y * adjustment.shape.z + id.x] = hdr_gain(light, base, adjustment.amounts);
 }
 fn gain_at(p: vec2<i32>) -> f32 {

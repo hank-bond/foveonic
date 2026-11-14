@@ -121,6 +121,15 @@ impl WorkingGrid {
         bounds
     }
 
+    /// Pooled sample centers expressed on the original sensor lattice.
+    pub(crate) fn native_mapping(self) -> [[f64; 3]; 2] {
+        let d = f64::from(self.scale.divisor());
+        [
+            [d, 0., (0.5 - f64::from(self.origin[0])) * d - 0.5],
+            [0., d, (0.5 - f64::from(self.origin[1])) * d - 0.5],
+        ]
+    }
+
     /// Map normalized photograph coordinates from native crop edges to working
     /// sample indices. Pooled samples sit at block centers, including the halo.
     pub fn frame_mapping(self, native: [u32; 4]) -> [[f32; 4]; 2] {

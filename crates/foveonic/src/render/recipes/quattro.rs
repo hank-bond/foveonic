@@ -266,6 +266,7 @@ fn compose(
                     graph,
                     final_id: $output,
                     params,
+                    rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
                     rgb_extent: [params.output[0], params.output[1]],
                     rgb_bounds: [0, 0, params.output[0], params.output[1]],
                 });
@@ -861,6 +862,7 @@ fn compose(
     let crop = metadata.fixed::<4>("ActiveImageArea")?.map(|v| v as u32);
     // This crop's raw right/bottom are exclusive in the reference operation.
     // Nominal output dimensions still include that final recorded pixel.
+    let regional_origin = region.as_ref().map(|r| [r.physical[0], r.physical[1]]);
     let crop = if let Some(region) = region {
         region.crop
     } else {
@@ -877,6 +879,19 @@ fn compose(
             crop
         }
     };
+    let mut rgb_to_native = crop.input_mapping();
+    for axis in 0..2 {
+        if let Some(origin) = regional_origin {
+            rgb_to_native[axis][2] += f64::from(origin[axis]);
+        } else if reduced {
+            let d = f64::from(grid.divisor());
+            rgb_to_native[axis][2] += 0.5 - f64::from(output_geometry.origin[axis]);
+            for value in &mut rgb_to_native[axis] {
+                *value *= d;
+            }
+            rgb_to_native[axis][2] -= 0.5;
+        }
+    }
     let cropped = graph.add(Operation::CodeCrop(std::sync::Arc::new(crop)), &[sharpened])?;
     finish!(cropped);
     validate_photographic(settings)?;
@@ -903,6 +918,7 @@ fn compose(
             graph,
             final_id,
             params,
+            rgb_to_native,
             rgb_extent: [params.output[0], params.output[1]],
             rgb_bounds: [0, 0, params.output[0], params.output[1]],
         });
@@ -925,6 +941,7 @@ fn compose(
             graph,
             final_id: id,
             params,
+            rgb_to_native,
             rgb_extent: [params.output[0], params.output[1]],
             rgb_bounds: [0, 0, params.output[0], params.output[1]],
         };
@@ -1079,6 +1096,7 @@ fn compose(
         graph,
         final_id,
         params,
+        rgb_to_native,
         rgb_extent: [params.output[0], params.output[1]],
         rgb_bounds: [0, 0, params.output[0], params.output[1]],
     })

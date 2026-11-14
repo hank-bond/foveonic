@@ -175,6 +175,7 @@ pub(super) fn build(
                     graph,
                     final_id: input,
                     params,
+                    rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
                     rgb_extent: [params.source[0], params.source[1]],
                     rgb_bounds: params.crop,
                 }));
@@ -341,6 +342,7 @@ pub(super) fn build(
             graph,
             final_id: calibrated,
             params,
+            rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
             rgb_extent: [params.source[0], params.source[1]],
             rgb_bounds: params.crop,
         },

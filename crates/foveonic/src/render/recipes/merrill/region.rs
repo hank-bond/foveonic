@@ -30,16 +30,6 @@ impl Prepared {
         Self::with_finish_support(encode, output, FINISH_SUPPORT, 1)
     }
 
-    pub fn with_tonal_support(encode: EncodeParams, output: [u32; 4]) -> Result<Self> {
-        use crate::nodes::finish::tone_equalizer;
-        Self::with_finish_support(
-            encode,
-            output,
-            tone_equalizer::support() + FINISH_SUPPORT,
-            tone_equalizer::GUIDE_ALIGNMENT,
-        )
-    }
-
     pub(super) fn with_finish_support(
         mut encode: EncodeParams,
         output: [u32; 4],

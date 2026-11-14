@@ -148,6 +148,15 @@ impl Grid {
         )?;
         recipe.params.source[..2].copy_from_slice(&output);
         recipe.params.crop = [0, 0, output[0], output[1]];
+        let [l, t, r, b] = self.native.crop.map(f64::from);
+        let step = [
+            (r - l) / f64::from(output[0]),
+            (b - t) / f64::from(output[1]),
+        ];
+        recipe.rgb_to_native = [
+            [step[0], 0., l + 0.5 * step[0] - 0.5],
+            [0., step[1], t + 0.5 * step[1] - 0.5],
+        ];
         recipe.rgb_extent = output;
         recipe.rgb_bounds = recipe.params.crop;
         recipe

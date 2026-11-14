@@ -58,29 +58,18 @@ pub(super) fn build(
         .map(|rect| {
             let shared = super::super::linear_edits::support(settings);
             if shared > 0 || settings.is_monochrome() {
-                let (tonal, alignment) = if settings.tonal_ranges.is_neutral() {
-                    (
-                        0,
-                        if settings.adaptive_tone_active() {
-                            crate::nodes::finish::tone_equalizer::GUIDE_ALIGNMENT
-                        } else {
-                            1
-                        },
-                    )
-                } else {
-                    (
-                        crate::nodes::finish::tone_equalizer::support(),
-                        crate::nodes::finish::tone_equalizer::GUIDE_ALIGNMENT,
-                    )
-                };
+                let alignment =
+                    if settings.adaptive_tone_active() || !settings.tonal_ranges.is_neutral() {
+                        crate::nodes::finish::tone_equalizer::GUIDE_ALIGNMENT
+                    } else {
+                        1
+                    };
                 region::Prepared::with_finish_support(
                     params,
                     rect,
-                    shared + tonal + region::FINISH_SUPPORT + super::monochrome::support(settings),
+                    shared + region::FINISH_SUPPORT + super::monochrome::support(settings),
                     alignment,
                 )
-            } else if !settings.tonal_ranges.is_neutral() {
-                region::Prepared::with_tonal_support(params, rect)
             } else {
                 region::Prepared::new(params, rect)
             }
@@ -136,6 +125,7 @@ pub(super) fn build(
                     graph,
                     final_id: calibrated,
                     params,
+                    rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
                     rgb_extent: [params.source[0], params.source[1]],
                     rgb_bounds: params.crop,
                 }));
@@ -179,6 +169,7 @@ pub(super) fn build(
                 graph,
                 final_id: calibrated,
                 params,
+                rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
                 rgb_extent: [params.source[0], params.source[1]],
                 rgb_bounds: params.crop,
             },
@@ -263,6 +254,7 @@ pub(super) fn build(
                     graph,
                     final_id: calibrated,
                     params,
+                    rgb_to_native: [[1., 0., 0.], [0., 1., 0.]],
                     rgb_extent: [params.source[0], params.source[1]],
                     rgb_bounds: params.crop,
                 }));
@@ -389,6 +381,18 @@ pub(super) fn build(
         graph,
         final_id: linear,
         params,
+        rgb_to_native: preview.as_ref().map_or_else(
+            || {
+                let origin = region
+                    .as_ref()
+                    .map_or([0, 0], |r| [r.physical[0], r.physical[1]]);
+                [
+                    [1., 0., f64::from(origin[0])],
+                    [0., 1., f64::from(origin[1])],
+                ]
+            },
+            |grid| grid.grid.native_mapping(),
+        ),
         rgb_extent: [params.source[0], params.source[1]],
         rgb_bounds: region
             .as_ref()

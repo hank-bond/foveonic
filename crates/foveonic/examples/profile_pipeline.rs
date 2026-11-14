@@ -14,7 +14,7 @@ fn milliseconds(start: Instant) -> f64 {
 }
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut args = std::env::args_os().skip(1);
-    let input=PathBuf::from(args.next().ok_or("usage: profile_pipeline INPUT.x3f NEW_EXPORT_DIR [--warm N] [--goldens DIR] --wb NAME --mode NAME [normal render options]")?);
+    let input=PathBuf::from(args.next().ok_or("usage: profile_pipeline INPUT.x3f NEW_EXPORT_DIR [--warm N] [--goldens DIR] [--render-only] --wb NAME --mode NAME [normal render options]")?);
     let output = PathBuf::from(args.next().ok_or("missing export directory")?);
     // Mixing old and new runs would make the evidence ambiguous. Require
     // a new output directory rather than silently appending.
@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Err("export directory must be new".into());
     }
     let mut warm = 2usize;
+    let mut render_only = false;
     let mut goldens = None;
     let mut capture = None;
     let mut settings_snapshot = None;
@@ -30,7 +31,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut thumb = false;
     let mut controls = Vec::<OsString>::new();
     while let Some(arg) = args.next() {
-        if arg == "--preview-quality" {
+        if arg == "--render-only" {
+            render_only = true;
+        } else if arg == "--preview-quality" {
             scale_selected = true;
             let quality = args.next().and_then(|v| v.into_string().ok());
             thumb = quality.as_deref() == Some("thumb");
@@ -116,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         profile::report(
             "session",
             mode,
-            serde_json::json!({"frontend":"completed_processing","scale_divisor":working_scale.divisor(),"family":source.metadata.processing_family().ok(),"source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
+            serde_json::json!({"frontend":"completed_processing","render_only":render_only,"scale_divisor":working_scale.divisor(),"family":source.metadata.processing_family().ok(),"source":input,"adapter":engine.adapter_name(),"settings":settings,"gpu_supported":engine.device().features().contains(wgpu::Features::TIMESTAMP_QUERY)})
         )
     );
     println!(
@@ -141,7 +144,20 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut profile = Profile::new(sample_mode);
         let before = engine.gpu_activity();
         let start = Instant::now();
-        let image = engine.render(&source, &settings, &mut profile)?;
+        let image = if render_only {
+            // Use the same named-output request path as interactive sessions.
+            // The convenience render API deliberately accepts whole photographs.
+            let artifact = engine
+                .render_artifacts(&source, &settings, &["final"], &mut profile)?
+                .pop()
+                .ok_or("missing final image")?;
+            let foveonic::inspection::Content::Image(image) = artifact.content else {
+                return Err("final output is not an image".into());
+            };
+            *image
+        } else {
+            engine.render(&source, &settings, &mut profile)?
+        };
         let render_call = milliseconds(start);
         engine.device().poll(wgpu::Maintain::Wait);
         let completed = milliseconds(start);
@@ -154,20 +170,24 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 serde_json::json!({"source":input,"settings":settings,"effective_scale_divisor":image.settings().working_scale.divisor(),"output":"final","execution":"fresh","iteration":iteration,"cold":iteration==0,"render_call_ms":render_call,"completed_ms":completed,"profile":profile,"activity":activity})
             )
         );
-        let mut profile = Profile::new(sample_mode);
-        let before = engine.gpu_activity();
-        let start = Instant::now();
-        let destination = output.join(format!("{stem}-{iteration}.tiff"));
-        engine.write_tiff(&image, &destination, &mut profile)?;
-        engine.device().poll(wgpu::Maintain::Wait);
-        println!(
-            "{}",
-            profile::report(
-                "export",
-                sample_mode,
-                serde_json::json!({"source":input,"settings":settings,"iteration":iteration,"destination":destination,"completed_ms":milliseconds(start),"profile":profile,"activity":engine.gpu_activity().since(before)})
-            )
-        );
+        // Regional previews are useful numerical outputs but cannot be exported
+        // as authored whole photographs. Keep their measurements render-only.
+        if !render_only {
+            let mut profile = Profile::new(sample_mode);
+            let before = engine.gpu_activity();
+            let start = Instant::now();
+            let destination = output.join(format!("{stem}-{iteration}.tiff"));
+            engine.write_tiff(&image, &destination, &mut profile)?;
+            engine.device().poll(wgpu::Maintain::Wait);
+            println!(
+                "{}",
+                profile::report(
+                    "export",
+                    sample_mode,
+                    serde_json::json!({"source":input,"settings":settings,"iteration":iteration,"destination":destination,"completed_ms":milliseconds(start),"profile":profile,"activity":engine.gpu_activity().since(before)})
+                )
+            );
+        }
         // Reading every sample for comparison adds work and transfers. Keep that
         // validation outside the intervals used for performance claims.
         if iteration == 0 {
