@@ -87,8 +87,11 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         Step::Before,
         Step::RefreshOverviews,
         Step::After,
+        Step::Quality(1),
         Step::Inspection,
         Step::RefreshInspection,
+        Step::Before,
+        Step::After,
         Step::Photograph,
         Step::Quality(0),
         Step::TileZoom,
@@ -152,6 +155,7 @@ pub(super) struct TransitionJourney {
     zoom_image: Option<egui::Rect>,
     view_request: Option<(foveonic::render::Settings, foveonic::render::Scale)>,
     inspection_output: Option<String>,
+    inspection_task: Option<(u64, u64)>,
     photograph_task: Option<(u64, u64)>,
     hold: Option<crate::rendering::worker::DeliveryHold>,
     held_delta: f32,
@@ -182,6 +186,7 @@ impl TransitionJourney {
             zoom_image: None,
             view_request: None,
             inspection_output: None,
+            inspection_task: None,
             photograph_task: None,
             hold: None,
             held_delta: 0.,
@@ -656,10 +661,10 @@ impl TransitionJourney {
                 return Ok(false);
             }
             if step == Step::Before
-                && app
-                    .frame
-                    .as_ref()
-                    .is_none_or(|frame| frame.rendition != crate::editor::Rendition::Camera)
+                && app.frame.as_ref().is_none_or(|frame| {
+                    frame.rendition != crate::editor::Rendition::Camera
+                        || frame.processing_quality != app.preferences.processing_quality
+                })
             {
                 return Ok(false);
             }
@@ -695,6 +700,25 @@ impl TransitionJourney {
                 if Some(frame.output.as_str()) != self.inspection_output.as_deref() {
                     return Ok(false);
                 }
+                if frame.processing_quality != ProcessingQuality::Quality
+                    || frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
+                {
+                    return Err("pipeline inspection did not use native Quality".into());
+                }
+                if step == Step::RefreshInspection {
+                    for path in app.multi_edit.render_paths() {
+                        let Some(overview) = app.current_photo_frame(path) else {
+                            return Ok(false);
+                        };
+                        if overview.processing_quality != ProcessingQuality::Speed {
+                            return Err(
+                                "inspector refresh changed a background overview's Speed policy"
+                                    .into(),
+                            );
+                        }
+                    }
+                    self.events.push(serde_json::json!({"observed":"Quality inspector with Speed background overviews"}));
+                }
                 if !app.worker.is_settled_and_admitted(frame) {
                     return Err("overview refresh retired the active inspection request".into());
                 }
@@ -725,6 +749,19 @@ impl TransitionJourney {
                     .is_none_or(|frame| frame.rendition != crate::editor::Rendition::Current)
             {
                 return Ok(false);
+            }
+            if step == Step::After && app.output != "final" {
+                let frame = app.frame.as_ref().ok_or("missing restored inspector")?;
+                if app.preferences.processing_quality != ProcessingQuality::Speed
+                    || frame.processing_quality != ProcessingQuality::Quality
+                    || frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
+                    || Some(frame.output.as_str()) != self.inspection_output.as_deref()
+                    || Some((frame.diagnostic_task.id, frame.diagnostic_task.revision))
+                        != self.inspection_task
+                {
+                    return Err("Before did not restore its owned native Quality inspector in a Speed workspace".into());
+                }
+                self.events.push(serde_json::json!({"observed":"Speed Before restored existing Quality inspector", "task":self.inspection_task}));
             }
             if let Some((index, crop, rotation)) = self.composition {
                 let settings = if app.selected.as_ref() == Some(&paths[index]) {
@@ -1053,6 +1090,13 @@ impl TransitionJourney {
                 app.submit(None);
             }
             Step::Before => {
+                self.inspection_task = if app.output != "final" {
+                    app.frame
+                        .as_ref()
+                        .map(|frame| (frame.diagnostic_task.id, frame.diagnostic_task.revision))
+                } else {
+                    None
+                };
                 app.toggle_before(crate::editor::Rendition::Camera);
                 if app.before.active != crate::editor::Rendition::Camera {
                     return Err("Before did not activate".into());
@@ -1183,6 +1227,20 @@ mod tests {
                 .all(|step| !matches!(step, Step::Select(index) if *index >= 8)));
         }
     }
+    #[test]
+    fn speed_inspection_before_restoration_is_part_of_the_native_journey() {
+        let sequence = steps(0, 1, 2);
+        assert!(sequence.windows(6).any(|steps| steps
+            == [
+                Step::Quality(1),
+                Step::Inspection,
+                Step::RefreshInspection,
+                Step::Before,
+                Step::After,
+                Step::Photograph,
+            ]));
+    }
+
     #[test]
     fn rejects_invalid_bounds_and_seed_types() {
         assert!(!valid_count(0));

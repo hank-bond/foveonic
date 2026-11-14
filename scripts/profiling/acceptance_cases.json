@@ -352,7 +352,7 @@
       "id": "scenario-transition-journey",
       "domain": "viewport",
       "driver": "scenario",
-      "evidence": "Checks quality, persistent per-photo viewing and mixed-resolution Quality/Speed editing at the 2 GiB app default. Records per-photo and group latency for Fit, one zoomed photo with all editing targets, and a single-target control.",
+      "evidence": "Checks Quality/Speed switches, native Quality inspection with Speed background photographs, Before restoration of the owned inspector, persistent per-photo viewing and mixed-resolution editing at the 2 GiB app default. Records per-photo and group latency for Fit, one zoomed photo with all editing targets, and a single-target control.",
       "scenario": "transition-journey",
       "mode": "wall",
       "count": 4,

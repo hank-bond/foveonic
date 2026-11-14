@@ -457,8 +457,10 @@ fn another_policy_cannot_replace_pixel_history_or_photo_feedback_at_the_same_nat
 
 #[test]
 fn speed_background_overviews_remain_admissible_while_the_active_photo_shows_inspection() {
-    let mut speed = Settings::default();
-    speed.processing_quality = ProcessingQuality::Speed;
+    let speed = Settings {
+        processing_quality: ProcessingQuality::Speed,
+        ..Default::default()
+    };
     let mut context = view(&speed);
     context.processing_quality = ProcessingQuality::Speed;
     context.active = Some(Path::new("b.x3f"));
@@ -528,8 +530,10 @@ fn active_current_inspection_requires_quality_in_a_speed_workspace() {
 
 #[test]
 fn before_photographic_renditions_use_speed_even_when_the_saved_current_root_is_inspection() {
-    let mut speed = Settings::default();
-    speed.processing_quality = ProcessingQuality::Speed;
+    let speed = Settings {
+        processing_quality: ProcessingQuality::Speed,
+        ..Default::default()
+    };
     for (rendition, purpose) in [
         (Rendition::Camera, Purpose::Camera),
         (Rendition::Defaults, Purpose::Defaults),
