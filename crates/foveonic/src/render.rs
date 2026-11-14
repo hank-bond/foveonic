@@ -390,8 +390,8 @@ impl Engine {
         )
     }
 
-    /// Keep full quality during editing. None means a newer request took over safely,
-    /// not that rendering failed.
+    /// Render edits with reusable session checkpoints. None means a newer request
+    /// took over safely, not that rendering failed.
     /// Checkpoints remain bound to this session's immutable source and this engine's device.
     pub fn render_session(
         &self,

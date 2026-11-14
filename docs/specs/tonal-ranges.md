@@ -15,7 +15,7 @@ Controls range from -1 to +1. Positive values brighten the selected range and ne
 
 HDR must derive a multiscale edge-preserving brightness base and preserve local detail through the coordinated response. Its tonal pivot must follow our selected camera curve and Exposure. Blacks must account for the shadow response and Whites for the highlight response. Existing camera-curve settings must remain available without silently changing saved recipes.
 
-Photographic pixel arithmetic must run on the GPU. Inspection must expose the brightness base and adjusted linear RGB. Amount changes must reuse unchanged inputs and the spatial base through the existing bounded render session. Fast and regional Smart rendering must preserve framing and use consistent spatial support. Source samples and retained outputs must remain immutable. The mathematical response may follow the researched HDR operation without claiming complete application appearance or bitwise spatial-filter equivalence.
+Photographic pixel arithmetic must run on the GPU. Inspection must expose the brightness base and adjusted linear RGB. Amount changes must reuse unchanged inputs and the spatial base through the existing bounded render session. Quality and Speed must preserve framing and use consistent spatial support on each selected working grid. Source samples and retained outputs must remain immutable. The mathematical response may follow the researched HDR operation without claiming complete application appearance or bitwise spatial-filter equivalence.
 
 ## Export boundary
 
@@ -27,8 +27,10 @@ The original X3F and sidecar remain the editable source. DNG is an edited deriva
 
 Review portraits, bright skies, textured objects and deep shadows. Check exact neutral output, range selectivity, native response samples, finite signed/headroom samples, region/full consistency, cached/fresh equality, and completed rendering cost. The spatial response has owner photographic approval. Further tuning remains possible.
 
-### Regional guide evaluation
+### Processing guide policy
 
-The owner requested testing a smaller independent Dynamic Range guide for native sectional previews. The candidate prepares that guide at Fast scale after the preceding edits, while retaining native local brightness measurements and photographic pixels. Whole Full, fixed preview modes and exports must preserve their established output. Sections using the same guide must preserve sampling alignment, overlapping pixels and cached/fresh equality. The reduced guide is an appearance approximation, so equivalence to the native Whole guide is measured separately. Its photographic acceptance remains pending in the [loupe investigation](../../plans/loupe-motion-diagnostics.md#separate-reduced-dynamic-range-guide).
+[Quality](./processing-quality.md) derives Dynamic Range guidance from complete working-grid RGB. Speed may use a reduced guide after the preceding edits while retaining local brightness measurements and photographic samples at the requested working resolution. The selected policy applies equally to Whole, native-detail regions and their continuations. Regional bounds must not select an approximation. Each policy must preserve sampling alignment, overlapping pixels and cached/fresh equality. Photographic and DNG exports use native Quality processing.
+
+The earlier regional-only half-resolution guide experiment and its pending photographic comparison remain recorded in the [loupe investigation](../../plans/loupe-motion-diagnostics.md#separate-reduced-dynamic-range-guide). The selected Quality/Speed contract now controls approximation independently of regional bounds.
 
 Implementation, source-study findings and measured limitations belong in the [experiment plan](../../plans/tonal-ranges.md).

@@ -12,7 +12,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 
 <!-- Generated from document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
-- **[adaptive-tone](./adaptive-tone.md)** _(accepted, conforming, reference)._ Regional base responses fit useful detail visibility with shared tuning limits independently of artistic tone edits.
+- **[adaptive-tone](./adaptive-tone.md)** _(accepted, incomplete, reference)._ Regional base responses fit useful detail visibility with shared tuning limits independently of artistic tone edits.
 - **[advanced-color-range](./advanced-color-range.md)** _(accepted, conforming, reference)._ Advanced Color Range uses soft hue and saturation selections for saved HSL edits.
 - **[application-workflows](./application-workflows.md)** _(accepted, incomplete, reference)._ A personal Merrill X3F app shares processing settings and one image engine between its GUI and batch CLI.
 - **[browser-previews](./browser-previews.md)** _(accepted, conforming, reference)._ Small embedded thumbnails appear immediately and asynchronous cached previews follow the latest photographic render.

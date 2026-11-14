@@ -2,7 +2,7 @@
 summary: "Regional base responses fit useful detail visibility with shared tuning limits independently of artistic tone edits."
 kind: reference
 status: accepted
-implementation: conforming
+implementation: incomplete
 ---
 
 # Regional adaptive base response
@@ -19,11 +19,13 @@ Add a restrained automatic Blacks contribution to protect useful detail that rem
 
 Fit scene targets on a fixed domain with refinement between coarse trials. Profile caps restrict the fitted amounts afterward. Moving a cap must not relocate the trial lattice or change other estimated amounts. Avoid abrupt selection between almost equally scored, substantially different responses. Natural aims for a restrained useful baseline. Strong aims for greater visibility and may use greater corrections. Photos that already meet both targets may render alike. A visible difference is expected where a stronger response offers useful correction, rather than forced for every photo. Compare profile outputs and cap hits over the photographic set during tuning.
 
-Natural fits from a whole-photo image at the camera's Thumb scale. Strong uses the next finer power-of-two scale. On Merrill and Quattro these are divisors eight and four. On Classic they are four and two. Cap both analysis choices at the requested working resolution under the [working-grid contract](./small-previews.md). Draft, Thumb and still coarser explicit grids must not prepare a higher-resolution image solely for estimation. Reuse the main RGB and guide when their whole-photo grid matches the selected analysis grid. Otherwise reconstruct the analysis input directly on that grid. Color and Monochrome use their own corrected reconstruction paths. This shared recipe policy is independent of Dehaze analysis sizing. Apply the fitted response at the requested display or export geometry. Fast and Smart must remain available for supported color recipes. Pan, zoom and presentation sizing must not change the whole-photo analysis or its scene fit at a given working grid. Smart may refine the whole frame directly when regional processing is unavailable. Direct unsupported regional requests must not silently fit the viewport. Highlight recovery remains upstream of the fit and follows the working-grid contract. Native Full recovery retains its original behavior.
+[Quality](./processing-quality.md) fits Natural and Strong from complete whole-photo working-grid RGB and samples every valid working pixel. Speed may use reduced whole-photo analysis: Natural uses the camera's smallest preview grid, and Strong the next finer power-of-two grid. On Merrill and Quattro these Speed divisors are eight and four. On Classic they are four and two. Cap analysis at the requested working resolution under the [working-grid contract](./small-previews.md). Reuse main RGB and guidance when their grid matches the selected analysis grid. Otherwise prepare the selected whole-photo input from the camera's corrected reconstruction path. Color and Monochrome retain their own routes. Dehaze chooses its analysis independently.
 
-Retain brightness guides on their encoded half-width, half-height lattice. Consumers must map image coordinates to those cells with the same nearest-cell values as the expanded representation. Full-size mask inspection remains available on demand. The representation change must preserve photographic and inspected pixel values bit-for-bit.
+Apply the fitted response at the requested display or export geometry. At a fixed processing policy and working grid, pan and viewport bounds must not change the whole-photo fit. Quality and Speed may both fall back to whole-photo processing when sectional execution is unavailable. Regional bounds must not choose processing policy. A section and Whole continuation must preserve that policy and agree over their shared coordinates. Highlight recovery remains upstream of the fit and follows the working-grid contract.
 
-Structure probes must retain usable nonzero support on every working grid. Scale-derived parameter preparation belongs beside the operation. Coarser previews must not lose all structure evidence because a spatial offset rounds to zero. Preserve existing Full and Fast sampling where its support is already representable.
+Quality brightness guides cover every working sample. Speed may retain an encoded half-width, half-height lattice. Consumers must honor the declared cell step and coordinate mapping. Full-size mask inspection remains available on demand. Compact Speed storage must preserve that policy's photographic and inspected values.
+
+Structure probes must retain usable nonzero support on every working grid. Scale-derived parameter preparation belongs beside the operation. Coarser previews must not lose structure evidence because a spatial offset rounds to zero. Preserve physical support wherever it is representable.
 
 Use the existing typed graph and bounded active-photo cache. RGB input, geometry, luminance definition and guide parameters determine guide reuse. The scene fit additionally depends on the predictive mode curve, response profile, Exposure and estimator version. The applied response also depends on the profile caps. The combined node may refit on cap changes initially. Downstream artistic edits must not trigger a new baseline fit when they do not feed that boundary. Keep analysis and application on GPU without a required host readback. Broader optimization and approximate reuse across changed upstream settings are outside this slice.
 
@@ -31,7 +33,7 @@ During shared-limit tuning, adaptive display previews remain in memory. Persiste
 
 TIFF and DNG exports must apply the selected spatial response. DNG bakes its gain through the existing shared linear-edit route and retains the ordinary camera tone as appearance. Do not retain the fixed-curve prototype's unchanged-technical-sample requirement for adaptive output.
 
-Validate unchanged Camera output, expected estimator defaults, limit changes, Tone bypass, cache invalidation and reuse, Full/Fast policy, Color/Monochrome, retained input ownership and photographic TIFF/DNG behavior. Build and open a local app for owner tuning without installing, publishing or changing global photographic defaults.
+Validate unchanged Camera output, expected estimator defaults, limit changes, Tone bypass, cache invalidation and reuse, Quality/Speed policy and working resolution, Color/Monochrome, retained input ownership and photographic TIFF/DNG behavior. Build and open a local app for owner tuning without installing, publishing or changing global photographic defaults.
 
 The [integration plan](../../plans/archived/adaptive-tone.md) tracks implementation. Scientific references and exploratory findings remain in the [research reference](../visibility-tone-research.md) and [experiment plan](../../plans/archived/visibility-tone-experiment.md).
 
