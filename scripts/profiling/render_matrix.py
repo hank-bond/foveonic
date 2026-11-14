@@ -12,6 +12,7 @@ from file_hash import digest
 from image_replay import events
 from results import IMAGE_GEOMETRY_FIELDS, RESOLUTIONS, PROCESSING_QUALITIES, compare_images, include_assertions, render_result
 from watch_workloads import require_quiet
+from process_memory import run_captured
 
 REQUIRED_SOURCES_BY_FAMILY = {'classic': 3, 'merrill': 3, 'quattro': 3, 'tiger': 1}
 RESERVED = {'--goldens', '--capture-float', '--resolution', '--processing-quality', '--working-scale', '--profile', '--warm'}
@@ -100,7 +101,9 @@ def processing_mode_difference(quality_file, speed_file, geometry):
             'limits':'Differences are descriptive evidence. They do not approve dense output or replace immutable exact baselines.'}
 
 
-def run(binary, cases, directory, baseline=None, require_coverage=False):
+def run(binary, cases, directory, baseline=None, require_coverage=False, max_memory_mb=None):
+    if max_memory_mb is not None and max_memory_mb <= 0:
+        raise ValueError('physical-footprint limit must be positive')
     binary = binary.resolve(strict=True)
     matrix, coverage = expand_cases(cases)
     if not matrix:
@@ -120,6 +123,7 @@ def run(binary, cases, directory, baseline=None, require_coverage=False):
             raise ValueError('baseline and current matrix have different source identities, recipes, resolutions or processing modes')
     directory.mkdir(parents=True, exist_ok=False)
     report = {'schema_version': 2, 'kind': 'exact-render-matrix', 'passed': False,
+              'physical_memory_guard_limit_bytes':None if max_memory_mb is None else max_memory_mb * 1024 * 1024,
               'binary': str(binary), 'binary_sha256': digest(binary), 'baseline': str(baseline) if baseline else None,
               'coverage': coverage, 'cases': [], 'processing_mode_comparisons': [],
               'limits': ['Camera family and RAW size are supplied by the fixture manifest, not independently verified.',
@@ -143,7 +147,9 @@ def run(binary, cases, directory, baseline=None, require_coverage=False):
                 require_quiet()
                 command = [str(binary), case['source'], str(out), '--warm', '0', '--resolution', case['resolution'], '--processing-quality', case['processing_quality'],
                            '--profile', 'off', '--goldens', str(golden_dir), *case['options']]
-                result = subprocess.run(command, capture_output=True, text=True)
+                result = run_captured(command,
+                    limit_bytes=None if max_memory_mb is None else max_memory_mb * 1024 * 1024,
+                    samples=directory/(name+'.memory.jsonl'))
                 (directory/(name+'.jsonl')).write_text(result.stdout)
                 (directory/(name+'.stderr')).write_text(result.stderr)
                 if result.returncode:
@@ -174,7 +180,7 @@ def run(binary, cases, directory, baseline=None, require_coverage=False):
                 tiff = out/(Path(case['source']).stem+'-0.tiff')
                 tiff.unlink()
                 out.rmdir()
-            except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError) as error:
+            except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError, subprocess.TimeoutExpired) as error:
                 row['failure'] = str(error)
                 if 'test_result' in row:
                     if row['test_result']['outcome'] == 'passed':
@@ -183,7 +189,7 @@ def run(binary, cases, directory, baseline=None, require_coverage=False):
                 else:
                     row['test_result'] = render_result('headless', 'fresh-render', case['processing_quality'], [], False, str(error),
                                                        {'binary_sha256':report['binary_sha256'], 'adapter':None}, resolution=case['resolution'])
-                abort = isinstance(error, RuntimeError)
+                abort = isinstance(error, (RuntimeError, subprocess.TimeoutExpired))
             test_result_path = directory/(name+'.test-result.json')
             test_result_path.write_text(json.dumps(row['test_result'], indent=2)+'\n')
             row['test_result_artifact'] = {'path':str(test_result_path), 'sha256':digest(test_result_path)}
@@ -220,9 +226,10 @@ def main():
     parser.add_argument('--directory', type=Path, required=True, help='new owned output directory')
     parser.add_argument('--baseline', type=Path, help='compare against a previously recorded matrix instead of recording')
     parser.add_argument('--require-coverage', action='store_true', help='require three Classic, Merrill and Quattro inputs, one Tiger input, and all resolutions and both processing modes')
+    parser.add_argument('--max-memory-mb', type=int, help='sample and guard each renderer child physical footprint on macOS')
     args = parser.parse_args()
     try:
-        report = run(args.binary, json.loads(args.cases.read_text()), args.directory, args.baseline, args.require_coverage)
+        report = run(args.binary, json.loads(args.cases.read_text()), args.directory, args.baseline, args.require_coverage, args.max_memory_mb)
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
         parser.exit(1, str(error)+'\n')
     if not report['passed']:

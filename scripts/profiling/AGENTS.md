@@ -26,6 +26,7 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 - **[loupe_motion.py](./loupe_motion.py)** Check retained loupe coverage and sustained input independently of render scheduling.
 - **[native.py](./native.py)** Record shared native captures and inject explicit macOS pointer drags without changing app scheduling.
 - **[prepare_inputs.py](./prepare_inputs.py)** Resolve tracked test recipes and explicit photo aliases into portable runner inputs.
+- **[process_memory.py](./process_memory.py)** Guard an owned macOS test process using OS-accounted physical footprint rather than RSS.
 - **[render_matrix.py](./render_matrix.py)** Record or compare exact rendered samples across an explicit camera and preview matrix.
 - **[resources.py](./resources.py)** Sample settled macOS memory at explicit boundaries in an owned headless render run.
 - **[results.py](./results.py)** Report shared preview-scale assertions and exact image comparisons across test drivers.

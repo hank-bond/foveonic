@@ -21,6 +21,7 @@ from inputs import stage_inputs
 from scenario_checks import checked_scenario_images, pointer_value, same_numeric, validate_choice_recipes, check_cache_workflow
 from image_replay import replay_images
 from cache_workflow import associate_trace
+from process_memory import wait_guarded
 
 NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure', 'slider-drag', 'selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'collection-journey', 'choice-journey', 'source-loading', 'cache-workflow')
 
@@ -211,10 +212,10 @@ def shutdown_assertions(native_result, inputs):
     return assertions
 
 
-def compare_scenario_images(native_result, inputs, binary, directory, control_pointer='/exposure', native_photo_count=1):
+def compare_scenario_images(native_result, inputs, binary, directory, control_pointer='/exposure', native_photo_count=1, max_memory_mb=None):
     """Check the scenario's intended edits, then replay its captured final images."""
     action, photos = checked_scenario_images(native_result, inputs, directory, control_pointer, native_photo_count)
-    return replay_images(native_result, inputs, photos, action, binary, directory)
+    return replay_images(native_result, inputs, photos, action, binary, directory, max_memory_mb)
 
 
 def run_trial(args, selected, directory, source_hash):
@@ -240,6 +241,9 @@ def run_trial(args, selected, directory, source_hash):
                        'window_mode':'background' if getattr(args,'background',False) else 'foreground',
                        'coverage':'real application commands and egui input dispatch; not physical pointer injection',
                        'setup':'one active photo and GPU device before measured selection; processing reset before group; enabled disk cache primed except initial',
+                       'physical_memory_guard':({'limit_bytes':args.max_memory_mb * 1024 * 1024,
+                           'sample_interval_ms':100,'metric':'macOS proc_pid_rusage physical footprint'}
+                           if getattr(args,'max_memory_mb',None) is not None else None),
                        'os_file_cache':'uncontrolled; input hashing warms filesystem cache',
                        'scenario_poll_ms':20,'numerical_equality':'verified separately by maintained headless cases',
                        'capture_images_after_scenario':bool(getattr(args, 'compare_images', None))},
@@ -274,7 +278,10 @@ def run_trial(args, selected, directory, source_hash):
         process = subprocess.Popen([str(args.binary), inputs[0]['staged_source']], env=env,
                                    stdout=stdout, stderr=stderr, start_new_session=True)
         try:
-            returncode = process.wait(timeout=args.timeout)
+            memory_limit = getattr(args, 'max_memory_mb', None)
+            returncode = (process.wait(timeout=args.timeout) if memory_limit is None else
+                          wait_guarded(process, args.timeout, memory_limit * 1024 * 1024,
+                                       directory/'physical-memory.jsonl'))
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -341,8 +348,8 @@ def run_trial(args, selected, directory, source_hash):
         test_result['environment']['fresh_binary_sha256'] = manifest['fresh_renderer']['sha256']
         try:
             comparisons = compare_scenario_images(native_result, inputs, fresh_binary, directory, getattr(args, 'control_pointer', '/exposure'),
-                                                  manifest['scenario'].get('native_photo_count', 1))
-        except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as error:
+                                                  manifest['scenario'].get('native_photo_count', 1), getattr(args,'max_memory_mb',None))
+        except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
             comparisons = [{'name':'image_samples', 'step':'slider-drag', 'source':None,
                             'outcome':'failed', 'failure':str(error)}]
         include_assertions(test_result, comparisons)
@@ -380,6 +387,8 @@ def run_trial(args, selected, directory, source_hash):
 
 
 def run(args):
+    if getattr(args, 'max_memory_mb', None) is not None and args.max_memory_mb <= 0:
+        raise ValueError('physical-footprint limit must be positive')
     args.binary = args.binary.resolve(strict=True)
     cases = json.loads(args.cases.read_text()) if args.cases else [{'source':str(path)} for path in args.source]
     args.count = len(cases) if args.count is None else args.count
@@ -504,6 +513,8 @@ def main():
     parser.add_argument('--pressure-mib',type=int,default=128)
     parser.add_argument('--step-timeout',type=int,default=60)
     parser.add_argument('--timeout',type=int,default=600)
+    parser.add_argument('--max-memory-mb',type=int,
+                        help='kill the owned app if its sampled macOS physical footprint exceeds this limit')
     parser.add_argument('--no-monitor',action='store_true')
     parser.add_argument('--cache-namespace',help='explicit controlled reuse; default is unique and isolated from the owner cache')
     args=parser.parse_args()

@@ -13,6 +13,7 @@ from native import recording_environment
 from file_hash import digest
 from inputs import stage_inputs
 from watch_workloads import require_quiet
+from process_memory import wait_guarded
 
 HERE = Path(__file__).resolve().parent
 CATALOG = HERE / 'acceptance_cases.json'
@@ -147,6 +148,9 @@ def execute(job, args, root):
     result = {'id':job['id'], 'driver':job['driver'], 'evidence_description':job['evidence'], 'outcome':'unverified'}
     try:
         cmd, env, required = command(job, args, out)
+        limit_mb = getattr(args, 'max_memory_mb', None)
+        if limit_mb is not None and job['driver'] != 'smoke':
+            cmd += ['--max-memory-mb', str(limit_mb)]
         if job['driver'] == 'smoke':
             require_quiet()
         result['command'] = cmd
@@ -157,8 +161,13 @@ def execute(job, args, root):
             process = subprocess.Popen(cmd, env=env, stdout=stream, stderr=subprocess.STDOUT,
                                        start_new_session=job['driver'] == 'smoke')
             try:
-                code = process.wait(timeout=args.timeout if job['driver'] == 'smoke' else None)
+                code = (wait_guarded(process, args.timeout, limit_mb * 1024 * 1024,
+                                     out/'physical-memory.jsonl')
+                        if job['driver'] == 'smoke' and limit_mb is not None else
+                        process.wait(timeout=args.timeout if job['driver'] == 'smoke' else None))
             except BaseException:
+                if process.poll() is not None:
+                    raise
                 if job['driver'] == 'smoke':
                     os.killpg(process.pid, signal.SIGTERM)
                     try:
@@ -262,8 +271,11 @@ def main():
     p.add_argument('--action-count', type=int, default=12)
     p.add_argument('--foreground', action='store_true')
     p.add_argument('--timeout', type=int, default=600)
+    p.add_argument('--max-memory-mb', type=int, help='guard each owned app or renderer physical footprint on macOS')
     args = p.parse_args()
     try:
+        if args.max_memory_mb is not None and args.max_memory_mb <= 0:
+            raise ValueError('physical-footprint limit must be positive')
         if args.record_latency_baseline and args.latency_before is not None:
             raise ValueError('choose latency baseline recording or comparison')
         catalog = json.loads(CATALOG.read_text())

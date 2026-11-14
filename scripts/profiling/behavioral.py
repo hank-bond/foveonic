@@ -148,7 +148,7 @@ def run_scenario(command, log):
         raise
 
 
-def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, disk_cache_bytes=0, background=True, selection=None, provenance=None, compare_images=None):
+def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, disk_cache_bytes=0, background=True, selection=None, provenance=None, compare_images=None, max_memory_mb=None):
     binary = binary.resolve(strict=True)
     validate(fixtures, cases)
     if not fixtures or not cases:
@@ -157,6 +157,8 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
         raise ValueError('traced behavioral runs need a trace processor')
     if disk_cache_bytes < 0:
         raise ValueError('disk cache budget must be nonnegative')
+    if max_memory_mb is not None and max_memory_mb <= 0:
+        raise ValueError('physical-footprint limit must be positive')
     if compare_images is not None:
         compare_images = compare_images.resolve(strict=True)
     directory.mkdir(parents=True, exist_ok=False)
@@ -180,6 +182,8 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
                    '--quality',case.get('processing_quality', 'quality'), '--mode',mode, '--trials','1', '--disk-cache-bytes',str(disk_cache_bytes)]
             if compare_images:
                 cmd += ['--compare-images',str(compare_images)]
+            if max_memory_mb is not None:
+                cmd += ['--max-memory-mb',str(max_memory_mb)]
             if trace_processor:
                 cmd += ['--trace-processor',str(trace_processor)]
             if background:
@@ -227,6 +231,7 @@ def main():
     parser.add_argument('--compare-images',type=Path,metavar='RENDERER',help='compare settled app frames with fresh renders')
     parser.add_argument('--disk-cache-bytes',type=int,default=0,help='optional owned decoded-cache budget; disabled by default')
     parser.add_argument('--foreground',action='store_true',help='show scenario windows in the foreground')
+    parser.add_argument('--max-memory-mb',type=int,help='guard each owned app and fresh renderer physical footprint on macOS')
     args=parser.parse_args()
     try:
         filters={'fixtures':args.fixture, 'families':args.family, 'cases':args.case, 'themes':args.theme}
@@ -244,7 +249,7 @@ def main():
         selection={'full':args.full, **filters}
         provenance={name:{'path':str(path.resolve()),'sha256':digest(path)} for name,path in
                     (('fixtures',args.fixtures),('cases',args.cases),('runner',Path(__file__)),('scenario_runner',Path(__file__).with_name('scenarios.py')))}
-        result=run(args.binary,fixtures,cases,args.directory,args.mode,args.trace_processor,args.disk_cache_bytes,not args.foreground,selection,provenance,args.compare_images)
+        result=run(args.binary,fixtures,cases,args.directory,args.mode,args.trace_processor,args.disk_cache_bytes,not args.foreground,selection,provenance,args.compare_images,args.max_memory_mb)
     except (OSError,ValueError,KeyError,json.JSONDecodeError) as error:
         parser.exit(1,str(error)+'\n')
     if not result['passed']:

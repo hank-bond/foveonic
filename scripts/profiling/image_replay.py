@@ -6,6 +6,7 @@ import subprocess
 
 from results import IMAGE_GEOMETRY_FIELDS, compare_images
 from watch_workloads import require_quiet
+from process_memory import run_captured
 
 
 def events(stdout):
@@ -21,7 +22,7 @@ def events(stdout):
     return found
 
 
-def replay_images(native_result, inputs, photos, final_action, binary, directory):
+def replay_images(native_result, inputs, photos, final_action, binary, directory, max_memory_mb=None):
     """Compare checked final photos with their owned captured images and fresh renders."""
     captures = native_result.get('image_captures', [])
     declared = {item['staged_source']:item for item in inputs}
@@ -49,7 +50,9 @@ def replay_images(native_result, inputs, photos, final_action, binary, directory
         require_quiet()
         command = [str(binary), source, str(out), '--warm', '0',
                    '--settings-snapshot', str(snapshot_path), '--goldens', str(golden_dir)]
-        fresh = subprocess.run(command, capture_output=True, text=True)
+        fresh = run_captured(command,
+            limit_bytes=None if max_memory_mb is None else max_memory_mb * 1024 * 1024,
+            samples=directory/f'fresh-{index:02}.memory.jsonl')
         (directory/f'fresh-{index:02}.jsonl').write_text(fresh.stdout)
         (directory/f'fresh-{index:02}.stderr').write_text(fresh.stderr)
         if fresh.returncode:
