@@ -227,7 +227,7 @@ impl RenderCoordinator {
         });
         crate::timing::task(&task.stamp, "desired", || {
             json!({"nominal_scale":task.request.preview_quality.working_scale().divisor(),"preview_quality":format!("{:?}",task.request.preview_quality),
-            "output":task.request.output,"settings":task.request.settings,"pixel_reuse":compatible})
+            "output":task.request.output,"settings":task.request.settings,"preview_region":task.request.settings.preview_region,"pixel_reuse":compatible})
         });
         if let Some(index) = existing {
             let entry = &mut self.desired[index];

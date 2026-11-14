@@ -67,7 +67,35 @@ Validation passes 40 exact render comparisons against the preserved pre-change r
 
 ## Follow-up
 
-- [ ] Owner review of sustained loupe movement and ordinary editing in the candidate app.
+- [x] Owner review of sustained loupe movement in the candidate app. Stuttering remains after the initial native section appears.
 - [ ] Attribute residual acquisition stalls and measure how much compute can queue ahead of drawing before proposing a separate submission or scheduling change.
 
 This slice changes completion servicing only. Preserve that boundary while evaluating the remaining responsiveness and settlement costs.
+
+## Owner follow-up
+
+The subsequent loss-free owner capture includes three held-loupe gestures over a four-photo comparison, with a 4 GB processing budget. UI updates have medians of 1.5–1.7 ms and maxima below 6.6 ms during these gestures. Window submission stays below 4.4 ms, while acquisition reaches 93–116 ms. Larger gaps between updates without corresponding measured work cannot be classified as stalls from real pointer input alone because the user may have paused movement.
+
+Replacement processing continues after the first native section appears. The second hazy-coast gesture publishes 96 detail requests, starts 71 jobs, reports 67 superseded completions and completes three results. NoiseBase repeatedly executes. Current loupe requests contain only 32 native pixels of reuse margin per side. Loading one section therefore does not supply native coverage for arbitrary later movement.
+
+Before this slice, returning into displayed native coverage skipped new requests without withdrawing an earlier uncovered request. That request could continue while the displayed image already covered the lens. The earlier desired and draw evidence lacked enough regional geometry to distinguish this case from genuinely uncovered movement in the owner capture.
+
+The owner approved coverage diagnostics, pending-demand withdrawal and an independently measured reuse-margin experiment. This does not authorize a scheduling or kernel change.
+
+- [x] Record visible bounds, compatible native image identity and coverage, submitted revision and region, and request decisions on change. Include capture identity so starting a new capture emits current state. Desired work also records its transient preview region explicitly.
+- [x] Compare the original 32-pixel margin before and after withdrawing newer demand when retained native pixels cover the lens again. Preserve completed detail demand and existing resource owners.
+- [x] Add a held boundary-crossing, return and second crossing to the native journey. Verify retained image identity, retirement before admission and fresh detail after leaving again. Keep this controlled test after the timed motion windows. Independent Python checks reject missing, unchanged or insufficient coverage evidence.
+- [x] Compare a larger margin independently and select it only if its measured tradeoff is useful. Reject it and retain 32 pixels.
+- [x] Complete final source review and checks. Make the selected build available for owner testing.
+
+In the new baseline three-second sweep, 59 requests start 28 jobs, all superseded during motion. Withdrawal with the same 32-pixel margin still publishes 61 requests and starts 29 jobs, with 28 superseded during the window. Each observes only one native image during the sweep. Off input-gap p95 changes from 114.6 to 110.0 ms, with variable cached controls. This supports the coverage-return correctness improvement, not a substantial movement-latency gain from withdrawal alone.
+
+The first withdrawal Wall replay passes native behavior and fresh-image equality but fails strict startup cache-read accounting. A pre-existing background read crosses capture startup without its surrounding context. Its cache lookup reports interruption and zero I/O errors, but the trace cannot satisfy the required enclosing-prefetch evidence. Preserve that failure separately. Subsequent Off and Wall replays pass the complete journey and accounting checks. Do not weaken accounting to waive the incomplete evidence.
+
+The independent margin trial adds one native lens radius of reuse margin per side, with a 32-pixel minimum, leaving visible bounds and magnification unchanged. Its sweep publishes 31 requests and starts 17 jobs, with 15 superseded and 172 processing submissions, compared with 61 requests, 29 starts, 28 superseded and 125 submissions with withdrawal at 32 pixels. Both observe only one native image during the sweep. Off input-gap p95 is 108.1 versus 110.0 ms, while the maximum increases from 124.9 to 251.6 ms. Controls vary, so this is not a reliable regression estimate. Larger jobs progress further but show no convincing latency or useful-feedback benefit. Both trial journeys pass, and the Wall trial passes fresh-image equality. Independent review agrees to reject the default change. Restore its code, comment and geometry test rather than retaining an experimental option.
+
+The selected slice keeps coverage diagnostics, withdrawal and the return regression. It removes unnecessary pending demand but does not establish a stutter fix. Investigating repeated expensive regional processing or GPU submission timing requires a separate agreed slice.
+
+Final validation passes 525 ordinary GUI tests, 158 Python checks with one platform-dependent skip, strict affected-crate Clippy and documentation checks. The rebuilt selected executable is identical to the withdrawal executable used for passing Merrill native replays. The additional Quattro Wall journey exercises the new coverage-return checks and passes fresh-image equality, but its overall report remains unverified because one event was dropped during a capture transition. The Quattro Off journey fails earlier at the unchanged second-tile double-click-to-Fit assertion, before the loupe driver starts, so it supplies no loupe validation. Source review identifies no direct behavioral path from this slice to that earlier failure, but its cause remains unresolved. Preserve both reports and leave complete Quattro validation outstanding.
+
+Potential next experiments remain separate: allow useful same-edit detail already in flight to finish while coalescing the latest region, investigate capture-start/stop evidence completeness, and resolve the earlier Quattro Fit transition failure. More completed jobs alone would not demonstrate useful feedback at the moving lens. Measure current-point coverage as well as GPU work, input cadence and settlement.

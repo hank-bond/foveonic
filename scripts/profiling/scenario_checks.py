@@ -4,7 +4,7 @@ import json
 import struct
 
 from cache_workflow import check_cache_workflow
-from loupe_motion import check_motion
+from loupe_motion import check_motion, check_return_coverage
 
 
 def pointer_value(settings, pointer):
@@ -118,6 +118,7 @@ def check_transitions(transitions, inputs, photos, directory):
         raise ValueError('transition composition differs from the independent expectation')
     check_detail_layers(transitions.get('loupe'), directory)
     check_motion(transitions['loupe'])
+    check_return_coverage(transitions['loupe'])
 
 
 def check_selection_delivery(journey):

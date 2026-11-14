@@ -53,6 +53,10 @@ enum Phase {
     SingleMotionCachedSettled,
     SingleMotionSweep,
     SingleMotionSweepSettled,
+    ReturnHeld,
+    ReturnCovered,
+    ReturnReleased,
+    ReturnRequested,
     SingleReleased,
     ZoomHeld,
     ZoomCapture,
@@ -449,13 +453,11 @@ impl Driver {
                 self.events.push(json!({"observed":"Full regional detail","photo":self.target(),"task":first.image,"region":first.region}));
                 self.first = Some(first);
                 let frame = app.multi_edit.detail(self.target()).unwrap();
-                let window = frame.requested.crop.pixels(frame.uncropped_extent());
                 let radius = 40. * ctx.pixels_per_point();
-                let uv = [
-                    (first.region[2] as f32 - radius * 0.5 - window[0] as f32)
-                        / (window[2] - window[0]) as f32,
-                    (first.focus[1] - window[1] as f32) / (window[3] - window[1]) as f32,
-                ];
+                let uv = focus_uv(
+                    frame,
+                    [first.region[2] as f32 - radius * 0.5, first.focus[1]],
+                );
                 self.hold_next(app);
                 self.queue_pointer(app, smoke, uv, None)?;
                 self.phase = Phase::PartialHeld;
@@ -845,6 +847,78 @@ impl Driver {
                     return Ok(false);
                 };
                 self.first = Some(detail);
+                if self.single_whole {
+                    self.release_pointer(smoke);
+                    self.phase = Phase::SingleReleased;
+                } else {
+                    let frame = app.multi_edit.detail(self.target()).unwrap();
+                    let radius = 40. * ctx.pixels_per_point();
+                    let uv = focus_uv(
+                        frame,
+                        [detail.region[2] as f32 - radius * 0.5, detail.focus[1]],
+                    );
+                    self.hold_next(app);
+                    self.queue_pointer(app, smoke, uv, None)?;
+                    self.phase = Phase::ReturnHeld;
+                }
+            }
+            Phase::ReturnHeld => {
+                if !self.held()? {
+                    return Ok(false);
+                }
+                let frame = app.multi_edit.detail(self.target()).unwrap();
+                let uv = focus_uv(frame, self.first.unwrap().focus);
+                self.queue_pointer(app, smoke, uv, None)?;
+                self.phase = Phase::ReturnCovered;
+            }
+            Phase::ReturnCovered => {
+                let Some(detail) = self.detail(app, ctx, false)? else {
+                    return Ok(false);
+                };
+                if detail.image != self.first.unwrap().image {
+                    return Err("return to covered loupe lost the retained native image".into());
+                }
+                if app.worker.busy() {
+                    return Ok(false);
+                }
+                self.events.push(json!({"observed":"covered loupe withdrew held replacement", "detail":detail.image,"region":detail.region,"required":detail.required}));
+                self.held_reply_epoch = app.memory_reply_epoch;
+                self.release();
+                self.phase = Phase::ReturnReleased;
+            }
+            Phase::ReturnReleased => {
+                if app.worker.busy() || app.memory_reply_epoch == self.held_reply_epoch {
+                    return Ok(false);
+                }
+                let Some(detail) = self.detail(app, ctx, false)? else {
+                    return Ok(false);
+                };
+                if detail.image != self.first.unwrap().image {
+                    return Err(
+                        "withdrawn replacement was admitted over retained loupe coverage".into(),
+                    );
+                }
+                let frame = app.multi_edit.detail(self.target()).unwrap();
+                let radius = 40. * ctx.pixels_per_point();
+                let uv = focus_uv(
+                    frame,
+                    [detail.region[2] as f32 - radius * 0.5, detail.focus[1]],
+                );
+                self.queue_pointer(app, smoke, uv, None)?;
+                self.phase = Phase::ReturnRequested;
+            }
+            Phase::ReturnRequested => {
+                let Some(detail) = self.detail(app, ctx, false)? else {
+                    return Ok(false);
+                };
+                let first = self.first.unwrap();
+                if detail.image == first.image {
+                    return Err(
+                        "leaving retained loupe coverage did not request fresh detail".into(),
+                    );
+                }
+                self.events.push(json!({"observed":"leaving covered loupe requested fresh detail", "previous":first.image,"detail":detail.image,"region":detail.region,"required":detail.required}));
+                self.first = Some(detail);
                 self.release_pointer(smoke);
                 self.phase = Phase::SingleReleased;
             }
@@ -1004,6 +1078,14 @@ impl Driver {
         app.submit_photos();
         self.phase = Phase::Restoring;
     }
+}
+
+fn focus_uv(frame: &worker::Frame, focus: [f32; 2]) -> [f32; 2] {
+    let window = frame.requested.crop.pixels(frame.uncropped_extent());
+    [
+        (focus[0] - window[0] as f32) / (window[2] - window[0]) as f32,
+        (focus[1] - window[1] as f32) / (window[3] - window[1]) as f32,
+    ]
 }
 
 fn thumb_ready(app: &App, path: &Path) -> bool {

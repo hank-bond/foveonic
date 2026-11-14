@@ -1,6 +1,26 @@
-"""Check that native loupe measurements contain sustained input rather than coalesced external drags."""
+"""Check retained loupe coverage and sustained input independently of render scheduling."""
 
 import math
+
+
+def check_return_coverage(loupe):
+    if loupe.get('single_whole') is True:
+        return
+    names = ('covered loupe withdrew held replacement', 'leaving covered loupe requested fresh detail')
+    rows = [event for event in loupe.get('events', []) if event.get('observed') in names]
+    if [row.get('observed') for row in rows] != list(names):
+        raise ValueError('loupe journey lacks return-to-coverage and fresh-request evidence')
+    retained, fresh = rows
+    def contains(region, required):
+        return (len(region) == len(required) == 4
+                and all(region[i] <= required[i] for i in (0, 1))
+                and all(region[i] >= required[i] for i in (2, 3)))
+    if (not retained.get('detail') or retained['detail'] != fresh.get('previous')
+            or not fresh.get('detail') or fresh['detail'] == retained['detail']
+            or not contains(retained.get('region', []), retained.get('required', []))
+            or not contains(fresh.get('region', []), fresh.get('required', []))
+            or contains(retained.get('region', []), fresh.get('required', []))):
+        raise ValueError('loupe return did not retain coverage and then replace uncovered detail')
 
 
 def check_motion(loupe):

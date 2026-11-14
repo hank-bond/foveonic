@@ -14,11 +14,24 @@ use foveonic::{
 };
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Copy, PartialEq, serde::Serialize)]
+struct CoverageObservation {
+    capture: u64,
+    visible: Option<[u32; 4]>,
+    requested_region: Option<[u32; 4]>,
+    native_image: Option<(u64, u64)>,
+    native_coverage: Option<[u32; 4]>,
+    submitted_revision: Option<u64>,
+    submitted_region: Option<[u32; 4]>,
+    action: &'static str,
+}
+
 #[derive(Default)]
 pub(crate) struct Loupe {
     path: Option<PathBuf>,
     geometry: Option<Geometry>,
     submitted: Option<(Request, Option<SourceOrigin>)>,
+    observation: Option<CoverageObservation>,
 }
 
 impl Loupe {
@@ -50,6 +63,52 @@ fn coverage(frame: &Frame) -> [u32; 4] {
 }
 
 impl App {
+    fn trace_loupe_coverage(
+        &mut self,
+        path: &Path,
+        settings: &Settings,
+        geometry: Option<Geometry>,
+        action: &'static str,
+    ) {
+        use foveonic::diagnostics::{self as trace, Category};
+        let Some(capture) = trace::capture_id() else {
+            return;
+        };
+        let native = self
+            .loupe_images(path, settings)
+            .into_iter()
+            .flatten()
+            .find(|frame| {
+                frame.artifact.settings.working_scale == Scale::NATIVE
+                    && frame.artifact.settings.output_size.is_none()
+                    && matching::same_authored_edits(&frame.requested, settings)
+            });
+        let submitted = self.loupe.submitted.as_ref().map(|(request, _)| request);
+        let observation = CoverageObservation {
+            capture,
+            visible: geometry.map(|geometry| geometry.visible),
+            requested_region: geometry.map(|geometry| geometry.region),
+            native_image: native.map(|frame| (frame.diagnostic_task.id, frame.content_revision())),
+            native_coverage: native.map(coverage),
+            submitted_revision: submitted.map(|request| request.revision),
+            submitted_region: submitted.and_then(|request| request.settings.preview_region),
+            action,
+        };
+        if self.loupe.observation == Some(observation) {
+            return;
+        }
+        self.loupe.observation = Some(observation);
+        trace::event(Category::Coordinator, "loupe.coverage", |fields| {
+            fields
+                .str("source", &path.to_string_lossy())
+                .str("action", action)
+                .str(
+                    "geometry",
+                    &serde_json::to_string(&observation).expect("coverage diagnostics"),
+                );
+        });
+    }
+
     pub(crate) fn loupe_inspecting(&self, path: &Path) -> bool {
         self.loupe.path.as_deref() == Some(path)
     }
@@ -237,16 +296,34 @@ impl App {
         let Some(mut settings) = self.loupe_settings(&path) else {
             return;
         };
-        let covered = geometry.is_some_and(|geometry| {
+        let covered_revision = geometry.and_then(|geometry| {
             self.loupe_image(&path, &settings, geometry.visible)
-                .is_some_and(|frame| {
+                .filter(|frame| {
                     frame.artifact.settings.working_scale == Scale::NATIVE
                         && frame.artifact.settings.output_size.is_none()
                         && matching::same_authored_edits(&frame.requested, &settings)
                         && smart::contains(coverage(frame), geometry.visible)
                 })
+                .map(Frame::content_revision)
         });
-        if covered {
+        if let Some(revision) = covered_revision {
+            let withdraw = self
+                .loupe
+                .submitted
+                .as_ref()
+                .is_some_and(|(request, _)| request.revision > revision);
+            self.trace_loupe_coverage(
+                &path,
+                &settings,
+                geometry,
+                if withdraw { "withdraw" } else { "covered" },
+            );
+            if withdraw {
+                // The retained image is enough again. Withdraw newer demand,
+                // leaving displayed pixels and numerical caches with their owners.
+                self.worker.retire_detail(&path);
+                self.loupe.submitted = None;
+            }
             return;
         }
         settings.working_scale = Scale::NATIVE;
@@ -272,12 +349,14 @@ impl App {
             .loupe
             .covers_request(&request, &origin, geometry.map(|geometry| geometry.visible))
         {
+            self.trace_loupe_coverage(&path, &request.settings, geometry, "pending");
             return;
         }
         self.revision = request.revision;
         self.publish_render_view();
-        self.worker.submit(request.clone());
-        self.loupe.submitted = Some((request, origin));
+        self.loupe.submitted = Some((request.clone(), origin));
+        self.trace_loupe_coverage(&path, &request.settings, geometry, "request");
+        self.worker.submit(request);
     }
 }
 

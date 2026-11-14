@@ -836,6 +836,7 @@
         "Single and inactive multi-photo gestures receive Full detail while the main preview remains Thumb.",
         "Dragging replaces uncovered regions and reuses Whole fallback with complete lens coverage.",
         "Held replacement leaves partially overlapping native detail aligned over the overview in loupe and supported Smart zoom, with native screenshots.",
+        "Returning into retained native coverage withdraws a held replacement without discarding the image, then leaving coverage requests fresh detail.",
         "Release, tool changes and source removal retire held work without selecting a photo.",
         "Cropped and rotated thumbnail-only photos use transient ownership and restore authored settings.",
         "Native screenshots retain the lens for visual review at normal and low memory budgets."
