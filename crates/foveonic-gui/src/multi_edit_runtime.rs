@@ -543,7 +543,7 @@ impl Runtime {
             .frame
             .as_ref()
             .zip(photo.detail.as_ref())
-            .is_some_and(|(base, detail)| base.content_revision() >= detail.content_revision())
+            .is_some_and(|(base, detail)| base.supersedes_detail(detail))
         {
             photo.detail = None;
         }
@@ -551,12 +551,12 @@ impl Runtime {
     pub fn detail(&self, path: &Path) -> Option<&worker::Frame> {
         self.photos.get(path)?.detail.as_ref()
     }
-    pub fn supersede_detail(&mut self, path: &Path, order: u64) {
-        if let Some(photo) = self.photos.get_mut(path) {
+    pub fn supersede_detail(&mut self, base: &worker::Frame) {
+        if let Some(photo) = self.photos.get_mut(&base.path) {
             if photo
                 .detail
                 .as_ref()
-                .is_some_and(|detail| detail.content_revision() <= order)
+                .is_some_and(|detail| base.supersedes_detail(detail))
             {
                 photo.detail = None;
             }

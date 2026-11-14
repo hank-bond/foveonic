@@ -79,6 +79,18 @@ impl App {
         {
             return None;
         }
+        self.compatible_detail(path, base, requested, rendition)
+    }
+
+    /// Presentation accepts partial overlap. Request settlement separately
+    /// requires complete coverage of the newly visible region.
+    pub(crate) fn compatible_detail(
+        &self,
+        path: &Path,
+        base: Option<&worker::Frame>,
+        requested: &Settings,
+        rendition: crate::editor::Rendition,
+    ) -> Option<&worker::Frame> {
         let detail = if rendition == crate::editor::Rendition::Current {
             self.multi_edit.detail(path)
         } else {
@@ -100,15 +112,7 @@ impl App {
                 .cache
                 .source_origin(path)
                 .is_none_or(|origin| origin == detail.origin)
-            && base.is_none_or(|base| {
-                base.output == detail.output
-                    && base.rendition == detail.rendition
-                    && !base.framing_preview
-                    && base.comparison.is_none()
-                    && base.origin == detail.origin
-                    && same_image_geometry(&base.requested, requested)
-                    && base.content_revision() < detail.content_revision()
-            }))
+            && base.is_none_or(|base| detail.can_overlay(base)))
         .then_some(detail)
     }
 

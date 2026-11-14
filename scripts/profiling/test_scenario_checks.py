@@ -9,10 +9,39 @@ from unittest.mock import patch
 
 from scenarios import compare_scenario_images
 from cache_workflow import associate_trace
-from scenario_checks import validate_choice_recipes, check_cache_workflow, checked_scenario_images
+from scenario_checks import validate_choice_recipes, check_cache_workflow, checked_scenario_images, check_detail_layers
 
 
 class ScenarioCheckTests(unittest.TestCase):
+    def test_layering_requires_partial_overlap_distinct_images_and_both_views(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evidence = root/'evidence'
+            evidence.mkdir()
+            for name in ('loupe-partial.png', 'zoom-partial.png'):
+                (evidence/name).write_bytes(b'captured')
+            observations = ('partial loupe retained overview and native section while replacement held',
+                            'zoom movement retained overview and native section while replacement held')
+            loupe = {'phase':'Done', 'single_whole':False, 'events':[
+                {'observed':observation, 'overview':[1, 1], 'detail':[2, 2],
+                 'region':[0, 0, 100, 100], 'required':[50, 0, 150, 100]}
+                for observation in observations]}
+            check_detail_layers(loupe, root)
+            for change in ('complete', 'disjoint', 'same-image', 'missing-zoom', 'unfinished'):
+                bad = json.loads(json.dumps(loupe))
+                if change == 'complete': bad['events'][0]['required'] = [10, 10, 90, 90]
+                elif change == 'disjoint': bad['events'][0]['required'] = [100, 0, 200, 100]
+                elif change == 'same-image': bad['events'][0]['detail'] = [1, 1]
+                elif change == 'missing-zoom': bad['events'].pop()
+                else: bad['phase'] = 'PartialCapture'
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    check_detail_layers(bad, root)
+            loupe['single_whole'] = True
+            loupe['events'].pop()
+            check_detail_layers(loupe, root)
+            (evidence/'loupe-partial.png').unlink()
+            with self.assertRaises(ValueError): check_detail_layers(loupe, root)
+
     def setUp(self):
         quiet = patch('image_replay.require_quiet')
         quiet.start()

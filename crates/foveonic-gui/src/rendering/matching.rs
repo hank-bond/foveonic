@@ -13,6 +13,17 @@ pub(crate) fn same_authored_edits(a: &Settings, b: &Settings) -> bool {
     authored_edits(a) == authored_edits(b)
 }
 
+/// New detail may advance feedback before its overview catches up. Once the
+/// overview advances, an older section is useful only for the same edits.
+pub(crate) fn can_overlay_edits(
+    base: &Settings,
+    base_revision: u64,
+    detail: &Settings,
+    detail_revision: u64,
+) -> bool {
+    detail_revision > base_revision || same_authored_edits(base, detail)
+}
+
 fn authored_edits(settings: &Settings) -> Settings {
     let mut edits = settings.clone();
     edits.working_scale = Scale::NATIVE;
@@ -93,6 +104,20 @@ pub(crate) fn same_delivery_request(a: &Request, b: &Request) -> bool {
 mod tests {
     use super::*;
     use crate::{editor::Rendition, preferences::PreviewMode};
+
+    #[test]
+    fn overlay_feedback_preserves_same_edits_and_never_covers_newer_edits_with_old_detail() {
+        let base = Settings::default();
+        let mut detail = base.clone();
+        detail.working_scale = Scale::NATIVE;
+        detail.preview_region = Some([100, 100, 500, 500]);
+        assert!(can_overlay_edits(&base, 3, &detail, 2));
+        assert!(can_overlay_edits(&base, 2, &detail, 2));
+        detail.exposure = 0.5;
+        assert!(!can_overlay_edits(&base, 3, &detail, 2));
+        assert!(!can_overlay_edits(&base, 2, &detail, 2));
+        assert!(can_overlay_edits(&base, 1, &detail, 2));
+    }
 
     fn request() -> Request {
         Request {

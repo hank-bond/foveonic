@@ -82,6 +82,8 @@ impl App {
                 .is_none_or(|origin| origin == frame.origin)
     }
 
+    /// Full coverage determines request readiness, independently of useful
+    /// partial detail that can still be drawn over the overview.
     pub(crate) fn loupe_image(
         &self,
         path: &Path,
@@ -100,6 +102,14 @@ impl App {
                     frame.content_revision(),
                 )
             })
+    }
+
+    pub(crate) fn loupe_images(&self, path: &Path, settings: &Settings) -> [Option<&Frame>; 2] {
+        let overview = self
+            .current_photo_frame(path)
+            .filter(|frame| self.loupe_frame_matches(frame, path, settings));
+        let detail = self.compatible_detail(path, overview, settings, Rendition::Current);
+        [overview, detail]
     }
 
     /// Run after every tile has drawn, so neither the lens nor its pointer is owned by selection.
@@ -198,32 +208,23 @@ impl App {
         ) else {
             return;
         };
-        let frame = self.loupe_image(&gesture.path, &settings, geometry.visible);
-        if let Some(frame) = frame {
-            viewport::show_loupe(
-                &painter,
-                self.viewports.view(Some(&gesture.path)).id(),
-                frame.texture.clone(),
-                coverage(frame),
-                geometry.lens,
-                geometry.focus_native,
-                geometry.points_per_native_pixel,
-                mapping,
-                self.srgb_target,
-                frame.diagnostic_identity(false),
-            );
-        } else {
-            painter.circle_filled(
-                geometry.lens.center(),
-                geometry.lens.width() * 0.5,
-                egui::Color32::from_gray(18),
-            );
-            painter.circle_stroke(
-                geometry.lens.center(),
-                geometry.lens.width() * 0.5,
-                egui::Stroke::new(1_f32, egui::Color32::GRAY),
-            );
-        }
+        let layers = self.loupe_images(&gesture.path, &settings).map(|frame| {
+            frame.map(|frame| viewport::ImageLayer {
+                texture: frame.texture.clone(),
+                coverage: coverage(frame),
+                identity: frame.diagnostic_identity(false),
+            })
+        });
+        viewport::show_loupe(
+            &painter,
+            self.viewports.view(Some(&gesture.path)).id(),
+            layers,
+            geometry.lens,
+            geometry.focus_native,
+            geometry.points_per_native_pixel,
+            mapping,
+            self.srgb_target,
+        );
         self.loupe.geometry = Some(geometry);
     }
 

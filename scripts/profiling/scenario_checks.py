@@ -83,7 +83,29 @@ def check_choices(choices, inputs, initial, photos, declared):
             raise ValueError('final choices or exposure differ from the independent expectation')
 
 
-def check_transitions(transitions, inputs, photos):
+def check_detail_layers(loupe, directory):
+    """Require held partial coverage and native screenshots for the exercised views."""
+    if not isinstance(loupe, dict) or loupe.get('phase') != 'Done':
+        raise ValueError('detail layering journey did not complete')
+    expected = [('partial loupe retained overview and native section while replacement held', 'loupe-partial.png')]
+    if loupe.get('single_whole') is not True:
+        expected.append(('zoom movement retained overview and native section while replacement held', 'zoom-partial.png'))
+    for observation, filename in expected:
+        event = next((event for event in loupe.get('events', []) if event.get('observed') == observation), None)
+        if (event is None or not event.get('overview') or not event.get('detail')
+                or event['overview'] == event['detail']
+                or not (directory/'evidence'/filename).is_file()):
+            raise ValueError('detail layering lacks distinct images and screenshot evidence')
+        region, required = event.get('region', []), event.get('required', [])
+        if len(region) != 4 or len(required) != 4:
+            raise ValueError('detail layering lacks coverage bounds')
+        contains = all(region[i] <= required[i] for i in (0, 1)) and all(region[i] >= required[i] for i in (2, 3))
+        overlaps = region[0] < required[2] and required[0] < region[2] and region[1] < required[3] and required[1] < region[3]
+        if contains or not overlaps:
+            raise ValueError('detail layering did not exercise incomplete overlapping coverage')
+
+
+def check_transitions(transitions, inputs, photos, directory):
     completed = [event['completed'] for event in transitions['events'] if 'completed' in event]
     if not completed or completed != transitions['sequence']:
         raise ValueError('transition journey lacks its complete replay sequence')
@@ -93,6 +115,7 @@ def check_transitions(transitions, inputs, photos):
     settings = photos[inputs[composed[0]]['staged_source']]['settings']
     if settings.get('crop') != composed[1] or settings.get('rotation') != composed[2]:
         raise ValueError('transition composition differs from the independent expectation')
+    check_detail_layers(transitions.get('loupe'), directory)
 
 
 def check_selection_delivery(journey):
@@ -155,7 +178,7 @@ def checked_scenario_images(native_result, inputs, directory, control_pointer='/
     if choices:
         check_choices(choices, inputs, initial, photos, declared)
     if transitions:
-        check_transitions(transitions, inputs, photos)
+        check_transitions(transitions, inputs, photos, directory)
     if journey:
         check_selection_delivery(journey)
     for capture in captures:

@@ -899,12 +899,14 @@ impl App {
                     } else {
                         viewport::clear(&self.render_state);
                         if frame.rendition == editor::Rendition::Current {
-                            self.multi_edit
-                                .supersede_detail(&frame.path, frame.content_revision());
+                            self.multi_edit.supersede_detail(&frame);
                         }
-                        if self.before.detail.as_ref().is_some_and(|detail| {
-                            frame.content_revision() >= detail.content_revision()
-                        }) {
+                        if self
+                            .before
+                            .detail
+                            .as_ref()
+                            .is_some_and(|detail| frame.supersedes_detail(detail))
+                        {
                             self.before.detail = None;
                         }
                         self.frame = Some(frame);
@@ -1568,12 +1570,10 @@ impl App {
                 allowed
             };
         if let Some(frame) = &self.frame {
-            let detail = self.smart_detail().map(|detail| {
-                (
-                    detail.texture.clone(),
-                    detail.detail_region(),
-                    detail.diagnostic_identity(false),
-                )
+            let detail = self.smart_detail().map(|detail| viewport::ImageLayer {
+                texture: detail.texture.clone(),
+                coverage: detail.detail_region(),
+                identity: detail.diagnostic_identity(false),
             });
             let viewport = self.viewports.view_mut(self.selected.as_deref());
             viewport.zoom_snap = self.preferences.zoom_snap;
@@ -1589,15 +1589,13 @@ impl App {
                 self.srgb_target,
                 frame.diagnostic_identity(mapping.input),
             );
-            if let Some((texture, region, identity)) = detail {
+            if let Some(layer) = detail {
                 viewport.show_region(
                     ui,
-                    texture,
-                    region,
+                    layer,
                     frame.display_window(false),
                     mapping,
                     self.srgb_target,
-                    identity,
                 );
             }
         } else if let Some(path) = &self.selected {

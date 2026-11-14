@@ -1,6 +1,7 @@
 //! Exercises held native-detail gestures, cancellation and transient photo ownership in the real app.
 
 use crate::{
+    editor::Rendition,
     loupe_tool::{self, Options, Size, Zoom},
     photo_tools,
     preferences::PreviewMode,
@@ -28,6 +29,8 @@ enum Phase {
     Setup,
     Ready,
     First,
+    PartialHeld,
+    PartialCapture,
     Dragged,
     ReleaseHeld,
     Released,
@@ -47,6 +50,9 @@ enum Phase {
     SingleReady,
     SingleDetail,
     SingleReleased,
+    ZoomHeld,
+    ZoomCapture,
+    ZoomReleased,
     RestoreBrowser,
     Restoring,
     Done,
@@ -105,7 +111,7 @@ impl Driver {
         self.hold.take();
     }
     pub(super) fn evidence(&self) -> Value {
-        json!({"phase":format!("{:?}",self.phase),"events":self.events})
+        json!({"phase":format!("{:?}",self.phase),"single_whole":self.single_whole,"events":self.events})
     }
     fn capture(
         &mut self,
@@ -251,21 +257,8 @@ impl Driver {
                 "loupe did not receive its own Full detail with the expected coverage".into(),
             );
         }
-        let window = frame.requested.crop.pixels(frame.uncropped_extent());
-        let focus = [
-            window[0] as f32 + gesture.focus_uv[0] * (window[2] - window[0]) as f32,
-            window[1] as f32 + gesture.focus_uv[1] * (window[3] - window[1]) as f32,
-        ];
         let region = frame.detail_region();
-        // The maintained gesture fixes a 160-point lens at 200%. Derive its
-        // complete native footprint independently of the production geometry.
-        let radius = 40. * ctx.pixels_per_point();
-        let required = [
-            (focus[0] - radius).floor().max(window[0] as f32) as u32,
-            (focus[1] - radius).floor().max(window[1] as f32) as u32,
-            (focus[0] + radius).ceil().min(window[2] as f32) as u32,
-            (focus[1] + radius).ceil().min(window[3] as f32) as u32,
-        ];
+        let (focus, required) = footprint(frame, &gesture, ctx.pixels_per_point());
         if !contains(region, required) {
             if let Some(base) = app.current_photo_frame(self.target()).filter(|base| {
                 matching::same_authored_edits(&base.requested, &effective)
@@ -433,6 +426,50 @@ impl Driver {
                 }
                 self.events.push(json!({"observed":"Full regional detail","photo":self.target(),"task":first.image,"region":first.region}));
                 self.first = Some(first);
+                let frame = app.multi_edit.detail(self.target()).unwrap();
+                let window = frame.requested.crop.pixels(frame.uncropped_extent());
+                let radius = 40. * ctx.pixels_per_point();
+                let uv = [
+                    (first.region[2] as f32 - radius * 0.5 - window[0] as f32)
+                        / (window[2] - window[0]) as f32,
+                    (first.focus[1] - window[1] as f32) / (window[3] - window[1]) as f32,
+                ];
+                self.hold_next(app);
+                self.queue_pointer(app, smoke, uv, None)?;
+                self.phase = Phase::PartialHeld;
+            }
+            Phase::PartialHeld => {
+                if !self.held()? {
+                    return Ok(false);
+                }
+                self.phase = Phase::PartialCapture;
+            }
+            Phase::PartialCapture => {
+                self.check_main(app)?;
+                let settings = app
+                    .preferences
+                    .render_settings(app.multi_edit.settings(self.target()).unwrap());
+                let [Some(base), Some(detail)] = app.loupe_images(self.target(), &settings) else {
+                    return Err("partial loupe lost its overview or native overlay".into());
+                };
+                let first = self.first.unwrap();
+                let gesture = loupe_tool::gesture(ctx).ok_or("partial loupe lost its gesture")?;
+                let (_, required) = footprint(detail, &gesture, ctx.pixels_per_point());
+                if image_id(detail) != first.image
+                    || contains(first.region, required)
+                    || !overlaps(first.region, required)
+                    || self.detail(app, ctx, false)?.is_some()
+                {
+                    return Err(
+                        "partial loupe did not retain an incomplete overlapping section".into(),
+                    );
+                }
+                let overview = image_id(base);
+                if !self.capture(ctx, smoke, "loupe-partial.png")? {
+                    return Ok(false);
+                }
+                self.events.push(json!({"observed":"partial loupe retained overview and native section while replacement held", "overview":overview,"detail":first.image,"region":first.region,"required":required}));
+                self.release();
                 self.queue_pointer(app, smoke, [0.8, 0.8], None)?;
                 self.phase = Phase::Dragged;
             }
@@ -737,6 +774,7 @@ impl Driver {
                     return Ok(false);
                 }
                 self.events.push(json!({"observed":"active single-photo Full loupe preserved main Thumb","photo":self.target(),"task":detail.image}));
+                self.first = Some(detail);
                 self.release_pointer(smoke);
                 self.phase = Phase::SingleReleased;
             }
@@ -745,12 +783,79 @@ impl Driver {
                     return Ok(false);
                 }
                 self.check_main(app)?;
-                app.preferences.organizer = self.saved.as_ref().unwrap().organizer;
-                app.browser.set_actions(vec![(
-                    crate::shortcuts::BrowserAction::SelectAll,
-                    egui::Modifiers::COMMAND,
-                )]);
-                self.phase = Phase::RestoreBrowser;
+                if self.single_whole {
+                    self.restore_browser(app);
+                } else {
+                    self.hold_next(app);
+                    app.preferences.preview_quality = PreviewMode::Smart;
+                    photo_tools::pointer(ctx);
+                    let view = app.viewports.view_mut(Some(self.target()));
+                    let current = view
+                        .zoom_percent(ctx.pixels_per_point())
+                        .ok_or("zoom has no geometry")?;
+                    view.zoom_by(200. / current);
+                    app.submit_photos();
+                    self.events.push(json!({"action":"zoom existing native section to 200 percent with replacement held","coverage":"direct-command"}));
+                    self.phase = Phase::ZoomHeld;
+                }
+            }
+            Phase::ZoomHeld => {
+                if !self.held()? {
+                    return Ok(false);
+                }
+                app.viewports.view_mut(Some(self.target())).pan += egui::vec2(35., 20.);
+                app.submit_photos();
+                smoke.direct_events.push_back(vec![]);
+                self.phase = Phase::ZoomCapture;
+            }
+            Phase::ZoomCapture => {
+                let base = app
+                    .current_photo_frame(self.target())
+                    .ok_or("zoom lost overview")?;
+                let detail = app
+                    .photo_detail(
+                        self.target(),
+                        Some(base),
+                        &app.view_settings(),
+                        Rendition::Current,
+                    )
+                    .ok_or("zoom lost compatible native overlay")?;
+                let visible = app
+                    .viewports
+                    .view(Some(self.target()))
+                    .visible_pixels()
+                    .ok_or("zoom has no visible bounds")?;
+                let window = base.display_window(false);
+                let required = [
+                    visible.top_left[0] + window[0],
+                    visible.top_left[1] + window[1],
+                    visible.bottom_right[0] + 1 + window[0],
+                    visible.bottom_right[1] + 1 + window[1],
+                ];
+                let first = self.first.unwrap();
+                if app.selected.as_deref() != Some(self.target())
+                    || image_id(detail) != first.image
+                    || contains(first.region, required)
+                    || !overlaps(first.region, required)
+                {
+                    return Err("zoom movement did not preserve the partial native section".into());
+                }
+                let overview = image_id(base);
+                if !self.capture(ctx, smoke, "zoom-partial.png")? {
+                    return Ok(false);
+                }
+                self.events.push(json!({"observed":"zoom movement retained overview and native section while replacement held", "overview":overview,"detail":first.image,"region":first.region,"required":required}));
+                self.release();
+                app.preferences.preview_quality = PreviewMode::Thumb;
+                app.viewports.view_mut(Some(self.target())).reset();
+                app.submit_photos();
+                self.phase = Phase::ZoomReleased;
+            }
+            Phase::ZoomReleased => {
+                if app.worker.busy() {
+                    return Ok(false);
+                }
+                self.restore_browser(app);
             }
             Phase::RestoreBrowser => {
                 if app.viewport_paths.len() != paths.len() || app.worker.busy() {
@@ -780,6 +885,15 @@ impl Driver {
         ctx.request_repaint();
         Ok(false)
     }
+    fn restore_browser(&mut self, app: &mut App) {
+        app.preferences.organizer = self.saved.as_ref().unwrap().organizer;
+        app.browser.set_actions(vec![(
+            crate::shortcuts::BrowserAction::SelectAll,
+            egui::Modifiers::COMMAND,
+        )]);
+        self.phase = Phase::RestoreBrowser;
+    }
+
     fn begin_single(&mut self, app: &mut App) {
         let saved = self.saved.as_ref().unwrap();
         for (path, settings) in &saved.settings {
@@ -844,6 +958,34 @@ fn covers(region: [u32; 4], point: [f32; 2]) -> bool {
         && point[1] >= region[1] as f32
         && point[1] < region[3] as f32
 }
+// The maintained gesture fixes a 160-point lens at 200%. Its native footprint
+// is independent of the production placement and overscan helpers.
+fn footprint(
+    frame: &worker::Frame,
+    gesture: &loupe_tool::Gesture,
+    pixels_per_point: f32,
+) -> ([f32; 2], [u32; 4]) {
+    let window = frame.requested.crop.pixels(frame.uncropped_extent());
+    let focus = [
+        window[0] as f32 + gesture.focus_uv[0] * (window[2] - window[0]) as f32,
+        window[1] as f32 + gesture.focus_uv[1] * (window[3] - window[1]) as f32,
+    ];
+    let radius = 40. * pixels_per_point;
+    (
+        focus,
+        [
+            (focus[0] - radius).floor().max(window[0] as f32) as u32,
+            (focus[1] - radius).floor().max(window[1] as f32) as u32,
+            (focus[0] + radius).ceil().min(window[2] as f32) as u32,
+            (focus[1] + radius).ceil().min(window[3] as f32) as u32,
+        ],
+    )
+}
+
+fn overlaps(a: [u32; 4], b: [u32; 4]) -> bool {
+    a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+}
+
 fn contains(outer: [u32; 4], inner: [u32; 4]) -> bool {
     outer[0] <= inner[0] && outer[1] <= inner[1] && outer[2] >= inner[2] && outer[3] >= inner[3]
 }

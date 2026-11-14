@@ -70,6 +70,37 @@ pub struct Frame {
     pub queued_at: std::time::Instant,
 }
 impl Frame {
+    /// Coverage can overlap only partly. Source, framing and feedback order
+    /// determine whether the two existing textures can share a presentation.
+    pub fn can_overlay(&self, base: &Self) -> bool {
+        self.path == base.path
+            && self.origin == base.origin
+            && self.output == base.output
+            && self.rendition == base.rendition
+            && self.calibration_signature == base.calibration_signature
+            && !self.framing_preview
+            && !base.framing_preview
+            && self.comparison.is_none()
+            && base.comparison.is_none()
+            && super::matching::same_image_geometry(&self.requested, &base.requested)
+            && super::matching::can_overlay_edits(
+                &base.requested,
+                base.content_revision(),
+                &self.requested,
+                self.content_revision(),
+            )
+    }
+
+    /// Same-edit reduced refreshes leave the section useful. New edits or a
+    /// complete native overview replace it under the existing content order.
+    pub fn supersedes_detail(&self, detail: &Self) -> bool {
+        self.content_revision() >= detail.content_revision()
+            && (!detail.can_overlay(self)
+                || (self.artifact.settings.working_scale == Scale::NATIVE
+                    && self.artifact.settings.preview_region.is_none()
+                    && self.artifact.settings.output_size.is_none()))
+    }
+
     /// Whole edited photographs can outlive their viewport and seed browser previews.
     pub fn is_photographic(&self) -> bool {
         self.rendition == crate::editor::Rendition::Current
@@ -2029,6 +2060,84 @@ mod tests {
         assert_eq!(key.region, None);
         let samples = result.unwrap().samples;
         assert_eq!(samples[0].max(samples[1]), 512);
+    }
+
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with blue-parking-sign.x3f"]
+    fn detail_layers_keep_only_the_latest_section_and_preserve_compatible_overviews() {
+        use crate::{editor::Rendition, memory::Inventory, preferences::PreviewMode};
+        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let path = root.join("blue-parking-sign.x3f");
+        let context = eframe::egui::Context::default();
+        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), context.clone());
+        let mut sidecars = crate::sidecars::Session::new(context, false, worker.cache.clone());
+        sidecars.set_memory_only(true);
+        let mut photos = crate::multi_edit_runtime::Runtime::default();
+        photos.sync(std::slice::from_ref(&path), 1, &mut sidecars);
+        let render = |revision, quality, region, exposure| {
+            let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+            settings.preview_region = region;
+            settings.exposure = exposure;
+            worker.submit(super::Request {
+                revision,
+                settings,
+                preview_quality: quality,
+                preview_policy: PreviewMode::Smart,
+                detail: region.is_some(),
+                framing_preview: false,
+                calibration: None,
+                rendition: Rendition::Current,
+                path: path.clone(),
+                output: "final".into(),
+                comparison: false,
+                export: None,
+            });
+            receive(&worker).result.unwrap().unwrap()
+        };
+        photos.retain(render(1, PreviewMode::Thumb, None, 0.));
+        let first = render(2, PreviewMode::Full, Some([100, 100, 512, 512]), 0.);
+        let old_texture = first.texture.clone();
+        photos.retain(first);
+        // Change quality to produce a real later overview. An identical settled
+        // request is correctly coalesced without another delivery.
+        photos.retain(render(3, PreviewMode::Draft, None, 0.));
+        let mut refresh = render(4, PreviewMode::Thumb, None, 0.);
+        let detail = photos.detail(&path).unwrap();
+        assert!(detail.can_overlay(&refresh));
+        assert!(!refresh.supersedes_detail(detail));
+        let origin = refresh.origin.clone();
+        refresh.origin = Default::default();
+        assert!(!detail.can_overlay(&refresh));
+        refresh.origin = origin;
+        refresh.calibration_signature = Some("another calibration".into());
+        assert!(!detail.can_overlay(&refresh));
+        refresh.calibration_signature = None;
+        refresh.requested.rotation.turns = 1;
+        assert!(!detail.can_overlay(&refresh));
+        refresh.requested.rotation.turns = 0;
+        refresh.requested.exposure = 0.5;
+        assert!(!detail.can_overlay(&refresh));
+        assert!(refresh.supersedes_detail(detail));
+        refresh.requested.exposure = 0.;
+        photos.retain(refresh);
+        assert_eq!(photos.detail(&path).unwrap().content_revision(), 2);
+
+        photos.retain(render(5, PreviewMode::Full, Some([400, 400, 812, 812]), 0.));
+        assert_eq!(photos.detail(&path).unwrap().content_revision(), 5);
+        let mut inventory = Inventory::default();
+        photos.memory_resources(&mut inventory);
+        assert!(!inventory.contains_image_texture(&old_texture));
+        photos.retain(render(6, PreviewMode::Full, None, 0.));
+        assert!(
+            photos.detail(&path).is_none(),
+            "complete native overview replaces the section"
+        );
+        photos.retain(render(7, PreviewMode::Full, Some([100, 100, 512, 512]), 0.));
+        photos.retain(render(8, PreviewMode::Thumb, None, 0.5));
+        assert!(
+            photos.detail(&path).is_none(),
+            "newer edits must replace old detail"
+        );
     }
 
     #[test]

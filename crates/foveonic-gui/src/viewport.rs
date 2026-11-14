@@ -163,7 +163,8 @@ impl Params {
 enum DrawSlot {
     Main(egui::Id),
     Detail(egui::Id),
-    Loupe(egui::Id),
+    LoupeOverview(egui::Id),
+    LoupeDetail(egui::Id),
 }
 
 struct Resources {
@@ -408,20 +409,86 @@ fn render_preview(
     rs.queue.submit(Some(encoder.finish()));
 }
 
-/// Draw the lens after all photograph tiles, using a painter clipped to the whole viewport.
-/// Coverage is the texture's actual cropped and oriented native-coordinate rectangle.
+/// Existing photographic textures carry their coverage in native image coordinates.
+pub(crate) struct ImageLayer {
+    pub texture: Arc<ImageTexture>,
+    pub coverage: [u32; 4],
+    pub identity: Option<crate::timing::ImageIdentity>,
+}
+
+#[derive(Clone, Copy)]
+struct LayerView {
+    origin: egui::Pos2,
+    native_origin: egui::Vec2,
+    points_per_pixel: egui::Vec2,
+    clip: egui::Rect,
+    circle: Option<egui::Rect>,
+}
+impl LayerView {
+    fn placement(self, coverage: [u32; 4]) -> Option<egui::Rect> {
+        if coverage[0] >= coverage[2] || coverage[1] >= coverage[3] {
+            return None;
+        }
+        let position = |x, y| {
+            self.origin
+                + (egui::vec2(x as f32, y as f32) - self.native_origin) * self.points_per_pixel
+        };
+        Some(egui::Rect::from_min_max(
+            position(coverage[0], coverage[1]),
+            position(coverage[2], coverage[3]),
+        ))
+    }
+}
+
+fn show_layer(
+    painter: &egui::Painter,
+    key: DrawSlot,
+    view: LayerView,
+    layer: ImageLayer,
+    mapping: Mapping,
+    srgb_target: bool,
+) {
+    let Some(tile) = view.placement(layer.coverage) else {
+        return;
+    };
+    let Some((visible, mut params)) = Params::clipped(
+        view.clip.intersect(tile),
+        tile,
+        painter.clip_rect().intersect(painter.ctx().screen_rect()),
+        layer.texture.description().space,
+        mapping.channel,
+        srgb_target,
+    ) else {
+        return;
+    };
+    if let Some(circle) = view.circle {
+        params.clip_circle(circle, visible);
+    }
+    painter.add(egui_wgpu::Callback::new_paint_callback(
+        visible,
+        Draw {
+            key,
+            frame: painter.ctx().cumulative_pass_nr(),
+            texture: layer.texture,
+            input: None,
+            params: mapping.apply(params),
+            probe: crate::timing::DrawProbe::new(layer.identity),
+        },
+    ));
+}
+
+/// The overview and latest detail share one transform and circular clip.
+/// The background and rim surround the photographic layers.
 #[allow(clippy::too_many_arguments)]
 pub fn show_loupe(
     painter: &egui::Painter,
     photo: egui::Id,
-    texture: Arc<ImageTexture>,
-    coverage: [u32; 4],
+    layers: [Option<ImageLayer>; 2],
     lens: egui::Rect,
     focus_native: [f32; 2],
     points_per_native_pixel: f32,
     mapping: Mapping,
     srgb_target: bool,
-    identity: Option<crate::timing::ImageIdentity>,
 ) {
     if !lens.is_positive()
         || !lens.min.is_finite()
@@ -434,36 +501,19 @@ pub fn show_loupe(
     }
     let radius = lens.width().min(lens.height()) * 0.5;
     painter.circle_filled(lens.center(), radius, egui::Color32::from_gray(18));
-    if coverage[2] > coverage[0] && coverage[3] > coverage[1] {
-        let position = |x, y| {
-            lens.center()
-                + egui::vec2(x as f32 - focus_native[0], y as f32 - focus_native[1])
-                    * points_per_native_pixel
-        };
-        let tile = egui::Rect::from_min_max(
-            position(coverage[0], coverage[1]),
-            position(coverage[2], coverage[3]),
-        );
-        if let Some((visible, mut params)) = Params::clipped(
-            lens.intersect(tile),
-            tile,
-            painter.clip_rect().intersect(painter.ctx().screen_rect()),
-            texture.description().space,
-            mapping.channel,
-            srgb_target,
-        ) {
-            params.clip_circle(lens, visible);
-            painter.add(egui_wgpu::Callback::new_paint_callback(
-                visible,
-                Draw {
-                    key: DrawSlot::Loupe(photo),
-                    frame: painter.ctx().cumulative_pass_nr(),
-                    texture,
-                    input: None,
-                    params: mapping.apply(params),
-                    probe: crate::timing::DrawProbe::new(identity),
-                },
-            ));
+    let view = LayerView {
+        origin: lens.center(),
+        native_origin: egui::vec2(focus_native[0], focus_native[1]),
+        points_per_pixel: egui::Vec2::splat(points_per_native_pixel),
+        clip: lens,
+        circle: Some(lens),
+    };
+    for (key, layer) in [DrawSlot::LoupeOverview(photo), DrawSlot::LoupeDetail(photo)]
+        .into_iter()
+        .zip(layers)
+    {
+        if let Some(layer) = layer {
+            show_layer(painter, key, view, layer, mapping, srgb_target);
         }
     }
     painter.circle_stroke(
@@ -982,53 +1032,37 @@ impl Viewport {
         let position = image.min + egui::vec2(uv[0], uv[1]) * image.size();
         canvas.contains(position).then_some(position)
     }
-    /// Paint a native-coordinate detail rectangle over the immediate overview.
-    #[allow(clippy::too_many_arguments)]
+    /// Paint the latest native section over the overview using the same transform.
     pub fn show_region(
         &self,
         ui: &mut egui::Ui,
-        texture: Arc<ImageTexture>,
-        region: [u32; 4],
+        layer: ImageLayer,
         window: [u32; 4],
         mapping: Mapping,
         srgb_target: bool,
-        identity: Option<crate::timing::ImageIdentity>,
     ) {
         let Some((canvas, image)) = self.last_image else {
             return;
         };
-        let position = |x, y| {
-            image.min
-                + egui::vec2(
-                    (x as f32 - window[0] as f32) / (window[2] - window[0]) as f32 * image.width(),
-                    (y as f32 - window[1] as f32) / (window[3] - window[1]) as f32 * image.height(),
-                )
+        let view = LayerView {
+            origin: image.min,
+            native_origin: egui::vec2(window[0] as f32, window[1] as f32),
+            points_per_pixel: image.size()
+                / egui::vec2(
+                    (window[2] - window[0]) as f32,
+                    (window[3] - window[1]) as f32,
+                ),
+            clip: canvas.intersect(image),
+            circle: None,
         };
-        let tile = egui::Rect::from_min_max(
-            position(region[0], region[1]),
-            position(region[2], region[3]),
-        );
-        let Some((visible, params)) = Params::clipped(
-            canvas.intersect(image).intersect(tile),
-            tile,
-            ui.clip_rect().intersect(ui.ctx().screen_rect()),
-            texture.description().space,
-            mapping.channel,
+        show_layer(
+            ui.painter(),
+            DrawSlot::Detail(self.id),
+            view,
+            layer,
+            mapping,
             srgb_target,
-        ) else {
-            return;
-        };
-        ui.painter().add(egui_wgpu::Callback::new_paint_callback(
-            visible,
-            Draw {
-                key: DrawSlot::Detail(self.id),
-                frame: ui.ctx().cumulative_pass_nr(),
-                texture,
-                input: None,
-                params: mapping.apply(params),
-                probe: crate::timing::DrawProbe::new(identity),
-            },
-        ));
+        );
     }
     /// Include partly visible pixels so the readout describes everything on screen.
     /// Bounds are inclusive and use the cropped, oriented image grid.
@@ -2442,6 +2476,85 @@ mod loupe_tests {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100., 100.));
         let params = Params::new(rect, rect, Space::ToneMappedRgb(ColorSpace::Srgb), -1, true);
         assert_eq!(params.circle, [0.; 4]);
+    }
+
+    #[test]
+    fn loupe_and_zoom_keep_partial_detail_registered_over_the_overview() {
+        let clip = egui::Rect::from_min_max(egui::pos2(10., 20.), egui::pos2(410., 420.));
+        let zoom = LayerView {
+            origin: clip.min,
+            native_origin: egui::vec2(200., 100.),
+            points_per_pixel: egui::Vec2::splat(2.),
+            clip,
+            circle: None,
+        };
+        let loupe = LayerView {
+            origin: clip.center(),
+            native_origin: egui::vec2(300., 200.),
+            circle: Some(clip),
+            ..zoom
+        };
+        let overview = [0, 0, 1920, 1280];
+        let detail = [100, 100, 300, 300];
+        for (view, expected) in [
+            (zoom, egui::vec2(0., 0.)),
+            (
+                LayerView {
+                    native_origin: zoom.native_origin + egui::vec2(50., 25.),
+                    ..zoom
+                },
+                egui::vec2(-100., -50.),
+            ),
+        ] {
+            let lens = LayerView {
+                native_origin: loupe.native_origin + (view.native_origin - zoom.native_origin),
+                ..loupe
+            };
+            assert_eq!(view.placement(overview), lens.placement(overview));
+            let tile = view.placement(detail).unwrap();
+            assert_eq!(Some(tile), lens.placement(detail));
+            assert_eq!(tile.min, egui::pos2(-190., 20.) + expected);
+            let overlap = clip.intersect(tile);
+            assert!(overlap.is_positive());
+            assert!(overlap.width() < clip.width());
+            for coverage in [overview, detail] {
+                let image = view.placement(coverage).unwrap();
+                let (visible, params) = Params::clipped(
+                    view.clip.intersect(image),
+                    image,
+                    clip,
+                    Space::ToneMappedRgb(ColorSpace::Srgb),
+                    -1,
+                    true,
+                )
+                .unwrap();
+                let point = overlap.center();
+                let uv = ((point - visible.min) / visible.size()
+                    - egui::vec2(params.rect[0], params.rect[1]))
+                    / egui::vec2(params.rect[2], params.rect[3]);
+                let native = egui::vec2(coverage[0] as f32, coverage[1] as f32)
+                    + uv * egui::vec2(
+                        (coverage[2] - coverage[0]) as f32,
+                        (coverage[3] - coverage[1]) as f32,
+                    );
+                let expected = view.native_origin + (point - view.origin) / view.points_per_pixel;
+                assert!((native - expected).length() < 0.001);
+            }
+        }
+        let photo = egui::Id::new("photo");
+        let slots = [
+            DrawSlot::Main(photo),
+            DrawSlot::Detail(photo),
+            DrawSlot::LoupeOverview(photo),
+            DrawSlot::LoupeDetail(photo),
+        ];
+        assert_eq!(
+            slots
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            4
+        );
     }
 
     #[test]

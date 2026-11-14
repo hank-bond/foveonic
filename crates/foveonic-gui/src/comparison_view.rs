@@ -1,6 +1,6 @@
 //! Fits browser-selected photographs into bounded comparison tiles with explicit viewport editing targets.
 
-use crate::{viewport_selection::Request, App};
+use crate::{viewport, viewport_selection::Request, App};
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -96,12 +96,10 @@ impl App {
                             crate::editor::Rendition::Current,
                         )
                     })
-                    .map(|detail| {
-                        (
-                            detail.texture.clone(),
-                            detail.detail_region(),
-                            detail.diagnostic_identity(false),
-                        )
+                    .map(|detail| viewport::ImageLayer {
+                        texture: detail.texture.clone(),
+                        coverage: detail.detail_region(),
+                        identity: detail.diagnostic_identity(false),
                     });
                 let view = self.viewports.view_mut(Some(path));
                 view.editing = crate::photo_tools::takes_pointer(ui.ctx());
@@ -117,15 +115,13 @@ impl App {
                         self.srgb_target,
                         frame.diagnostic_identity(false),
                     );
-                    if let Some((texture, region, identity)) = detail {
+                    if let Some(layer) = detail {
                         view.show_region(
                             &mut child,
-                            texture,
-                            region,
+                            layer,
                             frame.display_window(false),
                             crate::viewport::Mapping::normal(-1),
                             self.srgb_target,
-                            identity,
                         );
                     }
                     Some(frame.native_display_extent())
