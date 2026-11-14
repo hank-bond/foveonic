@@ -12,6 +12,7 @@ use crate::{
     },
     profile::Profile,
     recipe::Key,
+    render::ProcessingQuality,
     source::Result,
 };
 
@@ -27,6 +28,7 @@ pub(crate) fn support() -> u32 {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Params {
     shape: [u32; 4],
+    sampling: [u32; 4],
     bounds: [u32; 4],
     luma: [f32; 4],
     values: [f32; 4],
@@ -37,6 +39,7 @@ pub(crate) struct Params {
     guide: tone_equalizer::GuideSampling,
 }
 impl Params {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         extent: [u32; 2],
         bounds: [u32; 4],
@@ -45,6 +48,7 @@ impl Params {
         response: BaseResponse,
         tuning: Tuning,
         curve: &[f32],
+        processing_quality: ProcessingQuality,
     ) -> Result<Self> {
         tuning.validate()?;
         if extent.contains(&0)
@@ -52,6 +56,7 @@ impl Params {
             || bounds[1] >= bounds[3]
             || bounds[2] > extent[0]
             || bounds[3] > extent[1]
+            || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX) / 3
         {
             return Err("invalid adaptive tone geometry".into());
         }
@@ -66,8 +71,20 @@ impl Params {
         } else {
             0.
         };
+        let step = tone_equalizer::cell_step(processing_quality);
+        let analysis_extent = if processing_quality == ProcessingQuality::Quality {
+            [bounds[2] - bounds[0], bounds[3] - bounds[1]]
+        } else {
+            [256, 256]
+        };
         Ok(Self {
-            shape: [extent[0], extent[1], 256, 256],
+            shape: [extent[0], extent[1], analysis_extent[0], analysis_extent[1]],
+            sampling: [
+                step,
+                step,
+                u32::from(processing_quality == ProcessingQuality::Quality),
+                0,
+            ],
             bounds,
             luma: photographic::luminance(space),
             values: [white, pivot, response.strength(), 1.],
@@ -99,6 +116,7 @@ impl Params {
             || bounds[1] >= bounds[3]
             || bounds[2] > extent[0]
             || bounds[3] > extent[1]
+            || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX) / 3
             || !scale.is_finite()
             || scale <= 0.
         {
@@ -106,6 +124,10 @@ impl Params {
         }
         self.shape[..2].copy_from_slice(&extent);
         self.bounds = bounds;
+        if self.sampling[2] != 0 {
+            self.shape[2] = bounds[2] - bounds[0];
+            self.shape[3] = bounds[3] - bounds[1];
+        }
         // A zero-distance probe compares a pixel with itself and erases every
         // structure score. Keep the smallest usable neighborhood on coarse grids.
         self.toe[2] = (2. * scale).round().max(1.);
@@ -113,13 +135,19 @@ impl Params {
         Ok(self)
     }
     /// Map main RGB sample centers to sample centers in a separate guide image.
-    /// Its compact mask still stores one scalar per 2 by 2 guide-image pixels.
+    /// The guide carries its own encoded-cell lattice.
     pub(crate) fn with_application_guide(
         mut self,
         guide: Self,
         mapping: [[f32; 4]; 2],
     ) -> Result<Self> {
-        self.guide = tone_equalizer::GuideSampling::new(guide.extent(), guide.bounds, mapping)?;
+        self.guide = tone_equalizer::GuideSampling::new(
+            guide.extent(),
+            guide.bounds,
+            mapping,
+            guide.sampling[0],
+            self.sampling[1],
+        )?;
         Ok(self)
     }
 
@@ -136,7 +164,11 @@ impl Params {
     }
 
     pub(crate) fn aligned_output(self, bounds: [u32; 4]) -> Result<[u32; 4]> {
-        let alignment = tone_equalizer::GUIDE_ALIGNMENT;
+        let alignment = if self.sampling[1] == 1 {
+            1
+        } else {
+            tone_equalizer::GUIDE_ALIGNMENT
+        };
         if bounds[0] >= bounds[2] || bounds[1] >= bounds[3] {
             return Err("invalid adaptive output bounds".into());
         }
@@ -203,7 +235,15 @@ pub(crate) fn apply_with_analysis(
     for (samples, geometry) in [(&input, &params), (&analysis, &analysis_params)] {
         let extent = [geometry.shape[0], geometry.shape[1]];
         if samples.rgb.size() != u64::from(extent[0]) * u64::from(extent[1]) * 12
-            || samples.mask.size() != tone_equalizer::guide_storage_bytes(geometry.guide_extent())
+            || samples.mask.size()
+                != tone_equalizer::guide_storage_bytes(
+                    geometry.guide_extent(),
+                    if geometry.guide.is_mapped() {
+                        geometry.guide.cell_step()
+                    } else {
+                        geometry.sampling[0]
+                    },
+                )
         {
             return Err("adaptive RGB or compact brightness guide has an unexpected size".into());
         }
@@ -213,17 +253,23 @@ pub(crate) fn apply_with_analysis(
     let curve = gpu.upload("adaptive tone parameters", curve)?;
     let mut buffers = FitBuffers {
         curve,
-        histogram: gpu.storage("adaptive joint histogram", 4096 * 2 * 4)?,
+        histogram: gpu.storage("adaptive joint histogram", 4096 * 3 * 4)?,
         candidates: gpu.storage("adaptive candidate scores", 96 * 16)?,
         chosen: gpu.storage("adaptive selected response", 5 * 4)?,
         reference: gpu.storage("adaptive reference response", 5 * 4)?,
         global_reference: gpu.storage("adaptive initial response", 5 * 4)?,
         regions: gpu.storage("adaptive region summaries", 1235 * 64)?,
     };
-    let mut samples = gpu.storage("adaptive regional samples", 256 * 256 * 16)?;
+    let analysis_extent = [analysis_params.shape[2], analysis_params.shape[3]];
+    let mut samples = gpu.storage(
+        "adaptive regional samples",
+        u64::from(analysis_extent[0]) * u64::from(analysis_extent[1]) * 16,
+    )?;
+    let step = params.sampling[1];
+    let gain_extent = [width.div_ceil(step), height.div_ceil(step)];
     let mut gain = gpu.storage(
         "adaptive HDR gains",
-        u64::from(width.div_ceil(2)) * u64::from(height.div_ceil(2)) * 4,
+        u64::from(gain_extent[0]) * u64::from(gain_extent[1]) * 4,
     )?;
     let mut output = gpu.storage(
         "adaptive visible RGB",
@@ -240,7 +286,10 @@ pub(crate) fn apply_with_analysis(
             (3, Read(&analysis_context)),
             (4, Write(buffers.histogram.write())),
         ],
-        [32, 32],
+        [
+            analysis_extent[0].div_ceil(8),
+            analysis_extent[1].div_ceil(8),
+        ],
         &mut trace,
     );
     gpu.dispatch(
@@ -251,7 +300,10 @@ pub(crate) fn apply_with_analysis(
             (3, Read(&analysis_context)),
             (8, Write(samples.write())),
         ],
-        [32, 32],
+        [
+            analysis_extent[0].div_ceil(8),
+            analysis_extent[1].div_ceil(8),
+        ],
         &mut trace,
     );
     gpu.dispatch(
@@ -290,10 +342,7 @@ pub(crate) fn apply_with_analysis(
             (11, Read(&buffers.global_reference)),
             (7, Write(gain.write())),
         ],
-        [
-            width.div_ceil(2).div_ceil(8),
-            height.div_ceil(2).div_ceil(8),
-        ],
+        [gain_extent[0].div_ceil(8), gain_extent[1].div_ceil(8)],
         &mut trace,
     );
     #[repr(C)]
@@ -305,10 +354,10 @@ pub(crate) fn apply_with_analysis(
         pivot: [f32; 4],
     }
     let adjustment = gpu.uniform(&Adjustment {
-        shape: [width, height, width.div_ceil(2), height.div_ceil(2)],
+        shape: [width, height, gain_extent[0], gain_extent[1]],
         amounts: [0.; 4],
         luma: [0.; 4],
-        pivot: [params.values[1], 2., 0., 0.],
+        pivot: [params.values[1], step as f32, 0., 0.],
     });
     gpu.dispatch(
         Kernel::ToneEqualizerApply,

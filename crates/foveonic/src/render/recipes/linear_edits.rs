@@ -15,10 +15,6 @@ use crate::{
     source::Result,
 };
 
-// Prototype target for independent regional application guidance.
-// Compare the two finer grids before selecting a production policy.
-const REGIONAL_GUIDE_DIVISOR: u32 = 2;
-
 /// Camera response and the shared profile-dependent analysis scale.
 #[derive(Clone)]
 pub(super) struct Adaptive {
@@ -45,6 +41,7 @@ impl Adaptive {
                 settings.photographic.base_response,
                 settings.adaptive_tone_tuning,
                 &curve,
+                settings.processing_quality,
             )?
             .with_exposure(settings.exposure)?,
             curve,
@@ -56,6 +53,9 @@ impl Adaptive {
 /// Profiles select a target grid. Preparation never requests finer data than
 /// the main working grid, including explicit scales coarser than Thumb.
 fn adaptive_analysis_scale(settings: &Settings, thumb_scale: Scale) -> Result<Scale> {
+    if settings.processing_quality == crate::render::ProcessingQuality::Quality {
+        return Ok(settings.working_scale);
+    }
     let divisor = if settings.photographic.base_response == crate::render::BaseResponse::Strong {
         (thumb_scale.divisor() / 2).max(1)
     } else {
@@ -76,7 +76,6 @@ pub(super) struct Context {
     pub guide_white: f32,
     /// Working pixels per native pixel, independent of viewport crop size.
     pub scale: f32,
-    pub haze_scale: Scale,
 }
 
 /// Camera responses use a 16-bit code lattice. Evaluate metadata curves only.
@@ -185,8 +184,10 @@ pub(super) fn build(
         white,
         guide_white,
         scale,
-        haze_scale,
     } = context;
+    let haze_scale = settings
+        .processing_quality
+        .guide_scale(settings.working_scale);
     let extent = recipe.rgb_extent;
     white_balance(recipe, settings, space)?;
     alias(recipe, space, "linear.edits-input")?;
@@ -248,12 +249,20 @@ pub(super) fn build(
         let input = recipe.final_id;
         recipe.graph.retain_for_session(input);
         let regional = settings.preview_region.is_some();
-        let mask = if regional {
+        let application_scale = settings
+            .processing_quality
+            .guide_scale(settings.working_scale);
+        let separate_guide = regional || application_scale != settings.working_scale;
+        let mask = if separate_guide {
             None
         } else {
-            let guide =
-                tone_equalizer::Guide::new(extent, tone_equalizer::radius_for_scale(scale), space)?
-                    .with_white(white);
+            let guide = tone_equalizer::Guide::new(
+                extent,
+                tone_equalizer::radius_for_scale(scale),
+                space,
+                settings.processing_quality,
+            )?
+            .with_white(white);
             let mask = recipe
                 .graph
                 .add(Operation::AdaptiveToneGuide { guide, space }, &[input])?;
@@ -262,7 +271,7 @@ pub(super) fn build(
             Some((mask, guide))
         };
         let (analysis_rgb, analysis_mask, analysis, analysis_mapping) =
-            if analysis_scale == settings.working_scale && !regional {
+            if analysis_scale == settings.working_scale && !separate_guide {
                 let (mask, guide) = mask.expect("whole-photo application prepared its guide");
                 let rgb = recipe.graph.add(
                     Operation::ImageAlias {
@@ -304,16 +313,14 @@ pub(super) fn build(
                     execution,
                 )?
             };
-        let (mask, params) = if regional {
-            let application_scale = settings
-                .working_scale
-                .coarsest(Scale::new(REGIONAL_GUIDE_DIVISOR)?);
+        let (mask, params) = if separate_guide {
             let (application_mask, application, application_mapping) =
                 if application_scale == analysis_scale {
                     let guide = tone_equalizer::Guide::new(
                         analysis.extent(),
                         tone_equalizer::radius_for_scale(analysis_scale.factor()),
                         space,
+                        settings.processing_quality,
                     )?
                     .with_white(white);
                     mask_inspection(
@@ -488,26 +495,35 @@ pub(super) fn build(
     {
         let input = recipe.final_id;
         recipe.graph.retain_for_session(input);
-        let (mask, sampling) = if settings.preview_region.is_some() {
-            let (mask, sampling) =
-                dynamic_range_guide(engine, source, settings, recipe, profile, execution)?;
-            (mask, Some(sampling))
-        } else {
-            let guide =
-                tone_equalizer::Guide::new(extent, tone_equalizer::radius_for_scale(scale), space)?
-                    .with_white(white);
-            let mask = recipe
-                .graph
-                .add(Operation::ToneMask { guide, space }, &[input])?;
-            recipe.graph.retain_for_session(mask);
-            mask_inspection(&mut recipe.graph, mask, guide, "tonal-ranges.mask", names)?;
-            (mask, None)
-        };
+        let guide_scale = settings
+            .processing_quality
+            .guide_scale(settings.working_scale);
+        let (mask, sampling) =
+            if settings.preview_region.is_some() || guide_scale != settings.working_scale {
+                let (mask, sampling) =
+                    dynamic_range_guide(engine, source, settings, recipe, profile, execution)?;
+                (mask, Some(sampling))
+            } else {
+                let guide = tone_equalizer::Guide::new(
+                    extent,
+                    tone_equalizer::radius_for_scale(scale),
+                    space,
+                    settings.processing_quality,
+                )?
+                .with_white(white);
+                let mask = recipe
+                    .graph
+                    .add(Operation::ToneMask { guide, space }, &[input])?;
+                recipe.graph.retain_for_session(mask);
+                mask_inspection(&mut recipe.graph, mask, guide, "tonal-ranges.mask", names)?;
+                (mask, None)
+            };
         if requested(&recipe.graph, names) {
             return Ok(());
         }
         recipe.final_id = recipe.graph.add(
             Operation::TonalRanges {
+                processing_quality: settings.processing_quality,
                 sampling,
                 window: Default::default(),
                 controls: settings.tonal_ranges,
@@ -638,7 +654,9 @@ fn dynamic_range_guide(
     execution: &mut Execution<'_>,
 ) -> Result<(usize, tone_equalizer::GuideSampling)> {
     let mut overview = settings.clone();
-    overview.working_scale = settings.working_scale.coarsest(Scale::new(2)?);
+    overview.working_scale = settings
+        .processing_quality
+        .guide_scale(settings.working_scale);
     overview.preview_region = None;
     overview.output_size = None;
     overview.dehaze_estimate = false;
@@ -656,10 +674,17 @@ fn dynamic_range_guide(
         .iter()
         .position(|output| output.name == "tonal-ranges.guide")
         .ok_or("Dynamic Range branch did not prepare its brightness guide")?;
+    let Operation::ToneMask { guide, .. } =
+        branch.graph.nodes[branch.graph.outputs[mask].producer].operation
+    else {
+        return Err("Dynamic Range guide has an unexpected producer".into());
+    };
     let sampling = tone_equalizer::GuideSampling::new(
         branch.rgb_extent,
         branch.rgb_bounds,
         guide_mapping(recipe.rgb_to_native, branch.rgb_to_native)?,
+        guide.cell_step(),
+        guide.cell_step(),
     )?;
     let mapping = recipe
         .graph
@@ -729,7 +754,6 @@ fn adaptive_rgb(
             white,
             guide_white: white,
             scale: scale.factor(),
-            haze_scale: scale,
         },
         |_| Err("tone pivot is not required for guide preparation".into()),
         profile,
@@ -773,6 +797,7 @@ fn adaptive_application_guide(
         branch.rgb_extent,
         tone_equalizer::radius_for_scale(scale.factor()),
         space,
+        settings.processing_quality,
     )?
     .with_white(white);
     // Keep the ordinary guide's direct RGB parent. An inspection alias before
@@ -825,17 +850,19 @@ fn adaptive_analysis(
         execution,
     )?;
 
+    let guide_rgb = branch.final_id;
     alias(&mut branch, space, "base-response.analysis")?;
     let rgb = branch.final_id;
     let guide = tone_equalizer::Guide::new(
         branch.rgb_extent,
         tone_equalizer::radius_for_scale(analysis_scale.factor()),
         space,
+        settings.processing_quality,
     )?
     .with_white(white);
     let mask = branch
         .graph
-        .add(Operation::AdaptiveToneGuide { guide, space }, &[rgb])?;
+        .add(Operation::AdaptiveToneGuide { guide, space }, &[guide_rgb])?;
     let mask = branch.graph.add(
         Operation::ImageAlias {
             dehaze_basis: None,
@@ -901,6 +928,7 @@ fn haze_analysis(
                 white,
                 settings.is_monochrome(),
                 target.params.crop,
+                settings.processing_quality,
             )
             .with_color_estimation(settings.dehaze.shadow.is_none()),
             space,

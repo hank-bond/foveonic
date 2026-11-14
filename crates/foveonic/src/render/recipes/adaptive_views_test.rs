@@ -277,7 +277,7 @@ fn capture_views(adaptive_variants: bool) {
             &output.join(format!("{label}.f32")),
         );
         rows.push(serde_json::json!({"label":label,"scale_divisor":divisor,"shared_guide":shared,"regional":regional,"patch":patch}));
-        let report = serde_json::json!({"source":source_path,"settings":RenderSettingsSnapshot::from(&initial),"photo_extent":photo_extent,"rect":rect,"adapter":engine.adapter_name(),"regional_application_guide_divisor":REGIONAL_GUIDE_DIVISOR,"variants":rows,"timing":"quality attribution only; graph preparation, fresh GPU execution and diagnostic readback are not latency comparisons"});
+        let report = serde_json::json!({"source":source_path,"settings":RenderSettingsSnapshot::from(&initial),"photo_extent":photo_extent,"rect":rect,"adapter":engine.adapter_name(),"processing_quality":initial.processing_quality,"application_guide_divisor":initial.processing_quality.guide_scale(initial.working_scale).divisor(),"variants":rows,"timing":"quality attribution only; graph preparation, fresh GPU execution and diagnostic readback are not latency comparisons"});
         fs::write(
             output.join("report.json"),
             serde_json::to_vec_pretty(&report).unwrap(),

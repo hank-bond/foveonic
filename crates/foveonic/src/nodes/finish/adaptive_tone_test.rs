@@ -35,6 +35,7 @@ fn reduced_analysis_keeps_structure_in_histogram_and_regional_samples() {
             BaseResponse::Natural,
             Tuning::default(),
             &curve,
+            ProcessingQuality::Speed,
         )
         .unwrap()
         .with_geometry(
@@ -45,7 +46,7 @@ fn reduced_analysis_keeps_structure_in_histogram_and_regional_samples() {
         .unwrap();
         let context = gpu.uniform(&params);
         let mut histogram = gpu
-            .upload("Empty adaptive histogram", &vec![0_u32; 8192])
+            .upload("Empty adaptive histogram", &vec![0_u32; 12288])
             .unwrap();
         let mut samples = gpu
             .storage("Regional structure samples", 256 * 256 * 16)
@@ -76,7 +77,10 @@ fn reduced_analysis_keeps_structure_in_histogram_and_regional_samples() {
         let bytes = gpu.readback(&histogram).unwrap();
         let counts: &[u32] = bytemuck::cast_slice(&bytes);
         assert_eq!(counts[..4096].iter().sum::<u32>(), 256 * 256);
-        let structure = counts[4096..].iter().map(|v| u64::from(*v)).sum::<u64>();
+        let structure = counts[4096..8192]
+            .iter()
+            .map(|v| u64::from(*v))
+            .sum::<u64>();
         let bytes = gpu.readback(&samples).unwrap();
         let samples: &[[f32; 4]] = bytemuck::cast_slice(&bytes);
         let regional = samples
@@ -110,6 +114,7 @@ fn photographic_shadow_limit_sweep() {
         caps.editing_defaults(&source.metadata, Rendering::Color)
             .unwrap()
     });
+    settings.processing_quality = ProcessingQuality::Speed;
     if settings.white_balance.is_empty() {
         settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
     }
@@ -158,6 +163,7 @@ fn photographic_shadow_limit_sweep() {
             BaseResponse::Natural,
             settings.adaptive_tone_tuning,
             &curve,
+            ProcessingQuality::Speed,
         )
         .unwrap()
         .with_exposure(settings.exposure)
@@ -260,6 +266,7 @@ fn regional_app_response_bakes_exports_and_preserves_reference() {
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     for rendering in [Rendering::Color, Rendering::Monochrome] {
         let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
+        settings.processing_quality = ProcessingQuality::Speed;
         settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         settings.highlight_mode = HighlightMode::ColorField;
@@ -335,6 +342,7 @@ fn adaptive_sessions_reuse_guide_and_invalidate_limits_without_touching_camera()
         .unwrap();
     settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
     settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+    settings.processing_quality = ProcessingQuality::Speed;
     // Keep the positive reuse check below the checkpoint cache capacity. Full
     // admission pressure is a separate cache-policy case, not invalidation.
     settings.working_scale = crate::render::Scale::new(2).unwrap();
@@ -427,7 +435,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
     let guide = tone_equalizer::build_guide(
         &gpu,
         &input,
-        tone_equalizer::Guide::new(extent, 24, ColorSpace::Srgb).unwrap(),
+        tone_equalizer::Guide::new(extent, 48, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap(),
         &mut Profile::default(),
     )
     .unwrap();
@@ -441,6 +449,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
             response,
             Tuning::default(),
             &curve,
+            ProcessingQuality::Speed,
         )
         .unwrap();
         let output = apply(
@@ -476,6 +485,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
                 strong: zero,
             },
             &curve,
+            ProcessingQuality::Speed,
         )
         .unwrap()
         .with_exposure(2.)
@@ -516,7 +526,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
     let guide = tone_equalizer::build_guide(
         &gpu,
         &uniform,
-        tone_equalizer::Guide::new(extent, 24, ColorSpace::Srgb).unwrap(),
+        tone_equalizer::Guide::new(extent, 48, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap(),
         &mut Profile::default(),
     )
     .unwrap();
@@ -529,6 +539,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
             response,
             Tuning::default(),
             &curve,
+            ProcessingQuality::Speed,
         )
         .unwrap();
         let output = apply(
@@ -578,7 +589,7 @@ fn blacks_rescue_only_structured_near_black_without_flattening_or_touching_visib
     let mask = tone_equalizer::build_guide(
         &gpu,
         &input,
-        tone_equalizer::Guide::new(extent, 24, ColorSpace::Srgb).unwrap(),
+        tone_equalizer::Guide::new(extent, 48, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap(),
         &mut Profile::default(),
     )
     .unwrap();
@@ -594,6 +605,7 @@ fn blacks_rescue_only_structured_near_black_without_flattening_or_touching_visib
             response,
             disabled,
             &curve,
+            ProcessingQuality::Speed,
         )
         .unwrap();
         let baseline = apply(&gpu, &input, &mask, &curve, params, &mut Profile::default()).unwrap();
@@ -607,6 +619,7 @@ fn blacks_rescue_only_structured_near_black_without_flattening_or_touching_visib
             response,
             Tuning::default(),
             &curve,
+            ProcessingQuality::Speed,
         )
         .unwrap();
         let after = apply(&gpu, &input, &mask, &curve, params, &mut Profile::default()).unwrap();
@@ -682,6 +695,7 @@ fn mapped_application_guide_keeps_fit_and_overlapping_sections_aligned() {
         BaseResponse::Natural,
         Tuning::default(),
         &curve,
+        ProcessingQuality::Speed,
     )
     .unwrap();
     let analysis_params = params
@@ -819,6 +833,7 @@ fn mapped_application_guide_clamps_probes_to_photo_cells_inside_padding() {
         BaseResponse::Natural,
         Tuning::default(),
         &curve,
+        ProcessingQuality::Speed,
     )
     .unwrap();
     let analysis = params
@@ -866,4 +881,315 @@ fn mapped_application_guide_clamps_probes_to_photo_cells_inside_padding() {
         outputs[0], outputs[1],
         "inactive margins affected edge application or fit"
     );
+}
+
+#[test]
+fn quality_analysis_and_gain_geometry_cover_the_valid_working_grid() {
+    let curve: Vec<_> = (0..4096).map(|v| v as f32 / 4095.).collect();
+    let create = |quality| {
+        Params::new(
+            [321, 257],
+            [3, 5, 319, 255],
+            4095.,
+            ColorSpace::Srgb,
+            BaseResponse::Natural,
+            Tuning::default(),
+            &curve,
+            quality,
+        )
+        .unwrap()
+    };
+    let quality = create(ProcessingQuality::Quality);
+    assert_eq!(quality.shape, [321, 257, 316, 250]);
+    assert_eq!(quality.sampling, [1, 1, 1, 0]);
+    assert_eq!(
+        quality.aligned_output([3, 5, 17, 21]).unwrap(),
+        [3, 5, 17, 21]
+    );
+    let speed = create(ProcessingQuality::Speed);
+    assert_eq!(speed.shape, [321, 257, 256, 256]);
+    assert_eq!(speed.sampling, [2, 2, 0, 0]);
+    let reduced = quality
+        .with_geometry([81, 65], [1, 2, 79, 63], 0.25)
+        .unwrap();
+    assert_eq!(reduced.shape, [81, 65, 78, 61]);
+    let mapped = quality
+        .with_application_guide(reduced, [[0.25, 0., -0.375, 0.], [0., 0.25, -0.375, 0.]])
+        .unwrap();
+    assert_eq!(mapped.guide.cell_step(), 1);
+    assert_eq!(mapped.guide.gain_step(), 1);
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn dense_analysis_counts_every_valid_pixel_carries_structure_and_summarizes_complete_windows() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [303_u32, 269];
+    let bounds = [5_u32, 3, 298, 264];
+    let valid = [bounds[2] - bounds[0], bounds[3] - bounds[1]];
+    let values: Vec<f32> = (0..extent[1])
+        .flat_map(|y| {
+            (0..extent[0]).flat_map(move |x| {
+                if x < bounds[0] || x >= bounds[2] || y < bounds[1] || y >= bounds[3] {
+                    [0.; 3]
+                } else {
+                    let ev =
+                        -13. + (x - bounds[0]) as f32 * 0.125 + (y - bounds[1]) as f32 * 0.0625;
+                    [4095. * ev.exp2(); 3]
+                }
+            })
+        })
+        .collect();
+    let rgb = gpu
+        .upload("Dense analytical log-light ramp", &values)
+        .unwrap();
+    let mask = gpu
+        .upload(
+            "Dense constant brightness guide",
+            &vec![0.5_f32; (extent[0] * extent[1]) as usize],
+        )
+        .unwrap();
+    let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
+    let params = Params::new(
+        extent,
+        bounds,
+        4095.,
+        ColorSpace::Srgb,
+        BaseResponse::Natural,
+        Tuning::default(),
+        &curve,
+        ProcessingQuality::Quality,
+    )
+    .unwrap();
+    let mut initial = vec![0_u32; 4096 * 3];
+    // Seed the low words just below a carry. This exercises the dense-safe
+    // accumulator without allocating a multi-million-pixel overflow fixture.
+    initial[4096..8192].fill(u32::MAX - 1023);
+    let mut histogram = gpu
+        .upload("Seeded wide structure accumulator", &initial)
+        .unwrap();
+    let mut samples = gpu
+        .storage(
+            "All valid working samples",
+            u64::from(valid[0]) * u64::from(valid[1]) * 16,
+        )
+        .unwrap();
+    let mut regions = gpu
+        .storage("Dense normalized regional summaries", 1235 * 64)
+        .unwrap();
+    let context = gpu.uniform(&params);
+    let curve = gpu.upload("Dense analysis curve", &curve).unwrap();
+    let groups = [valid[0].div_ceil(8), valid[1].div_ceil(8)];
+    let mut trace = gpu.trace(false, 3);
+    gpu.dispatch(
+        Kernel::AdaptiveToneHistogram,
+        &mut [
+            (0, Read(&rgb)),
+            (1, Read(&mask)),
+            (3, Read(&context)),
+            (4, Write(histogram.write())),
+        ],
+        groups,
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::AdaptiveToneSampleRegions,
+        &mut [
+            (0, Read(&rgb)),
+            (1, Read(&mask)),
+            (3, Read(&context)),
+            (8, Write(samples.write())),
+        ],
+        groups,
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::AdaptiveToneRegionSummary,
+        &mut [
+            (2, Read(&curve)),
+            (3, Read(&context)),
+            (8, Read(&samples)),
+            (9, Write(regions.write())),
+        ],
+        [1235_u32.div_ceil(64), 1],
+        &mut trace,
+    );
+    let bytes = gpu.readback(&histogram).unwrap();
+    let histogram: &[u32] = bytemuck::cast_slice(&bytes);
+    let count = valid[0] * valid[1];
+    assert!(count > 256 * 256);
+    assert_eq!(histogram[..4096].iter().sum::<u32>(), count);
+    let sum: u64 = (0..4096)
+        .map(|i| {
+            ((u64::from(histogram[8192 + i]) << 32) + u64::from(histogram[4096 + i]))
+                - u64::from(initial[4096 + i])
+        })
+        .sum();
+    // This ramp's fine and broad gradients agree strongly even at clamped
+    // edges, so every valid pixel contributes exactly the full 1024 units.
+    assert_eq!(sum, u64::from(count) * 1024);
+    assert!(histogram[8192..].iter().any(|v| *v > 0));
+    let bytes = gpu.readback(&samples).unwrap();
+    let samples: &[[f32; 4]] = bytemuck::cast_slice(&bytes);
+    assert_eq!(samples.len(), count as usize);
+    for y in 0..valid[1] {
+        for x in 0..valid[0] {
+            let sample = samples[(y * valid[0] + x) as usize];
+            let expected = -13. + x as f32 * 0.125 + y as f32 * 0.0625;
+            assert!((sample[0] - expected).abs() < 0.00002);
+            assert!((sample[1] + 4.).abs() < 0.00002);
+            assert_eq!(sample[3], 1.);
+        }
+    }
+    let bytes = gpu.readback(&regions).unwrap();
+    let regions: &[[f32; 16]] = bytemuck::cast_slice(&bytes);
+    for (index, region) in regions.iter().enumerate() {
+        let (grid, step, size, local) = if index < 961 {
+            (31, 8, 16, index)
+        } else if index < 1186 {
+            (15, 16, 32, index - 961)
+        } else {
+            (7, 32, 64, index - 1186)
+        };
+        let start = [(local % grid * step) as u32, (local / grid * step) as u32];
+        let low = [start[0] * valid[0] / 256, start[1] * valid[1] / 256];
+        let high = [
+            ((start[0] + size) * valid[0]).div_ceil(256),
+            ((start[1] + size) * valid[1]).div_ceil(256),
+        ];
+        let width = f64::from(high[0] - low[0]);
+        let height = f64::from(high[1] - low[1]);
+        let expected = -13.
+            + f64::from(low[0] + high[0] - 1) * 0.0625
+            + f64::from(low[1] + high[1] - 1) * 0.03125;
+        let deviation = (((width * width - 1.) * 0.125_f64.powi(2)
+            + (height * height - 1.) * 0.0625_f64.powi(2))
+            / 12.)
+            .sqrt();
+        let support = width * height * 65536. / f64::from(count);
+        assert!(
+            (f64::from(region[0]) - expected).abs() < 0.0001,
+            "region {index} mean"
+        );
+        assert!(
+            (f64::from(region[3]) - deviation).abs() < 0.005,
+            "region {index} deviation: {} vs {deviation}",
+            region[3]
+        );
+        assert!(
+            (f64::from(region[14]) - support).abs() < 0.001,
+            "region {index} support"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn dense_large_windows_preserve_constant_and_weak_population_variance() {
+    let gpu = Gpu::new().unwrap();
+    let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
+    let curve_buffer = gpu.upload("Large-window analytical curve", &curve).unwrap();
+    for (extent, textured) in [
+        ([2048_u32, 2048], false),
+        ([2048, 2048], true),
+        ([1, 1], false),
+    ] {
+        let params = Params::new(
+            extent,
+            [0, 0, extent[0], extent[1]],
+            4095.,
+            ColorSpace::Srgb,
+            BaseResponse::Natural,
+            Tuning::default(),
+            &curve,
+            ProcessingQuality::Quality,
+        )
+        .unwrap();
+        let context = gpu.uniform(&params);
+        let cycle: Vec<[f32; 4]> = (0..16)
+            .map(|x| {
+                let ev = if !textured {
+                    -5.3
+                } else {
+                    let center = if x < 8 { -8.3 } else { -0.3 };
+                    center + ((x % 8) as f32 - 3.5) * 0.001
+                };
+                [ev, -6., 0., 0.5]
+            })
+            .collect();
+        let samples: Vec<_> = (0..extent[0] * extent[1])
+            .map(|i| cycle[(i % 16) as usize])
+            .collect();
+        let samples = gpu
+            .upload("Large constant or weakly textured populations", &samples)
+            .unwrap();
+        let mut regions = gpu
+            .storage("Large-window stable summaries", 1235 * 64)
+            .unwrap();
+        let mut trace = gpu.trace(false, 1);
+        gpu.dispatch(
+            Kernel::AdaptiveToneRegionSummary,
+            &mut [
+                (2, Read(&curve_buffer)),
+                (3, Read(&context)),
+                (8, Read(&samples)),
+                (9, Write(regions.write())),
+            ],
+            [1235_u32.div_ceil(64), 1],
+            &mut trace,
+        );
+        let bytes = gpu.readback(&regions).unwrap();
+        let regions: &[[f32; 16]] = bytemuck::cast_slice(&bytes);
+        let moments = |values: &[[f32; 4]]| {
+            let mean = values.iter().map(|v| f64::from(v[0])).sum::<f64>() / values.len() as f64;
+            let variance = values
+                .iter()
+                .map(|v| (f64::from(v[0]) - mean).powi(2))
+                .sum::<f64>()
+                / values.len() as f64;
+            (mean, variance.sqrt())
+        };
+        let all = moments(&cycle);
+        let dark = moments(&cycle[..8]);
+        let bright = moments(&cycle[8..]);
+        for (index, region) in regions.iter().enumerate() {
+            assert!(
+                (f64::from(region[0]) - all.0).abs() < 0.000002,
+                "{extent:?} textured={textured} window {index} all mean {} vs {} (region {region:?})",
+                region[0],
+                all.0
+            );
+            assert!(
+                (f64::from(region[3]) - all.1).abs() < 0.000003,
+                "window {index} all deviation {} vs {}",
+                region[3],
+                all.1
+            );
+            assert!((region[1] + 6.).abs() < 0.000002);
+            assert!((region[2] - 0.5).abs() < 0.000002);
+            if !textured {
+                assert!(
+                    (f64::from(region[8]) - all.0).abs() < 0.000002,
+                    "window {index} small weighted population mean"
+                );
+                assert_eq!(region[11], 0.);
+            }
+            if textured {
+                for (offset, expected) in [(4, bright), (8, dark)] {
+                    assert!(
+                        (f64::from(region[offset]) - expected.0).abs() < 0.000002,
+                        "window {index} population {offset} mean"
+                    );
+                    assert!(
+                        (f64::from(region[offset + 3]) - expected.1).abs() < 0.000003,
+                        "window {index} population {offset} deviation {} vs {}",
+                        region[offset + 3],
+                        expected.1
+                    );
+                }
+                assert!((region[12] / region[14] - 0.5).abs() < 0.000002);
+                assert!((region[13] / region[14] - 0.5).abs() < 0.000002);
+            }
+        }
+    }
 }

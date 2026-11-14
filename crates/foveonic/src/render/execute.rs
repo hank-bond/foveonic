@@ -2096,6 +2096,7 @@ impl Engine {
                     })
                 }
                 Operation::TonalRanges {
+                    processing_quality,
                     sampling,
                     window,
                     white,
@@ -2109,6 +2110,7 @@ impl Engine {
                         &input(1).buffer,
                         inherited,
                         crate::nodes::finish::tone_equalizer::Response {
+                            processing_quality: *processing_quality,
                             sampling: *sampling,
                             controls: *controls,
                             pivot: *pivot,

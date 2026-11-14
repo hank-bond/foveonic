@@ -247,6 +247,7 @@ fn finishing_graph() -> (Graph, usize, usize, usize, usize) {
         BaseResponse::Natural,
         Default::default(),
         &curve,
+        crate::render::ProcessingQuality::Speed,
     )
     .unwrap();
     let adaptive = graph
@@ -261,13 +262,16 @@ fn finishing_graph() -> (Graph, usize, usize, usize, usize) {
             &[rgb, mask, rgb, mask],
         )
         .unwrap();
-    let guide = tone_equalizer::Guide::new(extent, 192, space).unwrap();
+    let guide =
+        tone_equalizer::Guide::new(extent, 384, space, crate::render::ProcessingQuality::Speed)
+            .unwrap();
     let mask = graph
         .add(Operation::ToneMask { guide, space }, &[adaptive])
         .unwrap();
     let hdr = graph
         .add(
             Operation::TonalRanges {
+                processing_quality: crate::render::ProcessingQuality::Speed,
                 sampling: None,
                 window: Default::default(),
                 white: 4095.,
@@ -522,11 +526,14 @@ fn mapped_hdr_keeps_its_guide_whole_and_requests_only_local_rgb() {
     let hdr = graph
         .add(
             Operation::TonalRanges {
+                processing_quality: crate::render::ProcessingQuality::Speed,
                 sampling: Some(
                     tone_equalizer::GuideSampling::new(
                         [1024, 768],
                         [0, 0, 1024, 768],
                         [[0.5, 0., 0., 0.], [0., 0.5, 0., 0.]],
+                        2,
+                        2,
                     )
                     .unwrap(),
                 ),

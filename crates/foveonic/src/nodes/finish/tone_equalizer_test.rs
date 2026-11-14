@@ -30,7 +30,7 @@ fn neutral_controls_and_saved_choices_are_independent() {
     for value in [f32::NAN, f32::INFINITY, -1.01, 1.01] {
         assert!(Controls { whites: value, ..c }.validate().is_err());
     }
-    assert!(Guide::new([0, 4], 1, ColorSpace::Srgb).is_err());
+    assert!(Guide::new([0, 4], 2, ColorSpace::Srgb, ProcessingQuality::Speed).is_err());
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
         .flat_map(|_| levels.into_iter().flat_map(|ev| [4095. * ev.exp2(); 24]))
         .collect();
     let input = gpu.upload("HDR flat exposure steps", &data).unwrap();
-    let guide = Guide::new(extent, 4, ColorSpace::Srgb).unwrap();
+    let guide = Guide::new(extent, 8, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap();
     let values: Vec<f32> = (0..1)
         .flat_map(|_| levels.into_iter().flat_map(|ev| [(ev + 8.) / 8.; 4]))
         .collect();
@@ -63,6 +63,7 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
         &field,
         extent,
         Response {
+            processing_quality: ProcessingQuality::Speed,
             sampling: None,
             controls: Controls::default(),
             pivot: 0.,
@@ -116,6 +117,7 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
             &field,
             extent,
             Response {
+                processing_quality: ProcessingQuality::Speed,
                 sampling: None,
                 controls,
                 pivot: 0.,
@@ -152,6 +154,7 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
             &field,
             extent,
             Response {
+                processing_quality: ProcessingQuality::Speed,
                 sampling: None,
                 controls: Controls {
                     blacks: amount,
@@ -219,6 +222,7 @@ fn gpu_hdr_preserves_native_control_coupling_and_detail_direction() {
             &field,
             extent,
             Response {
+                processing_quality: ProcessingQuality::Speed,
                 sampling: None,
                 controls: Controls {
                     blacks: amount,
@@ -260,7 +264,7 @@ fn gpu_spatial_mask_smooths_texture_and_keeps_strong_edges() {
         })
         .collect();
     let input = gpu.upload("Textured brightness step", &data).unwrap();
-    let guide = Guide::new(extent, 5, ColorSpace::AdobeRgb).unwrap();
+    let guide = Guide::new(extent, 10, ColorSpace::AdobeRgb, ProcessingQuality::Speed).unwrap();
     let spatial = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
     let s = gpu.readback(&spatial).unwrap();
     let s: &[f32] = bytemuck::cast_slice(&s);
@@ -292,7 +296,7 @@ fn gpu_regional_mask_matches_full_with_aligned_support() {
         })
         .collect();
     let input = gpu.upload("Full mask field", &data).unwrap();
-    let guide = Guide::new(extent, 4, ColorSpace::Srgb).unwrap();
+    let guide = Guide::new(extent, 8, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap();
     let full = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
     let region_extent = [196, 144];
     let mut region = Vec::new();
@@ -303,7 +307,7 @@ fn gpu_regional_mask_matches_full_with_aligned_support() {
     let local = build_guide(
         &gpu,
         &input,
-        Guide::new(region_extent, 4, ColorSpace::Srgb).unwrap(),
+        Guide::new(region_extent, 8, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap(),
         &mut Profile::default(),
     )
     .unwrap();
@@ -338,11 +342,14 @@ fn gpu_hdr_matches_across_declared_linear_code_units() {
         let ma = build_guide(
             &gpu,
             &a,
-            Guide::new(extent, 4, space).unwrap().with_white(1.),
+            Guide::new(extent, 8, space, ProcessingQuality::Speed)
+                .unwrap()
+                .with_white(1.),
             &mut Profile::default(),
         )
         .unwrap();
         let response = || Response {
+            processing_quality: ProcessingQuality::Speed,
             sampling: None,
             controls: Controls {
                 shadows: 0.5,
@@ -369,7 +376,9 @@ fn gpu_hdr_matches_across_declared_linear_code_units() {
             let mb = build_guide(
                 &gpu,
                 &b,
-                Guide::new(extent, 4, space).unwrap().with_white(white),
+                Guide::new(extent, 8, space, ProcessingQuality::Speed)
+                    .unwrap()
+                    .with_white(white),
                 &mut Profile::default(),
             )
             .unwrap();
@@ -411,9 +420,9 @@ fn gpu_compact_guide_expands_exactly_over_odd_edges() {
             })
             .collect();
         let input = gpu.upload("Compact guide odd-edge fixture", &data).unwrap();
-        let guide = Guide::new(extent, 4, ColorSpace::Srgb).unwrap();
+        let guide = Guide::new(extent, 8, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap();
         let compact = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
-        assert_eq!(compact.size(), guide_storage_bytes(extent));
+        assert_eq!(compact.size(), guide_storage_bytes(extent, 2));
         let expanded = expand_mask(&gpu, &compact, guide, &mut Profile::default()).unwrap();
         assert_eq!(expanded.size(), u64::from(width) * u64::from(height) * 4);
         let compact = gpu.readback(&compact).unwrap();
@@ -441,11 +450,18 @@ fn gpu_mapped_hdr_guide_preserves_identity_and_overlapping_sections() {
         })
         .collect();
     let input = gpu.upload("Mapped HDR input", &data).unwrap();
-    let guide = Guide::new(extent, 8, ColorSpace::Srgb).unwrap();
+    let guide = Guide::new(extent, 16, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap();
     let mask = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
-    let sampling =
-        GuideSampling::new(extent, [0, 0, 80, 64], [[1., 0., 0., 0.], [0., 1., 0., 0.]]).unwrap();
+    let sampling = GuideSampling::new(
+        extent,
+        [0, 0, 80, 64],
+        [[1., 0., 0., 0.], [0., 1., 0., 0.]],
+        2,
+        2,
+    )
+    .unwrap();
     let response = |sampling| Response {
+        processing_quality: ProcessingQuality::Speed,
         sampling,
         controls: Controls {
             shadows: 0.5,
@@ -529,9 +545,12 @@ fn gpu_scaled_hdr_guide_clamps_padding_and_keeps_fractional_phase() {
         [13, 11],
         [3, 1, 12, 10],
         [[0.5, 0., 0.25, 0.], [0., 0.5, -0.25, 0.]],
+        2,
+        2,
     )
     .unwrap();
     let response = |sampling| Response {
+        processing_quality: ProcessingQuality::Speed,
         sampling: Some(sampling),
         controls: Controls {
             shadows: 0.5,
@@ -595,6 +614,318 @@ fn gpu_scaled_hdr_guide_clamps_padding_and_keeps_fractional_phase() {
                 &bytes[a..a + 12],
                 &whole[b..b + 12],
                 "fractional guide phase changed"
+            );
+        }
+    }
+}
+
+#[test]
+fn quality_guide_keeps_physical_radii_and_dense_storage() {
+    let quality = |radius| {
+        Guide::new(
+            [257, 193],
+            radius,
+            ColorSpace::Srgb,
+            ProcessingQuality::Quality,
+        )
+        .unwrap()
+    };
+    let full = quality(radius_for_scale(1.));
+    assert_eq!(full.storage_extent(), [257, 193]);
+    assert_eq!(full.cell_step(), 1);
+    assert_eq!(guide_storage_bytes([257, 193], 1), 257 * 193 * 4);
+    assert_eq!(
+        full.stages(),
+        vec![
+            (2, 0),
+            (6, 2),
+            (12, 6),
+            (24, 12),
+            (48, 24),
+            (96, 48),
+            (192, 96),
+            (384, 192)
+        ]
+    );
+    assert_eq!(
+        quality(radius_for_scale(0.5)).stages(),
+        vec![
+            (1, 0),
+            (3, 1),
+            (6, 3),
+            (12, 6),
+            (24, 12),
+            (48, 24),
+            (96, 48),
+            (192, 96)
+        ]
+    );
+    assert_eq!(
+        quality(radius_for_scale(1. / 128.)).stages(),
+        vec![(1, 0), (2, 1), (3, 2)]
+    );
+    assert_eq!(quality(1).stages(), vec![(1, 0)]);
+    assert!(full.with_input_bounds([3, 5, 31, 29]).is_ok());
+    let speed = Guide::new(
+        [257, 193],
+        radius_for_scale(1.),
+        ColorSpace::Srgb,
+        ProcessingQuality::Speed,
+    )
+    .unwrap();
+    assert_eq!(speed.storage_extent(), [129, 97]);
+    assert_eq!(speed.stages(), full.stages());
+    assert!(speed.with_input_bounds([3, 5, 31, 29]).is_err());
+    for (radius, residual) in full.stages() {
+        let dense = full.at_scale(false, radius, residual, 0, false);
+        assert_eq!(dense.sampling[2], 1);
+        assert_eq!(dense.filter[0], radius as f32);
+        assert_eq!(dense.filter[2], residual as f32);
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_quality_guide_matches_direct_two_dimensional_moments() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [7, 5];
+    let ev: Vec<f64> = (0..35)
+        .map(|i| -6. + f64::from((i * 17) % 23) / 8.)
+        .collect();
+    let rgb: Vec<f32> = ev
+        .iter()
+        .flat_map(|v| [4095. * v.exp2() as f32; 3])
+        .collect();
+    let input = gpu.upload("Dense guide moment fixture", &rgb).unwrap();
+    let guide = Guide::new(extent, 1, ColorSpace::Srgb, ProcessingQuality::Quality).unwrap();
+    let result = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
+    let bytes = gpu.readback(&result).unwrap();
+    let actual: &[f32] = bytemuck::cast_slice(&bytes);
+    // Direct 2D sums are independent of the shader's separable moment passes.
+    let box_mean = |values: &[f64], x: i32, y: i32| -> f64 {
+        let mut sum = 0.;
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                sum += values[(y + dy).clamp(0, 4) as usize * 7 + (x + dx).clamp(0, 6) as usize];
+            }
+        }
+        sum / 9.
+    };
+    let square: Vec<_> = ev.iter().map(|v| v * v).collect();
+    let mut slopes = Vec::new();
+    let mut offsets = Vec::new();
+    for y in 0..5 {
+        for x in 0..7 {
+            let mean = box_mean(&ev, x, y);
+            let variance = (box_mean(&square, x, y) - mean * mean).max(0.);
+            let a = (1.125 * variance / (variance + 0.9_f64.powi(2))).min(1.);
+            slopes.push(a);
+            offsets.push((1. - a) * mean);
+        }
+    }
+    for y in 0..5 {
+        for x in 0..7 {
+            let i = y as usize * 7 + x as usize;
+            let expected = (box_mean(&slopes, x, y) * ev[i] + box_mean(&offsets, x, y) + 8.) / 8.;
+            assert!(
+                (f64::from(actual[i]) - expected).abs() < 0.00002,
+                "{x},{y}: {} vs {expected}",
+                actual[i]
+            );
+        }
+    }
+    let expanded = expand_mask(&gpu, &result, guide, &mut Profile::default()).unwrap();
+    assert_eq!(bytes, gpu.readback(&expanded).unwrap());
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_quality_gain_retains_each_pixel_and_odd_edges() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [5, 3];
+    let levels = [-6_f32, -3., 0., 1., 2.];
+    let input: Vec<f32> = (0..3)
+        .flat_map(|_| levels.into_iter().flat_map(|ev| [4095. * ev.exp2(); 3]))
+        .collect();
+    let mask: Vec<f32> = (0..3)
+        .flat_map(|_| levels.into_iter().map(|ev| (ev + 8.) / 8.))
+        .collect();
+    let rgb = gpu.upload("Dense response steps", &input).unwrap();
+    let mask = gpu.upload("Dense response bases", &mask).unwrap();
+    let result = apply(
+        &gpu,
+        &rgb,
+        &mask,
+        extent,
+        Response {
+            processing_quality: ProcessingQuality::Quality,
+            sampling: None,
+            controls: Controls {
+                whites: -0.5,
+                ..Default::default()
+            },
+            pivot: 0.,
+            space: ColorSpace::Srgb,
+        },
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let bytes = gpu.readback(&result).unwrap();
+    let actual: &[f32] = bytemuck::cast_slice(&bytes);
+    // These independent native-response stop values also cover the reduced
+    // path above. Dense application must reproduce them at every pixel.
+    let stops = [
+        -0.0007038_f32,
+        -0.0019805,
+        -0.0179677,
+        -0.1043254,
+        -0.4857178,
+    ];
+    for (pixel, (before, after)) in input
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(actual.as_chunks::<3>().0)
+        .enumerate()
+    {
+        let expected = stops[pixel % 5].exp2();
+        assert!((after[0] / before[0] - expected).abs() < 0.00002);
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_quality_mapped_guide_matches_pixel_center_affines_and_ignores_padding() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [9, 7];
+    let input: Vec<f32> = (0..63)
+        .flat_map(|p| [30. + (p * 37 % 4095) as f32; 3])
+        .collect();
+    let input = gpu.upload("Dense affine input", &input).unwrap();
+    let mut cells: Vec<f32> = (0..13)
+        .flat_map(|y| {
+            (0..11).map(move |x| {
+                if (2..10).contains(&x) && (3..12).contains(&y) {
+                    0.2 + x as f32 * 0.03 + y as f32 * 0.02
+                } else {
+                    100.
+                }
+            })
+        })
+        .collect();
+    for mapping in [
+        [[0.5, 0., 1.75, 0.], [0., 0.5, 2.75, 0.]],
+        [[0., 0.5, 2.75, 0.], [-0.5, 0., 10.25, 0.]],
+    ] {
+        let sampling = GuideSampling::new([11, 13], [2, 3, 10, 12], mapping, 1, 1).unwrap();
+        let expected: Vec<f32> = (0..7)
+            .flat_map(|y| {
+                (0..9).map(move |x| {
+                    let u = (mapping[0][0] * x as f32 + mapping[0][1] * y as f32 + mapping[0][2])
+                        .clamp(2., 9.);
+                    let v = (mapping[1][0] * x as f32 + mapping[1][1] * y as f32 + mapping[1][2])
+                        .clamp(3., 11.);
+                    0.2 + u * 0.03 + v * 0.02
+                })
+            })
+            .collect();
+        let expected = gpu.upload("CPU affine dense guide", &expected).unwrap();
+        let response = |sampling| Response {
+            processing_quality: ProcessingQuality::Quality,
+            sampling,
+            controls: Controls {
+                shadows: 0.5,
+                highlights: -0.5,
+                ..Default::default()
+            },
+            pivot: -2.,
+            space: ColorSpace::Srgb,
+        };
+        let direct = apply(
+            &gpu,
+            &input,
+            &expected,
+            extent,
+            response(None),
+            &mut Profile::default(),
+        )
+        .unwrap();
+        let direct = gpu.readback(&direct).unwrap();
+        for padding in [100., -100.] {
+            for y in 0..13 {
+                for x in 0..11 {
+                    if !(2..10).contains(&x) || !(3..12).contains(&y) {
+                        cells[y * 11 + x] = padding;
+                    }
+                }
+            }
+            let mask = gpu
+                .upload("Dense guide with inactive padding", &cells)
+                .unwrap();
+            let mapped = apply(
+                &gpu,
+                &input,
+                &mask,
+                extent,
+                response(Some(sampling)),
+                &mut Profile::default(),
+            )
+            .unwrap();
+            let mapped = gpu.readback(&mapped).unwrap();
+            for (a, b) in bytemuck::cast_slice::<u8, f32>(&mapped)
+                .iter()
+                .zip(bytemuck::cast_slice::<u8, f32>(&direct))
+            {
+                assert!((a - b).abs() < 0.00002 * b.abs().max(1.), "{a} vs {b}");
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn gpu_quality_cascade_matches_whole_with_an_unaligned_crop_origin() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [353_u32, 321];
+    let bounds = [13_u32, 17, 340, 304];
+    let values: Vec<f32> = (0..extent[1])
+        .flat_map(|y| {
+            (0..extent[0]).flat_map(move |x| {
+                let ev = -6. + (x as f32 / 29.).sin() + (y as f32 / 41.).cos() * 2.;
+                [4095. * ev.exp2(); 3]
+            })
+        })
+        .collect();
+    let input = gpu.upload("Whole dense cascade fixture", &values).unwrap();
+    let guide = Guide::new(extent, 48, ColorSpace::Srgb, ProcessingQuality::Quality).unwrap();
+    let whole = build_guide(&gpu, &input, guide, &mut Profile::default()).unwrap();
+    let cropped: Vec<f32> = (bounds[1]..bounds[3])
+        .flat_map(|y| {
+            values[((y * extent[0] + bounds[0]) * 3) as usize
+                ..((y * extent[0] + bounds[2]) * 3) as usize]
+                .iter()
+                .copied()
+        })
+        .collect();
+    let cropped = gpu
+        .upload("Unaligned dense cascade backing", &cropped)
+        .unwrap();
+    let local_guide = guide.with_input_bounds(bounds).unwrap();
+    let local = build_guide(&gpu, &cropped, local_guide, &mut Profile::default()).unwrap();
+    let whole = gpu.readback(&whole).unwrap();
+    let local = gpu.readback(&local).unwrap();
+    let whole: &[f32] = bytemuck::cast_slice(&whole);
+    let local: &[f32] = bytemuck::cast_slice(&local);
+    let width = bounds[2] - bounds[0];
+    let height = bounds[3] - bounds[1];
+    // The largest neighborhood includes two radius-48 means and its
+    // radius-24 residual. Other stages depend on the same immutable guide.
+    for y in 122..height - 122 {
+        for x in 122..width - 122 {
+            assert_eq!(
+                local[(y * width + x) as usize],
+                whole[((y + bounds[1]) * extent[0] + x + bounds[0]) as usize],
+                "dense crop differs at {x},{y}"
             );
         }
     }

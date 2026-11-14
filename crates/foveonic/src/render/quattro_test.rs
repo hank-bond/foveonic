@@ -1309,10 +1309,19 @@ fn original_fast_previews_match_fresh_renders_through_quality_and_edit_changes()
 
 #[test]
 fn supported_preview_policy_survives_photographic_control_normalization() {
-    let mut settings = Settings::new("Sunlight", "Standard");
-    settings.working_scale = Scale::new(2).unwrap();
-    assert!(!recipes::quattro::normalize_photographic(&mut settings));
-    assert!(recipes::quattro::validate_photographic(&settings).is_ok());
+    for processing_quality in [
+        crate::render::ProcessingQuality::Quality,
+        crate::render::ProcessingQuality::Speed,
+    ] {
+        let mut settings = Settings::new("Sunlight", "Standard");
+        settings.working_scale = Scale::new(2).unwrap();
+        settings.processing_quality = processing_quality;
+        settings.preview_region = Some([100, 120, 400, 420]);
+        let expected = settings.clone();
+        assert!(!recipes::quattro::normalize_photographic(&mut settings));
+        assert_eq!(settings, expected);
+        assert!(recipes::quattro::validate_photographic(&settings).is_ok());
+    }
 }
 
 #[test]

@@ -257,6 +257,8 @@ fn convert(
         format,
         encoding,
     } = output;
+    let quality_settings = settings.for_export();
+    let settings = &quality_settings;
     mode.check_gpu_features(engine.device().features())?;
     if mode.enabled() {
         eprintln!(

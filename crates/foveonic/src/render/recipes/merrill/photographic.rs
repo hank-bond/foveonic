@@ -107,13 +107,6 @@ pub(in crate::render::recipes) fn build(
         } else {
             settings.working_scale.factor()
         },
-        haze_scale: settings
-            .working_scale
-            .coarsest(if settings.is_monochrome() {
-                crate::render::Scale::NATIVE
-            } else {
-                crate::render::Scale::new(2)?
-            }),
     };
     linear_edits::build(
         engine,

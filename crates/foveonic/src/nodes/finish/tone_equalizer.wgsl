@@ -115,7 +115,7 @@ fn interpolated_coefficients(point: vec2<f32>) -> vec2<f32> {
 @compute @workgroup_size(8, 8)
 fn update_base(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= guide.shape.zw) { return; }
-    let ratio = f32(guide.sampling.z) / 2.0;
+    let ratio = f32(guide.sampling.z) / guide.smoothing.w;
     let coefficients = interpolated_coefficients((vec2<f32>(id.xy) + 0.5) / ratio - 0.5);
     let i = id.y * guide.shape.z + id.x;
     filtered[i] = vec4<f32>(coefficients.x * previous_base[i].x + coefficients.y, 0.0, 0.0, 0.0);
@@ -129,7 +129,7 @@ fn finish_mask(@builtin(global_invocation_id) id: vec3<u32>) {
 @compute @workgroup_size(8, 8)
 fn expand_mask(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= guide.shape.xy) { return; }
-    output_mask[id.y * guide.shape.x + id.x] = brightness_mask[brightness_cell_index(id.xy, guide.shape.xy)];
+    output_mask[id.y * guide.shape.x + id.x] = brightness_mask[brightness_cell_index(id.xy, guide.shape.xy, u32(guide.smoothing.w))];
 }
 
 @compute @workgroup_size(8, 8)
@@ -141,7 +141,7 @@ fn calculate_gain(@builtin(global_invocation_id) id: vec3<u32>) {
     if guide_sampling.shape.z == 0u {
         encoded = brightness_mask[id.y * adjustment.shape.z + id.x];
     } else {
-        let sample = brightness_sample(vec2<f32>(id.xy * sample) + 0.5, guide_sampling);
+        let sample = brightness_sample(vec2<f32>(id.xy * sample), guide_sampling);
         let top = mix(brightness_mask[sample.indices.x], brightness_mask[sample.indices.y], sample.phase.x);
         let bottom = mix(brightness_mask[sample.indices.z], brightness_mask[sample.indices.w], sample.phase.x);
         encoded = mix(top, bottom, sample.phase.y);

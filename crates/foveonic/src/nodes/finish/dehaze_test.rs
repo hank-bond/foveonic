@@ -116,6 +116,7 @@ fn dehaze_estimates_patches_and_bypasses_empty_or_neutral_images_exactly() {
             1.,
             false,
             [0, 0, 64, 48],
+            ProcessingQuality::Speed,
         );
         let analysis = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
         let stats = floats(&gpu, &analysis);
@@ -289,6 +290,7 @@ fn dehaze_candidate_heap_matches_independent_spatial_selection() {
         1.,
         false,
         [0, 0, width as u32, height as u32],
+        ProcessingQuality::Speed,
     );
     let result = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
     let actual = floats(&gpu, &result);
@@ -491,7 +493,14 @@ fn camera_coordinates_control_candidate_selection_and_color_transport() {
     let analysis = estimate(
         &gpu,
         &input,
-        Estimate::new([128, 96], basis, 1., false, [0, 0, 128, 96]),
+        Estimate::new(
+            [128, 96],
+            basis,
+            1.,
+            false,
+            [0, 0, 128, 96],
+            ProcessingQuality::Speed,
+        ),
         &mut Profile::default(),
     )
     .unwrap();
@@ -656,6 +665,7 @@ fn manual_dehaze_skips_color_selection_and_retains_identical_brightness_calibrat
         1.,
         false,
         [0, 0, 64, 48],
+        ProcessingQuality::Speed,
     );
     let automatic = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
     let manual_params = params.with_color_estimation(false);
@@ -898,9 +908,15 @@ fn partitioned_estimate_matches_serial_for_ties_empty_and_saturation() {
                         )
                         .unwrap()
                     };
-                    let mut p =
-                        Estimate::new(extent, basis, 1., mono, [0, 0, extent[0], extent[1]])
-                            .with_color_estimation(auto);
+                    let mut p = Estimate::new(
+                        extent,
+                        basis,
+                        1.,
+                        mono,
+                        [0, 0, extent[0], extent[1]],
+                        ProcessingQuality::Speed,
+                    )
+                    .with_color_estimation(auto);
                     // Patch estimation permits bright candidates that Auto excludes.
                     if mode == 3 {
                         p.selection[1] = 65535;
@@ -916,4 +932,207 @@ fn partitioned_estimate_matches_serial_for_ties_empty_and_saturation() {
             }
         }
     }
+}
+
+#[test]
+fn quality_estimation_keeps_dense_samples_radius_and_selection_fraction() {
+    let basis = Basis::monochrome();
+    let crop = [11, 23, 1035, 791];
+    let quality = Estimate::new(
+        [1100, 900],
+        basis,
+        1.,
+        true,
+        crop,
+        ProcessingQuality::Quality,
+    );
+    let speed = Estimate::new([1100, 900], basis, 1., true, crop, ProcessingQuality::Speed);
+    assert_eq!(quality.shape, [1100, 900, 1024, 768]);
+    assert_eq!(speed.shape, [1100, 900, 512, 384]);
+    assert_eq!(quality.region, [11, 23, 1024, 768]);
+    assert_eq!(quality.selection[..3], [32, 16384, 784]);
+    assert_eq!(speed.selection[..3], [16, 16384, 196]);
+    assert_ne!(quality.key(), speed.key());
+    let small_quality = Estimate::new(
+        [128, 96],
+        basis,
+        1.,
+        true,
+        [0, 0, 128, 96],
+        ProcessingQuality::Quality,
+    );
+    let small_speed = Estimate::new(
+        [128, 96],
+        basis,
+        1.,
+        true,
+        [0, 0, 128, 96],
+        ProcessingQuality::Speed,
+    );
+    assert_eq!(small_quality.key(), small_speed.key());
+
+    let native = Estimate::new(
+        [12000, 8000],
+        basis,
+        1.,
+        true,
+        [0, 0, 12000, 8000],
+        ProcessingQuality::Quality,
+    );
+    assert_eq!(native.selection[0], 384);
+    assert_eq!(native.selection[2], 96000);
+    let tiny = Estimate::new(
+        [1, 1],
+        basis,
+        1.,
+        true,
+        [0, 0, 1, 1],
+        ProcessingQuality::Quality,
+    );
+    assert_eq!(tiny.selection[2], 1);
+    let patch = Estimate::patch([1100, 900], basis, 1., true, [500, 400], crop);
+    assert_eq!(patch.shape[2..], [133, 133]);
+    assert_eq!(patch.selection[1], 65535);
+}
+
+// This scalar CPU oracle sorts all eligible candidates instead of reproducing
+// the GPU's partition heaps. Its deterministic pixels and ordering are explicit.
+fn scalar_estimate_truth(
+    samples: &[u32],
+    width: usize,
+    height: usize,
+    radius: usize,
+    k: usize,
+) -> [f32; 8] {
+    let mut horizontal = vec![0; samples.len()];
+    let mut histogram = [0_u32; 256];
+    for y in 0..height {
+        for x in 0..width {
+            horizontal[y * width + x] = (x.saturating_sub(radius)..=(x + radius).min(width - 1))
+                .map(|column| samples[y * width + column])
+                .min()
+                .unwrap();
+            histogram[(samples[y * width + x] >> 8) as usize] += 1;
+        }
+    }
+    let mut candidates = Vec::new();
+    for y in radius..height.saturating_sub(radius) {
+        for x in radius..width.saturating_sub(radius) {
+            let index = y * width + x;
+            let score = (y - radius..=y + radius)
+                .map(|row| horizontal[row * width + x])
+                .min()
+                .unwrap();
+            let sample = samples[index];
+            let intensity = (sample >> 2) + (sample >> 1) + (sample >> 2);
+            if score > 0 && intensity <= 16384 {
+                candidates.push((score, intensity, index));
+            }
+        }
+    }
+    candidates.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    candidates.truncate(k);
+    let sum: u64 = candidates
+        .iter()
+        .map(|candidate| u64::from(samples[candidate.2]))
+        .sum();
+    let color = sum as f64 / (65535. * candidates.len().max(1) as f64);
+    let percentile = (samples.len() / 100).max(1) as u32;
+    let mut low = 0.;
+    let mut high = 1.;
+    let mut low_count = 0;
+    let mut high_count = 0;
+    for bin in 0..256 {
+        if low_count < percentile {
+            low = bin as f32 / 255.;
+        }
+        if high_count < percentile {
+            high = (255 - bin) as f32 / 255.;
+        }
+        low_count += histogram[bin];
+        high_count += histogram[255 - bin];
+    }
+    low = low.min(0.95);
+    high = high.max(0.05);
+    if high <= 4. * low {
+        let center = (low * high).sqrt();
+        low = (0.5 * center).min(0.95);
+        high = (2. * center).max(0.05);
+    }
+    [
+        color as f32,
+        color as f32,
+        color as f32,
+        f32::from(!candidates.is_empty() && color > 0.),
+        low,
+        high,
+        0.,
+        0.,
+    ]
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn dense_quality_selection_matches_sorted_cpu_truth_beyond_the_old_heap_capacity() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [128, 96];
+    // This formula is the complete fixture. It exercises exact ties and mixed candidate ranks.
+    let samples: Vec<u32> = (0..extent[1])
+        .flat_map(|y| (0..extent[0]).map(move |x| 1000 + (x * 73 + y * 151 + x * y * 7) % 14000))
+        .collect();
+    let values: Vec<f32> = samples
+        .iter()
+        .flat_map(|sample| [*sample as f32 / 65535.; 3])
+        .collect();
+    let input = gpu.upload("dense haze selection fixture", &values).unwrap();
+    let params = Estimate::new(
+        extent,
+        Basis::monochrome(),
+        1.,
+        true,
+        [0, 0, extent[0], extent[1]],
+        ProcessingQuality::Quality,
+    );
+    for k in [params.selection[2], 1100] {
+        let mut params = params;
+        params.selection[2] = k;
+        let actual = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+        let expected = scalar_estimate_truth(
+            &samples,
+            extent[0] as usize,
+            extent[1] as usize,
+            params.selection[0] as usize,
+            k as usize,
+        );
+        for (channel, (actual, expected)) in
+            floats(&gpu, &actual).into_iter().zip(expected).enumerate()
+        {
+            assert!(
+                (actual - expected).abs() < 0.000002,
+                "K {k}, component {channel}: {actual} != {expected}"
+            );
+        }
+    }
+    assert_eq!(floats(&gpu, &input), values);
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn dense_selection_accumulates_more_than_one_u32_of_channel_codes_without_overflow() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [512, 256];
+    let values = vec![1_f32; (extent[0] * extent[1] * 3) as usize];
+    let input = gpu.upload("haze sum carry fixture", &values).unwrap();
+    let mut params = Estimate::new(
+        extent,
+        Basis::monochrome(),
+        1.,
+        true,
+        [0, 0, extent[0], extent[1]],
+        ProcessingQuality::Quality,
+    );
+    params.selection[1] = 65535;
+    params.selection[2] = 70000;
+    let result = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+    assert_eq!(&floats(&gpu, &result)[..4], &[1.; 4]);
 }

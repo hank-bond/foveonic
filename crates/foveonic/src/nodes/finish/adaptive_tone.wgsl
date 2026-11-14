@@ -1,6 +1,7 @@
 // Regional visibility fit using the shared coordinated HDR response.
 struct Context {
     shape: vec4<u32>,
+    sampling: vec4<u32>, // guide cell step, gain-anchor step, dense analysis, reserved
     bounds: vec4<u32>,
     luma: vec4<f32>,
     values: vec4<f32>, // nominal white, HDR pivot, profile strength, Exposure gain
@@ -32,14 +33,14 @@ fn ev_at(p: vec2<i32>) -> f32 {
     return log2(max(dot(pixel(q), context.luma.xyz) / context.values.x, exp2(-16.0)));
 }
 fn encoded_guide(point: vec2<u32>) -> f32 {
-    return base_mask[brightness_cell_index(point, context.shape.xy)];
+    return base_mask[brightness_cell_index(point, context.shape.xy, context.sampling.x)];
 }
 // Estimation keeps its original integer lookup. Only application samples a
 // different grid, with bilinear interpolation between compact cell centers.
-// Gain anchors name a 2 by 2 block. Map its center before changing lattices.
+// Gain anchors carry their block step. Map their center before changing lattices.
 fn application_guide(point: vec2<f32>) -> f32 {
     if context.guide.shape.z == 0u { return encoded_guide(vec2<u32>(point)); }
-    let sample = brightness_sample(point+0.5, context.guide);
+    let sample = brightness_sample(point, context.guide);
     let top = mix(base_mask[sample.indices.x],base_mask[sample.indices.y],sample.phase.x);
     let bottom = mix(base_mask[sample.indices.z],base_mask[sample.indices.w],sample.phase.x);
     return mix(top,bottom,sample.phase.y);
@@ -55,10 +56,14 @@ fn tone(ev: f32) -> f32 {
     let value = mix(tone_curve[lo], tone_curve[min(lo+1u, arrayLength(&tone_curve)-1u)], fract(position));
     return select(12.92 * value, 1.055 * pow(max(value,0.0), 1.0/2.4)-0.055, value > 0.0031308);
 }
+fn analysis_point(id: vec2<u32>) -> vec2<u32> {
+    if context.sampling.z != 0u { return context.bounds.xy + id; }
+    return context.bounds.xy + min(vec2<u32>((vec2<f32>(id)+0.5) * vec2<f32>(context.bounds.zw-context.bounds.xy) / vec2<f32>(context.shape.zw)), context.bounds.zw-context.bounds.xy-1u);
+}
 @compute @workgroup_size(8,8)
 fn histogram(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= context.shape.zw) { return; }
-    let point = context.bounds.xy + min(vec2<u32>((vec2<f32>(id.xy)+0.5) * vec2<f32>(context.bounds.zw-context.bounds.xy) / vec2<f32>(context.shape.zw)), context.bounds.zw-context.bounds.xy-1u);
+    let point = analysis_point(id.xy);
     let rgb = pixel(point);
     let y = dot(rgb, context.luma.xyz) / context.values.x;
     if y <= exp2(-14.0) { return; }
@@ -77,7 +82,12 @@ fn histogram(@builtin(global_invocation_id) id: vec3<u32>) {
     // A cross-scale structure proxy, not a calibrated noise or HVS model.
     let structure = clamp(sqrt(max(dot(g2,g8),0.0))/0.3,0.0,1.0);
     atomicAdd(&counts[slot],1u);
-    atomicAdd(&counts[BIN_COUNT+slot],u32(round(structure*1024.0)));
+    // Keep all dense contributions. A working frame can exceed 2^32/1024 pixels.
+    let contribution = u32(round(structure*1024.0));
+    let previous = atomicAdd(&counts[BIN_COUNT+slot], contribution);
+    if previous > 0xffffffffu - contribution {
+        atomicAdd(&counts[2u*BIN_COUNT+slot], 1u);
+    }
 }
 fn reference_amounts() -> vec4<f32> {
     return vec4<f32>(0.0,reference[0],reference[1],reference[2]);
@@ -109,7 +119,8 @@ fn global_score(amounts: vec4<f32>, strength: f32) -> f32 {
     for(var slot=0u;slot<BIN_COUNT;slot++) {
         let n = f32(atomicLoad(&counts[slot]));
         if n == 0.0 { continue; }
-        let structure = f32(atomicLoad(&counts[BIN_COUNT+slot]))/(n*1024.0);
+        let structure_sum = f32(atomicLoad(&counts[2u*BIN_COUNT+slot]))*4294967296.0 + f32(atomicLoad(&counts[BIN_COUNT+slot]));
+        let structure = structure_sum/(n*1024.0);
         let base = -12.0+(f32(slot/64u)+0.5)/4.0;
         let residual = -1.0+(f32((slot/8u)%8u)+0.5)/4.0;
         let peak_offset = f32(slot%8u)*0.5;
@@ -198,14 +209,15 @@ fn rescue_black(point:vec2<u32>,light:f32,base:f32,amounts:vec4<f32>,gain:f32)->
 }
 @compute @workgroup_size(8,8)
 fn adaptive_gain(@builtin(global_invocation_id) id: vec3<u32>) {
-    let half = (context.shape.xy+1u)/2u;
+    let step = context.sampling.y;
+    let half = (context.shape.xy+step-1u)/step;
     if any(id.xy >= half) { return; }
-    let point = min(id.xy*2u,context.shape.xy-1u);
+    let point = min(id.xy*step,context.shape.xy-1u);
     var brightness = 0.0;
-    for(var dy=0u;dy<2u;dy++) { for(var dx=0u;dx<2u;dx++) {
+    for(var dy=0u;dy<step;dy++) { for(var dx=0u;dx<step;dx++) {
         brightness += dot(pixel(min(point+vec2<u32>(dx,dy),context.shape.xy-1u)),context.luma.xyz);
     } }
-    let light = log2(max(brightness/(4.0*context.values.x),exp2(-16.0)));
+    let light = log2(max(brightness/(f32(step*step)*context.values.x),exp2(-16.0)));
     let base = application_guide(vec2<f32>(point))*8.0-8.0;
     let amounts=capped(vec4<f32>(0.0,chosen[0],chosen[1],chosen[2]),context.limits);
     var gain=hdr_gain(light-context.values.y,base-context.values.y,amounts);

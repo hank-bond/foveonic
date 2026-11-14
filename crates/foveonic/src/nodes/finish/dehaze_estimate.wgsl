@@ -1,4 +1,4 @@
-// Bounded dark-channel candidate selection on a stable linear RGB overview.
+// Dark-channel candidate selection on a stable linear RGB analysis grid.
 struct Basis {
     to_camera:array<vec4<f32>,3>, from_camera:array<vec4<f32>,3>,
     to_srgb:array<vec4<f32>,3>, from_srgb:array<vec4<f32>,3>, luma:vec4<f32>,
@@ -131,7 +131,7 @@ fn dehaze_estimate() {
 // Any omitted record has K better records in its partition, hence cannot be global top K.
 @compute @workgroup_size(1)
 fn dehaze_partition(@builtin(workgroup_id) group: vec3<u32>) {
-    let part=group.x; let base=part*1000u; let hbase=part*256u;
+    let part=group.x; let base=part*p.selection.z; let hbase=part*256u;
     for(var b=0u;b<256u;b++) { partial_hist[hbase+b]=vec4(0u); }
     var count=0u;
     let n=p.shape.z*p.shape.w;
@@ -173,6 +173,7 @@ fn dehaze_partition(@builtin(workgroup_id) group: vec3<u32>) {
 }
 @compute @workgroup_size(1)
 fn dehaze_merge() {
+    let base=16u*p.selection.z;
     for(var b=0u;b<256u;b++) {
         var total=vec4(0u);
         for(var part=0u;part<16u;part++) { total+=partial_hist[part*256u+b]; }
@@ -180,31 +181,37 @@ fn dehaze_merge() {
     }
     var count=0u;
     for(var part=0u;part<16u;part++) { for(var i=0u;i<partial_count[part];i++) {
-        let candidate=partial_heap[part*1000u+i];
+        let candidate=partial_heap[part*p.selection.z+i];
         if count<p.selection.z {
             var child=count; count++;
             loop {
                 if child==0u { break; }
                 let parent=(child-1u)/2u;
-                if !worse(candidate,heap[parent]) { break; }
-                heap[child]=heap[parent]; child=parent;
+                if !worse(candidate,partial_heap[base+parent]) { break; }
+                partial_heap[base+child]=partial_heap[base+parent]; child=parent;
             }
-            heap[child]=candidate;
-        } else if worse(heap[0],candidate) {
+            partial_heap[base+child]=candidate;
+        } else if worse(partial_heap[base],candidate) {
             var parent=0u;
             loop {
                 var child=parent*2u+1u;
                 if child>=count { break; }
-                if child+1u<count { if worse(heap[child+1u],heap[child]) { child++; } }
-                if !worse(heap[child],candidate) { break; }
-                heap[parent]=heap[child]; parent=child;
+                if child+1u<count { if worse(partial_heap[base+child+1u],partial_heap[base+child]) { child++; } }
+                if !worse(partial_heap[base+child],candidate) { break; }
+                partial_heap[base+parent]=partial_heap[base+child]; parent=child;
             }
-            heap[parent]=candidate;
+            partial_heap[base+parent]=candidate;
         }
     }}
-    var sum=vec3(0u);
-    for(var i=0u;i<count;i++) { sum+=pixels[heap[i].z].xyz; }
-    var color=vec3<f32>(sum)/(65535.*f32(max(count,1u)));
+    // Dense selections can exceed one u32 of 16-bit channel codes.
+    var sum=vec3(0u); var carry=vec3(0u);
+    for(var i=0u;i<count;i++) {
+        let previous=sum;
+        sum+=pixels[partial_heap[base+i].z].xyz;
+        carry+=select(vec3(0u),vec3(1u),sum<previous);
+    }
+    let total=vec3<f32>(carry)*4294967296.+vec3<f32>(sum);
+    var color=total/(65535.*f32(max(count,1u)));
     if p.selection.w==0u {
         color=vec3(dot(color,p.basis.to_srgb[0].xyz),dot(color,p.basis.to_srgb[1].xyz),dot(color,p.basis.to_srgb[2].xyz));
     }

@@ -18,62 +18,68 @@ fn original_dehaze_swatch_reports_auto_at_zero_and_freezes_without_an_image_chan
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
     let engine = Engine::new().unwrap();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
-    for rendering in [Rendering::Color, Rendering::Monochrome] {
-        let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
-        settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
-        settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
-        let neutral = engine
-            .render(&source, &settings, &mut Profile::default())
-            .unwrap();
-        let neutral = engine.readback_image(&neutral).unwrap();
-        settings.dehaze_estimate = true;
-        let mut session = RenderSession::new(source.clone());
-        let mut automatic_pixels = None;
-        let mut color = None;
-        for (amount, manual) in [(0., false), (35., false), (35., true), (0., false)] {
-            settings.dehaze.amount = amount;
-            settings.dehaze.shadow = if manual { color } else { None };
-            let mut artifacts = engine
-                .render_session(
-                    &mut session,
-                    &settings,
-                    &["final"],
-                    || false,
-                    &mut Profile::default(),
-                )
-                .unwrap()
+    for policy in [
+        crate::render::ProcessingQuality::Quality,
+        crate::render::ProcessingQuality::Speed,
+    ] {
+        for rendering in [Rendering::Color, Rendering::Monochrome] {
+            let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
+            settings.processing_quality = policy;
+            settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+            settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+            let neutral = engine
+                .render(&source, &settings, &mut Profile::default())
                 .unwrap();
-            let artifact = artifacts.pop().unwrap();
-            if manual {
-                assert!(
-                    artifact.dehaze_estimate.is_none(),
-                    "manual color must not request color estimation"
-                );
-            } else {
-                let estimate = artifact
-                    .dehaze_estimate
-                    .expect("fixture needs an automatic haze color");
-                if let Some(expected) = color {
-                    assert_eq!(estimate, expected);
+            let neutral = engine.readback_image(&neutral).unwrap();
+            settings.dehaze_estimate = true;
+            let mut session = RenderSession::new(source.clone());
+            let mut automatic_pixels = None;
+            let mut color = None;
+            for (amount, manual) in [(0., false), (35., false), (35., true), (0., false)] {
+                settings.dehaze.amount = amount;
+                settings.dehaze.shadow = if manual { color } else { None };
+                let mut artifacts = engine
+                    .render_session(
+                        &mut session,
+                        &settings,
+                        &["final"],
+                        || false,
+                        &mut Profile::default(),
+                    )
+                    .unwrap()
+                    .unwrap();
+                let artifact = artifacts.pop().unwrap();
+                if manual {
+                    assert!(
+                        artifact.dehaze_estimate.is_none(),
+                        "manual color must not request color estimation"
+                    );
+                } else {
+                    let estimate = artifact
+                        .dehaze_estimate
+                        .expect("fixture needs an automatic haze color");
+                    if let Some(expected) = color {
+                        assert_eq!(estimate, expected);
+                    }
+                    color = Some(estimate);
                 }
-                color = Some(estimate);
-            }
-            let Content::Image(image) = artifact.content else {
-                panic!("image")
-            };
-            let pixels = engine.readback_image(&image).unwrap();
-            if amount == 0. {
-                assert!(
-                    pixels == neutral,
-                    "showing Auto must preserve zero output exactly"
-                );
-            } else if manual {
-                assert!(
-                    Some(pixels) == automatic_pixels,
-                    "freezing Auto must preserve the image exactly"
-                );
-            } else {
-                automatic_pixels = Some(pixels);
+                let Content::Image(image) = artifact.content else {
+                    panic!("image")
+                };
+                let pixels = engine.readback_image(&image).unwrap();
+                if amount == 0. {
+                    assert!(
+                        pixels == neutral,
+                        "showing Auto must preserve zero output exactly"
+                    );
+                } else if manual {
+                    assert!(
+                        Some(pixels) == automatic_pixels,
+                        "freezing Auto must preserve the image exactly"
+                    );
+                } else {
+                    automatic_pixels = Some(pixels);
+                }
             }
         }
     }
@@ -83,7 +89,8 @@ fn original_dehaze_swatch_reports_auto_at_zero_and_freezes_without_an_image_chan
 #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
 fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction() {
     use crate::interactive::Execution;
-    let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
+    let source =
+        Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
     let engine = Engine::new().unwrap();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = caps
@@ -97,86 +104,93 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
         settings.working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
     );
     assert!(settings.regional_preview_available(&source.metadata));
-    let mut full_extent = None;
-    let mut whole_frame_analysis = None;
-    let mut fast_pixels = None;
-    for (quality, region) in [
-        (Scale::NATIVE, None),
-        (Scale::new(2).unwrap(), None),
-        (Scale::NATIVE, Some([10, 10, 200, 200])),
+    for policy in [
+        crate::render::ProcessingQuality::Quality,
+        crate::render::ProcessingQuality::Speed,
     ] {
-        settings.working_scale = quality;
-        settings.preview_region = region;
-        let mut profile = Profile::default();
-        let mut execution = Execution::default();
-        let mut built = super::super::build_camera(
-            &engine,
-            crate::render::recipes::RecipeInput::Original(&source),
-            &settings,
-            &["final"],
-            &mut profile,
-            &mut execution,
-        )
-        .unwrap();
-        let mut artifacts = engine
-            .collect_artifacts(
+        settings.processing_quality = policy;
+        let mut full_extent = None;
+        let mut whole_frame_analysis = std::collections::HashMap::new();
+        let mut fast_pixels = None;
+        for (quality, region) in [
+            (Scale::NATIVE, None),
+            (Scale::new(2).unwrap(), None),
+            (Scale::NATIVE, Some([10, 10, 200, 200])),
+        ] {
+            settings.working_scale = quality;
+            settings.preview_region = region;
+            let mut profile = Profile::default();
+            let mut execution = Execution::default();
+            let mut built = super::super::build_camera(
+                &engine,
                 crate::render::recipes::RecipeInput::Original(&source),
                 &settings,
-                &mut built.graph,
-                built.final_id,
-                &["dehaze.analysis", "final"],
+                &["final"],
                 &mut profile,
                 &mut execution,
             )
             .unwrap();
-        let Content::Image(image) = artifacts.pop().unwrap().content else {
-            panic!("image")
-        };
-        let Content::Table { values, .. } = artifacts.pop().unwrap().content else {
-            panic!("analysis")
-        };
-        assert!(values[3] > 0., "fixture needs an Auto estimate");
-        if let Some(expected) = &whole_frame_analysis {
-            assert_eq!(&values, expected, "{quality:?} {region:?}");
-        } else {
-            whole_frame_analysis = Some(values);
-        }
-        let extent = image.view().extent;
-        if quality.is_reduced() {
-            assert_eq!(Some(extent.map(|v| v * 2)), full_extent);
-        } else if region.is_some() {
-            assert_eq!(extent, [190, 190]);
-        } else {
-            full_extent = Some(extent);
-        }
-        let bytes = engine.readback_image(&image).unwrap();
-        assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
-            .iter()
-            .all(|v| v.is_finite()));
-        if quality == Scale::new(2).unwrap() {
-            fast_pixels = Some(bytes);
-        }
-    }
-    let mut session = RenderSession::new(Arc::new(source));
-    settings.working_scale = Scale::new(2).unwrap();
-    settings.preview_region = None;
-    for amount in [35., 45., 35.] {
-        settings.dehaze.amount = amount;
-        let mut profile = Profile::new(Mode::Wall);
-        let mut artifacts = engine
-            .render_session(&mut session, &settings, &["final"], || false, &mut profile)
-            .unwrap()
-            .unwrap();
-        let Content::Image(image) = artifacts.pop().unwrap().content else {
-            panic!("image")
-        };
-        let actual = engine.readback_image(&image).unwrap();
-        assert_eq!(actual == *fast_pixels.as_ref().unwrap(), amount == 35.);
-        if amount == 45. {
-            assert!(!profile
-                .host
+            let mut artifacts = engine
+                .collect_artifacts(
+                    crate::render::recipes::RecipeInput::Original(&source),
+                    &settings,
+                    &mut built.graph,
+                    built.final_id,
+                    &["dehaze.analysis", "final"],
+                    &mut profile,
+                    &mut execution,
+                )
+                .unwrap();
+            let Content::Image(image) = artifacts.pop().unwrap().content else {
+                panic!("image")
+            };
+            let Content::Table { values, .. } = artifacts.pop().unwrap().content else {
+                panic!("analysis")
+            };
+            assert!(values[3] > 0., "fixture needs an Auto estimate");
+            let analysis_scale = policy.guide_scale(quality);
+            if let Some(expected) = whole_frame_analysis.get(&analysis_scale) {
+                assert_eq!(&values, expected, "{policy:?} {quality:?} {region:?}");
+            } else {
+                whole_frame_analysis.insert(analysis_scale, values);
+            }
+            let extent = image.view().extent;
+            if quality.is_reduced() {
+                assert_eq!(Some(extent.map(|v| v * 2)), full_extent);
+            } else if region.is_some() {
+                assert_eq!(extent, [190, 190]);
+            } else {
+                full_extent = Some(extent);
+            }
+            let bytes = engine.readback_image(&image).unwrap();
+            assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
                 .iter()
-                .any(|t| t.stage == "estimate haze color"));
+                .all(|v| v.is_finite()));
+            if quality == Scale::new(2).unwrap() {
+                fast_pixels = Some(bytes);
+            }
+        }
+        let mut session = RenderSession::new(source.clone());
+        settings.working_scale = Scale::new(2).unwrap();
+        settings.preview_region = None;
+        for amount in [35., 45., 35.] {
+            settings.dehaze.amount = amount;
+            let mut profile = Profile::new(Mode::Wall);
+            let mut artifacts = engine
+                .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+                .unwrap()
+                .unwrap();
+            let Content::Image(image) = artifacts.pop().unwrap().content else {
+                panic!("image")
+            };
+            let actual = engine.readback_image(&image).unwrap();
+            assert_eq!(actual == *fast_pixels.as_ref().unwrap(), amount == 35.);
+            if amount == 45. {
+                assert!(!profile
+                    .host
+                    .iter()
+                    .any(|t| t.stage == "estimate haze color"));
+            }
         }
     }
 }
@@ -1244,8 +1258,20 @@ fn adaptive_analysis_policy_caps_profile_targets_at_the_working_grid() {
                 let mut settings = Settings::new("Sunlight", "Standard");
                 settings.photographic.base_response = profile;
                 settings.working_scale = Scale::new(divisor).unwrap();
-                let analysis = super::adaptive_analysis_scale(&settings, thumb).unwrap();
-                assert_eq!(analysis.divisor(), divisor.max(target));
+                for processing_quality in [
+                    crate::render::ProcessingQuality::Quality,
+                    crate::render::ProcessingQuality::Speed,
+                ] {
+                    settings.processing_quality = processing_quality;
+                    let analysis = super::adaptive_analysis_scale(&settings, thumb).unwrap();
+                    let expected =
+                        if processing_quality == crate::render::ProcessingQuality::Quality {
+                            divisor
+                        } else {
+                            divisor.max(target)
+                        };
+                    assert_eq!(analysis.divisor(), expected);
+                }
             }
         }
     }
@@ -1263,151 +1289,159 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
     let engine = Engine::new().unwrap();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
-    for rendering in [Rendering::Color, Rendering::Monochrome] {
-        let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
-        settings.photographic.tone_method = PhotographicMethod::Universal;
-        settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
-        settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
-        for response in [BaseResponse::Natural, BaseResponse::Strong] {
-            settings.photographic.base_response = response;
-            let mut qualities: Vec<_> = [1, 2, 4, 8, 16, 64]
-                .into_iter()
-                .map(|divisor| (Scale::new(divisor).unwrap(), None))
-                .collect();
-            if settings.regional_preview_available(&source.metadata) {
-                qualities.push((Scale::NATIVE, Some([100, 100, 400, 300])));
-            }
-            let mut expected = std::collections::HashMap::new();
-            for (quality, region) in qualities {
-                settings.working_scale = quality;
-                settings.preview_region = region;
-                let mut profile = Profile::default();
-                let mut execution = Execution::default();
-                let mut built = super::super::build_camera(
-                    &engine,
-                    crate::render::recipes::RecipeInput::Original(&source),
-                    &settings,
-                    &["final", "base-response.mask", "base-response.analysis-mask"],
-                    &mut profile,
-                    &mut execution,
-                )
-                .unwrap();
-                let (params, analysis_params, curve) = built
-                    .graph
-                    .nodes
-                    .iter()
-                    .find_map(|n| match &n.operation {
-                        Operation::AdaptiveTone {
-                            params,
-                            analysis,
-                            curve,
-                            ..
-                        } => Some((*params, *analysis, curve.clone())),
-                        _ => None,
-                    })
-                    .unwrap();
-                let artifacts = engine
-                    .collect_artifacts(
+    for policy in [
+        crate::render::ProcessingQuality::Quality,
+        crate::render::ProcessingQuality::Speed,
+    ] {
+        for rendering in [Rendering::Color, Rendering::Monochrome] {
+            let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
+            settings.processing_quality = policy;
+            settings.photographic.tone_method = PhotographicMethod::Universal;
+            settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+            settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+            for response in [BaseResponse::Natural, BaseResponse::Strong] {
+                settings.photographic.base_response = response;
+                let mut qualities: Vec<_> = [1, 2, 4, 8, 16, 64]
+                    .into_iter()
+                    .map(|divisor| (Scale::new(divisor).unwrap(), None))
+                    .collect();
+                if settings.regional_preview_available(&source.metadata) {
+                    qualities.push((Scale::NATIVE, Some([100, 100, 400, 300])));
+                }
+                let mut expected = std::collections::HashMap::new();
+                for (quality, region) in qualities {
+                    settings.working_scale = quality;
+                    settings.preview_region = region;
+                    let mut profile = Profile::default();
+                    let mut execution = Execution::default();
+                    let mut built = super::super::build_camera(
+                        &engine,
                         crate::render::recipes::RecipeInput::Original(&source),
                         &settings,
-                        &mut built.graph,
-                        built.final_id,
-                        &[
-                            "linear.edits-input",
-                            "base-response.mask",
-                            "base-response.analysis",
-                            "base-response.analysis-mask",
-                            "base-response.rgb",
-                        ],
+                        &["final", "base-response.mask", "base-response.analysis-mask"],
                         &mut profile,
                         &mut execution,
                     )
                     .unwrap();
-                let images: Vec<_> = artifacts
-                    .into_iter()
-                    .map(|a| match a.content {
-                        Content::Image(i) => i,
-                        _ => panic!("expected image"),
-                    })
-                    .collect();
-                let [input, mask, analysis_rgb, analysis_mask, actual] = images.as_slice() else {
-                    panic!("missing inputs")
-                };
-                let expected_scale =
-                    super::adaptive_analysis_scale(&settings, caps.thumb_scale()).unwrap();
-                assert_eq!(analysis_rgb.settings.working_scale, expected_scale);
-                assert_eq!(analysis_mask.settings.working_scale, expected_scale);
-                assert_eq!(input.settings.working_scale, quality);
-                if quality == expected_scale && region.is_none() {
-                    assert_eq!(analysis_rgb.description.extent, input.description.extent);
-                    assert_eq!(analysis_rgb.buffer.identity(), input.buffer.identity());
-                }
-                let gpu = engine.test_gpu();
-                let bytes = gpu.readback(&analysis_rgb.buffer).unwrap();
-                let guide = gpu.readback(&analysis_mask.buffer).unwrap();
-                let pack = |image: &crate::image::RenderedImage| {
-                    let bytes = gpu.readback(&image.buffer).unwrap();
-                    let values: &[f32] = bytemuck::cast_slice(&bytes);
-                    let [width, height] = image.description.extent;
-                    let cells: Vec<f32> = (0..height)
-                        .step_by(2)
-                        .flat_map(|y| {
-                            (0..width)
-                                .step_by(2)
-                                .map(move |x| values[(y * width + x) as usize])
+                    let (params, analysis_params, curve) = built
+                        .graph
+                        .nodes
+                        .iter()
+                        .find_map(|n| match &n.operation {
+                            Operation::AdaptiveTone {
+                                params,
+                                analysis,
+                                curve,
+                                ..
+                            } => Some((*params, *analysis, curve.clone())),
+                            _ => None,
+                        })
+                        .unwrap();
+                    let artifacts = engine
+                        .collect_artifacts(
+                            crate::render::recipes::RecipeInput::Original(&source),
+                            &settings,
+                            &mut built.graph,
+                            built.final_id,
+                            &[
+                                "linear.edits-input",
+                                "base-response.mask",
+                                "base-response.analysis",
+                                "base-response.analysis-mask",
+                                "base-response.rgb",
+                            ],
+                            &mut profile,
+                            &mut execution,
+                        )
+                        .unwrap();
+                    let images: Vec<_> = artifacts
+                        .into_iter()
+                        .map(|a| match a.content {
+                            Content::Image(i) => i,
+                            _ => panic!("expected image"),
                         })
                         .collect();
-                    gpu.upload("Inspected brightness cells", &cells).unwrap()
-                };
-                let mask_cells = pack(mask);
-                let analysis_cells = pack(analysis_mask);
-                let replay = apply_with_analysis(
-                    gpu,
-                    Samples {
-                        rgb: &input.buffer,
-                        mask: &mask_cells,
-                    },
-                    Samples {
-                        rgb: &analysis_rgb.buffer,
-                        mask: &analysis_cells,
-                    },
-                    &curve,
-                    params,
-                    analysis_params,
-                    &mut Profile::default(),
-                )
-                .unwrap();
-                assert!(
-                    gpu.readback(&replay.rgb).unwrap() == gpu.readback(&actual.buffer).unwrap(),
-                    "inspection replay changed RGB output"
-                );
-                let fit = gpu.readback(&replay.amounts).unwrap();
-                let sample = (bytes, guide, analysis_params.key(), fit);
-                if let Some((rgb, mask, key, fit)) = expected.get(&expected_scale) {
-                    assert_eq!(
-                        &sample.0, rgb,
-                        "analysis RGB changed at {quality:?} {region:?}"
-                    );
-                    assert_eq!(
-                        &sample.1, mask,
-                        "analysis guide changed at {quality:?} {region:?}"
-                    );
+                    let [input, mask, analysis_rgb, analysis_mask, actual] = images.as_slice()
+                    else {
+                        panic!("missing inputs")
+                    };
+                    let expected_scale =
+                        super::adaptive_analysis_scale(&settings, caps.thumb_scale()).unwrap();
+                    assert_eq!(analysis_rgb.settings.working_scale, expected_scale);
+                    assert_eq!(analysis_mask.settings.working_scale, expected_scale);
+                    assert_eq!(input.settings.working_scale, quality);
+                    if quality == expected_scale && region.is_none() {
+                        assert_eq!(analysis_rgb.description.extent, input.description.extent);
+                        assert_eq!(analysis_rgb.buffer.identity(), input.buffer.identity());
+                    }
+                    let gpu = engine.test_gpu();
+                    let bytes = gpu.readback(&analysis_rgb.buffer).unwrap();
+                    let guide = gpu.readback(&analysis_mask.buffer).unwrap();
+                    let pack = |image: &crate::image::RenderedImage| {
+                        let bytes = gpu.readback(&image.buffer).unwrap();
+                        let values: &[f32] = bytemuck::cast_slice(&bytes);
+                        let [width, height] = image.description.extent;
+                        let step = crate::nodes::finish::tone_equalizer::cell_step(policy) as usize;
+                        let cells: Vec<f32> = (0..height)
+                            .step_by(step)
+                            .flat_map(|y| {
+                                (0..width)
+                                    .step_by(step)
+                                    .map(move |x| values[(y * width + x) as usize])
+                            })
+                            .collect();
+                        gpu.upload("Inspected brightness cells", &cells).unwrap()
+                    };
+                    let mask_cells = pack(mask);
+                    let analysis_cells = pack(analysis_mask);
+                    let replay = apply_with_analysis(
+                        gpu,
+                        Samples {
+                            rgb: &input.buffer,
+                            mask: &mask_cells,
+                        },
+                        Samples {
+                            rgb: &analysis_rgb.buffer,
+                            mask: &analysis_cells,
+                        },
+                        &curve,
+                        params,
+                        analysis_params,
+                        &mut Profile::default(),
+                    )
+                    .unwrap();
                     assert!(
-                        sample.2 == *key,
-                        "analysis parameters changed at {quality:?} {region:?}"
+                        gpu.readback(&replay.rgb).unwrap() == gpu.readback(&actual.buffer).unwrap(),
+                        "inspection replay changed RGB output"
                     );
-                    assert_eq!(
-                        &sample.3, fit,
-                        "fitted amounts changed at {quality:?} {region:?}"
-                    );
-                } else {
-                    expected.insert(expected_scale, sample);
+                    let fit = gpu.readback(&replay.amounts).unwrap();
+                    let sample = (bytes, guide, analysis_params.key(), fit);
+                    if let Some((rgb, mask, key, fit)) = expected.get(&expected_scale) {
+                        assert_eq!(
+                            &sample.0, rgb,
+                            "analysis RGB changed at {quality:?} {region:?}"
+                        );
+                        assert_eq!(
+                            &sample.1, mask,
+                            "analysis guide changed at {quality:?} {region:?}"
+                        );
+                        assert!(
+                            sample.2 == *key,
+                            "analysis parameters changed at {quality:?} {region:?}"
+                        );
+                        assert_eq!(
+                            &sample.3, fit,
+                            "fitted amounts changed at {quality:?} {region:?}"
+                        );
+                    } else {
+                        expected.insert(expected_scale, sample);
+                    }
+                    assert!(bytemuck::cast_slice::<u8, f32>(
+                        &gpu.readback(&actual.buffer).unwrap()
+                    )
+                    .iter()
+                    .all(|v| v.is_finite()));
                 }
-                assert!(
-                    bytemuck::cast_slice::<u8, f32>(&gpu.readback(&actual.buffer).unwrap())
-                        .iter()
-                        .all(|v| v.is_finite())
-                );
             }
         }
     }
@@ -1532,29 +1566,50 @@ fn original_dynamic_range_guide_reuses_across_moving_sections() {
     assert!(extent[0] >= 1024 && extent[1] >= 512);
     let origin = [(extent[0] - 1024) / 2, (extent[1] - 512) / 2];
     let engine = Engine::new().unwrap();
-    let mut session = RenderSession::new(source);
-    for step in 0..4 {
-        let x = origin[0] + step * 128;
-        let region = [x, origin[1], x + 512, origin[1] + 512];
-        settings.preview_region = Some(region);
-        let mut profile = Profile::new(Mode::Wall);
-        let mut artifacts = engine
-            .render_session(&mut session, &settings, &["final"], || false, &mut profile)
-            .unwrap()
-            .unwrap();
-        let Content::Image(image) = artifacts.remove(0).content else {
-            panic!("image")
-        };
-        assert_eq!(image.settings().preview_region, Some(region));
-        let built_guide = profile
-            .host
-            .iter()
-            .any(|timing| timing.stage == "submit tonal brightness mask");
-        assert_eq!(
-            built_guide,
-            step == 0,
-            "Dynamic Range must build its guide once, then reuse it while moving: {:?}",
-            profile.host
-        );
+    for policy in [
+        crate::render::ProcessingQuality::Quality,
+        crate::render::ProcessingQuality::Speed,
+    ] {
+        settings.processing_quality = policy;
+        for whole_first in [false, true] {
+            let mut session = RenderSession::new(source.clone());
+            if whole_first {
+                settings.preview_region = None;
+                engine
+                    .render_session(
+                        &mut session,
+                        &settings,
+                        &["final"],
+                        || false,
+                        &mut Profile::default(),
+                    )
+                    .unwrap()
+                    .unwrap();
+            }
+            for step in 0..4 {
+                let x = origin[0] + step * 128;
+                let region = [x, origin[1], x + 512, origin[1] + 512];
+                settings.preview_region = Some(region);
+                let mut profile = Profile::new(Mode::Wall);
+                let mut artifacts = engine
+                    .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+                    .unwrap()
+                    .unwrap();
+                let Content::Image(image) = artifacts.remove(0).content else {
+                    panic!("image")
+                };
+                assert_eq!(image.settings().preview_region, Some(region));
+                let built_guide = profile
+                    .host
+                    .iter()
+                    .any(|timing| timing.stage == "submit tonal brightness mask");
+                assert_eq!(
+                    built_guide,
+                    step == 0 && !whole_first,
+                    "Dynamic Range must build its guide once, then reuse it while moving: {:?}",
+                    profile.host
+                );
+            }
+        }
     }
 }

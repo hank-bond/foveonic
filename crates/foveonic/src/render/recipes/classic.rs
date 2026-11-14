@@ -372,7 +372,6 @@ fn compose(
             white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
             guide_white: crate::nodes::finish::signed_response::SIGNAL_CODE_UNIT as f32,
             scale: settings.working_scale.factor(),
-            haze_scale: settings.working_scale,
         };
         let context_white = context.white;
         super::linear_edits::build(

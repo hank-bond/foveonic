@@ -998,11 +998,7 @@ fn compose(
         let context = super::linear_edits::Context {
             dehaze_basis,
             adaptive,
-            haze_scale: grid.coarsest(if settings.is_monochrome() {
-                WorkingGrid::NATIVE
-            } else {
-                WorkingGrid::new(2)?
-            }),
+
             space,
             white: appearance::LINEAR_CODE_WHITE as f32,
             guide_white: appearance::LINEAR_CODE_WHITE as f32,

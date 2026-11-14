@@ -34,6 +34,8 @@ pub fn prepare_base(
     settings: &Settings,
     profile: &mut Profile,
 ) -> Result<RenderedImage> {
+    let quality_settings = settings.for_export();
+    let settings = &quality_settings;
     settings.validate_for_camera(&source.metadata)?;
     engine.render_dng_base(source, settings, profile)
 }

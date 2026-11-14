@@ -8,6 +8,7 @@ use crate::{
     },
     profile::Profile,
     recipe::Key,
+    render::ProcessingQuality,
     source::Result,
 };
 use serde::{Deserialize, Serialize};
@@ -135,20 +136,39 @@ pub(crate) struct Estimate {
     basis: Basis,
 }
 impl Estimate {
-    pub fn new(extent: [u32; 2], basis: Basis, white: f32, mono: bool, crop: [u32; 4]) -> Self {
+    pub fn new(
+        extent: [u32; 2],
+        basis: Basis,
+        white: f32,
+        mono: bool,
+        crop: [u32; 4],
+        quality: ProcessingQuality,
+    ) -> Self {
         let width = (crop[2] - crop[0]).max(1);
         let height = (crop[3] - crop[1]).max(1);
         let step = width.max(height).div_ceil(512).max(1);
-        let [w, h] = [width.div_ceil(step), height.div_ceil(step)];
+        let virtual_shape = [width.div_ceil(step), height.div_ceil(step)];
+        let virtual_radius = virtual_shape[0].min(virtual_shape[1]).min(64) / 4;
+        let virtual_count = u64::from(virtual_shape[0]) * u64::from(virtual_shape[1]);
+        let virtual_candidates = (virtual_count / 1000).clamp(100, 1000);
+        let ([w, h], radius, candidates) = match quality {
+            ProcessingQuality::Speed => (virtual_shape, virtual_radius, virtual_candidates as u32),
+            ProcessingQuality::Quality => {
+                let radius = virtual_radius * step;
+                let count = u64::from(width) * u64::from(height);
+                let eligible = u64::from(width.saturating_sub(2 * radius))
+                    * u64::from(height.saturating_sub(2 * radius));
+                // Preserve the overview's selected fraction when every working sample participates.
+                let candidates = (virtual_candidates * count)
+                    .div_ceil(virtual_count)
+                    .min(eligible);
+                ([width, height], radius, candidates as u32)
+            }
+        };
         Self {
             shape: [extent[0], extent[1], w, h],
             region: [crop[0], crop[1], width, height],
-            selection: [
-                w.min(h).min(64) / 4,
-                16384,
-                (w * h / 1000).clamp(100, 1000),
-                u32::from(mono),
-            ],
+            selection: [radius, 16384, candidates, u32::from(mono)],
             normalization: [1. / white, 0., 0., 0.],
             basis,
         }
@@ -169,7 +189,14 @@ impl Estimate {
                 .clamp(crop[axis], crop[axis + 2] - size);
             region[axis + 2] = region[axis] + size;
         }
-        let mut params = Self::new(extent, basis, white, mono, region);
+        let mut params = Self::new(
+            extent,
+            basis,
+            white,
+            mono,
+            region,
+            ProcessingQuality::Quality,
+        );
         params.selection[1] = 65535;
         params
     }
@@ -278,6 +305,9 @@ fn estimate_impl(
     }
     #[cfg(test)]
     if !partitioned {
+        if p.selection[2] > 1000 {
+            return Err("serial Dehaze selection requires at most 1000 candidates".into());
+        }
         gpu.dispatch(
             Kernel::DehazeEstimate,
             &mut [
@@ -295,7 +325,11 @@ fn estimate_impl(
     #[cfg(not(test))]
     let _ = partitioned;
     {
-        let mut heaps = gpu.storage("haze candidate heaps", 16 * 1000 * 16)?;
+        // Sixteen partition heaps and one merge heap share the selected K capacity.
+        let mut heaps = gpu.storage(
+            "haze candidate heaps",
+            17 * u64::from(p.selection[2]).max(1) * 16,
+        )?;
         let mut histograms = gpu.storage("haze partial histograms", 16 * 256 * 16)?;
         let mut counts = gpu.storage("haze candidate counts", 16 * 4)?;
         gpu.dispatch(
@@ -317,7 +351,7 @@ fn estimate_impl(
                 (1, Read(&uniform)),
                 (2, Read(&pixels)),
                 (5, Write(output.write())),
-                (6, Read(&heaps)),
+                (6, Write(heaps.write())),
                 (7, Read(&histograms)),
                 (8, Read(&counts)),
             ],

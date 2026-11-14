@@ -12,7 +12,7 @@ const REGION_COUNT: u32 = 1235u; // 31² + 15² + 7² overlapping windows
 @compute @workgroup_size(8,8)
 fn sample_regions(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= context.shape.zw) { return; }
-    let point = context.bounds.xy + min(vec2<u32>((vec2<f32>(id.xy)+0.5) * vec2<f32>(context.bounds.zw-context.bounds.xy) / vec2<f32>(context.shape.zw)), context.bounds.zw-context.bounds.xy-1u);
+    let point = analysis_point(id.xy);
     let rgb = pixel(point);
     let y = dot(rgb,context.luma.xyz)/context.values.x;
     let index = id.y*context.shape.z+id.x;
@@ -31,9 +31,70 @@ fn window(index:u32)->vec3<u32> {
     let large=middle-225u;
     return vec3<u32>((large%7u)*32u,(large/7u)*32u,64u);
 }
+fn add_region(left: Region, right: Region) -> Region {
+    return Region(left.all+right.all, left.bright+right.bright, left.dark+right.dark, left.support+right.support);
+}
+fn summarize_dense_region(index: u32) {
+    let w=window(index);
+    let window_low=vec2<u32>(floor(vec2<f32>(w.xy)*vec2<f32>(context.shape.zw)/256.0));
+    let window_high=min(vec2<u32>(ceil(vec2<f32>(w.xy+w.z)*vec2<f32>(context.shape.zw)/256.0)),context.shape.zw);
+    // Binary partial sums bound rounding error by the tree depth, even when
+    // GPU fast-math reassociates compensated-addition expressions. Each valid
+    // sample participates once. The input geometry contains fewer than 2^31
+    // RGB pixels, so 31 levels cover even the largest supported population.
+    var partial: array<Region,31>;
+    var count=0u;
+    var origin=vec3<f32>(0.0);
+    var has_origin=vec3<bool>(false);
+    for(var y=window_low.y;y<window_high.y;y++) { for(var x=window_low.x;x<window_high.x;x++) {
+        let v=samples[y*context.shape.z+x];
+        if v.x < -20.0 { continue; }
+        let bright_weight=smoothstep(0.80,0.90,tone(v.x+v.z));
+        let dark_weight=(1.0-smoothstep(0.15,0.25,tone(v.x)))*smoothstep(0.03,0.08,v.w);
+        // Separate nearby origins protect weak variation within a bright or
+        // dark population even when the complete window spans many stops.
+        if !has_origin.x { origin.x=v.x; has_origin.x=true; }
+        if !has_origin.y && bright_weight>0.0 { origin.y=v.x; has_origin.y=true; }
+        if !has_origin.z && dark_weight>0.0 { origin.z=v.x; has_origin.z=true; }
+        let light=vec3<f32>(v.x)-origin;
+        var merged=Region(
+            vec4<f32>(light.x,v.y,v.w,light.x*light.x),
+            bright_weight*vec4<f32>(light.y,v.y,v.z,light.y*light.y),
+            dark_weight*vec4<f32>(light.z,v.y,v.w,light.z*light.z),
+            vec4<f32>(bright_weight,dark_weight,1.0,0.0));
+        var occupied=count;
+        var level=0u;
+        loop {
+            if (occupied & 1u)==0u { break; }
+            merged=add_region(partial[level],merged);
+            occupied=occupied>>1u;
+            level++;
+        }
+        partial[level]=merged;
+        count++;
+    } }
+    var total=Region(vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0),vec4<f32>(0.0));
+    for(var level=0u;level<31u;level++) {
+        if (count & (1u<<level))!=0u { total=add_region(total,partial[level]); }
+    }
+    var all=total.all/max(total.support.z,1.0);
+    // Fractional physical populations can have useful normalized support on
+    // small grids. Their means divide by their actual positive weight.
+    var bright=total.bright/max(total.support.x,1e-30);
+    var dark=total.dark/max(total.support.y,1e-30);
+    all.w=sqrt(max(all.w-all.x*all.x,0.0));
+    bright.w=sqrt(max(bright.w-bright.x*bright.x,0.0));
+    dark.w=sqrt(max(dark.w-dark.x*dark.x,0.0));
+    all.x+=origin.x;
+    bright.x+=origin.y;
+    dark.x+=origin.z;
+    let density=65536.0/(f32(context.shape.z)*f32(context.shape.w));
+    regions[index]=Region(all,bright,dark,total.support*density);
+}
 @compute @workgroup_size(64)
 fn summarize_regions(@builtin(global_invocation_id) id:vec3<u32>) {
     if id.x>=REGION_COUNT { return; }
+    if context.sampling.z!=0u { summarize_dense_region(id.x); return; }
     let w=window(id.x);
     var sum=vec4<f32>(0.0);
     var high=vec4<f32>(0.0);
