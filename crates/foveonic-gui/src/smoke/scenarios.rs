@@ -58,13 +58,6 @@ impl Case {
             )
     }
 }
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Quality {
-    Quality,
-    Speed,
-}
-
 fn default_folder_mode() -> FolderMode {
     FolderMode::Import
 }
@@ -77,22 +70,13 @@ fn read_folder_mode<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Folder
         )),
     }
 }
-impl Quality {
-    fn preview(self) -> ProcessingQuality {
-        match self {
-            Self::Quality => ProcessingQuality::Quality,
-            Self::Speed => ProcessingQuality::Speed,
-        }
-    }
-}
-
 #[derive(Deserialize)]
 struct Config {
     name: Case,
     photo_count: usize,
     #[serde(default = "default_native_photo_count")]
     native_photo_count: usize,
-    quality: Quality,
+    quality: ProcessingQuality,
     #[serde(deserialize_with = "read_mode")]
     mode: Mode,
     directory: PathBuf,
@@ -521,7 +505,7 @@ impl Scenario {
         })
     }
     fn marker(&self, phase: &str, extra: serde_json::Value) {
-        let mut fields = serde_json::json!({"scenario":self.manifest["scenario"]["name"],"action":self.action.map_or("setup",Action::name),"phase":phase,"step":self.step,"photo_count":self.targets.len(),"processing_quality":format!("{:?}",self.config.quality.preview())});
+        let mut fields = serde_json::json!({"scenario":self.manifest["scenario"]["name"],"action":self.action.map_or("setup",Action::name),"phase":phase,"step":self.step,"photo_count":self.targets.len(),"processing_quality":format!("{:?}",self.config.quality)});
         fields
             .as_object_mut()
             .unwrap()
@@ -575,7 +559,7 @@ impl Scenario {
                 }
                 app.preferences.multi_edit_limit = self.config.photo_count;
                 app.preferences.memory_cache_bytes = self.config.memory_cache_bytes;
-                app.preferences.processing_quality = self.config.quality.preview();
+                app.preferences.processing_quality = self.config.quality;
                 if matches!(self.config.name, Case::ChoiceJourney | Case::BackgroundEdit) {
                     app.preferences.collapsed = [
                         crate::preferences::Section::Navigator,
@@ -1046,7 +1030,7 @@ impl Scenario {
                         .filter(|frame| self.matches(app, path, frame, self.minimum_revision))
                     {
                         if !self.observed.contains_key(path) {
-                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.config.quality.preview()), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
+                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.config.quality), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
                             self.observed.insert(path.clone(), frame.diagnostic_task.id);
                         }
                     }
@@ -1430,10 +1414,10 @@ impl Scenario {
             && (matches!(self.action, Some(Action::CacheWorkflow))
                 || frame.diagnostic_task.revision >= minimum)
             && (matches!(self.action, Some(Action::CacheWorkflow))
-                || frame.processing_quality == self.config.quality.preview()
+                || frame.processing_quality == self.config.quality
                     && frame.artifact.settings.working_scale.divisor()
                         <= app
-                            .preview_scale_for(path, self.config.quality.preview())
+                            .preview_scale_for(path, self.config.quality)
                             .divisor())
             && crate::rendering::matching::same_authored_edits(
                 &frame.requested,

@@ -112,9 +112,15 @@ fn main() -> Result<()> {
     let (mut mode, mut repeats, mut scale, mut regional, mut verify) =
         (Mode::Off, 1usize, Scale::NATIVE, false, false);
     let (mut case_filter, mut control_filter) = (None, None);
+    let mut processing_quality = foveonic::render::ProcessingQuality::default();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--mode" => mode = args.next().ok_or("missing mode")?.parse()?,
+            "--processing-quality" => {
+                processing_quality = serde_json::from_value(Value::String(
+                    args.next().ok_or("missing processing quality")?,
+                ))?
+            }
             "--repeats" => repeats = args.next().ok_or("missing repeats")?.parse()?,
             "--scale-divisor" => scale = Scale::new(args.next().ok_or("missing scale")?.parse()?)?,
             "--regional" => regional = true,
@@ -160,6 +166,7 @@ fn main() -> Result<()> {
         selected += 1;
         let source = Arc::new(Source::open(&case.source)?);
         let mut initial = Settings::new("Sunlight", "Standard");
+        initial.processing_quality = processing_quality;
         ControlCapabilities::from_metadata(&source.metadata)?
             .apply_capture_defaults(&mut initial, &source.metadata)?;
         let authored = patch_settings(&initial, &case.settings)?;
@@ -207,7 +214,7 @@ fn main() -> Result<()> {
             &mut out,
             "checkpoint_session",
             mode,
-            json!({"case":case.label,"source":case.source,"source_identity":source_identity,"settings":RenderSettingsSnapshot::from(&initial),"scale_divisor":scale.divisor(),"region":initial.preview_region,"adapter":warm.adapter_name(),"repeats":repeats,"verify":verify,"timing_usable":!verify && mode == Mode::Off,"source_loaded_outside_timing":true,"snapshots_outside_timing":true,"controls":controls}),
+            json!({"case":case.label,"source":case.source,"source_identity":source_identity,"settings":RenderSettingsSnapshot::from(&initial),"processing_quality":processing_quality,"scale_divisor":scale.divisor(),"region":initial.preview_region,"adapter":warm.adapter_name(),"repeats":repeats,"verify":verify,"timing_usable":!verify && mode == Mode::Off,"source_loaded_outside_timing":true,"snapshots_outside_timing":true,"controls":controls}),
         )?;
         for (control, a, b) in edits {
             for trial in 0..repeats {
@@ -280,10 +287,12 @@ mod tests {
     fn patch_preserves_transients_and_rejects_unknown_keys() {
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.working_scale = Scale::new(4).unwrap();
+        settings.processing_quality = foveonic::render::ProcessingQuality::Speed;
         settings.preview_region = Some([1, 2, 10, 12]);
         let changed = patch_settings(&settings, &json!({"exposure":0.25})).unwrap();
         assert_eq!(changed.exposure, 0.25);
         assert_eq!(changed.working_scale, settings.working_scale);
+        assert_eq!(changed.processing_quality, settings.processing_quality);
         assert_eq!(changed.preview_region, settings.preview_region);
         assert!(patch_settings(&settings, &json!({"exposuer":1})).is_err());
         assert!(patch_settings(&settings, &json!({"tone":{"unknown":1}})).is_err());

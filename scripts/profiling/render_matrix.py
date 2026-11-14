@@ -188,7 +188,7 @@ def run(binary, cases, directory, baseline=None, require_coverage=False):
             test_result_path.write_text(json.dumps(row['test_result'], indent=2)+'\n')
             row['test_result_artifact'] = {'path':str(test_result_path), 'sha256':digest(test_result_path)}
             (directory/'manifest.json').write_text(json.dumps(report, indent=2)+'\n')
-            print(f"{name}: {'exact' if row['passed'] else 'FAILED: '+row['failure']}", flush=True)
+            print(f"{name}: {('exact' if baseline else 'recorded') if row['passed'] else 'FAILED: '+row['failure']}", flush=True)
             if abort:
                 break
         paired = {}

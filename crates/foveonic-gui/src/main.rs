@@ -2104,6 +2104,7 @@ impl eframe::App for App {
         let (_, preparation_paths) = self.worker.cache.preparation_window();
         self.worker
             .configure_preparation(worker::PreparationConfig {
+                processing_quality: self.preferences.processing_quality,
                 recipes: self.sidecars.cached_recipes(&preparation_paths),
                 overrides: self.camera_overrides.clone(),
                 calibration: self

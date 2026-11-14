@@ -10,20 +10,22 @@ use foveonic::{
     diagnostics::{self as trace, Category},
     noise_calibration::Calibration,
     profile::Profile,
-    render::{Engine, MemoryReservation},
+    render::{Engine, MemoryReservation, ProcessingQuality},
     source::SourceOrigin,
 };
 use std::{path::PathBuf, sync::Arc};
 
 #[derive(Clone)]
 pub struct Config {
+    pub processing_quality: ProcessingQuality,
     pub recipes: CachedRecipes,
     pub overrides: [String; 2],
     pub calibration: Option<Arc<Calibration>>,
 }
 impl PartialEq for Config {
     fn eq(&self, other: &Self) -> bool {
-        self.recipes == other.recipes
+        self.processing_quality == other.processing_quality
+            && self.recipes == other.recipes
             && self.overrides == other.overrides
             && self.calibration.as_ref().map(|c| c.signature())
                 == other.calibration.as_ref().map(|c| c.signature())
@@ -113,6 +115,7 @@ impl Preparation {
                     config.recipes.resolve(&path, selection)?,
                     &config.overrides,
                 );
+                settings.processing_quality = config.processing_quality;
                 let Some(source) = photos
                     .shared_source(&path, &origin)
                     .or_else(|| cache.open_cached(&path, |_| {}))

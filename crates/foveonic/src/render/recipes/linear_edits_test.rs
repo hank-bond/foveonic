@@ -1557,6 +1557,13 @@ fn original_dynamic_range_guide_reuses_across_moving_sections() {
         caps.editing_defaults(&source.metadata, Rendering::Color)
             .unwrap()
     };
+    if settings.white_balance.is_empty() {
+        settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
+    }
+    if settings.color_mode.is_empty() {
+        settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
+    }
+    settings.photographic.tone_method = PhotographicMethod::Universal;
     settings.tonal_ranges.shadows = 0.5;
     settings.tonal_ranges.highlights = -0.5;
     settings.working_scale = Scale::NATIVE;

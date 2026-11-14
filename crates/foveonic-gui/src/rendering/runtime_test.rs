@@ -366,3 +366,33 @@ fn complete_demand_retains_current_detail_but_removal_forgets_its_suppressed_int
         "re-adding a removed photo must republish its intent"
     );
 }
+
+#[test]
+fn idle_preparation_mode_changes_replace_the_config_while_identical_values_coalesce() {
+    let rig = Rig::new();
+    let sidecars = crate::sidecars::Session::new(
+        eframe::egui::Context::default(),
+        false,
+        Arc::new(Cache::new()),
+    );
+    let mut config = PreparationConfig {
+        processing_quality: ProcessingQuality::Quality,
+        recipes: sidecars.cached_recipes(&[]),
+        overrides: Default::default(),
+        calibration: None,
+    };
+    rig.handle.preparation(config.clone());
+    rig.applied();
+    let original = rig.slot.0.lock().unwrap().preparation.clone().unwrap();
+    assert_eq!(original.processing_quality, ProcessingQuality::Quality);
+    let sequence = rig.handle.sequence.get();
+    rig.handle.preparation(config.clone());
+    assert_eq!(rig.handle.sequence.get(), sequence);
+    config.processing_quality = ProcessingQuality::Speed;
+    assert!(original.as_ref() != &config);
+    rig.handle.preparation(config);
+    rig.applied();
+    let changed = rig.slot.0.lock().unwrap().preparation.clone().unwrap();
+    assert_eq!(changed.processing_quality, ProcessingQuality::Speed);
+    assert!(!Arc::ptr_eq(&original, &changed));
+}
