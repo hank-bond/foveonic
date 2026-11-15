@@ -33,7 +33,6 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[early-sensor-reduction](./early-sensor-reduction.md)** Move the sensor reduction boundary earlier with working-resolution inputs, preserved native algorithms and existing recipe ownership.
 - **[editing-optimization-handoff](./editing-optimization-handoff.md)** Continue native editing measurements with guarded GPU ownership while preserving the deferred mismatch evidence.
 - **[editing-sidecars](./editing-sidecars.md)** Persist shared photographic settings in atomic versioned JSON sidecars and restore them independently of render completion.
-- **[finishing-optimization](./finishing-optimization.md)** Restore practical brightness-guide grids, establish repeatable comparisons and optimize measured finishing bottlenecks in reviewed checkpoints.
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
 - **[full-option-scaled-pipeline](./full-option-scaled-pipeline.md)** Replace recipe-wide scale exceptions with numeric working grids, graph-owned dependency cuts and complete downstream option support.
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.

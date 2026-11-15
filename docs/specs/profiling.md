@@ -49,4 +49,4 @@ Baselines must retain repeated Off-mode timing observations, input and recipe id
 
 Compare matched workloads per photograph and workflow so aggregate improvements cannot hide individual regressions. Hardware-dependent comparisons require the same host, or new matched runs of the released binary and candidate. Regression budgets require explicit approval. Recording slow behavior does not make it an acceptable target. Keep synchronized GPU attribution and numerical output verification separate from baseline timing, and preserve raw evidence with the release results.
 
-The [finishing optimization plan](../../plans/finishing-optimization.md) tracks the release-baseline and comparison-tool extension.
+The [finishing optimization plan](../../plans/archived/finishing-optimization.md) records the fresh-processing baseline and comparison-tool extension. Remaining workflow baseline linkage is tracked in the [performance-diagnostics plan](../../plans/performance-diagnostics.md#release-workflow-baseline-follow-up).

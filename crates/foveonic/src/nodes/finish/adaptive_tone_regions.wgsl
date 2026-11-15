@@ -51,8 +51,8 @@ fn summarize_quality_region(index: u32) {
     // Bound each scene summary while preserving its Whole-normalized windows.
     // Small windows retain every pixel. Larger windows use cell midpoints.
     // Binary partial sums bound rounding error by the tree depth, even when
-    // GPU fast-math reassociates compensated-addition expressions. Each valid
-    // sample participates once. The input geometry contains fewer than 2^31
+    // GPU fast-math reassociates compensated-addition expressions. Each selected
+    // valid sample participates once. The input geometry contains fewer than 2^31
     // RGB pixels, so 31 levels cover even the largest supported population.
     var partial: array<Region,31>;
     var count=0u;

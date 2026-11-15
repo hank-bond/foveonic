@@ -146,3 +146,7 @@ Reuse the same fixture/recipe manifests and behavioral assertions for current ph
 - [x] Record serial native Thumb and headless multi-photo Draft baseline artifacts before any concurrent renderer experiment.
 - [x] Verify existing two-worker headless sessions preserve independent task contexts, flow queries and exact fresh outputs. This checks attribution, not a new reduced-photo scheduler.
 - [x] Add matched-workload Off comparisons with caller-supplied median/p95 regression budgets. Baseline and candidate input/settings/hardware keys must match, every trial must be complete and uncontended, and no default timing threshold is invented.
+
+## Release-workflow baseline follow-up
+
+The finishing unit added a complete portable fresh-processing baseline for 144 maintained recipe/grid/policy cases. The remaining release requirement is to connect comparable retained-edit, native-detail, multi-photo and UI-delivery baselines using the existing scenario/checkpoint reports. Preserve source loading, foreground delivery, background completion and UI-update gaps as separate measurements. This linkage was deferred from the completed finishing optimization unit; fresh-engine results alone do not close it.

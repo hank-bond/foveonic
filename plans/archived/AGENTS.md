@@ -62,6 +62,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[export-toolbar](./export-toolbar.md)** _(archived)._ Move TIFF color selection from Editing to a padded, grouped Open/Export toolbar.
 - **[family-controls](./family-controls.md)** _(archived)._ Separate family editing panels and centralize processing control constraints before reviewing broader organization.
 - **[fast-preview-controls](./fast-preview-controls.md)** _(archived)._ Separate quarter-resolution Fast controls from Smart's reconstruction-bypassing Draft recipe and publish the verified release.
+- **[finishing-optimization](./finishing-optimization.md)** _(archived)._ Restored practical brightness guides and optimized finishing bottlenecks with reproducible comparisons.
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** _(archived)._ Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.
 - **[guarded-rows-working-grid](./guarded-rows-working-grid.md)** _(archived)._ Moves Merrill guarded-row estimation onto resized evidence with shared calibration, projected noise and bounded native rounding differences.
 - **[gui-screenshot](./gui-screenshot.md)** _(archived)._ Share example-photo syncing through Cargo and explicitly refresh a lossless WebP GUI screenshot for the README.

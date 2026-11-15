@@ -10,14 +10,14 @@ Requirements: [processing quality](../docs/specs/processing-quality.md). Recover
 
 One engine `ProcessingQuality` enum accompanies the existing numeric working `Scale`. Settings keep it transient. Diagnostics preserve it. The GUI offers Quality and Speed and selects scale automatically for both. Requests, results and presentation compatibility carry the same policy. Bounds choose coverage only. Exports force Quality. No new cache owner, worker type or scheduling architecture is needed.
 
-Quality scene estimation covers all working pixels, and Quality spatial guidance begins from working-grid RGB. The owner approved restoring the shared brightness filter's half-grid cells and gain anchors after profiling its dense variant. Large neighborhoods retain the established coefficient reduction. Speed may additionally reduce whole-photo guidance inputs and statistical sampling. The same algorithms consume explicit sampling parameters where possible. Adaptive's normalized regional scoring windows remain the same statistical model while dense Quality covers all contributing pixels. Dehaze must preserve photographic neighborhood size when removing its estimation-grid reduction.
+Quality histogram and feature preparation cover working-grid RGB, while the selected Adaptive regional summaries are bounded to 128 samples per axis. Quality spatial guidance begins from working-grid RGB. The owner approved restoring the shared brightness filter's half-grid cells and gain anchors after profiling its dense variant. Large neighborhoods retain the established coefficient reduction. Speed may additionally reduce whole-photo guidance inputs and statistical sampling. The same algorithms consume explicit sampling parameters where possible. Adaptive's normalized regional windows retain their statistical model and area-normalized support. Quality Auto Dehaze uses bounded score-bin averaging; Speed and manual picking retain their established ordering. Dehaze must preserve photographic neighborhood size when removing its estimation-grid reduction.
 
 ## Inventory
 
 | Operation | Current reduction | Quality | Speed / disposition |
 | --- | --- | --- | --- |
 | Adaptive input statistics | Thumb or half-Thumb RGB branch | Working-grid RGB | Existing profile target |
-| Adaptive histogram and region statistics | 256 by 256 point samples | Complete working-grid coverage | Bounded samples |
+| Adaptive histogram and region statistics | 256 by 256 point samples | Full histogram/features; bounded regional summaries | Bounded samples |
 | Brightness base | 2 by 2 cells and additional coarse coefficient grid | Shared compact/coarse grids | Shared compact/coarse grids |
 | Adaptive and Dynamic Range gains | Half-grid gain anchors | Half-grid anchors | Half-grid anchors |
 | Regional application guides | Fast branch selected by region | Whole guide at the working scale | Whole guide at a Fast ceiling |
@@ -40,7 +40,7 @@ Color Editor's independent cleaned guide is a possible future Speed target, but 
 - [x] Consistent recipe guide preparation and dense/reduced Dehaze. Parent owns recipe and Dehaze work.
 - [x] Migrate profiling/behavioral scenarios and output schemas to independent policy and resolution.
 - [x] Independent review, regression/fidelity checks, targeted headed coverage and isolated latency/memory measurements.
-- [x] Final cleanup, commits, review build and owner checklist. Owner visual acceptance remains pending below.
+- [x] Final cleanup, commits, review build and owner checklist. Owner acceptance was subsequently recorded in the feature closeout below.
 
 Compiler and GPU checks run serially through the shared release cache. The parent delegates an exclusive measurement window when a node author needs to investigate a numerical failure. Implementation agents avoid compiler/GPU work and share API decisions before changing callers. All photographs, approved baselines and unique inputs remain protected.
 
@@ -50,18 +50,20 @@ Today's Full output is not a universal Quality golden: hidden sampling reduction
 
 Keep section/Whole and cached/fresh checks separate from Quality/Speed appearance comparisons. Test all supported camera families with native detail, Color/Monochrome, odd bounds, rotations, fractional mappings and padding. Verify guide construction once followed by reuse, and verify different quality cannot satisfy current native demand. Native detail and Whole continuation must keep policy through rapid controls and background completion.
 
-## Owner review checklist
+## Owner review prompts (historical)
 
-- [ ] Quality/Speed are the only preview choices and both automatically fit single and multi-photo layouts.
-- [ ] Whites scrubbing at 200 percent on hazy coast no longer changes local contrast when a section is replaced by Whole completion, with Adaptive Natural and Disabled.
-- [ ] Mode switching may change tone intentionally. Assess Adaptive Natural/Strong, Dynamic Range controls and Dehaze in both modes.
-- [ ] Quality native detail preserves fine contrast. Inspect coast metal/label, clouds, flowers and deep shadows for artifacts.
-- [ ] Speed loupe and viewport detail are responsive and remain aligned while panning. XL and 400 percent loupe remain available.
-- [ ] Quality and Speed both work in Color and Monochrome across Merrill, Quattro, Classic and Tiger fixtures where supported.
-- [ ] Before/After, inspection, multi-edit selection and controls, cache pressure and recipe persistence keep their existing behavior.
-- [ ] Export from either preview mode produces the same Quality result.
+These prompts accompanied the combined review. The owner subsequently declared the feature work complete; they are retained as review context.
 
-Record measured visual tradeoffs, latency and memory below as implementation evidence arrives. Owner acceptance is pending until that final review.
+- Quality/Speed are the only preview choices and both automatically fit single and multi-photo layouts.
+- Whites scrubbing at 200 percent on hazy coast no longer changes local contrast when a section is replaced by Whole completion, with Adaptive Natural and Disabled.
+- Mode switching may change tone intentionally. Assess Adaptive Natural/Strong, Dynamic Range controls and Dehaze in both modes.
+- Quality native detail preserves fine contrast. Inspect coast metal/label, clouds, flowers and deep shadows for artifacts.
+- Speed loupe and viewport detail are responsive and remain aligned while panning. XL and 400 percent loupe remain available.
+- Quality and Speed both work in Color and Monochrome across Merrill, Quattro, Classic and Tiger fixtures where supported.
+- Before/After, inspection, multi-edit selection and controls, cache pressure and recipe persistence keep their existing behavior.
+- Export from either preview mode produces the same Quality result.
+
+The following sections preserve measured tradeoffs and the review sequence; the feature closeout below records the final owner acceptance.
 
 ## Evidence and lessons
 
@@ -117,7 +119,7 @@ Automatic resolution exposed another obsolete harness assumption: a native Whole
 
 The final GUI suite passed 533 ordinary tests with 52 opt-in tests ignored. Python profiling tools passed 170 tests with one skip, and artwork tools passed five. The earlier full-workspace checks, GPU arithmetic suites, 80 unaffected-output comparisons, 32 exact allocation-change comparisons and policy-independent exports remain separate evidence. Formatting, strict Clippy and generated documentation checks complete the review build. The app is left closed after testing.
 
-The implementation is ready for the owner's visual checklist. Keep the specification incomplete until that acceptance is recorded. Further data-structure, element-type and resource-lifetime memory work belongs to the deferred follow-up rather than this migration.
+At that checkpoint the implementation was ready for the owner's visual checklist. The owner subsequently completed review after the finishing optimization pass. Further data-structure, element-type and resource-lifetime memory work belongs to the deferred follow-up rather than this migration.
 
 ## Owner review: flower latency and UI stalls
 
@@ -131,12 +133,16 @@ Dense box filters scan every neighbor at every working pixel across multiple rad
 
 The GPU capture observed display-surface acquisition waits up to 526 ms. The five largest waits overlapped the two guide operations, Adaptive fitting and Dehaze estimation. Application UI-update scopes stayed below ten milliseconds. A separate profiling-Off app run still took 2.83 seconds and recorded a maximum UI-update gap of 387 ms, confirming that timestamp recording is not required for the stalls. Surface acquisition on the main thread waits behind long GPU workloads despite rendering coordination living on workers.
 
-Owner acceptance remains open. The next design decision is which guidance and scene-estimation grids Quality actually needs, versus which dense operations should receive more efficient neighborhood/reduction algorithms. Preserve native photographic detail and consistent section/Whole policy while evaluating that decision. No processing policy or algorithm was changed during this profiling investigation.
+Owner acceptance remained open at this checkpoint. The next design decision was which guidance and scene-estimation grids Quality actually needed, versus which dense operations should receive more efficient neighborhood/reduction algorithms. Native photographic detail and consistent section/Whole policy were constraints for that decision. No processing policy or algorithm was changed during this profiling investigation.
 
-The owner subsequently approved restoring half-size brightness guides and gain anchors before further optimization. The [finishing optimization plan](./finishing-optimization.md) tracks that reviewed rollback, its preserved photographic resolution, boundary regressions and new performance observations. Dense-guide measurements above describe the superseded checkpoint. Dense Quality scene estimation and Dehaze remain for the next optimization round.
+The owner subsequently approved restoring half-size brightness guides and gain anchors before further optimization. The [finishing optimization plan](./archived/finishing-optimization.md) tracks that reviewed rollback, its preserved photographic resolution, boundary regressions and new performance observations. Dense-guide measurements above describe the superseded checkpoint. The subsequent finishing pass completed the scene-estimation and Dehaze optimizations.
 
 ## Requested release performance baseline
 
 The owner requests performance coverage across all test photographs, with a versioned baseline accompanying each release so development runs can detect regressions. Extend the existing Off-mode recording and comparison tools rather than introducing another timing framework. Fixed, checked-in recipes must exercise expensive enabled features as well as camera defaults. Mutable local sidecars must not define release workloads.
 
 The proposed slice should cover fresh processing from decoded inputs, retained edits, fitted previews, native zoom/loupe and representative multi-photo groups in both processing policies. Report each photograph and workflow separately, including effective scale and UI-update gaps. Keep loading, foreground delivery and background completion distinct. Record repeated samples, build/input identities, hardware, display geometry and cache conditions with the baseline. Compare matched workloads on the same host, or run the released binary and candidate on a new host. Preserve raw results as release evidence and review regression budgets explicitly. Recording a baseline does not approve the flower latency or UI stalls identified above. Concrete matrix size, release-asset layout and thresholds remain to be agreed before implementation.
+
+## Feature closeout and release gate
+
+The owner reviewed the combined finishing build and declared the feature set complete. The [finishing optimization closeout](./archived/finishing-optimization.md) records the selected algorithms, checks, measured improvements and remaining profiling follow-ups. Quality permits 10% display enlargement and Speed 20%, as specified in the current viewport contract. Windows build support is the next release prerequisite; do not cut a release before that work is completed.
