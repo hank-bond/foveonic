@@ -74,6 +74,61 @@ fn tiff_compression_preserves_rgb16_and_destination_profile() {
 }
 
 #[test]
+fn uncompressed_tiff_strips_match_whole_image_encoding() {
+    let [width, height] = [1024, 200];
+    let rgb: Vec<u16> = (0..width * height * 3).map(|i| (i * 37) as u16).collect();
+    let packed: Vec<u8> = rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|p| {
+            [p[0], p[1], p[2], 65535]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+        })
+        .collect();
+    let params = EncodeParams {
+        mapping: [[0.; 4]; 2],
+        source: [width, height, 0, 0],
+        crop: [0, 0, width, height],
+        output: [width, height, 0, 0],
+    };
+    let space = TiffColorSpace::Srgb;
+    let mut actual = Cursor::new(Vec::new());
+    write(
+        &mut actual,
+        &packed,
+        &params,
+        space,
+        Format::Tiff,
+        Default::default(),
+        &mut Default::default(),
+    )
+    .unwrap();
+    let mut expected = Cursor::new(Vec::new());
+    {
+        let mut encoder = tiff::encoder::TiffEncoder::new(&mut expected).unwrap();
+        let mut image = encoder
+            .new_image::<tiff::encoder::colortype::RGB16>(width, height)
+            .unwrap();
+        image
+            .encoder()
+            .write_tag(tiff::tags::Tag::Unknown(34675), space.profile())
+            .unwrap();
+        image
+            .encoder()
+            .write_tag(tiff::tags::Tag::Orientation, 1_u16)
+            .unwrap();
+        image
+            .encoder()
+            .write_tag(tiff::tags::Tag::Software, "Foveonic GPU")
+            .unwrap();
+        image.write_data(&rgb).unwrap();
+    }
+    assert_eq!(actual.into_inner(), expected.into_inner());
+}
+
+#[test]
 fn png_depth_and_profiles_preserve_the_selected_samples() {
     use image::ImageDecoder;
     for space in TiffColorSpace::ALL {

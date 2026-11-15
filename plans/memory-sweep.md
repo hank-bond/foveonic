@@ -19,6 +19,7 @@ The owner requested an autonomous sweep, prioritizing peak memory and simpler de
 - [x] Stream JPEG XL output through a 64 KiB buffer rather than retain the complete encoded file. Lossless multi-chunk round trip, writer failure and existing encoder tests pass.
 - [x] Release RGB16 preview samples before floating resize. Review caught an initial extended float lifetime. An inner scope fixes it. Preview tests pass.
 - [x] Prepare rendered display previews from their linearized samples without cloning the RGB16 payload needed for persistence. GUI preview tests pass.
+- [x] Stream uncompressed TIFF repacking one encoder strip at a time. Exact multi-strip output and existing compression/profile tests pass. Three alternating native example exports per variant gave byte-identical TIFFs. RSS fell from 846–848 MiB to 782–785 MiB while peak footprint overlapped at 1736–1739 MiB versus 1734–1740 MiB. Compressed TIFF retains the existing whole-image path because the encoder enables compression only through its whole-image API.
 - [ ] Investigate decoded-source storage and other GPU transient allocations. Measure representative workloads before claiming process-level savings or accepting complexity.
 - [x] Run applicable checks and independent review for each change. Record limits and remaining opportunities.
 

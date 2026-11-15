@@ -171,6 +171,8 @@ pub fn write<W: Write + Seek>(
     });
     let eight_bit =
         format == Format::Jpeg || (format == Format::Png && options.png_depth == BitDepth::Eight);
+    let streaming_tiff =
+        format == Format::Tiff && options.tiff_compression == TiffCompression::None;
     let (pixels, rgb8): (Vec<u16>, Vec<u8>) = if eight_bit {
         (
             Vec::new(),
@@ -178,17 +180,21 @@ pub fn write<W: Write + Seek>(
                 .map(|v| ((u32::from(v) + 128) / 257) as u8)
                 .collect(),
         )
+    } else if streaming_tiff {
+        (Vec::new(), Vec::new())
     } else {
         (samples.collect(), Vec::new())
     };
-    profile.record(
-        if eight_bit {
-            "export RGB8 repack"
-        } else {
-            "export RGB16 repack"
-        },
-        start,
-    );
+    if !streaming_tiff {
+        profile.record(
+            if eight_bit {
+                "export RGB8 repack"
+            } else {
+                "export RGB16 repack"
+            },
+            start,
+        );
+    }
     let start = std::time::Instant::now();
     match format {
         Format::Tiff => {
@@ -216,7 +222,29 @@ pub fn write<W: Write + Seek>(
             image
                 .encoder()
                 .write_tag(tiff::tags::Tag::Software, "Foveonic GPU")?;
-            image.write_data(&pixels)?;
+            if streaming_tiff {
+                let mut offset = 0;
+                let mut strip = Vec::new();
+                while image.next_strip_sample_count() > 0 {
+                    let samples = usize::try_from(image.next_strip_sample_count())?;
+                    let packed_bytes = samples / 3 * 8;
+                    strip.clear();
+                    strip.extend(
+                        bytes[offset..offset + packed_bytes]
+                            .as_chunks::<8>()
+                            .0
+                            .iter()
+                            .flat_map(|pixel| {
+                                [0, 2, 4].map(|i| u16::from_le_bytes([pixel[i], pixel[i + 1]]))
+                            }),
+                    );
+                    image.write_strip(&strip)?;
+                    offset += packed_bytes;
+                }
+                image.finish()?;
+            } else {
+                image.write_data(&pixels)?;
+            }
         }
         Format::Jpeg => {
             let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
