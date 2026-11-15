@@ -1,8 +1,8 @@
 ---
-summary: "Cargo packages macOS apps and release tags build Developer ID signed, unnotarized draft GitHub Releases without publishing them."
+summary: "Release tags build signed macOS and unsigned Windows archives into draft GitHub Releases without publishing them."
 kind: reference
 status: accepted
-implementation: conforming
+implementation: incomplete
 ---
 
 # Application releases
@@ -19,12 +19,13 @@ implementation: conforming
 - Missing credentials, ambiguous signing identities, or signing and signature-verification failures **must** block release uploads. There **must not** be an unsigned fallback.
 - Release guidance **must** explain that downloads are not notarized and may require the per-app **Open Anyway** control in macOS Privacy & Security settings on first launch. It **must not** recommend disabling Gatekeeper globally.
 - Signing credentials **must** come from GitHub Actions secrets. The Team ID **may** be a repository variable. Certificate exports and imported private keys **must** remain in temporary runner storage and be cleaned up on success, failure or cancellation.
-- Successful release builds **must** attach the app archive to a draft GitHub Release. Automation **must not** publish releases or change an existing release's prose. Uploads to an already published release **must** fail.
+- Release tags **must** also build an unsigned Windows x64 archive containing the GUI executable, pinned DirectX shader compiler DLLs and their license notices. Its app **must** use DirectX 12 with DXC. CI **must** verify the downloaded compiler archive before packaging.
+- Successful release builds **must** attach both platform archives and their SHA-256 checksums to a draft GitHub Release. Automation **must not** publish releases or change an existing release's prose. Uploads to an already published release **must** fail.
 - The checked-in changelog **must** supply the initial draft notes for the tagged version, with space for the owner to add introductory prose. The owner reviews prose and publishes the release.
 
 ## Release scope
 
-Release assets are Apple Silicon ZIP archives targeting macOS 15 Sequoia or later. Building uses Xcode 26 or later, independently of the application's deployment target. The owner approved including Sequoia-targeted builds in 0.3.0 for a user trial. Interactive GUI, Metal rendering and icon checks on macOS 15 remain outstanding and must not be described as completed by the CI process-startup check. Intel builds and installers are outside the current scope. Creating or pushing a tag and publishing its release remain separate owner-approved actions. Previously published releases remain unchanged.
+Release assets include Apple Silicon ZIP archives targeting macOS 15 Sequoia or later and unsigned Windows x64 ZIP archives. Building uses Xcode 26 or later, independently of the application's deployment target. The owner approved including Sequoia-targeted builds in 0.3.0 for a user trial. Interactive GUI, Metal rendering and icon checks on macOS 15 remain outstanding and must not be described as completed by the CI process-startup check. Intel builds and installers are outside the current scope. Creating or pushing a tag and publishing its release remain separate owner-approved actions. Previously published releases remain unchanged.
 
 ## Validation
 

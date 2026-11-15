@@ -1,5 +1,5 @@
 ---
-summary: "Configure Developer ID signing, review versioned changes, and manually publish the unnotarized macOS app from its draft GitHub Release."
+summary: "Configure signing, review Windows and macOS archives, and manually publish a draft GitHub Release."
 kind: how-to
 ---
 
@@ -52,14 +52,15 @@ git tag -a v0.3.0 -m "Foveonic v0.3.0"
 git push origin v0.3.0
 ```
 
-The [release workflow](../.github/workflows/release.yml) runs checks on an Apple Silicon `macos-26` runner and builds with Xcode. It signs the app with Developer ID, hardened runtime and a secure timestamp, then verifies the signature before creating the ZIP and checksum and uploading them to a draft GitHub Release:
+The [release workflow](../.github/workflows/release.yml) runs checks on an Apple Silicon `macos-26` runner and builds with Xcode. It also builds Windows x64 on a Windows runner using a pinned DirectX shader compiler. It signs the app with Developer ID, hardened runtime and a secure timestamp, then verifies the signature before creating the ZIP and checksum and uploading them to a draft GitHub Release:
 
 - `Foveonic-v0.3.0-macos-arm64.zip`, containing `Foveonic.app`.
-- `SHA256SUMS`, for verifying the downloaded archive with `shasum -a 256 -c SHA256SUMS`.
+- `Foveonic-v0.3.0-windows-x64.zip`, containing the unsigned app and its DirectX compiler DLLs and license notices.
+- `SHA256SUMS`, containing both archive hashes. Verify each archive using its corresponding checksum.
 
 Signing or signature-verification failures stop uploads, without an unsigned fallback. There is no notarization submission, ticket stapling or Gatekeeper-acceptance gate.
 
-A new draft receives only the tagged changelog section. An existing draft keeps its title and notes, including your prose. Rerunning the workflow replaces its build assets. An already published release rejects uploads. Tags unrelated to application versions, such as `example-photographs`, do not trigger this workflow.
+The Windows archive is unsigned and must be tested on Windows before publication. The Windows build runs independently, and its draft upload waits for the macOS draft. A new draft receives only the tagged changelog section. An existing draft keeps its title and notes, including your prose. Rerunning the workflow replaces its build assets. An already published release rejects uploads. Tags unrelated to application versions, such as `example-photographs`, do not trigger this workflow.
 
 ## Publish manually
 

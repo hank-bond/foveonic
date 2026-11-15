@@ -128,6 +128,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)" != "$GITHUB_SHA" ]; then
+            echo "Refusing to upload for a tag that moved since this run started: $RELEASE_TAG" >&2
+            exit 1
+          fi
           if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
             if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" != true ]; then
               echo "Refusing to modify a published release: $RELEASE_TAG" >&2
@@ -164,9 +168,47 @@ jobs:
           rm -rf "$SIGNING_TEMP_DIR"
           exit "$status"
 
+  windows:
+    name: Build Windows x64 app
+    uses: ./.github/workflows/windows-test.yml
+
+  windows_draft:
+    name: Attach Windows archive to draft
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Download Windows archive
+        uses: actions/download-artifact@v4
+        with:
+          name: Foveonic-windows-x64-${{ github.sha }}
+          path: ${{ runner.temp }}/foveonic-release
+      - name: Verify draft and attach Windows archive
+        working-directory: ${{ runner.temp }}/foveonic-release
+        run: |
+          set -euo pipefail
+          if [ "$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)" != "$GITHUB_SHA" ]; then
+            echo "Refusing to upload for a tag that moved since this run started: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" != true ]; then
+            echo "Refusing to modify a published release: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          mac="Foveonic-${RELEASE_TAG}-macos-arm64.zip"
+          windows="Foveonic-${RELEASE_TAG}-windows-x64.zip"
+          gh release download "$RELEASE_TAG" --pattern "$mac"
+          mv Foveonic-windows-x64.zip "$windows"
+          sha256sum "$mac" "$windows" > SHA256SUMS
+          gh release upload "$RELEASE_TAG" "$windows" SHA256SUMS --clobber
+
   sequoia:
     name: Signed app startup on macOS 15
-    needs: macos
+    needs: windows_draft
     runs-on: macos-15
     timeout-minutes: 10
     env:
@@ -186,7 +228,7 @@ jobs:
           sw_vers
           test "$(sw_vers -productVersion | cut -d . -f1)" = 15
           test "$(uname -m)" = arm64
-          shasum -a 256 -c SHA256SUMS
+          grep -F "  Foveonic-${RELEASE_TAG}-macos-arm64.zip" SHA256SUMS | shasum -a 256 -c -
           ditto -x -k "Foveonic-${RELEASE_TAG}-macos-arm64.zip" .
           codesign --verify --deep --strict --verbose=2 Foveonic.app
           Foveonic.app/Contents/MacOS/foveonic-gui --help
