@@ -260,7 +260,8 @@ pub fn write_output(
             .ok_or("destination has no filename")?,
     );
     write(&temporary)?;
-    File::open(&temporary)?.sync_all()?;
+    // Windows requires write access when flushing the completed output.
+    File::options().write(true).open(&temporary)?.sync_all()?;
     let temporary = tempfile::TempPath::try_from_path(temporary)?;
     match conflict {
         ConflictPolicy::Overwrite => temporary.persist(destination)?,

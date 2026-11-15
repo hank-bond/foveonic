@@ -24,3 +24,31 @@ The tag workflow now reuses the Windows build, waits for the Mac draft, and atta
 The owner requested a normal Windows application without the initial console window. The Windows build now uses the GUI subsystem and shows startup errors in a native dialog. The rebuilt executable was verified as GUI subsystem 2, its help process returned zero, and an intentionally invalid startup configuration produced the dialog and exit code 1. The owner observed the app open normally.
 
 The first tag-triggered release run passed its Windows job and workspace tests but macOS Clippy rejected a Rust 1.100 deprecation and a newly flagged test loop. The deprecation allowance retains the workspace minimum Rust version, and the test iteration was made explicit. The reviewed fixes pass the Mac workspace tests and strict Clippy. A Windows Rust 1.100 Clippy check also passes with an unrelated Windows-only cache fallback lint explicitly excluded from that diagnostic run. No new draft assets were uploaded by the failed run.
+
+## Windows export failure
+
+The owner approved fixing [issue #1](https://github.com/hank-bond/foveonic/issues/1) and testing on the Windows machine. The [output publication requirements](../docs/specs/import-workflow.md#interaction) apply to both platforms.
+
+- [x] Reproduce the failed file operation on Windows and identify its access requirement.
+- [x] Open the completed temporary output with write access before syncing it.
+- [x] Review the correction independently for design, cleanliness and idiomatic Rust.
+- [x] Validate existing publication tests on Windows and photographic export through the shared wrapper.
+- [x] Make the correction available for owner testing.
+
+The shared publication helper reopened each completed output through `File::open` and then called `sync_all`. A synthetic Windows probe reproduced error 5 on that read-only handle in a writable temporary folder. Opening the same file with write access allowed syncing and renaming. The correction grants write access without creating or truncating the completed file. The handle closes before publication. Existing synthetic tests cover both conflict policies, failed rendering, collisions, destination preservation and temporary cleanup.
+
+All seven maintained `importing::tests` pass on Windows with the corrected helper. A disposable headless caller exercised the GUI's existing `export::write` on an RTX 3090 through DX12 and the packaged DXC. It loaded the pinned example `blue-parking-sign.x3f`, applied +0.5 EV and 96 × 64 output sizing, and published a TIFF twice under Overwrite and once under Rename. The TIFF decoder independently read each result as 96 × 64 RGB16 with nonzero samples. Only the two published files remained. This checks real photographic export without claiming native Windows UI coverage.
+
+The Mac workspace passes 1,195 ordinary Rust tests and strict all-target Clippy. The existing GPU copied-original test and frozen multi-format batch/export test pass separately. Formatting, all three Python test groups and documentation checks pass. Independent code and documentation reviews found no blocking issues.
+
+A Windows release executable builds offline and passes its packaged `--help` check with exit code zero. An isolated ZIP includes the executable, unchanged release DXC files and license notices. Its SHA-256 matches after transfer back to the Mac workspace. The archive was prepared before release approval and is available for owner testing. Interactive Windows GUI validation remains pending. The owner subsequently approved shipping the correction as patch release 0.8.2.
+
+## Reported 0.8.1 startup regression
+
+The same reporter could start 0.8.0 on Windows 10 but reported that 0.8.1 would not start. No error text or loading-window behavior is available. The owner requested inspection of patch changes without arranging a Windows 10 installation.
+
+The published Windows executables import the same DLLs and functions, retain identical PE operating-system and subsystem version fields, and reserve the same 1 MiB main-thread stack. Their packaged `dxcompiler.dll` and `dxil.dll` are byte-for-byte identical. The tag diff does not upgrade wgpu, eframe or their transitive dependencies, change the Windows build workflow, or change DX12/DXC selection. This comparison found no newly imported Windows API or compiler package establishing a Windows 11 requirement.
+
+The principal startup change is the [loading-window handoff](./archived/startup-progress.md). Photographic preparation now waits for the first root presentation, then compiles pipelines on a worker while the UI continues using the shared GPU device. These are plausible presentation/driver-sensitive failure points, not a confirmed Windows 10 diagnosis. The presentation callback is installed even with diagnostics disabled. Ordinary preparation failures appear in the loading window. There is no evidence yet supporting a startup code correction.
+
+Both published versions fail with the same `Surface::configure: Invalid surface` error when launched through the noninteractive SSH session on the Windows 11 test host. This launch path cannot distinguish the reported regression and is not evidence that 0.8.1 fails on an interactive Windows desktop.

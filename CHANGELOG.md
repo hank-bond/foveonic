@@ -5,6 +5,14 @@ kind: reference
 
 # Changelog
 
+## 0.8.2
+
+Fix processed-photo exports on Windows.
+
+### Changes
+
+- Fix an Access denied error when publishing completed exports on Windows.
+
 ## 0.8.1
 
 Preserve capture metadata in processed photographs.
