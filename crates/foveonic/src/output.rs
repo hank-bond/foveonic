@@ -166,22 +166,30 @@ pub fn write<W: Write + Seek>(
         return Err("invalid packed RGB16 output".into());
     }
     let start = std::time::Instant::now();
-    let pixels: Vec<u16> = bytes
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .flat_map(|pixel| {
-            [0, 2, 4].map(|offset| u16::from_le_bytes([pixel[offset], pixel[offset + 1]]))
-        })
-        .collect();
-    profile.record("export RGB16 repack", start);
-    let start = std::time::Instant::now();
-    let rgb8 = || {
-        pixels
-            .iter()
-            .map(|&v| ((u32::from(v) + 128) / 257) as u8)
-            .collect::<Vec<_>>()
+    let samples = bytes.as_chunks::<8>().0.iter().flat_map(|pixel| {
+        [0, 2, 4].map(|offset| u16::from_le_bytes([pixel[offset], pixel[offset + 1]]))
+    });
+    let eight_bit =
+        format == Format::Jpeg || (format == Format::Png && options.png_depth == BitDepth::Eight);
+    let (pixels, rgb8): (Vec<u16>, Vec<u8>) = if eight_bit {
+        (
+            Vec::new(),
+            samples
+                .map(|v| ((u32::from(v) + 128) / 257) as u8)
+                .collect(),
+        )
+    } else {
+        (samples.collect(), Vec::new())
     };
+    profile.record(
+        if eight_bit {
+            "export RGB8 repack"
+        } else {
+            "export RGB16 repack"
+        },
+        start,
+    );
+    let start = std::time::Instant::now();
     match format {
         Format::Tiff => {
             use tiff::encoder::{compression::DeflateLevel, Compression, Predictor};
@@ -216,7 +224,7 @@ pub fn write<W: Write + Seek>(
                 options.jpeg_quality,
             );
             encoder.set_icc_profile(space.profile().to_vec())?;
-            encoder.encode(&rgb8(), width, height, image::ExtendedColorType::Rgb8)?;
+            encoder.encode(&rgb8, width, height, image::ExtendedColorType::Rgb8)?;
         }
         Format::Png => {
             use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -228,7 +236,7 @@ pub fn write<W: Write + Seek>(
             encoder.set_icc_profile(space.profile().to_vec())?;
             match options.png_depth {
                 BitDepth::Eight => {
-                    encoder.write_image(&rgb8(), width, height, image::ExtendedColorType::Rgb8)?
+                    encoder.write_image(&rgb8, width, height, image::ExtendedColorType::Rgb8)?
                 }
                 BitDepth::Sixteen => encoder.write_image(
                     bytemuck::cast_slice(&pixels),

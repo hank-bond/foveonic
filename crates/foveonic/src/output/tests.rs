@@ -105,6 +105,40 @@ fn png_depth_and_profiles_preserve_the_selected_samples() {
 }
 
 #[test]
+fn png_rgb8_quantizes_every_u16_value() {
+    let params = EncodeParams {
+        mapping: [[0.; 4]; 2],
+        source: [256, 256, 0, 0],
+        crop: [0, 0, 256, 256],
+        output: [256, 256, 0, 0],
+    };
+    let packed: Vec<u8> = (0..=u16::MAX)
+        .flat_map(|v| [v, v, v, 0].into_iter().flat_map(u16::to_le_bytes))
+        .collect();
+    let mut writer = Cursor::new(Vec::new());
+    write(
+        &mut writer,
+        &packed,
+        &params,
+        TiffColorSpace::Srgb,
+        Format::Png,
+        EncodingOptions {
+            png_depth: BitDepth::Eight,
+            ..Default::default()
+        },
+        &mut Default::default(),
+    )
+    .unwrap();
+    let decoded = image::load_from_memory(&writer.into_inner())
+        .unwrap()
+        .into_rgb8();
+    for (value, pixel) in (0..=u16::MAX).zip(decoded.pixels()) {
+        let expected = ((u32::from(value) + 128) / 257) as u8;
+        assert_eq!(pixel.0, [expected; 3]);
+    }
+}
+
+#[test]
 fn jpeg_is_readable_rgb8_with_the_requested_profile() {
     use image::ImageDecoder;
     for space in TiffColorSpace::ALL {
