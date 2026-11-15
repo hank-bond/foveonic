@@ -1,6 +1,7 @@
 """Record or compare exact rendered samples across an explicit camera and preview matrix."""
 
 import argparse
+import copy
 import json
 import math
 import struct
@@ -10,12 +11,12 @@ import subprocess
 
 from file_hash import digest
 from image_replay import events
-from results import IMAGE_GEOMETRY_FIELDS, RESOLUTIONS, PROCESSING_QUALITIES, compare_images, include_assertions, render_result
+from results import IMAGE_GEOMETRY_FIELDS, RESOLUTIONS, PROCESSING_QUALITIES, compare_images, expected_resolution_scale, include_assertions, render_result
 from watch_workloads import require_quiet
 from process_memory import run_captured
 
 REQUIRED_SOURCES_BY_FAMILY = {'classic': 3, 'merrill': 3, 'quattro': 3, 'tiger': 1}
-RESERVED = {'--goldens', '--capture-float', '--resolution', '--processing-quality', '--working-scale', '--profile', '--warm'}
+RESERVED = {'--goldens', '--capture-float', '--resolution', '--processing-quality', '--working-scale', '--profile', '--warm', '--settings-snapshot', '--render-only'}
 
 
 def expand_cases(cases):
@@ -30,7 +31,11 @@ def expand_cases(cases):
         source = Path(case['source']).resolve(strict=True)
         if not source.is_file():
             raise ValueError(f'not a source file: {source}')
-        options = case.get('options', ['--wb', 'Sunlight', '--mode', 'Standard'])
+        snapshot = case.get('settings_snapshot')
+        if snapshot is not None and ('options' in case or not isinstance(snapshot, dict)
+                                     or not isinstance(snapshot.get('settings'), dict) or not snapshot['settings']):
+            raise ValueError(f'{label}: a settings snapshot needs settings and cannot be combined with options')
+        options = case.get('options', [] if snapshot is not None else ['--wb', 'Sunlight', '--mode', 'Standard'])
         if not isinstance(options, list) or any(not isinstance(arg, str) or arg.split('=')[0] in RESERVED for arg in options):
             raise ValueError(f'{label}: options must be strings without matrix-owned flags')
         resolutions = case.get('resolutions', RESOLUTIONS)
@@ -50,7 +55,8 @@ def expand_cases(cases):
                     raise ValueError(f'duplicate matrix case: {key}')
                 seen.add(key)
                 expanded.append({'id': key, 'label': label, 'family': family, 'raw_size': case.get('raw_size', 'unspecified'), 'source': str(source), 'source_stem': source.stem,
-                                 'source_sha256': source_hash, 'resolution': resolution, 'processing_quality': policy, 'options': options})
+                                 'source_sha256': source_hash, 'resolution': resolution, 'processing_quality': policy, 'options': options,
+                                 **({'settings_snapshot': snapshot} if snapshot is not None else {})})
     coverage = {family: {'provided': len(families[family]), 'required': needed,
                           'missing': max(0, needed-len(families[family]))}
                 for family, needed in REQUIRED_SOURCES_BY_FAMILY.items()}
@@ -64,7 +70,22 @@ def expand_cases(cases):
 
 
 def same_input(left, right):
-    return all(left[key] == right[key] for key in ('id', 'family', 'raw_size', 'source_stem', 'source_sha256', 'resolution', 'processing_quality', 'options'))
+    return (all(left[key] == right[key] for key in ('id', 'family', 'raw_size', 'source_stem', 'source_sha256', 'resolution', 'processing_quality', 'options'))
+            and left.get('settings_snapshot') == right.get('settings_snapshot'))
+
+
+def render_arguments(case, snapshot_path):
+    """Apply matrix-owned resolution and policy to either declared controls or a fixed snapshot."""
+    if 'settings_snapshot' not in case:
+        return ['--resolution', case['resolution'], '--processing-quality', case['processing_quality'],
+                '--profile', 'off', *case['options']]
+    snapshot = copy.deepcopy(case['settings_snapshot'])
+    family = {'classic': 'Classic', 'merrill': 'Merrill', 'quattro': 'Quattro', 'tiger': 'Quattro'}[case['family']]
+    snapshot['working_scale'] = expected_resolution_scale(case['resolution'], family)
+    snapshot['processing_quality'] = case['processing_quality']
+    with snapshot_path.open('x') as output:
+        output.write(json.dumps(snapshot, indent=2, allow_nan=False) + '\n')
+    return ['--settings-snapshot', str(snapshot_path)]
 
 
 
@@ -145,8 +166,8 @@ def run(binary, cases, directory, baseline=None, require_coverage=False, max_mem
                     if not baseline_image.is_file() or digest(baseline_image) != expected['pixels_sha256']:
                         raise ValueError('baseline samples are missing or modified')
                 require_quiet()
-                command = [str(binary), case['source'], str(out), '--warm', '0', '--resolution', case['resolution'], '--processing-quality', case['processing_quality'],
-                           '--profile', 'off', '--goldens', str(golden_dir), *case['options']]
+                command = [str(binary), case['source'], str(out), '--warm', '0', '--goldens', str(golden_dir),
+                           *render_arguments(case, directory/(name+'.settings.json'))]
                 result = run_captured(command,
                     limit_bytes=None if max_memory_mb is None else max_memory_mb * 1024 * 1024,
                     samples=directory/(name+'.memory.jsonl'))
@@ -155,6 +176,8 @@ def run(binary, cases, directory, baseline=None, require_coverage=False, max_mem
                 if result.returncode:
                     raise ValueError(f'render exited with status {result.returncode}; see stderr')
                 data = events(result.stdout)
+                if 'settings_snapshot' in case and data['session']['settings'] != case['settings_snapshot']['settings']:
+                    raise ValueError('actual settings differ from the declared snapshot')
                 validation = data['validation']
                 observation = {'step': 'render', 'source': case['source'], 'source_sha256': case['source_sha256'],
                                'family': data['session'].get('family'),

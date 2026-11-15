@@ -56,9 +56,13 @@ python3 scripts/profiling/pipeline_benchmark.py compare \
 
 Each invocation uses profiling Off. The declared warmup iterations are excluded from the reported distributions. Subsequent iterations are fresh graphs from the already-decoded source, not retained edits. Source loading and the first image's numerical readback remain separate from measured processing. The runner records per-case median and nearest-rank p95, actual settings and geometry, input hashes, measured executable identity and hardware. `--build-source-revision` adds a caller-declared label rather than attesting which sources produced the executable.
 
+A case may declare either photographic CLI `options` or an inline `settings_snapshot` from a fixed workload. Snapshots preserve saved controls and request-owned analysis flags that the CLI does not expose. The runner writes an owned copy with the matrix-selected working scale and processing policy, then checks the actual serialized photographic settings. The maintained flower case uses this route rather than reading a mutable sidecar.
+
 Comparison requires matching workloads and hardware. Without an explicit `--max-regression-percent`, timing remains observational. Exact photographic SHA-256 and geometry are checked independently of the timing decision. A heuristic candidate can differ intentionally, but its failed exact comparison is not a new approved baseline. Review its quality separately.
 
 The runner monitors known competing workloads through each owned renderer and uses the sampled memory guard described below. Successful full-float files are discarded after hashing by default. Use `--retain-floats` for numerical or crop investigations. Failed or contended evidence is retained. Compact reports can accompany release baselines, while raw records and large images remain separate artifacts.
+
+Use `pipeline_benchmark.py export REPORT.json --output NEW_BASELINE.json` to retain the same validated comparison schema without local source, executable or float-artifact paths. Keep release observations under `scripts/profiling/baselines/VERSION/HARDWARE/` and retain raw evidence separately. Export keeps source and executable hashes, actual settings, geometry, hardware and timing samples, plus the full source-report hash. It does not approve a latency target or promote candidate output expectations.
 
 Retained-edit measurements use the existing checkpoint probe. Native and multi-photo behavior use the native scenario reports and their separate [Off comparison](#compare-controlled-off-baselines). A fresh-processing matrix alone does not establish complete release workflow coverage.
 

@@ -45,6 +45,12 @@ class PrepareInputTests(unittest.TestCase):
             scenarios = json.loads(outputs['scenario-cases.json'].read_text())
             self.assertEqual(scenarios[0]['settings'], {'exposure': 0.15})
             self.assertEqual(scenarios[0]['source'], str(source / 'camera.x3f'))
+            fixed={'settings':{'exposure':-0.6},'dehaze_estimate':True,'working_scale':1,'processing_quality':'quality'}
+            definitions['render_cases'][0]['settings_snapshot']=fixed
+            additional=prepare(source,root/'generated-fixed',definitions,[])
+            rendered=json.loads(additional['render-cases.json'].read_text())
+            self.assertEqual(rendered[0]['settings_snapshot'],fixed)
+            definitions['render_cases'][0].pop('settings_snapshot')
             checkpoints = json.loads(outputs['checkpoint-cases.json'].read_text())
             self.assertEqual(checkpoints[0]['edits'], definitions['checkpoint_cases'][0]['edits'])
             self.assertEqual(checkpoints[0]['source'], str(source / 'camera.x3f'))

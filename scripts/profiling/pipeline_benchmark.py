@@ -1,6 +1,7 @@
 """Record matched fresh-processing Off distributions and compare timings and exact output separately."""
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -11,7 +12,7 @@ import subprocess
 from file_hash import digest
 from native import recording_environment, workload_monitor
 from process_memory import run_captured
-from render_matrix import expand_cases
+from render_matrix import expand_cases, render_arguments
 from results import IMAGE_GEOMETRY_FIELDS, render_result
 from trace_analysis import distribution
 from watch_workloads import concurrent_workloads, require_quiet
@@ -44,6 +45,8 @@ def parse_run(stdout, case, warmups, samples):
             or not session.get('adapter') or not isinstance(session.get('settings'), dict)
             or not session['settings'] or session.get('processing_quality') != case['processing_quality']):
         raise ValueError('renderer lacks its actual render-only settings, policy or adapter')
+    if 'settings_snapshot' in case and session['settings'] != case['settings_snapshot']['settings']:
+        raise ValueError('actual settings differ from the declared snapshot')
     scale = None
     for iteration, row in enumerate(processing):
         if (row.get('iteration') != iteration or row.get('cold') is not (iteration == 0)
@@ -91,9 +94,6 @@ def record(binary, cases, directory, *, build_source_revision=None, warmups=1, s
     matrix, coverage = expand_cases(cases)
     if not matrix:
         raise ValueError('the matrix must contain at least one case')
-    for case in matrix:
-        if any(arg.split('=')[0] in {'--render-only', '--settings-snapshot'} for arg in case['options']):
-            raise ValueError('benchmark owns render-only execution and settings selection')
     directory = directory.resolve()
     directory.mkdir(parents=True, exist_ok=False)
     home = directory / 'home'
@@ -122,9 +122,8 @@ def record(binary, cases, directory, *, build_source_revision=None, warmups=1, s
             try:
                 require_quiet()
                 command = [str(binary), case['source'], str(directory / name), '--render-only',
-                           '--warm', str(warmups + samples - 1), '--profile', 'off',
-                           '--resolution', case['resolution'], '--processing-quality', case['processing_quality'],
-                           '--goldens', str(golden_dir), *case['options']]
+                           '--warm', str(warmups + samples - 1), '--goldens', str(golden_dir),
+                           *render_arguments(case, directory / (name + '.settings.json'))]
                 with workload_monitor(workload_path):
                     result = run_captured(command, limit_bytes=max_memory_mb * 1024 * 1024,
                                           samples=directory / (name + '.memory.jsonl'),
@@ -208,7 +207,7 @@ def compare_reports(before, after, max_regression_percent=None):
         new = right[name]
         identity = ('source_sha256', 'family', 'raw_size', 'resolution', 'processing_quality',
                     'options', 'settings', 'effective_scale_divisor', 'adapter', 'geometry')
-        if any(old[key] != new[key] for key in identity):
+        if any(old[key] != new[key] for key in identity) or old.get('settings_snapshot') != new.get('settings_snapshot'):
             raise ValueError(f'{name}: reports have different source, recipe, actual settings, grid or adapter')
         baseline, candidate = distribution(old['warm_completed_ms']), distribution(new['warm_completed_ms'])
         metrics = {}
@@ -231,6 +230,22 @@ def compare_reports(before, after, max_regression_percent=None):
             'numerical_exact': all(row['numerical']['exact'] for row in comparisons), 'cases': comparisons}
 
 
+def portable_report(report, source_report_sha256):
+    """Keep the comparable report schema while removing local input and artifact paths."""
+    checked_cases(report)
+    result = copy.deepcopy(report)
+    result['build'].pop('binary', None)
+    for row in result['cases']:
+        row.pop('source', None)
+        row.pop('float_artifact', None)
+        row['source_load'].pop('source', None)
+        for assertion in row['preview_assertions']:
+            assertion.pop('source', None)
+    result['evidence'] = {'source_report_sha256': source_report_sha256}
+    result['limits'].append('This export records observed performance. It does not approve a latency target or promote output expectations.')
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -248,6 +263,9 @@ def main():
     comparison.add_argument('after', type=Path)
     comparison.add_argument('--max-regression-percent', type=float)
     comparison.add_argument('--output', type=Path)
+    export = commands.add_parser('export', help='write a validated report without local input and artifact paths')
+    export.add_argument('report', type=Path)
+    export.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.command == 'record':
@@ -255,7 +273,7 @@ def main():
                             build_source_revision=args.build_source_revision, warmups=args.warmups,
                             samples=args.samples, max_memory_mb=args.max_memory_mb, retain_floats=args.retain_floats)
             failed = not result['passed'] or not result['timing_valid']
-        else:
+        elif args.command == 'compare':
             result = compare_reports(json.loads(args.before.read_text()), json.loads(args.after.read_text()), args.max_regression_percent)
             result['reports'] = {name: {'path': str(path.resolve()), 'sha256': digest(path)}
                                  for name, path in (('before', args.before), ('after', args.after))}
@@ -263,6 +281,11 @@ def main():
                 with args.output.open('x') as output:
                     output.write(json.dumps(result, indent=2, allow_nan=False) + '\n')
             failed = result['timing_passed'] is False or not result['numerical_exact']
+        else:
+            result = portable_report(json.loads(args.report.read_text()), digest(args.report))
+            with args.output.open('x') as output:
+                output.write(json.dumps(result, indent=2, allow_nan=False) + '\n')
+            failed = False
     except (OSError, ValueError, KeyError, RuntimeError) as error:
         parser.exit(1, str(error) + '\n')
     print(json.dumps(result, indent=2, allow_nan=False))

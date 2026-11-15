@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from render_matrix import expand_cases, run, processing_mode_difference
+from render_matrix import expand_cases, render_arguments, run, same_input, processing_mode_difference
 from scenarios import application_result
 
 
@@ -31,6 +31,27 @@ for event,data in [('session',{'settings':{'mode':'test'},'processing_quality':q
 
 
 class MatrixTests(unittest.TestCase):
+    def test_snapshot_recipes_preserve_transients_and_use_matrix_owned_axes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            source=root/'source.x3f';source.write_bytes(b'fixed original')
+            snapshot={'settings':{'exposure':-0.6},'working_scale':1,'processing_quality':'quality',
+                      'dehaze_estimate':True}
+            case={'label':'saved','family':'classic','source':str(source),'settings_snapshot':snapshot,
+                  'resolutions':['thumb'],'processing_qualities':['speed']}
+            rows,_=expand_cases([case])
+            arguments=render_arguments(rows[0],root/'owned-settings.json')
+            self.assertEqual(arguments,['--settings-snapshot',str(root/'owned-settings.json')])
+            effective=json.loads((root/'owned-settings.json').read_text())
+            self.assertEqual(effective['working_scale'],4)
+            self.assertEqual(effective['processing_quality'],'speed')
+            self.assertTrue(effective['dehaze_estimate'])
+            self.assertEqual(snapshot['working_scale'],1)
+            changed={**rows[0],'settings_snapshot':{**snapshot,'dehaze_estimate':False}}
+            self.assertFalse(same_input(rows[0],changed))
+            with self.assertRaisesRegex(ValueError,'cannot be combined'):
+                expand_cases([{**case,'options':[]}])
+
     def test_coverage_uses_distinct_sources_and_reports_missing_qualities(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'sample.x3f';path.write_bytes(b'source')
@@ -127,9 +148,20 @@ class ProcessingModeMatrixTests(unittest.TestCase):
         manifest=json.loads(Path(__file__).with_name('test_inputs.json').read_text())
         cases=manifest['render_cases']
         self.assertEqual({case['family'] for case in cases},{'classic','merrill','quattro','tiger'})
-        self.assertEqual(len({case['source'] for case in cases}),10)
+        self.assertEqual(len({case['source'] for case in cases}),13)
+        for size in ('medium','low'):
+            reduced=next(case for case in cases if case['label']==f'dp3-merrill-{size}')
+            self.assertEqual(reduced['raw_size'],size)
+            self.assertIn(reduced['source'],manifest['sample_hashes'])
+            self.assertEqual(reduced['resolutions'],['full','fast','draft','thumb'])
+            self.assertEqual(reduced['options'],['--wb','Sunlight','--mode','Standard'])
         self.assertTrue(all(case['processing_qualities']==['quality','speed'] for case in cases))
         self.assertTrue({'merrill-dense-adaptive','merrill-dense-hdr','merrill-dense-color','merrill-dense-dehaze'} <= {case['label'] for case in cases})
+        flower=next(case for case in cases if case['label']=='sunlit-red-flower-edited')
+        self.assertNotIn('options',flower)
+        self.assertEqual(flower['settings_snapshot']['settings']['dehaze']['amount'],61)
+        self.assertTrue(flower['settings_snapshot']['dehaze_estimate'])
+        self.assertIn(flower['source'],manifest['sample_hashes'])
 
     def test_dense_differences_are_evidence_and_never_an_approved_golden(self):
         import struct

@@ -4,7 +4,8 @@
     "blue-parking-sign.x3f": "7a650537a9986bfe348e0da117defbf80da7ceca35f76bc092f220a7cdbcffee",
     "low-light-speaker-and-desk.x3f": "46704158239f724b97ba004b80e498a7ae0d43b059ff8667f1bb04a72f04a4ad",
     "dp3-merrill-medium.x3f": "6ce000fe95068b515080428c858b328574a3820b6ff08beac32f705d9fe39754",
-    "dp3-merrill-low.x3f": "209f753ed5de24a2bb79e7e851c8c77255d0298ac79685963a20792bc6e9294e"
+    "dp3-merrill-low.x3f": "209f753ed5de24a2bb79e7e851c8c77255d0298ac79685963a20792bc6e9294e",
+    "sunlit-red-flower.x3f": "98eeaef4e5d17f1330e5cdeda19f97c1337eacf4d392bceaa743d843f386a06e"
   },
   "aliases": {
     "sd-quattro-h-second.x3f": "sd-quattro-h.x3f"
@@ -125,6 +126,50 @@
       "source": "low-light-speaker-and-desk.x3f",
       "family": "merrill",
       "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "dp3-merrill-medium",
+      "source": "dp3-merrill-medium.x3f",
+      "family": "merrill",
+      "raw_size": "medium",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "dp3-merrill-low",
+      "source": "dp3-merrill-low.x3f",
+      "family": "merrill",
+      "raw_size": "low",
       "options": [
         "--wb",
         "Sunlight",
@@ -335,6 +380,293 @@
         "quality",
         "speed"
       ]
+    },
+    {
+      "label": "sunlit-red-flower",
+      "source": "sunlit-red-flower.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ],
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard"
+      ]
+    },
+    {
+      "label": "sunlit-red-flower-edited",
+      "source": "sunlit-red-flower.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ],
+      "settings_snapshot": {
+        "adaptive_tone_tuning": {
+          "natural": {
+            "blacks": 0.07500000298023224,
+            "highlights": 0.3499999940395355,
+            "shadows": 0.25,
+            "whites": 1.0
+          },
+          "strong": {
+            "blacks": 0.11500000208616257,
+            "highlights": 0.6499999761581421,
+            "shadows": 0.550000011920929,
+            "whites": 1.0
+          }
+        },
+        "color_range_preview": null,
+        "dehaze_estimate": true,
+        "preview_region": null,
+        "processing_quality": "quality",
+        "processing_sections": {
+          "color_editor": true,
+          "corrections": true,
+          "detail": true,
+          "noise": true,
+          "saturation": true,
+          "sharpening": true,
+          "tone": true
+        },
+        "settings": {
+          "color_dq_gain": null,
+          "color_editor_enabled": true,
+          "color_field": {
+            "approach": "local_gradient",
+            "selectivity": 0.0
+          },
+          "color_mode": "Standard",
+          "corrections_enabled": true,
+          "crop": {
+            "aspect": {
+              "ratio": [
+                5.0,
+                7.0
+              ]
+            },
+            "bounds": [
+              0.09630102040816327,
+              0.17793367346938777,
+              0.9413265306122449,
+              0.966624149659864
+            ],
+            "flipped": false
+          },
+          "dehaze": {
+            "amount": 61.0,
+            "shadow": null
+          },
+          "despeckle": true,
+          "exposure": -0.6000000238418579,
+          "exposure_auto": false,
+          "exposure_auto_compensation": "both",
+          "highlight_amount": null,
+          "highlight_mode": "color_field",
+          "highlight_restoration": true,
+          "highlight_threshold_ev": 2.0,
+          "merrill_banding": {
+            "columns": {
+              "bands": [
+                {
+                  "size": 27,
+                  "strength": 1.0
+                },
+                {
+                  "size": 119,
+                  "strength": 0.0
+                }
+              ]
+            },
+            "enabled": true,
+            "method": "reference",
+            "rows": {
+              "bands": [
+                {
+                  "size": 27,
+                  "strength": 1.0
+                },
+                {
+                  "size": 119,
+                  "strength": 0.0
+                }
+              ]
+            }
+          },
+          "merrill_noise_method": "reference",
+          "merrill_speckles": {
+            "method": "reference",
+            "size": 3,
+            "threshold": 1.0
+          },
+          "monochrome": {
+            "banding": 2,
+            "detail_enabled": true,
+            "mix": [
+              0.3333333432674408,
+              0.3333333432674408,
+              0.3333333432674408
+            ],
+            "noise": 2,
+            "texture": {
+              "coarse": 1.0,
+              "coarse_size": 1.0,
+              "fine": 1.0,
+              "fine_size": 1.0
+            }
+          },
+          "monochrome_smoothness": null,
+          "neutralize_shadows": {
+            "color_tolerance": 0.25,
+            "hue_width": 35.0,
+            "shadow_ev": -4.0,
+            "strength": 0.0
+          },
+          "output_size": null,
+          "photographic": {
+            "base_response": "natural",
+            "brightness": 0.0,
+            "color_editor": {
+              "advanced": [],
+              "bands": [
+                {
+                  "hue": -0.0025963278021663427,
+                  "lightness": -0.05999999865889549,
+                  "saturation": 0.0
+                },
+                {
+                  "hue": -0.002079373225569725,
+                  "lightness": 0.3199999928474426,
+                  "saturation": 0.0
+                },
+                {
+                  "hue": 0.0,
+                  "lightness": -0.4000000059604645,
+                  "saturation": 0.0
+                },
+                {
+                  "hue": 0.0,
+                  "lightness": 0.0,
+                  "saturation": 0.0
+                },
+                {
+                  "hue": 0.0,
+                  "lightness": 0.0,
+                  "saturation": 0.0
+                },
+                {
+                  "hue": 0.0,
+                  "lightness": 0.0,
+                  "saturation": 0.0
+                },
+                {
+                  "hue": 0.0,
+                  "lightness": 0.0,
+                  "saturation": 0.0
+                },
+                {
+                  "hue": 0.0,
+                  "lightness": 0.0,
+                  "saturation": 0.0
+                }
+              ],
+              "master": {
+                "hue": 0.0,
+                "lightness": 0.0,
+                "saturation": 0.0
+              }
+            },
+            "local_contrast": 0.4000000059604645,
+            "perceptual": {
+              "bands": [
+                {
+                  "saturation": 0.0
+                },
+                {
+                  "saturation": 0.0
+                },
+                {
+                  "saturation": 0.6399999856948853
+                }
+              ],
+              "contrast": 0.0,
+              "saturation": 0.0
+            },
+            "saturation_method": "universal",
+            "sharpening": {
+              "amount": 2.200000047683716,
+              "halo_suppression": 0.5,
+              "method": "universal",
+              "radius": 1.1200000047683716,
+              "threshold": 0.009999999776482582
+            },
+            "tone_method": "universal"
+          },
+          "prevent_color_clipping": true,
+          "reconstruction": {
+            "banding": 2,
+            "chroma": 2,
+            "detail": 1.0,
+            "detail_enabled": true,
+            "luminance": 0,
+            "noise_enabled": true,
+            "texture": {
+              "coarse": 1.0,
+              "coarse_size": 1.0,
+              "fine": 1.0,
+              "fine_size": 1.0
+            }
+          },
+          "rendering": "color",
+          "repair": "camera",
+          "rotation": {
+            "degrees": 0.0,
+            "turns": 0
+          },
+          "row_correction": true,
+          "saturation": 1.0,
+          "saturation_enabled": true,
+          "sharpen_amount": 2.0,
+          "sharpening_enabled": true,
+          "tiff_color_space": null,
+          "tonal_ranges": {
+            "blacks": 0.23000000417232513,
+            "highlights": -0.2199999988079071,
+            "shadows": 0.0,
+            "whites": 0.0
+          },
+          "tone": {
+            "contrast": 0.0,
+            "highlights": 0.0,
+            "shadows": 0.0
+          },
+          "tone_enabled": true,
+          "white_balance": "Sunlight",
+          "white_balance_bias": {
+            "neutral": null,
+            "tint": 0.0,
+            "warmth": 0.0
+          }
+        },
+        "working_scale": 1
+      }
     }
   ],
   "scenario_cases": [

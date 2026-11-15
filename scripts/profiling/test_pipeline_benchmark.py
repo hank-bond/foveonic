@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from pipeline_benchmark import compare_reports, parse_run, record
+from pipeline_benchmark import compare_reports, parse_run, portable_report, record
 
 
 def renderer_records(source, times, *, scale=8):
@@ -135,6 +135,43 @@ class PipelineBenchmarkTests(unittest.TestCase):
         self.assertTrue(changed['timing_passed'])
         self.assertFalse(changed['numerical_exact'])
 
+    def test_fixed_snapshot_uses_owned_scale_and_policy_and_checks_actual_settings(self):
+        snapshot = {'settings': renderer_records(str(self.source), self.times)[0]['data']['settings'],
+                    'working_scale': 1, 'processing_quality': 'speed', 'dehaze_estimate': True}
+        self.cases[0]['settings_snapshot'] = snapshot
+        before = copy.deepcopy(snapshot)
+        report = self.capture()
+        self.assertTrue(report['passed'])
+        actual = json.loads((self.root / 'run/sample-thumb-quality.settings.json').read_text())
+        self.assertEqual(actual['working_scale'], 8)
+        self.assertEqual(actual['processing_quality'], 'quality')
+        self.assertTrue(actual['dehaze_estimate'])
+        self.assertEqual(snapshot, before)
+        def changed_actual(rows):
+            for row in rows:
+                if 'settings' in row['data']:
+                    row['data']['settings'] = {'unexpected': 'settings'}
+            return rows
+        self.mutations = changed_actual
+        failed = self.capture('wrong-settings')
+        self.assertFalse(failed['passed'])
+        self.assertIn('declared snapshot', failed['cases'][0]['failure'])
+
+    def test_portable_export_keeps_comparison_and_raw_observations_without_local_paths(self):
+        report = self.capture(retain_floats=True)
+        original = copy.deepcopy(report)
+        exported = portable_report(report, 'a' * 64)
+        self.assertNotIn(str(self.root), json.dumps(exported))
+        self.assertEqual(report, original)
+        result = compare_reports(report, exported)
+        self.assertTrue(result['numerical_exact'])
+        self.assertIsNone(result['timing_passed'])
+        self.assertEqual(exported['cases'][0]['iterations'], report['cases'][0]['iterations'])
+        self.assertEqual(exported['evidence']['source_report_sha256'], 'a' * 64)
+        report['timing_valid'] = False
+        with self.assertRaisesRegex(ValueError, 'uncontended'):
+            portable_report(report, 'a' * 64)
+
     def test_comparison_rejects_changed_workload_hardware_and_incomplete_samples(self):
         before = self.capture()
         changes = [lambda report: report['hardware'].update(host='other host'),
@@ -173,7 +210,7 @@ class PipelineBenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'positive integers'):
             record(self.binary, self.cases, self.root / 'bad', warmups=0)
         self.cases[0]['options'] = ['--settings-snapshot', 'mutable.json']
-        with self.assertRaisesRegex(ValueError, 'owns'):
+        with self.assertRaisesRegex(ValueError, 'matrix-owned'):
             self.capture()
         self.cases[0]['options'] = ['--profile=wall']
         with self.assertRaisesRegex(ValueError, 'matrix-owned'):
