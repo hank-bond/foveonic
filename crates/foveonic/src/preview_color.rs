@@ -79,14 +79,16 @@ impl Encoding {
             // Fall back before changing any samples.
             Err(_) => return fallback.decode(rgb),
         };
-        let input = samples();
-        let mut converted = vec![0; input.len()];
-        for (chunk, output) in input
+        let mut input = Vec::with_capacity(TRANSFORM_PIXELS * RGB_CHANNELS);
+        let mut converted = vec![0; rgb.len()];
+        for (chunk, output) in rgb
             .chunks(TRANSFORM_PIXELS * RGB_CHANNELS)
             .zip(converted.chunks_mut(TRANSFORM_PIXELS * RGB_CHANNELS))
         {
             crate::background::checkpoint_or_cancel()?;
-            transform.transform(chunk, output)?;
+            input.clear();
+            input.extend(chunk.iter().map(|v| u16::from(*v) * RGB8_TO_RGB16));
+            transform.transform(&input, output)?;
         }
         Ok((converted, TiffColorSpace::ProPhotoRgb))
     }

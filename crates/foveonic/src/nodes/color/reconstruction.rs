@@ -202,7 +202,7 @@ pub(crate) fn base(
     } else {
         raw
     };
-    let filtered = filter(gpu, &raw, reduced, need_tiles, profile)?;
+    let filtered = filter(gpu, raw, reduced, need_tiles, profile)?;
     let seed = if keep_seed {
         Some(pattern_seed(gpu, &filtered.edges, p, profile)?)
     } else {
@@ -255,7 +255,7 @@ pub(crate) fn global_context(
     )?;
     whole.source[..2].copy_from_slice(&size);
     whole.tile[..2].copy_from_slice(&size);
-    let filtered = filter(gpu, &raw, whole, true, profile)?;
+    let filtered = filter(gpu, raw, whole, true, profile)?;
     Ok(GlobalContext {
         layers: filtered.tiles.ok_or("missing whole-image noise base")?,
         edges: filtered.edges,
@@ -314,7 +314,7 @@ pub(crate) fn base_from_context(
 
 fn filter(
     gpu: &Gpu,
-    raw: &crate::gpu::ReadGuard,
+    raw: crate::gpu::ReadGuard,
     params: Parameters,
     need_tiles: bool,
     profile: &mut Profile,
@@ -338,7 +338,7 @@ fn filter(
         gpu.dispatch(
             Kernel::NoiseBlock,
             &mut [
-                (0, Read(raw)),
+                (0, Read(&raw)),
                 (1, Read(&uniform)),
                 (4, Write(block_mean.write())),
             ],
@@ -359,7 +359,7 @@ fn filter(
     gpu.dispatch(
         Kernel::NoiseBilateral,
         &mut [
-            (0, Read(raw)),
+            (0, Read(&raw)),
             (1, Read(&uniform)),
             (2, Write(filtered.write())),
             (6, Read(&tables)),
@@ -396,7 +396,8 @@ fn filter(
         gpu.finish_trace(&trace, profile)?;
         return Ok(Filtered { tiles: None, edges });
     }
-    let mut prefix = gpu.storage("Directional prefix sums", n * 12)?;
+    // The bilateral pass was the last reader of the raw tiles.
+    let mut prefix = raw;
     let mut weights = gpu.storage("Directional accumulated weights", n * 4)?;
     // Transpose into existing workspaces, rather than changing the recurrence
     // or keeping another RGB allocation. Adjacent lanes then access adjacent
@@ -486,7 +487,6 @@ pub(crate) fn column(
         "Column block deltas",
         u64::from(params.tile[0]) * u64::from(blocks) * u64::from(params.tile_count()) * 12,
     )?;
-    let mut output = gpu.storage("Column conditioned tiles", n * 12)?;
     let uniform = gpu.uniform(&params);
     let table = gpu.upload("Column bilateral lookup", &tables(params)[..2048])?;
     let mut trace = gpu.trace(profile.mode.gpu(), 4);
@@ -528,13 +528,13 @@ pub(crate) fn column(
             (0, Read(&raw)),
             (1, Read(&uniform)),
             (3, Read(&deltas)),
-            (4, Write(output.write())),
+            (4, Write(smoothed.write())),
         ],
         groups(params),
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
-    Ok(output)
+    Ok(smoothed)
 }
 
 pub(crate) fn ratio(

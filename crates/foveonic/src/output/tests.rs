@@ -91,6 +91,66 @@ fn tiff_compression_preserves_rgb16_and_destination_profile() {
 }
 
 #[test]
+fn uncompressed_tiff_strips_match_whole_image_encoding() {
+    let [width, height] = [1024, 200];
+    let rgb: Vec<u16> = (0..width * height * 3).map(|i| (i * 37) as u16).collect();
+    let packed: Vec<u8> = rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|p| {
+            [p[0], p[1], p[2], 65535]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+        })
+        .collect();
+    let params = EncodeParams {
+        mapping: [[0.; 4]; 2],
+        source: [width, height, 0, 0],
+        crop: [0, 0, width, height],
+        output: [width, height, 0, 0],
+    };
+    let space = TiffColorSpace::Srgb;
+    let mut actual = Cursor::new(Vec::new());
+    write(
+        &mut actual,
+        &packed,
+        &params,
+        space,
+        Format::Tiff,
+        Default::default(),
+        &metadata(),
+        &mut Default::default(),
+    )
+    .unwrap();
+    let mut expected = Cursor::new(Vec::new());
+    {
+        let mut encoder = tiff::encoder::TiffEncoder::new(&mut expected).unwrap();
+        let metadata = metadata();
+        let capture = crate::capture_metadata::Capture::new(&metadata);
+        let exif = capture.write_exif(&mut encoder, [width, height]).unwrap();
+        let mut image = encoder
+            .new_image::<tiff::encoder::colortype::RGB16>(width, height)
+            .unwrap();
+        capture.write_primary(image.encoder(), exif).unwrap();
+        image
+            .encoder()
+            .write_tag(tiff::tags::Tag::Unknown(34675), space.profile())
+            .unwrap();
+        image
+            .encoder()
+            .write_tag(tiff::tags::Tag::Orientation, 1_u16)
+            .unwrap();
+        image
+            .encoder()
+            .write_tag(tiff::tags::Tag::Software, "Foveonic GPU")
+            .unwrap();
+        image.write_data(&rgb).unwrap();
+    }
+    assert_eq!(actual.into_inner(), expected.into_inner());
+}
+
+#[test]
 fn png_depth_and_profiles_preserve_the_selected_samples() {
     use image::ImageDecoder;
     for space in TiffColorSpace::ALL {
@@ -118,6 +178,164 @@ fn png_depth_and_profiles_preserve_the_selected_samples() {
                 ),
             }
         }
+    }
+}
+
+#[test]
+fn png_rgb16_stream_preserves_rows_and_propagates_writer_errors() {
+    use image::ImageDecoder;
+    use std::io::{Seek, SeekFrom, Write};
+    let [width, height] = [257, 33];
+    let rgb: Vec<u16> = (0..width * height * 3)
+        .map(|i| (i * 37 + i / 73) as u16)
+        .collect();
+    let packed: Vec<u8> = rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|p| {
+            [p[0], p[1], p[2], 65535]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+        })
+        .collect();
+    let params = EncodeParams {
+        mapping: [[0.; 4]; 2],
+        source: [width, height, 0, 0],
+        crop: [0, 0, width, height],
+        output: [width, height, 0, 0],
+    };
+    let mut output = Cursor::new(Vec::new());
+    write(
+        &mut output,
+        &packed,
+        &params,
+        TiffColorSpace::AdobeRgb,
+        Format::Png,
+        Default::default(),
+        &metadata(),
+        &mut Default::default(),
+    )
+    .unwrap();
+    let data = output.into_inner();
+    let mut decoder = image::codecs::png::PngDecoder::new(Cursor::new(&data)).unwrap();
+    assert_eq!(
+        decoder.icc_profile().unwrap().unwrap(),
+        TiffColorSpace::AdobeRgb.profile()
+    );
+    assert_eq!(
+        image::load_from_memory(&data)
+            .unwrap()
+            .into_rgb16()
+            .as_raw(),
+        &rgb
+    );
+
+    struct FailingWriter {
+        inner: Cursor<Vec<u8>>,
+        remaining: usize,
+        fail_flush: bool,
+    }
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::Error::other("injected failure"));
+            }
+            let n = bytes.len().min(self.remaining);
+            self.remaining -= n;
+            self.inner.write(&bytes[..n])
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_flush {
+                Err(std::io::Error::other("injected flush failure"))
+            } else {
+                self.inner.flush()
+            }
+        }
+    }
+    impl Seek for FailingWriter {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+    let mut pos = 8;
+    let idat_middle = loop {
+        let len = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+        if &data[pos + 4..pos + 8] == b"IDAT" {
+            break pos + 8 + len / 2;
+        }
+        pos += len + 12;
+    };
+    for remaining in [16, idat_middle, data.len() - 4] {
+        let mut writer = FailingWriter {
+            inner: Cursor::new(Vec::new()),
+            remaining,
+            fail_flush: false,
+        };
+        let error = write(
+            &mut writer,
+            &packed,
+            &params,
+            TiffColorSpace::AdobeRgb,
+            Format::Png,
+            Default::default(),
+            &metadata(),
+            &mut Default::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("injected failure"));
+    }
+    let mut writer = FailingWriter {
+        inner: Cursor::new(Vec::new()),
+        remaining: usize::MAX,
+        fail_flush: true,
+    };
+    let error = write(
+        &mut writer,
+        &packed,
+        &params,
+        TiffColorSpace::AdobeRgb,
+        Format::Png,
+        Default::default(),
+        &metadata(),
+        &mut Default::default(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("injected flush failure"));
+}
+
+#[test]
+fn png_rgb8_quantizes_every_u16_value() {
+    let params = EncodeParams {
+        mapping: [[0.; 4]; 2],
+        source: [256, 256, 0, 0],
+        crop: [0, 0, 256, 256],
+        output: [256, 256, 0, 0],
+    };
+    let packed: Vec<u8> = (0..=u16::MAX)
+        .flat_map(|v| [v, v, v, 0].into_iter().flat_map(u16::to_le_bytes))
+        .collect();
+    let mut writer = Cursor::new(Vec::new());
+    write(
+        &mut writer,
+        &packed,
+        &params,
+        TiffColorSpace::Srgb,
+        Format::Png,
+        EncodingOptions {
+            png_depth: BitDepth::Eight,
+            ..Default::default()
+        },
+        &metadata(),
+        &mut Default::default(),
+    )
+    .unwrap();
+    let decoded = image::load_from_memory(&writer.into_inner())
+        .unwrap()
+        .into_rgb8();
+    for (value, pixel) in (0..=u16::MAX).zip(decoded.pixels()) {
+        let expected = ((u32::from(value) + 128) / 257) as u8;
+        assert_eq!(pixel.0, [expected; 3]);
     }
 }
 
@@ -681,4 +899,70 @@ fn x3f_embedded_capture_reaches_every_photographic_encoder() {
             17_u32.to_le_bytes()
         );
     }
+}
+
+#[test]
+fn jxl_streams_multiple_chunks_and_propagates_writer_errors() {
+    struct Sink {
+        bytes: Vec<u8>,
+        writes: usize,
+        fail: bool,
+    }
+    impl std::io::Write for Sink {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            if self.fail {
+                return Err(std::io::Error::other("injected failure"));
+            }
+            self.writes += 1;
+            self.bytes.extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut state = 1_u32;
+    let pixels: Vec<u16> = (0..256 * 256 * 3)
+        .map(|_| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 16) as u16
+        })
+        .collect();
+    let options = EncodingOptions {
+        jxl_effort: 1,
+        ..Default::default()
+    };
+    let mut sink = Sink {
+        bytes: Vec::new(),
+        writes: 0,
+        fail: false,
+    };
+    jxl::encode(
+        &mut sink,
+        &pixels,
+        256,
+        256,
+        TiffColorSpace::Srgb,
+        options,
+        &[],
+    )
+    .unwrap();
+    assert!(sink.writes > 1);
+    assert_eq!(decode_jxl(&sink.bytes).pixels, pixels);
+    let mut failing = Sink {
+        bytes: Vec::new(),
+        writes: 0,
+        fail: true,
+    };
+    let error = jxl::encode(
+        &mut failing,
+        &pixels,
+        256,
+        256,
+        TiffColorSpace::Srgb,
+        options,
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "injected failure");
 }

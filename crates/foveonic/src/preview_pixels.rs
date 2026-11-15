@@ -90,6 +90,7 @@ impl Preview {
             return Ok(self);
         }
         let image = self.linear_resized(side)?;
+        drop(self.rgb);
         Ok(Self {
             rgb: image
                 .as_raw()

@@ -59,8 +59,8 @@ fn original_decoding_preserves_samples_and_metadata_while_recording() {
             .unwrap();
         assert!(saved.trace_bytes > 0);
         assert_eq!(
-            bytemuck::cast_slice::<f32, u8>(baseline.samples()),
-            bytemuck::cast_slice::<f32, u8>(recorded.samples()),
+            bytemuck::cast_slice::<f32, u8>(baseline.samples().as_ref()),
+            bytemuck::cast_slice::<f32, u8>(recorded.samples().as_ref()),
             "decoded samples changed while recording {name}"
         );
         assert_eq!(baseline.storage(), recorded.storage(), "{name}");

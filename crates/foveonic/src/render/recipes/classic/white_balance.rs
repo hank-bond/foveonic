@@ -51,7 +51,7 @@ pub(crate) fn estimate(
                 |original| {
                     let pixels = engine
                         .gpu
-                        .upload("Original layers for white balance", &original.pixels)?;
+                        .upload_sensor("Original layers for white balance", &original.pixels)?;
                     weighted_white_balance::estimate(&engine.gpu, &pixels, &p, profile)
                 },
             )?);
@@ -112,7 +112,7 @@ fn gray_mean(
 ) -> Result<[f64; 3]> {
     let pixels = engine
         .gpu
-        .upload("Original layers for gray-world statistics", &source.pixels)?;
+        .upload_sensor("Original layers for gray-world statistics", &source.pixels)?;
     weighted_white_balance::mean(
         &engine.gpu,
         &pixels,

@@ -100,9 +100,6 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
     settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
     settings.dehaze.amount = 35.;
     settings.dehaze.shadow = None;
-    assert!(
-        settings.working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
-    );
     assert!(settings.regional_preview_available(&source.metadata));
     for policy in [
         crate::render::ProcessingQuality::Quality,
@@ -1153,12 +1150,6 @@ fn original_advanced_color_builds_full_fast_and_regional_previews() {
         (Scale::new(2).unwrap(), None),
         (Scale::NATIVE, Some([10, 10, 200, 200])),
     ] {
-        if quality == Scale::new(2).unwrap()
-            && !settings
-                .working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
-        {
-            continue;
-        }
         if region.is_some() && !settings.regional_preview_available(&source.metadata) {
             continue;
         }

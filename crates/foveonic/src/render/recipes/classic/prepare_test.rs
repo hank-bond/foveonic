@@ -20,7 +20,7 @@ fn complete_original_correction_matches_reference() {
     let source = reference_source();
     if let Ok(path) = std::env::var("CLASSIC_DECODED_REFERENCE") {
         assert_eq!(
-            bytemuck::cast_slice::<f32, u8>(&source.pixels),
+            bytemuck::cast_slice::<f32, u8>(source.samples().as_ref()),
             std::fs::read(path).unwrap()
         );
     }
@@ -35,7 +35,7 @@ fn complete_original_correction_matches_reference() {
     .unwrap();
     let gpu = crate::gpu::Gpu::new().unwrap();
     let input = gpu
-        .upload("Original Classic layers", &source.pixels)
+        .upload("Original Classic layers", source.samples().as_ref())
         .unwrap();
     let output = apply_correction(&gpu, &input, &p.correction, &mut Default::default()).unwrap();
     let bytes = gpu.readback(&output).unwrap();
@@ -168,7 +168,7 @@ fn original_decoded_samples_and_presets_match_reference() {
     if reference.len() == source.pixels.len() * 2 {
         assert!(
             source
-                .pixels
+                .samples()
                 .iter()
                 .zip(reference.as_chunks::<2>().0)
                 .all(|(actual, bytes)| *actual == f32::from(i16::from_le_bytes(*bytes))),
@@ -181,7 +181,7 @@ fn original_decoded_samples_and_presets_match_reference() {
             "expected signed16 or float32 reference samples"
         );
         assert!(
-            bytemuck::cast_slice::<f32, u8>(&source.pixels) == reference,
+            bytemuck::cast_slice::<f32, u8>(source.samples().as_ref()) == reference,
             "decoded float sensor samples differ"
         );
     }

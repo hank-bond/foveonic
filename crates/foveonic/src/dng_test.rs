@@ -33,7 +33,7 @@ fn export_shader_has_valid_guarded_entry_points_without_hardware() {
         assert_eq!(
             mask,
             match entry.name.as_str() {
-                "convert" => (1 << 2) | (1 << 3),
+                "convert" => 1 << 3,
                 "quantize" => 1 << 5,
                 _ => panic!("unexpected DNG entry point"),
             }

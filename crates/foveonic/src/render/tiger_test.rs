@@ -23,7 +23,7 @@ fn original_tiger_modes_masks_and_retained_results() {
         .map(str::to_owned)
         .collect();
     assert_eq!(modes.len(), 10);
-    let source_hash = fingerprint(bytemuck::cast_slice(&source.pixels));
+    let source_hash = fingerprint(bytemuck::cast_slice(source.samples().as_ref()));
     let engine = Engine::new().unwrap();
     let mut session = RenderSession::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
@@ -86,7 +86,7 @@ fn original_tiger_modes_masks_and_retained_results() {
     assert_eq!(engine.readback_image(retained).unwrap(), original);
     assert_eq!(engine.readback_image(mask).unwrap(), mask_bytes);
     assert_eq!(
-        fingerprint(bytemuck::cast_slice(&session.source().pixels)),
+        fingerprint(bytemuck::cast_slice(session.source().samples().as_ref())),
         source_hash
     );
 }
@@ -116,7 +116,7 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
     for rotation in [0, 90] {
         let mut source = Source::open(std::env::var_os("TIGER_X3F").unwrap()).unwrap();
         Arc::make_mut(&mut source.metadata).rotation = rotation;
-        let source_hash = fingerprint(bytemuck::cast_slice(source.samples()));
+        let source_hash = fingerprint(bytemuck::cast_slice(source.samples().as_ref()));
         let mut session = RenderSession::new(source);
         let mut settings = Settings::new(
             "Sunlight",
@@ -239,7 +239,7 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
             fast_hash
         );
         assert_eq!(
-            fingerprint(bytemuck::cast_slice(session.source().samples())),
+            fingerprint(bytemuck::cast_slice(session.source().samples().as_ref())),
             source_hash
         );
     }

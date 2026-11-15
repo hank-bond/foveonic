@@ -501,7 +501,7 @@ pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String
     })
 }
 
-/// Physical ordering of immutable samples returned by `Source::samples`.
+/// Ordering of immutable samples returned by `Source::samples`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceStorage {
     /// One R, G, B triplet per sensor location.
@@ -569,11 +569,56 @@ impl SourceOrigin {
     }
 }
 
+/// Immutable source samples in their exact decoded representation.
+#[derive(Debug)]
+pub(crate) enum SensorSamples {
+    Float(Vec<f32>),
+    Unsigned(Vec<u16>),
+    UnsignedPlanes([Vec<u16>; 3]),
+}
+impl SensorSamples {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Float(v) => v.len(),
+            Self::Unsigned(v) => v.len(),
+            Self::UnsignedPlanes(v) => v[0].len() * 3,
+        }
+    }
+    fn allocated_bytes(&self) -> usize {
+        match self {
+            Self::Float(v) => v.capacity() * std::mem::size_of::<f32>(),
+            Self::Unsigned(v) => v.capacity() * std::mem::size_of::<u16>(),
+            Self::UnsignedPlanes(v) => v
+                .iter()
+                .map(|plane| plane.capacity() * std::mem::size_of::<u16>())
+                .sum(),
+        }
+    }
+    fn as_float(&self) -> std::borrow::Cow<'_, [f32]> {
+        match self {
+            Self::Float(v) => std::borrow::Cow::Borrowed(v),
+            Self::Unsigned(v) => std::borrow::Cow::Owned(v.iter().map(|&x| f32::from(x)).collect()),
+            Self::UnsignedPlanes(v) => std::borrow::Cow::Owned(
+                v[0].iter()
+                    .zip(&v[1])
+                    .zip(&v[2])
+                    .flat_map(|((&a, &b), &c)| [f32::from(a), f32::from(b), f32::from(c)])
+                    .collect(),
+            ),
+        }
+    }
+}
+impl From<Vec<f32>> for SensorSamples {
+    fn from(value: Vec<f32>) -> Self {
+        Self::Float(value)
+    }
+}
+
 pub struct Source {
     pub(crate) origin: SourceOrigin,
     pub metadata: std::sync::Arc<Metadata>,
-    /// Immutable samples in original camera code units, ordered by `storage`.
-    pub(crate) pixels: Vec<f32>,
+    /// Immutable samples in original camera code units, presented in `storage` order.
+    pub(crate) pixels: SensorSamples,
     pub(crate) storage: SourceStorage,
     pub camf: Vec<u8>,
     pub(crate) timings: Vec<crate::profile::Timing>,
@@ -584,7 +629,7 @@ impl Source {
     /// other shared owners and is inventoried independently.
     pub fn retained_source_bytes(&self) -> u64 {
         (std::mem::size_of::<Self>()
-            + self.pixels.capacity() * std::mem::size_of::<f32>()
+            + self.pixels.allocated_bytes()
             + self.camf.capacity()
             + self.timings.capacity() * std::mem::size_of::<crate::profile::Timing>()
             + self.origin.allocated_bytes()) as u64
@@ -593,12 +638,12 @@ impl Source {
         &self.origin
     }
 
-    /// Physical sample ordering.
+    /// Sample ordering presented to processing.
     pub fn storage(&self) -> SourceStorage {
         self.storage
     }
 
-    /// Number of stored triplets or six-sample cells along each axis.
+    /// Number of represented triplets or six-sample cells along each axis.
     pub fn storage_extent(&self) -> [usize; 2] {
         let divisor = match self.storage {
             SourceStorage::InterleavedRgb => 1,
@@ -610,9 +655,10 @@ impl Source {
         ]
     }
 
-    /// Original camera codes ordered according to `storage()`. Samples remain immutable.
-    pub fn samples(&self) -> &[f32] {
-        &self.pixels
+    /// Original camera codes ordered according to `storage()`. Compact sources
+    /// are widened into an owned buffer when floating samples are requested.
+    pub fn samples(&self) -> std::borrow::Cow<'_, [f32]> {
+        self.pixels.as_float()
     }
 
     /// Keep reading separate from decoding so cached-file speed is not mistaken
@@ -687,6 +733,13 @@ impl Source {
                 if self.storage != expected {
                     return Err("Quattro sensor storage does not match its resolution".into());
                 }
+            }
+        }
+        if let SensorSamples::UnsignedPlanes(planes) = &self.pixels {
+            if self.storage != SourceStorage::InterleavedRgb
+                || planes.iter().any(|p| p.len() != planes[0].len())
+            {
+                return Err("source sample plane geometry mismatch".into());
             }
         }
         let [w, h] = self.storage_extent();
@@ -792,3 +845,16 @@ fn is_merrill(model: Option<&str>) -> bool {
 #[cfg(test)]
 #[path = "source_test.rs"]
 mod tests;
+
+#[cfg(test)]
+impl Source {
+    pub(crate) fn samples_mut(&mut self) -> &mut Vec<f32> {
+        if !matches!(&self.pixels, SensorSamples::Float(_)) {
+            self.pixels = SensorSamples::Float(self.samples().into_owned());
+        }
+        let SensorSamples::Float(samples) = &mut self.pixels else {
+            unreachable!("test samples were widened")
+        };
+        samples
+    }
+}

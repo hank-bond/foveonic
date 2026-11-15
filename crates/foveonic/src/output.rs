@@ -148,6 +148,28 @@ impl EncodingOptions {
     }
 }
 
+fn rgb_samples(bytes: &[u8]) -> impl Iterator<Item = u16> + '_ {
+    bytes.as_chunks::<8>().0.iter().flat_map(|pixel| {
+        [0, 2, 4].map(|offset| u16::from_le_bytes([pixel[offset], pixel[offset + 1]]))
+    })
+}
+
+fn repack_rgb8(bytes: &[u8], profile: &mut crate::profile::Profile) -> Vec<u8> {
+    let start = std::time::Instant::now();
+    let pixels = rgb_samples(bytes)
+        .map(|v| ((u32::from(v) + 128) / 257) as u8)
+        .collect();
+    profile.record("export RGB8 repack", start);
+    pixels
+}
+
+fn repack_rgb16(bytes: &[u8], profile: &mut crate::profile::Profile) -> Vec<u16> {
+    let start = std::time::Instant::now();
+    let pixels = rgb_samples(bytes).collect();
+    profile.record("export RGB16 repack", start);
+    pixels
+}
+
 /// Samples arrive as little-endian RGB16 with one padding component per pixel.
 /// Encoders receive the already oriented, resized, destination-encoded image.
 /// Lossy JXL uses native color signaling with a pure gamma ProPhoto transfer.
@@ -171,27 +193,13 @@ pub fn write<W: Write + Seek>(
     if count.checked_mul(8) != Some(bytes.len()) {
         return Err("invalid packed RGB16 output".into());
     }
-    let start = std::time::Instant::now();
-    let pixels: Vec<u16> = bytes
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .flat_map(|pixel| {
-            [0, 2, 4].map(|offset| u16::from_le_bytes([pixel[offset], pixel[offset + 1]]))
-        })
-        .collect();
-    profile.record("export RGB16 repack", start);
-    let start = std::time::Instant::now();
-    let rgb8 = || {
-        pixels
-            .iter()
-            .map(|&v| ((u32::from(v) + 128) / 257) as u8)
-            .collect::<Vec<_>>()
-    };
     let capture = crate::capture_metadata::Capture::new(metadata);
-    match format {
+    let start = match format {
         Format::Tiff => {
             use tiff::encoder::{compression::DeflateLevel, Compression, Predictor};
+            let pixels = (options.tiff_compression != TiffCompression::None)
+                .then(|| repack_rgb16(bytes, profile));
+            let start = std::time::Instant::now();
             let compression = match options.tiff_compression {
                 TiffCompression::None => Compression::Uncompressed,
                 TiffCompression::Lzw => Compression::Lzw,
@@ -217,52 +225,97 @@ pub fn write<W: Write + Seek>(
             image
                 .encoder()
                 .write_tag(tiff::tags::Tag::Software, "Foveonic GPU")?;
-            image.write_data(&pixels)?;
+            if let Some(pixels) = pixels {
+                image.write_data(&pixels)?;
+            } else {
+                let mut offset = 0;
+                let mut strip = Vec::new();
+                while image.next_strip_sample_count() > 0 {
+                    let samples = usize::try_from(image.next_strip_sample_count())?;
+                    let packed_bytes = samples / 3 * 8;
+                    strip.clear();
+                    strip.extend(rgb_samples(&bytes[offset..offset + packed_bytes]));
+                    image.write_strip(&strip)?;
+                    offset += packed_bytes;
+                }
+                image.finish()?;
+            }
+            start
         }
         Format::Jpeg => {
             let exif = capture.payload([width, height])?;
             if exif.len() > 65_527 {
                 return Err("EXIF metadata exceeds JPEG APP1 capacity".into());
             }
+            let rgb8 = repack_rgb8(bytes, profile);
+            let start = std::time::Instant::now();
             let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
                 &mut writer,
                 options.jpeg_quality,
             );
             encoder.set_icc_profile(space.profile().to_vec())?;
             encoder.set_exif_metadata(exif)?;
-            encoder.encode(&rgb8(), width, height, image::ExtendedColorType::Rgb8)?;
+            encoder.encode(&rgb8, width, height, image::ExtendedColorType::Rgb8)?;
+            start
         }
         Format::Png => {
-            use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-            let mut encoder = PngEncoder::new_with_quality(
-                &mut writer,
-                CompressionType::Best,
-                FilterType::Adaptive,
-            );
-            encoder.set_icc_profile(space.profile().to_vec())?;
-            encoder.set_exif_metadata(capture.payload([width, height])?)?;
-            match options.png_depth {
-                BitDepth::Eight => {
-                    encoder.write_image(&rgb8(), width, height, image::ExtendedColorType::Rgb8)?
+            if options.png_depth == BitDepth::Sixteen {
+                let start = std::time::Instant::now();
+                let mut info = png::Info::with_size(width, height);
+                info.icc_profile = Some(std::borrow::Cow::Borrowed(space.profile()));
+                info.exif_metadata =
+                    Some(std::borrow::Cow::Owned(capture.payload([width, height])?));
+                let mut encoder = png::Encoder::with_info(&mut writer, info)?;
+                encoder.set_color(png::ColorType::Rgb);
+                encoder.set_depth(png::BitDepth::Sixteen);
+                encoder.set_compression(png::Compression::High);
+                encoder.set_filter(png::Filter::Adaptive);
+                let mut png_writer = encoder.write_header()?;
+                {
+                    let mut stream = png_writer.stream_writer()?;
+                    let mut row = Vec::with_capacity(width as usize * 6);
+                    for packed in bytes.chunks_exact(width as usize * 8) {
+                        row.clear();
+                        row.extend(packed.as_chunks::<8>().0.iter().flat_map(|pixel| {
+                            [pixel[1], pixel[0], pixel[3], pixel[2], pixel[5], pixel[4]]
+                        }));
+                        stream.write_all(&row)?;
+                    }
+                    stream.finish()?;
                 }
-                BitDepth::Sixteen => encoder.write_image(
-                    bytemuck::cast_slice(&pixels),
-                    width,
-                    height,
-                    image::ExtendedColorType::Rgb16,
-                )?,
+                png_writer.finish()?;
+                start
+            } else {
+                use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+                let rgb8 = repack_rgb8(bytes, profile);
+                let start = std::time::Instant::now();
+                let mut encoder = PngEncoder::new_with_quality(
+                    &mut writer,
+                    CompressionType::Best,
+                    FilterType::Adaptive,
+                );
+                encoder.set_icc_profile(space.profile().to_vec())?;
+                encoder.set_exif_metadata(capture.payload([width, height])?)?;
+                encoder.write_image(&rgb8, width, height, image::ExtendedColorType::Rgb8)?;
+                start
             }
         }
-        Format::Jxl => writer.write_all(&jxl::encode(
-            &pixels,
-            width,
-            height,
-            space,
-            options,
-            &capture.payload([width, height])?,
-        )?)?,
+        Format::Jxl => {
+            let pixels = repack_rgb16(bytes, profile);
+            let start = std::time::Instant::now();
+            jxl::encode(
+                &mut writer,
+                &pixels,
+                width,
+                height,
+                space,
+                options,
+                &capture.payload([width, height])?,
+            )?;
+            start
+        }
         Format::Dng => unreachable!("validated photographic format"),
-    }
+    };
     writer.flush()?;
     profile.record(format.label(), start);
     Ok(())

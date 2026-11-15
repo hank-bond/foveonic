@@ -4,7 +4,7 @@ summary: "The X3F reader decodes sensor samples and camera metadata from origina
 
 # X3F input
 
-Imported from the reference implementation at commit `d5e21fb`. The decoder owns unnormalized sensor samples and typed metadata. Equal-resolution samples are interleaved RGB. Quattro HI samples are packed six-value cells. Quattro LOW samples use equal-resolution RGB triplets. Camera and geometry checks belong to `source.rs`.
+Imported from the reference implementation at commit `d5e21fb`. The decoder owns unnormalized sensor samples and typed metadata. Equal-resolution samples are presented as interleaved RGB. Format-30 sources retain their decoded planes and interleave on upload or explicit sample access. Quattro HI samples are packed six-value cells. Quattro LOW samples use equal-resolution RGB triplets. Camera and geometry checks belong to `source.rs`.
 
 Keep decoding independent of photographic adjustments and orientation. Preserve original matrix encodings and camera property-list order, which selects color-mode tone rows.
 

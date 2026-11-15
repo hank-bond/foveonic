@@ -21,21 +21,40 @@ impl PreparedPreview {
         preview: foveonic::preview::Preview,
         large: bool,
     ) -> foveonic::source::Result<Self> {
-        // Bound the floating image before rotation. Cache preparation uses the
-        // same streamed linear reduction for the larger embedded preview.
+        let rotation = preview.rotation;
+        let color_space = preview.color_space;
+        let native_extent = preview.native_extent;
         let image = preview.linear_resized(if large {
             foveonic::decode_cache::PREVIEW_MAX_SIDE
         } else {
             THUMBNAIL_SIDE
         })?;
-        let image = match preview.rotation {
-            90 => image::imageops::rotate90(&image),
-            180 => image::imageops::rotate180(&image),
-            270 => image::imageops::rotate270(&image),
-            _ => image,
-        };
-        let mut native_extent = preview.native_extent;
-        if matches!(preview.rotation, 90 | 270) {
+        drop(preview);
+        Ok(Self::from_linear(
+            image,
+            rotation,
+            color_space,
+            native_extent,
+            large,
+        ))
+    }
+    pub(crate) fn from_linear(
+        image: image::Rgb32FImage,
+        rotation: u32,
+        color_space: foveonic::color_space::TiffColorSpace,
+        mut native_extent: [u32; 2],
+        large: bool,
+    ) -> Self {
+        fn rotate(image: image::Rgb32FImage, rotation: u32) -> image::Rgb32FImage {
+            match rotation {
+                90 => image::imageops::rotate90(&image),
+                180 => image::imageops::rotate180(&image),
+                270 => image::imageops::rotate270(&image),
+                _ => image,
+            }
+        }
+        let image = rotate(image, rotation);
+        if matches!(rotation, 90 | 270) {
             native_extent.swap(0, 1);
         }
         let scale = (THUMBNAIL_SIDE as f64 / f64::from(image.width().max(image.height()))).min(1.);
@@ -47,11 +66,11 @@ impl PreparedPreview {
             ],
         );
         let thumbnail = DecodedThumbnail {
-            image: Pixels::from_linear(&small, preview.color_space.into()),
+            image: Pixels::from_linear(&small, color_space.into()),
             native_extent,
         };
-        let preview = large.then(|| Pixels::from_linear(&image, preview.color_space.into()));
-        Ok(Self { thumbnail, preview })
+        let preview = large.then(|| Pixels::from_linear(&image, color_space.into()));
+        Self { thumbnail, preview }
     }
 }
 #[cfg(test)]

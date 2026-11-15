@@ -3,6 +3,48 @@
 use super::*;
 
 #[test]
+fn planar_samples_preserve_rgb_order_and_account_for_capacity() {
+    let mut first = Vec::with_capacity(10);
+    first.extend([1, 4]);
+    let mut source = Source {
+        origin: Default::default(),
+        metadata: std::sync::Arc::new(Metadata {
+            width: 2464,
+            height: 1632,
+            rotation: 0,
+            processing_version: None,
+            properties: [
+                ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
+                ("RESOLUTION".into(), "LOW".into()),
+            ]
+            .into(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        }),
+        pixels: SensorSamples::UnsignedPlanes([first, vec![2, 5], vec![3, 6]]),
+        storage: SourceStorage::InterleavedRgb,
+        camf: vec![],
+        timings: vec![],
+    };
+    assert_eq!(source.samples().as_ref(), &[1., 2., 3., 4., 5., 6.]);
+    let SensorSamples::UnsignedPlanes(planes) = &source.pixels else {
+        unreachable!()
+    };
+    let expected =
+        std::mem::size_of::<Source>() + planes.iter().map(|p| p.capacity() * 2).sum::<usize>();
+    assert_eq!(source.retained_source_bytes(), expected as u64);
+    let SensorSamples::UnsignedPlanes(planes) = &mut source.pixels else {
+        unreachable!()
+    };
+    planes[1].push(7);
+    assert!(source
+        .validate()
+        .unwrap_err()
+        .to_string()
+        .contains("plane geometry"));
+}
+
+#[test]
 fn accepts_merrill_models() {
     for model in [
         "SIGMA DP1 Merrill",
@@ -201,7 +243,7 @@ fn decode_original_merrill_files() {
         );
         assert_eq!(source.pixels.len(), SENSOR_WIDTH * SENSOR_HEIGHT * 3);
         assert!(source
-            .pixels
+            .samples()
             .iter()
             .all(|value| value.is_finite() && (0.0..=4095.0).contains(value)));
         assert!(!source.camf.is_empty());
@@ -462,12 +504,12 @@ fn original_merrill_resolutions_render_color_and_monochrome() {
                 crate::render::MerrillNoiseMethod::Reference,
             ),
         ] {
-            for quality in [
+            for working_scale in [
                 crate::render::Scale::NATIVE,
                 crate::render::Scale::new(2).unwrap(),
             ] {
                 let mut settings = crate::render::Settings::new("Auto", "Standard");
-                settings.working_scale = quality;
+                settings.working_scale = working_scale;
                 settings.rendering = rendering;
                 settings.merrill_noise_method = method;
                 settings.reconstruction = Some(crate::noise::Controls::default());
@@ -492,17 +534,14 @@ fn original_merrill_resolutions_render_color_and_monochrome() {
                 let crate::inspection::Content::Image(image) = &artifacts[0].content else {
                     panic!("expected photograph");
                 };
-                let scale = if quality == crate::render::Scale::NATIVE
-                    || rendering == crate::render::Rendering::Monochrome
-                {
-                    1
-                } else {
-                    2
-                };
-                assert_eq!(image.view().extent, presentation.map(|v| v / scale));
+                assert_eq!(
+                    image.view().extent,
+                    working_scale.extent(presentation),
+                    "{file}: {rendering:?}, {method:?}, {working_scale:?}"
+                );
                 let bytes = engine.readback_image(image).unwrap();
                 if extent == [4928, 1632]
-                    && quality == crate::render::Scale::NATIVE
+                    && working_scale == crate::render::Scale::NATIVE
                     && rendering == crate::render::Rendering::Color
                     && method == crate::render::MerrillNoiseMethod::Reference
                 {

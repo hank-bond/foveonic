@@ -177,7 +177,7 @@ fn measure_group(
             return Err("Cap group has inconsistent sensor geometry".into());
         }
         params.source[2] = index as u32 + 1;
-        let original = gpu.upload("Original cap layers", source.samples())?;
+        let original = gpu.upload_sensor("Original cap layers", &source.pixels)?;
         let black = black_levels(gpu, &original, &source)?;
         frames.push(
             measure_profiles(gpu, &original, &black, *params, regions)

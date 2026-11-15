@@ -337,6 +337,7 @@ fn check_real_inputs(full: bool) {
                 Content::Table { values, .. } => values.clone(),
             }
         };
+        let source_samples = source.samples();
         let before = floats("calibration.layers");
         let after = floats("repair.layers");
         let black = floats("black.levels");
@@ -351,7 +352,7 @@ fn check_real_inputs(full: bool) {
                     for col in left..left + side {
                         let off = (row * metadata.width + col) * 3;
                         let stressed = (0..3).any(|c| {
-                            (source.pixels[off + c] - black[c])
+                            (source_samples[off + c] - black[c])
                                 / (prepared.params.white[c] - black[c])
                                 > 0.95
                         });
@@ -382,7 +383,7 @@ fn check_real_inputs(full: bool) {
             for col in left..left + width {
                 let pixel = row * metadata.width + col;
                 let off = pixel * 3;
-                raw.extend_from_slice(&source.pixels[off..off + 3]);
+                raw.extend_from_slice(&source_samples[off..off + 3]);
                 calibrated.extend_from_slice(&after[off..off + 3]);
                 unrepaired.extend_from_slice(&before[off..off + 3]);
                 measured.push(std::array::from_fn(|c| {
@@ -392,8 +393,8 @@ fn check_real_inputs(full: bool) {
                     )
                 }));
                 masks.push(std::array::from_fn(|c| {
-                    let v =
-                        (source.pixels[off + c] - black[c]) / (prepared.params.white[c] - black[c]);
+                    let v = (source_samples[off + c] - black[c])
+                        / (prepared.params.white[c] - black[c]);
                     if v >= 0.99 {
                         0
                     } else {
@@ -457,7 +458,8 @@ fn check_real_inputs(full: bool) {
                 let off = (row * metadata.width + col) * 3;
                 std::array::from_fn(|c| {
                     f64::from(
-                        (source.pixels[off + c] - black[c]) / (prepared.params.white[c] - black[c]),
+                        (source_samples[off + c] - black[c])
+                            / (prepared.params.white[c] - black[c]),
                     )
                 })
             })

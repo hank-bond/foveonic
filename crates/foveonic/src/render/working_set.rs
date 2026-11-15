@@ -430,7 +430,7 @@ mod tests {
                 matrices: Default::default(),
                 lists: Default::default(),
             }),
-            pixels: vec![1., 2., 3.],
+            pixels: vec![1., 2., 3.].into(),
             storage: SourceStorage::InterleavedRgb,
             camf: vec![],
             timings: vec![],

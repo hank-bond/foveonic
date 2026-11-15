@@ -215,6 +215,9 @@ mod tests {
             })
             .expect("format-6 section");
         let (width, height, _, samples, _) = super::super::read_pixels(section).unwrap();
+        let crate::source::SensorSamples::Float(samples) = samples else {
+            panic!("Classic samples retain their float representation");
+        };
         let expected =
             std::fs::read(std::env::var("FORMAT6_REFERENCE").expect("FORMAT6_REFERENCE")).unwrap();
         assert_eq!(expected.len(), width * height * 6);

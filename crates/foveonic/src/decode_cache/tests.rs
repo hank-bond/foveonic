@@ -101,7 +101,7 @@ impl Fixture {
                 matrices: Default::default(),
                 lists: Default::default(),
             }),
-            pixels: (0..72).map(|i| i as f32 - 2048.).collect(),
+            pixels: (0..72).map(|i| i as f32 - 2048.).collect::<Vec<_>>().into(),
             storage: SourceStorage::PackedRgbBluePhases,
             camf: vec![],
             timings: vec![],
@@ -401,7 +401,7 @@ fn compact_payload_preserves_signed_and_unsigned_codes_across_chunks() {
         let mut source = fixture.image();
         Arc::make_mut(&mut source.metadata).width = 1024;
         Arc::make_mut(&mut source.metadata).height = 344;
-        source.pixels = (0..1024 * 172 * 3)
+        *source.samples_mut() = (0..1024 * 172 * 3)
             .map(|i| {
                 let code = i as u16;
                 if signed {
@@ -430,10 +430,102 @@ fn compact_payload_preserves_signed_and_unsigned_codes_across_chunks() {
         );
         let restored = load(&path, &identity, &Settings::default(), &|_| {}).unwrap();
         assert_eq!(
-            bytemuck::cast_slice::<f32, u8>(source.samples()),
-            bytemuck::cast_slice::<f32, u8>(restored.samples())
+            bytemuck::cast_slice::<f32, u8>(source.samples().as_ref()),
+            bytemuck::cast_slice::<f32, u8>(restored.samples().as_ref())
         );
     }
+}
+
+#[test]
+fn merrill_unsigned_cache_stays_compact_and_preserves_codes() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("cache");
+    let identity = Identity::read(&fixture.source).unwrap();
+    let mut source = fixture.image();
+    let metadata = Arc::make_mut(&mut source.metadata);
+    metadata.width = 2464;
+    metadata.height = 1632;
+    metadata
+        .properties
+        .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
+    metadata
+        .properties
+        .insert("RESOLUTION".into(), "LOW".into());
+    source.storage = SourceStorage::InterleavedRgb;
+    let codes: Vec<u16> = (0..2464 * 1632 * 3).map(|i| (i % 4096) as u16).collect();
+    source.pixels = crate::source::SensorSamples::Unsigned(codes);
+    source.validate().unwrap();
+    store(
+        &root,
+        &fixture.source,
+        identity.clone(),
+        &source,
+        DEFAULT_BUDGET,
+    )
+    .unwrap();
+    let restored = load(
+        &root.join(identity.name()),
+        &identity,
+        &Settings::default(),
+        &|_| {},
+    )
+    .unwrap();
+    let crate::source::SensorSamples::Unsigned(actual) = &restored.pixels else {
+        panic!("Merrill codes should remain compact");
+    };
+    let crate::source::SensorSamples::Unsigned(expected) = &source.pixels else {
+        unreachable!()
+    };
+    assert_eq!(actual, expected);
+    let mut planes: [Vec<u16>; 3] = std::array::from_fn(|_| Vec::with_capacity(expected.len() / 3));
+    for pixel in expected.as_chunks::<3>().0 {
+        for (plane, &sample) in planes.iter_mut().zip(pixel) {
+            plane.push(sample);
+        }
+    }
+    let planar_root = fixture.root.join("planar-cache");
+    source.pixels = crate::source::SensorSamples::UnsignedPlanes(planes);
+    source.validate().unwrap();
+    store(
+        &planar_root,
+        &fixture.source,
+        identity.clone(),
+        &source,
+        DEFAULT_BUDGET,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(root.join(identity.name())).unwrap(),
+        fs::read(planar_root.join(identity.name())).unwrap()
+    );
+    let crate::source::SensorSamples::UnsignedPlanes(planes) = &mut source.pixels else {
+        unreachable!()
+    };
+    planes[1].pop();
+    assert!(source.validate().is_err());
+    let expected_bytes = std::mem::size_of::<Source>()
+        + actual.capacity() * std::mem::size_of::<u16>()
+        + restored.camf.capacity()
+        + restored.timings.capacity() * std::mem::size_of::<crate::profile::Timing>()
+        + restored.origin.allocated_bytes();
+    assert_eq!(restored.retained_source_bytes(), expected_bytes as u64);
+
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let path = root.join(identity.name());
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    read_header(&mut file, &identity, &Settings::default()).unwrap();
+    let position = file.stream_position().unwrap() + 17;
+    file.seek(SeekFrom::Start(position)).unwrap();
+    let mut byte = [0];
+    file.read_exact(&mut byte).unwrap();
+    file.seek(SeekFrom::Start(position)).unwrap();
+    file.write_all(&[byte[0] ^ 1]).unwrap();
+    drop(file);
+    assert!(load(&path, &identity, &Settings::default(), &|_| {}).is_err());
 }
 
 #[test]
@@ -452,7 +544,7 @@ fn unrepresentable_samples_leave_existing_entry_intact() {
     .unwrap();
     let path = root.join(identity.name());
     let original = fs::read(&path).unwrap();
-    source.pixels[0] = 0.5;
+    source.samples_mut()[0] = 0.5;
     assert!(store(&root, &fixture.source, identity, &source, DEFAULT_BUDGET).is_err());
     assert_eq!(fs::read(path).unwrap(), original);
 }
@@ -504,8 +596,8 @@ fn persistence_preserves_sample_bits_geometry_and_source_location() {
     let file = root.join(identity.name());
     let restored = load(&file, &identity, &Settings::default(), &|_| {}).unwrap();
     assert_eq!(
-        bytemuck::cast_slice::<f32, u8>(source.samples()),
-        bytemuck::cast_slice::<f32, u8>(restored.samples())
+        bytemuck::cast_slice::<f32, u8>(source.samples().as_ref()),
+        bytemuck::cast_slice::<f32, u8>(restored.samples().as_ref())
     );
     assert_eq!(
         serde_json::to_value(&*source.metadata).unwrap(),
@@ -639,8 +731,8 @@ fn prepared_bundle_defers_publication_and_rechecks_recipe_policy_and_budget() {
     )
     .unwrap();
     assert_eq!(
-        bytemuck::cast_slice::<f32, u8>(restored.samples()),
-        bytemuck::cast_slice::<f32, u8>(source.samples())
+        bytemuck::cast_slice::<f32, u8>(restored.samples().as_ref()),
+        bytemuck::cast_slice::<f32, u8>(source.samples().as_ref())
     );
 }
 
@@ -847,8 +939,8 @@ fn original_families_roundtrip_exact_samples_metadata_and_camera_order() {
         store(&root, &path, identity.clone(), &original, DEFAULT_BUDGET).unwrap();
         let restored = load(&root.join(identity.name()), &identity, &settings, &|_| {}).unwrap();
         assert!(
-            bytemuck::cast_slice::<f32, u8>(original.samples())
-                == bytemuck::cast_slice::<f32, u8>(restored.samples()),
+            bytemuck::cast_slice::<f32, u8>(original.samples().as_ref())
+                == bytemuck::cast_slice::<f32, u8>(restored.samples().as_ref()),
             "cached samples changed: {name}"
         );
         assert_eq!(
@@ -1205,8 +1297,8 @@ fn foreground_open_interrupts_inflight_prefetch_then_resumes_browser_order() {
     }
     let resumed = cache.open(&first, |_| {}).unwrap();
     assert_eq!(
-        bytemuck::cast_slice::<f32, u8>(selected.samples()),
-        bytemuck::cast_slice::<f32, u8>(resumed.samples())
+        bytemuck::cast_slice::<f32, u8>(selected.samples().as_ref()),
+        bytemuck::cast_slice::<f32, u8>(resumed.samples().as_ref())
     );
 }
 
@@ -1248,8 +1340,8 @@ fn parallel_prefetch_throughput_preserves_exact_samples_and_disk_budget() {
     for path in &paths {
         let restored = cache.open_cached(path, |_| {}).unwrap();
         assert_eq!(
-            bytemuck::cast_slice::<f32, u8>(expected.samples()),
-            bytemuck::cast_slice::<f32, u8>(restored.samples())
+            bytemuck::cast_slice::<f32, u8>(expected.samples().as_ref()),
+            bytemuck::cast_slice::<f32, u8>(restored.samples().as_ref())
         );
     }
     drop(active);
@@ -1387,8 +1479,8 @@ fn navigation_keeps_nearest_decodes_when_the_window_exceeds_the_disk_budget() {
         let _foreground = cache.foreground();
         let decoded = cache.open_cached(&files[index], |_| {}).unwrap();
         assert_eq!(
-            bytemuck::cast_slice::<f32, u8>(decoded.samples()),
-            bytemuck::cast_slice::<f32, u8>(expected.samples())
+            bytemuck::cast_slice::<f32, u8>(decoded.samples().as_ref()),
+            bytemuck::cast_slice::<f32, u8>(expected.samples().as_ref())
         );
         eprintln!(
             "selection {index}: retained current/+1/-1 in a three-decode budget, {:.1} ms",
@@ -1529,7 +1621,7 @@ fn legacy_decodes_reuse_browser_capture_metadata_without_redecoding() {
         let source = cache
             .open_cached(&fixture.source, |_| {})
             .expect("cached pixels remain usable");
-        assert_eq!(source.pixels, fixture.image().pixels);
+        assert_eq!(source.samples(), fixture.image().samples());
         assert_eq!(
             source.metadata.properties["EXIF_CAPTURE_TAGS"],
             properties["EXIF_CAPTURE_TAGS"]
@@ -1552,7 +1644,7 @@ fn legacy_decode_survives_missing_or_changed_original() {
         let source = cache
             .open_cached(&fixture.source, |_| {})
             .expect("cached pixels remain usable");
-        assert_eq!(source.pixels, fixture.image().pixels);
+        assert_eq!(source.samples(), fixture.image().samples());
         assert!(!source.metadata.properties.contains_key("EXIF_CAPTURE_TAGS"));
     }
 }
