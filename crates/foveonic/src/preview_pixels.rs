@@ -39,7 +39,11 @@ impl Preview {
         let extent = self
             .extent
             .map(|v| (f64::from(v) * scale).round().max(1.) as u32);
-        let image = resize_linear(&self.linear_image()?, extent);
+        let image = {
+            let linear = self.linear_image()?;
+            drop(self.rgb);
+            resize_linear(&linear, extent)
+        };
         Ok(Self {
             rgb: image
                 .as_raw()
