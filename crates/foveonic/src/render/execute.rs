@@ -2238,23 +2238,21 @@ impl Engine {
                     params,
                     space,
                 } => {
-                    let start = Instant::now();
-                    gpu.with_readback(&input(0).buffer, |bytes| {
-                        profile.record("readback wait", start);
-                        let file = std::fs::OpenOptions::new()
-                            .write(true)
-                            .create_new(true)
-                            .open(path)?;
-                        crate::output::write(
-                            std::io::BufWriter::new(file),
-                            bytes,
-                            params,
-                            *space,
-                            *format,
-                            *options,
-                            profile,
-                        )
-                    })?;
+                    let bytes = profile
+                        .measure("readback wait and copy", || gpu.readback(&input(0).buffer))?;
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(path)?;
+                    crate::output::write(
+                        std::io::BufWriter::new(file),
+                        &bytes,
+                        params,
+                        *space,
+                        *format,
+                        *options,
+                        profile,
+                    )?;
                     None
                 }
             };

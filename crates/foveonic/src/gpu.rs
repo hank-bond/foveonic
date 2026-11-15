@@ -664,14 +664,6 @@ impl Gpu {
     }
 
     pub fn readback(&self, source: &ReadGuard) -> Result<Vec<u8>> {
-        self.with_readback(source, |bytes| Ok(bytes.to_vec()))
-    }
-
-    pub fn with_readback<T>(
-        &self,
-        source: &ReadGuard,
-        consume: impl FnOnce(&[u8]) -> Result<T>,
-    ) -> Result<T> {
         let _scope = crate::diagnostics::scope_with(
             crate::diagnostics::Category::Gpu,
             "gpu.readback",
@@ -699,12 +691,9 @@ impl Gpu {
         self.submit(encoder);
         map_readback(&self.device, &staging)?;
         let slice = staging.slice(..);
-        let data = slice.get_mapped_range();
-        drop(_scope);
-        let result = consume(&data);
-        drop(data);
+        let data = slice.get_mapped_range().to_vec();
         staging.unmap();
-        result
+        Ok(data)
     }
 }
 
@@ -741,23 +730,6 @@ mod scheduling_tests {
         sync::{mpsc, Arc},
         time::Duration,
     };
-
-    #[test]
-    #[ignore = "requires a GPU"]
-    fn scoped_readback_preserves_samples_and_propagates_consumer_errors() {
-        let gpu = Gpu::new().unwrap();
-        let expected = [0x12345678_u32, 0xfedcba98, 7, 0];
-        let source = gpu.upload("Scoped readback fixture", &expected).unwrap();
-        let result: Result<()> = gpu.with_readback(&source, |bytes| {
-            assert_eq!(bytes, bytemuck::cast_slice::<u32, u8>(&expected));
-            Err("consumer failed".into())
-        });
-        assert_eq!(result.unwrap_err().to_string(), "consumer failed");
-        assert_eq!(
-            gpu.readback(&source).unwrap(),
-            bytemuck::cast_slice::<u32, u8>(&expected)
-        );
-    }
 
     #[test]
     #[ignore = "requires a working GPU adapter"]
