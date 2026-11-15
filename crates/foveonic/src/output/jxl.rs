@@ -3,7 +3,7 @@
 use super::EncodingOptions;
 use crate::{render::TiffColorSpace, source::Result};
 use jxl_sys::*;
-use std::{ffi::c_void, ptr::NonNull};
+use std::{ffi::c_void, io::Write, ptr::NonNull};
 
 struct Encoder(NonNull<JxlEncoder>);
 impl Drop for Encoder {
@@ -21,12 +21,13 @@ impl Drop for Runner {
 }
 
 pub(super) fn encode(
+    writer: &mut impl Write,
     pixels: &[u16],
     width: u32,
     height: u32,
     space: TiffColorSpace,
     options: EncodingOptions,
-) -> Result<Vec<u8>> {
+) -> Result<()> {
     let lossless = options.jxl_lossless();
     // SAFETY: null selects libjxl's default allocator. Both allocations gain unique owners.
     let runner = Runner(
@@ -115,25 +116,18 @@ pub(super) fn encode(
         JxlEncoderCloseInput(enc);
     }
     let mut bytes = vec![0_u8; 65536];
-    let mut written = 0;
     loop {
-        let mut next = bytes[written..].as_mut_ptr();
-        let mut remaining = bytes.len() - written;
+        let mut next = bytes.as_mut_ptr();
+        let mut remaining = bytes.len();
         // SAFETY: next and remaining describe writable bytes in this allocation.
         let status = unsafe { JxlEncoderProcessOutput(enc, &mut next, &mut remaining) };
-        written = bytes.len() - remaining;
         if !matches!(status, JxlEncoderStatus::JXL_ENC_NEED_MORE_OUTPUT) {
             check(status)?;
-            bytes.truncate(written);
-            return Ok(bytes);
         }
-        bytes.resize(
-            bytes
-                .len()
-                .checked_mul(2)
-                .ok_or("JPEG XL output is too large")?,
-            0,
-        );
+        writer.write_all(&bytes[..bytes.len() - remaining])?;
+        if matches!(status, JxlEncoderStatus::JXL_ENC_SUCCESS) {
+            return Ok(());
+        }
     }
 }
 

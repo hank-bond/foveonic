@@ -246,7 +246,7 @@ pub fn write<W: Write + Seek>(
                 )?,
             }
         }
-        Format::Jxl => writer.write_all(&jxl::encode(&pixels, width, height, space, options)?)?,
+        Format::Jxl => jxl::encode(&mut writer, &pixels, width, height, space, options)?,
         Format::Dng => unreachable!("validated photographic format"),
     }
     writer.flush()?;

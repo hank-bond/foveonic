@@ -444,3 +444,59 @@ fn maximum_jxl_quality_uses_the_exact_lossless_profile_and_samples() {
         assert_eq!(decoded.profile, space.profile());
     }
 }
+
+#[test]
+fn jxl_streams_multiple_chunks_and_propagates_writer_errors() {
+    struct Sink {
+        bytes: Vec<u8>,
+        writes: usize,
+        fail: bool,
+    }
+    impl std::io::Write for Sink {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            if self.fail {
+                return Err(std::io::Error::other("injected failure"));
+            }
+            self.writes += 1;
+            self.bytes.extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut state = 1_u32;
+    let pixels: Vec<u16> = (0..256 * 256 * 3)
+        .map(|_| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 16) as u16
+        })
+        .collect();
+    let options = EncodingOptions {
+        jxl_effort: 1,
+        ..Default::default()
+    };
+    let mut sink = Sink {
+        bytes: Vec::new(),
+        writes: 0,
+        fail: false,
+    };
+    jxl::encode(&mut sink, &pixels, 256, 256, TiffColorSpace::Srgb, options).unwrap();
+    assert!(sink.writes > 1);
+    assert_eq!(decode_jxl(&sink.bytes).pixels, pixels);
+    let mut failing = Sink {
+        bytes: Vec::new(),
+        writes: 0,
+        fail: true,
+    };
+    let error = jxl::encode(
+        &mut failing,
+        &pixels,
+        256,
+        256,
+        TiffColorSpace::Srgb,
+        options,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "injected failure");
+}
