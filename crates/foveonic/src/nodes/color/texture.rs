@@ -3,7 +3,6 @@
 use crate::{
     color_space::{ColorSpace, TiffColorSpace},
     gpu::{
-        scratch::Scratch,
         Binding::{Read, Write},
         Gpu, Kernel, ReadGuard,
     },
@@ -198,8 +197,7 @@ pub(crate) fn apply(
     let mut fine = ratio.clone();
     let mut coarse = ratio.clone();
     if !unit {
-        let mut scratch = Scratch::default();
-        let mut log = scratch.take(gpu, bytes)?;
+        let mut log = gpu.storage("Texture luminance residual", bytes)?;
         gpu.dispatch(
             Kernel::TextureExtract,
             &mut [
@@ -220,7 +218,7 @@ pub(crate) fn apply(
                     steps: [step, axis as f32, 0., 0.],
                     ..prepared.uniforms
                 });
-                let mut output = scratch.take(gpu, bytes)?;
+                let mut output = gpu.storage("Texture binomial scale", bytes)?;
                 gpu.dispatch(
                     Kernel::TextureBlur,
                     &mut [
@@ -232,7 +230,7 @@ pub(crate) fn apply(
                     groups,
                     &mut trace,
                 );
-                scratch.release(std::mem::replace(&mut current, output));
+                current = output;
             }
             if index == FINE_BOUNDARY_STEP {
                 fine = current.clone();
