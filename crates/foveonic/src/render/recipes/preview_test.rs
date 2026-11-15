@@ -1,4 +1,4 @@
-//! Checks reduced-preview framing and fallback through exposure and reconstruction edits.
+//! Checks working-grid framing through exposure and reconstruction edits.
 
 use crate::{
     inspection::Content,
@@ -19,9 +19,6 @@ fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
     );
     settings.reconstruction = Some(crate::noise::Controls::default());
     settings.rendering = Rendering::Color;
-    assert!(
-        settings.working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
-    );
     let mut session = RenderSession::new(source);
     let engine = Engine::new().unwrap();
     let output = std::env::var_os("SMALL_PREVIEW_OUT").map(std::path::PathBuf::from);
@@ -153,10 +150,6 @@ fn scaled_color_guides_match_fresh_edits_and_native_inspection_remains_explicit(
         let mut session = RenderSession::new(source.clone());
         for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
             base.working_scale = quality;
-            assert!(
-                base.working_scale_available(&source.metadata, quality),
-                "{name}"
-            );
             let neutral = engine
                 .render_session(
                     &mut session,

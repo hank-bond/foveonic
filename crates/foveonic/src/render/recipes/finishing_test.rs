@@ -275,16 +275,11 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
             "DNG boundary"
         );
         drop(dng);
-        if rendering == Rendering::Color
-            && settings
-                .working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap())
-        {
-            settings.working_scale = Scale::new(2).unwrap();
-            let image = engine
-                .render(&source, &settings, &mut Profile::default())
-                .unwrap();
-            assert!(engine.readback_image(&image).is_ok());
-        }
+        settings.working_scale = Scale::new(2).unwrap();
+        let image = engine
+            .render(&source, &settings, &mut Profile::default())
+            .unwrap();
+        assert!(engine.readback_image(&image).is_ok());
     }
 }
 

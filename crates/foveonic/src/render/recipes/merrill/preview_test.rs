@@ -1,4 +1,4 @@
-//! Checks reduced framing, optional reconstruction bypass, and immutable Full refinement.
+//! Checks working-grid framing, selected reconstruction and immutable native refinement.
 
 use super::*;
 
@@ -213,7 +213,7 @@ fn arbitrary_sensor_scales_cover_edges_and_align_every_reconstruction_ratio() {
 }
 
 #[test]
-fn color_preview_support_requires_valid_merrill_geometry_and_supports_native_regions() {
+fn native_regions_support_color_monochrome_and_camera_rotations() {
     use crate::source::{Matrix, MatrixEncoding, Metadata};
     let mut metadata = Metadata {
         width: 4928,
@@ -236,19 +236,13 @@ fn color_preview_support_requires_valid_merrill_geometry_and_supports_native_reg
     let mut settings = crate::render::Settings::default();
     for rotation in [0, 90, 180, 270] {
         metadata.rotation = rotation;
-        assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
         assert!(settings.regional_preview_available(&metadata));
     }
     settings.rendering = crate::render::Rendering::Monochrome;
-    assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
+    assert!(settings.regional_preview_available(&metadata));
     settings.rendering = crate::render::Rendering::Color;
     settings.output_size = Some([1200, 800]);
     assert!(!settings.regional_preview_available(&metadata));
-    settings.output_size = None;
-    metadata.matrices.get_mut("ActiveImageArea").unwrap().values[0] += 1.;
-    assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
-    metadata.matrices.clear();
-    assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
 }
 
 #[test]

@@ -293,8 +293,6 @@ fn regional_app_response_bakes_exports_and_preserves_reference() {
         settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
         for response in [BaseResponse::Natural, BaseResponse::Strong] {
             settings.photographic.base_response = response;
-            assert!(settings
-                .working_scale_available(&source.metadata, crate::render::Scale::new(2).unwrap()));
             let mut images = engine
                 .render_artifacts(
                     &source,
