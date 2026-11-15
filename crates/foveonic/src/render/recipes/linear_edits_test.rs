@@ -243,7 +243,7 @@ fn original_dehaze_matches_cached_edits_dng_and_full_preview() {
             .all(|v| v.is_finite() && (0. ..=1.).contains(v)));
         drop(after);
         drop(before);
-        let reference_ms = started.elapsed().as_secs_f64() * 1000.;
+        let native_ms = started.elapsed().as_secs_f64() * 1000.;
         let stats = super::super::estimated_white_balance(
             &engine,
             &source,
@@ -283,10 +283,35 @@ fn original_dehaze_matches_cached_edits_dng_and_full_preview() {
             }
         }
         drop(bytes);
+        drop(session);
+        drop(expected);
+        // Quality analysis follows the working grid. Seed Half independently
+        // so this section tests amount-only reuse, without also changing scale.
+        settings.working_scale = Scale::new(2).unwrap();
+        let mut session = RenderSession::new(source.clone());
+        let mut profile = Profile::new(Mode::Wall);
+        let mut artifacts = engine
+            .render_session(
+                &mut session,
+                &settings,
+                &["linear.edits"],
+                || false,
+                &mut profile,
+            )
+            .unwrap()
+            .unwrap();
+        let Content::Image(image) = artifacts.remove(0).content else {
+            panic!("image")
+        };
+        let expected = engine.readback_image(&image).unwrap();
+        drop(image);
+        assert!(profile
+            .host
+            .iter()
+            .any(|t| t.stage == "estimate haze color"));
         let mut warm_ms = 0.;
         for amount in [45., 35.] {
             settings.dehaze.amount = amount;
-            settings.working_scale = Scale::new(2).unwrap();
             let start = std::time::Instant::now();
             let mut profile = Profile::new(Mode::Wall);
             let mut artifacts = engine
@@ -321,7 +346,7 @@ fn original_dehaze_matches_cached_edits_dng_and_full_preview() {
             );
         }
         eprintln!(
-            "{rendering:?}: Dehaze original {reference_ms:.1} ms, warm amount {warm_ms:.1} ms"
+            "{rendering:?}: Native Dehaze/pick {native_ms:.1} ms, Half amount/readback {warm_ms:.1} ms"
         );
     }
 }

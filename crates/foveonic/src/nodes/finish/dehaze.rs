@@ -4,7 +4,7 @@ use crate::{
     color_space::{ColorSpace, TiffColorSpace},
     gpu::{
         Binding::{Read, Write},
-        Gpu, Kernel, ReadGuard,
+        Gpu, GpuTrace, Kernel, ReadGuard,
     },
     profile::Profile,
     recipe::Key,
@@ -12,6 +12,15 @@ use crate::{
     source::Result,
 };
 use serde::{Deserialize, Serialize};
+
+const ESTIMATE_PARTITIONS: u32 = 16;
+
+fn tail_partitions(shape: [u32; 2]) -> u32 {
+    (u64::from(shape[0]) * u64::from(shape[1]))
+        .div_ceil(65536)
+        .next_power_of_two()
+        .clamp(u64::from(ESTIMATE_PARTITIONS), 256) as u32
+}
 
 /// Manual shadow colors use normalized linear sRGB, independently of display encoding.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -132,6 +141,8 @@ pub(crate) struct Estimate {
     shape: [u32; 4],
     region: [u32; 4],
     selection: [u32; 4],
+    // Partition count, Quality tail averaging, reserved.
+    partitions: [u32; 4],
     normalization: [f32; 4],
     basis: Basis,
 }
@@ -169,6 +180,16 @@ impl Estimate {
             shape: [extent[0], extent[1], w, h],
             region: [crop[0], crop[1], width, height],
             selection: [radius, 16384, candidates, u32::from(mono)],
+            partitions: [
+                if quality == ProcessingQuality::Quality {
+                    tail_partitions([w, h])
+                } else {
+                    ESTIMATE_PARTITIONS
+                },
+                u32::from(quality == ProcessingQuality::Quality),
+                0,
+                0,
+            ],
             normalization: [1. / white, 0., 0., 0.],
             basis,
         }
@@ -198,6 +219,8 @@ impl Estimate {
             ProcessingQuality::Quality,
         );
         params.selection[1] = 65535;
+        params.partitions[0] = ESTIMATE_PARTITIONS;
+        params.partitions[1] = 0;
         params
     }
     pub fn estimates_color(self) -> bool {
@@ -205,6 +228,11 @@ impl Estimate {
     }
     pub fn with_color_estimation(mut self, enabled: bool) -> Self {
         self.normalization[1] = f32::from(!enabled);
+        self.partitions[0] = if enabled && self.partitions[1] != 0 {
+            tail_partitions([self.shape[2], self.shape[3]])
+        } else {
+            ESTIMATE_PARTITIONS
+        };
         self
     }
     pub fn key(self) -> Key {
@@ -246,7 +274,7 @@ pub(crate) fn estimate(
     p: Estimate,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
-    estimate_impl(gpu, input, p, profile, true)
+    estimate_impl(gpu, input, p, profile, true, p.selection[0] > 16)
 }
 
 fn estimate_impl(
@@ -255,6 +283,7 @@ fn estimate_impl(
     p: Estimate,
     profile: &mut Profile,
     partitioned: bool,
+    expanded_minimum: bool,
 ) -> Result<ReadGuard> {
     if input.size() != u64::from(p.shape[0]) * u64::from(p.shape[1]) * 12 {
         return Err("Dehaze analysis geometry mismatch".into());
@@ -263,13 +292,17 @@ fn estimate_impl(
     let uniform = gpu.uniform(&p);
     let mut pixels = gpu.storage("Dehaze analysis pixels", count * 16)?;
     let estimate_color = p.estimates_color();
-    let mut dark = gpu.storage(
-        "Dehaze neighborhood minimum",
-        if estimate_color { count * 4 } else { 4 },
-    )?;
     let mut output = gpu.storage("Dehaze estimate", 32)?;
     let groups = [p.shape[2].div_ceil(8), p.shape[3].div_ceil(8)];
-    let mut trace = gpu.trace(profile.mode.gpu(), 5);
+    let offsets = minimum_offsets(p.selection[0]);
+    let minimum_passes = if !estimate_color {
+        0
+    } else if expanded_minimum {
+        offsets.len() as u32
+    } else {
+        2
+    };
+    let mut trace = gpu.trace(profile.mode.gpu(), 3 + minimum_passes);
     gpu.dispatch(
         Kernel::DehazePrepare,
         &mut [
@@ -280,29 +313,19 @@ fn estimate_impl(
         groups,
         &mut trace,
     );
-    if estimate_color {
-        let mut horizontal = gpu.storage("Dehaze horizontal minimum", count * 4)?;
-        gpu.dispatch(
-            Kernel::DehazeHorizontal,
-            &mut [
-                (1, Read(&uniform)),
-                (2, Read(&pixels)),
-                (3, Write(horizontal.write())),
-            ],
-            groups,
+    let dark = if estimate_color {
+        neighborhood_minimum(
+            gpu,
+            &pixels,
+            p,
+            &uniform,
+            &offsets,
+            expanded_minimum,
             &mut trace,
-        );
-        gpu.dispatch(
-            Kernel::DehazeVertical,
-            &mut [
-                (1, Read(&uniform)),
-                (3, Read(&horizontal)),
-                (4, Write(dark.write())),
-            ],
-            groups,
-            &mut trace,
-        );
-    }
+        )?
+    } else {
+        gpu.storage("Dehaze neighborhood minimum", 4)?
+    };
     #[cfg(test)]
     if !partitioned {
         if p.selection[2] > 1000 {
@@ -325,42 +348,146 @@ fn estimate_impl(
     #[cfg(not(test))]
     let _ = partitioned;
     {
-        // Sixteen partition heaps and one merge heap share the selected K capacity.
+        let partitions = p.partitions[0];
+        let tail_average = p.partitions[1] != 0 && estimate_color;
+        // Tail bins store a count and a two-word sum for each RGB channel.
         let mut heaps = gpu.storage(
-            "haze candidate heaps",
-            17 * u64::from(p.selection[2]).max(1) * 16,
+            "haze candidate selection",
+            if tail_average {
+                u64::from(partitions) * 256 * 32
+            } else {
+                (u64::from(partitions) + 1) * u64::from(p.selection[2]).max(1) * 16
+            },
         )?;
-        let mut histograms = gpu.storage("haze partial histograms", 16 * 256 * 16)?;
-        let mut counts = gpu.storage("haze candidate counts", 16 * 4)?;
+        let mut histograms =
+            gpu.storage("haze partial histograms", u64::from(partitions) * 256 * 16)?;
+        let mut counts = gpu.storage("haze candidate counts", u64::from(partitions) * 4)?;
+        let mut partition_bindings = [
+            (1, Read(&uniform)),
+            (2, Read(&pixels)),
+            (4, Read(&dark)),
+            (6, Write(heaps.write())),
+            (7, Write(histograms.write())),
+            (8, Write(counts.write())),
+        ];
         gpu.dispatch(
-            Kernel::DehazePartition,
-            &mut [
-                (1, Read(&uniform)),
-                (2, Read(&pixels)),
-                (4, Read(&dark)),
-                (6, Write(heaps.write())),
-                (7, Write(histograms.write())),
-                (8, Write(counts.write())),
-            ],
-            [16, 1],
+            if tail_average {
+                Kernel::DehazeTailPartition
+            } else {
+                Kernel::DehazePartition
+            },
+            &mut partition_bindings[..if tail_average { 5 } else { 6 }],
+            [partitions, 1],
             &mut trace,
         );
+        let mut merge_bindings = [
+            (1, Read(&uniform)),
+            (5, Write(output.write())),
+            (
+                6,
+                if tail_average {
+                    Read(&heaps)
+                } else {
+                    Write(heaps.write())
+                },
+            ),
+            (7, Read(&histograms)),
+            (2, Read(&pixels)),
+            (8, Read(&counts)),
+        ];
         gpu.dispatch(
-            Kernel::DehazeMerge,
-            &mut [
-                (1, Read(&uniform)),
-                (2, Read(&pixels)),
-                (5, Write(output.write())),
-                (6, Write(heaps.write())),
-                (7, Read(&histograms)),
-                (8, Read(&counts)),
-            ],
+            if tail_average {
+                Kernel::DehazeTailMerge
+            } else {
+                Kernel::DehazeMerge
+            },
+            &mut merge_bindings[..if tail_average { 4 } else { 6 }],
             [1, 1],
             &mut trace,
         );
     }
     gpu.finish_trace(&trace, profile)?;
     Ok(output)
+}
+
+// A radius-r minimum expanded at offsets {-d, 0, d} covers every sample
+// through radius r+d when d <= 2*r+1. The final step overlaps as needed.
+fn minimum_offsets(radius: u32) -> Vec<u32> {
+    let mut covered = radius.min(1);
+    let mut offsets = vec![covered];
+    while covered < radius {
+        let offset = covered
+            .saturating_mul(2)
+            .saturating_add(1)
+            .min(radius - covered);
+        offsets.push(offset);
+        covered += offset;
+    }
+    offsets
+}
+
+fn neighborhood_minimum(
+    gpu: &Gpu,
+    pixels: &ReadGuard,
+    p: Estimate,
+    uniform: &ReadGuard,
+    offsets: &[u32],
+    expanded: bool,
+    trace: &mut GpuTrace,
+) -> Result<ReadGuard> {
+    let count = u64::from(p.shape[2]) * u64::from(p.shape[3]);
+    let groups = [p.shape[2].div_ceil(8), p.shape[3].div_ceil(8)];
+    let mut dark = gpu.storage("Dehaze neighborhood minimum", count * 4)?;
+    let mut horizontal = gpu.storage("Dehaze horizontal minimum", count * 4)?;
+    if expanded {
+        let first = gpu.uniform(&[p.shape[2], p.shape[3], offsets[0], 0]);
+        gpu.dispatch(
+            Kernel::DehazeMinimumPrepare,
+            &mut [
+                (0, Read(&first)),
+                (1, Read(pixels)),
+                (3, Write(dark.write())),
+            ],
+            groups,
+            trace,
+        );
+        for &offset in &offsets[1..] {
+            let step = gpu.uniform(&[p.shape[2], p.shape[3], offset, 0]);
+            gpu.dispatch(
+                Kernel::DehazeMinimumExpand,
+                &mut [
+                    (0, Read(&step)),
+                    (2, Read(&dark)),
+                    (3, Write(horizontal.write())),
+                ],
+                groups,
+                trace,
+            );
+            std::mem::swap(&mut dark, &mut horizontal);
+        }
+    } else {
+        gpu.dispatch(
+            Kernel::DehazeHorizontal,
+            &mut [
+                (1, Read(uniform)),
+                (2, Read(pixels)),
+                (3, Write(horizontal.write())),
+            ],
+            groups,
+            trace,
+        );
+        gpu.dispatch(
+            Kernel::DehazeVertical,
+            &mut [
+                (1, Read(uniform)),
+                (3, Read(&horizontal)),
+                (4, Write(dark.write())),
+            ],
+            groups,
+            trace,
+        );
+    }
+    Ok(dark)
 }
 
 pub(crate) fn apply(

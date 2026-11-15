@@ -23,10 +23,14 @@ pub enum Kernel {
     DehazePrepare,
     DehazeHorizontal,
     DehazeVertical,
+    DehazeMinimumPrepare,
+    DehazeMinimumExpand,
     #[cfg(test)]
     DehazeEstimate,
     DehazePartition,
     DehazeMerge,
+    DehazeTailPartition,
+    DehazeTailMerge,
     DehazeApply,
     MonoTextureExtract,
     MonoTextureBlur,
@@ -358,10 +362,14 @@ impl Kernel {
             Self::DehazePrepare => "prepare haze analysis",
             Self::DehazeHorizontal => "horizontal haze minimum",
             Self::DehazeVertical => "vertical haze minimum",
+            Self::DehazeMinimumPrepare => "prepare square haze minimum",
+            Self::DehazeMinimumExpand => "expand square haze minimum",
             #[cfg(test)]
             Self::DehazeEstimate => "estimate haze color",
             Self::DehazePartition => "partition haze candidates",
             Self::DehazeMerge => "merge haze candidates",
+            Self::DehazeTailPartition => "partition haze score bins",
+            Self::DehazeTailMerge => "average haze score tail",
             Self::DehazeApply => "apply Dehaze",
             Self::MonoTextureExtract => "extract monochrome texture",
             Self::MonoTextureBlur => "filter monochrome texture",
@@ -826,6 +834,14 @@ impl Gpu {
                 include_str!("../nodes/finish/dehaze_estimate.wgsl"),
                 "dehaze_vertical",
             ),
+            (
+                include_str!("../nodes/finish/dehaze_minimum.wgsl"),
+                "dehaze_minimum_prepare",
+            ),
+            (
+                include_str!("../nodes/finish/dehaze_minimum.wgsl"),
+                "dehaze_minimum_expand",
+            ),
             #[cfg(test)]
             (
                 include_str!("../nodes/finish/dehaze_estimate.wgsl"),
@@ -838,6 +854,14 @@ impl Gpu {
             (
                 include_str!("../nodes/finish/dehaze_estimate.wgsl"),
                 "dehaze_merge",
+            ),
+            (
+                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+                "dehaze_tail_partition",
+            ),
+            (
+                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+                "dehaze_tail_merge",
             ),
             (include_str!("../nodes/finish/dehaze.wgsl"), "dehaze_apply"),
             (texture, "mono_texture_extract"),

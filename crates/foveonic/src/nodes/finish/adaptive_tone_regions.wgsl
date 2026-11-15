@@ -7,6 +7,7 @@ struct Region {
 }
 @group(0) @binding(8) var<storage, read_write> samples: array<vec4<f32>>;
 @group(0) @binding(9) var<storage, read_write> regions: array<Region>;
+const REGION_SAMPLE_LIMIT: u32 = 128u;
 const REGION_COUNT: u32 = 1235u; // 31² + 15² + 7² overlapping windows
 
 @compute @workgroup_size(8,8)
@@ -34,10 +35,21 @@ fn window(index:u32)->vec3<u32> {
 fn add_region(left: Region, right: Region) -> Region {
     return Region(left.all+right.all, left.bright+right.bright, left.dark+right.dark, left.support+right.support);
 }
-fn summarize_dense_region(index: u32) {
+// Integer midpoint selection also covers narrow images without overflowing
+// the product of a sample index and the physical window extent.
+fn region_midpoint(index: u32, extent: u32, count: u32) -> u32 {
+    let divisor=2u*count;
+    let phase=2u*index+1u;
+    return phase*(extent/divisor)+(phase*(extent%divisor))/divisor;
+}
+fn summarize_quality_region(index: u32) {
     let w=window(index);
     let window_low=vec2<u32>(floor(vec2<f32>(w.xy)*vec2<f32>(context.shape.zw)/256.0));
     let window_high=min(vec2<u32>(ceil(vec2<f32>(w.xy+w.z)*vec2<f32>(context.shape.zw)/256.0)),context.shape.zw);
+    let window_extent=window_high-window_low;
+    let sample_extent=min(window_extent,vec2<u32>(REGION_SAMPLE_LIMIT));
+    // Bound each scene summary while preserving its Whole-normalized windows.
+    // Small windows retain every pixel. Larger windows use cell midpoints.
     // Binary partial sums bound rounding error by the tree depth, even when
     // GPU fast-math reassociates compensated-addition expressions. Each valid
     // sample participates once. The input geometry contains fewer than 2^31
@@ -46,7 +58,9 @@ fn summarize_dense_region(index: u32) {
     var count=0u;
     var origin=vec3<f32>(0.0);
     var has_origin=vec3<bool>(false);
-    for(var y=window_low.y;y<window_high.y;y++) { for(var x=window_low.x;x<window_high.x;x++) {
+    for(var row=0u;row<sample_extent.y;row++) { for(var column=0u;column<sample_extent.x;column++) {
+        let y=window_low.y+region_midpoint(row,window_extent.y,sample_extent.y);
+        let x=window_low.x+region_midpoint(column,window_extent.x,sample_extent.x);
         let v=samples[y*context.shape.z+x];
         if v.x < -20.0 { continue; }
         let bright_weight=smoothstep(0.80,0.90,tone(v.x+v.z));
@@ -89,12 +103,15 @@ fn summarize_dense_region(index: u32) {
     bright.x+=origin.y;
     dark.x+=origin.z;
     let density=65536.0/(f32(context.shape.z)*f32(context.shape.w));
-    regions[index]=Region(all,bright,dark,total.support*density);
+    // Rejected samples still occupy lattice cells. Rescale by scheduled points
+    // so near-black rejection does not inflate a remaining population's support.
+    let represented_area=(f32(window_extent.x)*f32(window_extent.y))/(f32(sample_extent.x)*f32(sample_extent.y));
+    regions[index]=Region(all,bright,dark,total.support*represented_area*density);
 }
 @compute @workgroup_size(64)
 fn summarize_regions(@builtin(global_invocation_id) id:vec3<u32>) {
     if id.x>=REGION_COUNT { return; }
-    if context.sampling.z!=0u { summarize_dense_region(id.x); return; }
+    if context.sampling.z!=0u { summarize_quality_region(id.x); return; }
     let w=window(id.x);
     var sum=vec4<f32>(0.0);
     var high=vec4<f32>(0.0);

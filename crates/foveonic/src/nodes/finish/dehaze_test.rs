@@ -659,23 +659,25 @@ fn manual_dehaze_skips_color_selection_and_retains_identical_brightness_calibrat
         })
         .collect();
     let input = gpu.upload("Calibration fixture", &pixels).unwrap();
-    let params = Estimate::new(
-        extent,
-        test_basis(ColorSpace::Srgb),
-        1.,
-        false,
-        [0, 0, 64, 48],
-        ProcessingQuality::Speed,
-    );
-    let automatic = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
-    let manual_params = params.with_color_estimation(false);
-    assert!(!manual_params.estimates_color());
-    let manual = estimate(&gpu, &input, manual_params, &mut Profile::default()).unwrap();
-    let automatic = gpu.readback(&automatic).unwrap();
-    let manual = gpu.readback(&manual).unwrap();
-    let manual_values: &[f32] = bytemuck::cast_slice(&manual);
-    assert_eq!(&manual_values[..4], &[0.; 4]);
-    assert_eq!(&manual[16..], &automatic[16..]);
+    for quality in [ProcessingQuality::Quality, ProcessingQuality::Speed] {
+        let params = Estimate::new(
+            extent,
+            test_basis(ColorSpace::Srgb),
+            1.,
+            false,
+            [0, 0, 64, 48],
+            quality,
+        );
+        let automatic = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+        let manual_params = params.with_color_estimation(false);
+        assert!(!manual_params.estimates_color());
+        let manual = estimate(&gpu, &input, manual_params, &mut Profile::default()).unwrap();
+        let automatic = gpu.readback(&automatic).unwrap();
+        let manual = gpu.readback(&manual).unwrap();
+        let manual_values: &[f32] = bytemuck::cast_slice(&manual);
+        assert_eq!(&manual_values[..4], &[0.; 4]);
+        assert_eq!(&manual[16..], &automatic[16..]);
+    }
 }
 
 #[test]
@@ -921,16 +923,63 @@ fn partitioned_estimate_matches_serial_for_ties_empty_and_saturation() {
                     if mode == 3 {
                         p.selection[1] = 65535;
                     }
-                    let a = estimate_impl(&gpu, &input, p, &mut Profile::default(), false).unwrap();
-                    let b = estimate_impl(&gpu, &input, p, &mut Profile::default(), true).unwrap();
-                    assert_eq!(
-                        gpu.readback(&a).unwrap(),
-                        gpu.readback(&b).unwrap(),
-                        "extent {extent:?}, mode {mode}, auto {auto}, mono {mono}"
-                    );
+                    let a = estimate_impl(&gpu, &input, p, &mut Profile::default(), false, false)
+                        .unwrap();
+                    let expected = gpu.readback(&a).unwrap();
+                    for partitions in [16, 32, 64] {
+                        p.partitions[0] = partitions;
+                        let b =
+                            estimate_impl(&gpu, &input, p, &mut Profile::default(), true, false)
+                                .unwrap();
+                        assert_eq!(
+                            expected,
+                            gpu.readback(&b).unwrap(),
+                            "partitions {partitions}, extent {extent:?}, mode {mode}, auto {auto}, mono {mono}"
+                        );
+                    }
                 }
             }
         }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn partitioned_selection_resolves_equal_score_and_intensity_by_pixel_index() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [33, 5];
+    let k = 37;
+    // Both colors have minimum 4096 and intensity 8192. Only their indices differ.
+    let first = [4096, 8192, 12288];
+    let later = [4096, 10240, 8192];
+    let values: Vec<f32> = (0..extent[0] * extent[1])
+        .flat_map(|i| {
+            let rgb = if i < k { first } else { later };
+            rgb.map(|v| v as f32 / 65535.)
+        })
+        .collect();
+    let input = gpu.upload("haze pixel-index tie fixture", &values).unwrap();
+    let mut params = Estimate::new(
+        extent,
+        test_basis(ColorSpace::Srgb),
+        1.,
+        false,
+        [0, 0, extent[0], extent[1]],
+        ProcessingQuality::Quality,
+    );
+    params.selection[0] = 0;
+    params.selection[2] = k;
+    params.partitions[1] = 0;
+    let serial =
+        estimate_impl(&gpu, &input, params, &mut Profile::default(), false, false).unwrap();
+    let expected = gpu.readback(&serial).unwrap();
+    for (actual, code) in floats(&gpu, &serial)[..3].iter().zip(first) {
+        assert!((actual - code as f32 / 65535.).abs() < 0.000002);
+    }
+    for partitions in [16, 32, 64] {
+        params.partitions[0] = partitions;
+        let result = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+        assert_eq!(expected, gpu.readback(&result).unwrap());
     }
 }
 
@@ -969,7 +1018,9 @@ fn quality_estimation_keeps_dense_samples_radius_and_selection_fraction() {
         [0, 0, 128, 96],
         ProcessingQuality::Speed,
     );
-    assert_eq!(small_quality.key(), small_speed.key());
+    assert_ne!(small_quality.key(), small_speed.key());
+    assert_eq!(small_quality.partitions[1], 1);
+    assert_eq!(small_speed.partitions[1], 0);
 
     let native = Estimate::new(
         [12000, 8000],
@@ -993,6 +1044,7 @@ fn quality_estimation_keeps_dense_samples_radius_and_selection_fraction() {
     let patch = Estimate::patch([1100, 900], basis, 1., true, [500, 400], crop);
     assert_eq!(patch.shape[2..], [133, 133]);
     assert_eq!(patch.selection[1], 65535);
+    assert_eq!(patch.partitions[1], 0);
 }
 
 // This scalar CPU oracle sorts all eligible candidates instead of reproducing
@@ -1096,6 +1148,7 @@ fn dense_quality_selection_matches_sorted_cpu_truth_beyond_the_old_heap_capacity
     for k in [params.selection[2], 1100] {
         let mut params = params;
         params.selection[2] = k;
+        params.partitions[1] = 0;
         let actual = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
         let expected = scalar_estimate_truth(
             &samples,
@@ -1133,6 +1186,476 @@ fn dense_selection_accumulates_more_than_one_u32_of_channel_codes_without_overfl
     );
     params.selection[1] = 65535;
     params.selection[2] = 70000;
-    let result = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
-    assert_eq!(&floats(&gpu, &result)[..4], &[1.; 4]);
+    params.partitions[1] = 0;
+    for partitions in [16, 32, 64] {
+        params.partitions[0] = partitions;
+        let result = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+        assert_eq!(&floats(&gpu, &result)[..4], &[1.; 4]);
+    }
+}
+
+// Sort eligible pixels by their coarse score and average complete tied groups.
+// This oracle uses direct spatial minima and f64 arithmetic, without GPU bins.
+fn scalar_tail_color(samples: &[[u32; 3]], params: Estimate) -> [f64; 4] {
+    let width = params.shape[2] as usize;
+    let height = params.shape[3] as usize;
+    let radius = params.selection[0] as usize;
+    let mut candidates = Vec::new();
+    for y in radius..height.saturating_sub(radius) {
+        for x in radius..width.saturating_sub(radius) {
+            let score = (y - radius..=y + radius)
+                .flat_map(|row| (x - radius..=x + radius).map(move |column| row * width + column))
+                .map(|i| *samples[i].iter().min().unwrap())
+                .min()
+                .unwrap();
+            let rgb = samples[y * width + x];
+            let intensity = (rgb[0] >> 2) + (rgb[1] >> 1) + (rgb[2] >> 2);
+            if score > 0 && intensity <= params.selection[1] {
+                candidates.push((score >> 8, rgb));
+            }
+        }
+    }
+    candidates.sort_unstable_by_key(|(score, _)| std::cmp::Reverse(*score));
+    let mut count = 0;
+    let mut color = [0.; 4];
+    let mut remaining = candidates.as_slice();
+    while !remaining.is_empty() && count < params.selection[2] as usize {
+        let end = remaining.partition_point(|entry| entry.0 == remaining[0].0);
+        let take = end.min(params.selection[2] as usize - count);
+        for (channel, total) in color[..3].iter_mut().enumerate() {
+            let sum: u64 = remaining[..end]
+                .iter()
+                .map(|entry| u64::from(entry.1[channel]))
+                .sum();
+            *total += sum as f64 * take as f64 / end as f64;
+        }
+        count += take;
+        remaining = &remaining[end..];
+    }
+    for value in &mut color[..3] {
+        *value /= 65535. * count.max(1) as f64;
+    }
+    color[3] = f64::from(count > 0 && color[..3].iter().any(|v| *v > 0.));
+    color
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn quality_tail_average_matches_sorted_group_oracle_for_empty_and_extreme_bins() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [33, 7];
+    for mode in 0..3 {
+        let samples: Vec<[u32; 3]> = (0..extent[0] * extent[1])
+            .map(|i| match mode {
+                0 => [0; 3],
+                1 => {
+                    let code = [0, 1, 255, 256, 65280, 65535][i as usize % 6];
+                    [code; 3]
+                }
+                _ => [
+                    1 + i * 337 % 65535,
+                    1 + i * 149 % 65535,
+                    1 + i * 607 % 65535,
+                ],
+            })
+            .collect();
+        let values: Vec<f32> = samples
+            .iter()
+            .flatten()
+            .map(|v| *v as f32 / 65535.)
+            .collect();
+        let input = gpu
+            .upload("haze tail extreme-bin fixture", &values)
+            .unwrap();
+        for radius in [0, 1] {
+            for ceiling in [16384, 65535] {
+                for k in [0, 1, 37, 1000] {
+                    let mut params = Estimate::new(
+                        extent,
+                        test_basis(ColorSpace::Srgb),
+                        1.,
+                        false,
+                        [0, 0, extent[0], extent[1]],
+                        ProcessingQuality::Quality,
+                    );
+                    params.selection[..3].copy_from_slice(&[radius, ceiling, k]);
+                    let expected = scalar_tail_color(&samples, params);
+                    let mut exact_params = params;
+                    exact_params.partitions[1] = 0;
+                    let exact =
+                        estimate(&gpu, &input, exact_params, &mut Profile::default()).unwrap();
+                    let exact = floats(&gpu, &exact);
+                    for partitions in [1, 16, 64] {
+                        params.partitions[0] = partitions;
+                        let actual =
+                            estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+                        let actual = floats(&gpu, &actual);
+                        for (actual, expected) in actual[..4].iter().zip(expected) {
+                            assert!((f64::from(*actual) - expected).abs() < 0.000002,
+                                "mode {mode}, radius {radius}, ceiling {ceiling}, K {k}, partitions {partitions}");
+                        }
+                        assert_eq!(&actual[4..], &exact[4..]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn quality_tail_boundary_intentionally_averages_fine_score_intensity_and_index_ranks() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [33, 5];
+    // Every pixel lands in dark bin 16. Fine scores, intensity and index would
+    // choose different exact subsets, while this experiment averages the bin.
+    let samples: Vec<[u32; 3]> = (0..extent[0] * extent[1])
+        .map(|i| match i % 3 {
+            0 => [4096, 8192, 12288],
+            1 => [4096, 10240, 8192],
+            _ => [4300, 8100, 9000],
+        })
+        .collect();
+    let values: Vec<f32> = samples
+        .iter()
+        .flatten()
+        .map(|v| *v as f32 / 65535.)
+        .collect();
+    let input = gpu
+        .upload("haze approximate boundary fixture", &values)
+        .unwrap();
+    let mut params = Estimate::new(
+        extent,
+        test_basis(ColorSpace::Srgb),
+        1.,
+        false,
+        [0, 0, extent[0], extent[1]],
+        ProcessingQuality::Quality,
+    );
+    params.selection[0] = 0;
+    params.selection[2] = 37;
+    let expected = scalar_tail_color(&samples, params);
+    let actual = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+    let actual = floats(&gpu, &actual);
+    for (actual, expected) in actual[..4].iter().zip(expected) {
+        assert!((f64::from(*actual) - expected).abs() < 0.000002);
+    }
+    params.partitions[1] = 0;
+    let exact = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+    let exact = floats(&gpu, &exact);
+    assert!((actual[1] - exact[1]).abs() > 0.001);
+    assert_eq!(&actual[4..], &exact[4..]);
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn quality_tail_integer_sums_carry_before_fractional_boundary_weighting() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [512, 256];
+    let values = vec![1_f32; (extent[0] * extent[1] * 3) as usize];
+    let input = gpu.upload("haze tail carry fixture", &values).unwrap();
+    let mut params = Estimate::new(
+        extent,
+        Basis::monochrome(),
+        1.,
+        true,
+        [0, 0, extent[0], extent[1]],
+        ProcessingQuality::Quality,
+    );
+    params.selection[1] = 65535;
+    params.selection[2] = 70000;
+    let baseline = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+    let expected = gpu.readback(&baseline).unwrap();
+    for partitions in [1, 3, 16, 17, 31, 64, 256] {
+        params.partitions[0] = partitions;
+        let actual = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+        assert_eq!(expected, gpu.readback(&actual).unwrap());
+        for component in &floats(&gpu, &actual)[..4] {
+            assert!((component - 1.).abs() < 0.000002);
+        }
+    }
+}
+
+#[test]
+fn quality_tail_partition_count_is_bounded_and_leaves_other_selection_paths_at_sixteen() {
+    for (shape, expected) in [
+        ([0, 0], 16),
+        ([1, 1], 16),
+        ([1024, 1024], 16),
+        ([1025, 1024], 32),
+        ([2048, 1024], 32),
+        ([2049, 1024], 64),
+        ([4096, 2048], 128),
+        ([4097, 2048], 256),
+        ([12000, 8000], 256),
+        ([u32::MAX, u32::MAX], 256),
+    ] {
+        assert_eq!(tail_partitions(shape), expected, "shape {shape:?}");
+    }
+    let extent = [4096, 2048];
+    let crop = [0, 0, extent[0], extent[1]];
+    let quality = Estimate::new(
+        extent,
+        Basis::monochrome(),
+        1.,
+        true,
+        crop,
+        ProcessingQuality::Quality,
+    );
+    assert_eq!(quality.partitions[0], 128);
+    let manual = quality.with_color_estimation(false);
+    assert_eq!(manual.partitions[0], 16);
+    assert_eq!(manual.with_color_estimation(true).partitions[0], 128);
+    let speed = Estimate::new(
+        extent,
+        Basis::monochrome(),
+        1.,
+        true,
+        crop,
+        ProcessingQuality::Speed,
+    );
+    assert_eq!(speed.with_color_estimation(true).partitions[0], 16);
+    let patch = Estimate::patch(extent, Basis::monochrome(), 1., true, [500, 400], crop);
+    assert_eq!(patch.with_color_estimation(true).partitions[0], 16);
+}
+
+#[test]
+fn quality_tail_partition_boundaries_cover_large_inputs_without_overflow() {
+    // The shader's quotient/remainder expression is checked against a wider
+    // multiplication, including cases where n*part exceeds one u32.
+    for n in [
+        0,
+        1,
+        17,
+        65535,
+        65536,
+        1048577,
+        16777217,
+        50000000,
+        u32::MAX,
+    ] {
+        for count in [1, 3, 16, 17, 31, 64, 128, 256] {
+            let mut previous = 0;
+            let mut covered = 0_u64;
+            for part in 0..=count {
+                let boundary = (n / count) * part + ((n % count) * part) / count;
+                let expected = u64::from(n) * u64::from(part) / u64::from(count);
+                assert_eq!(u64::from(boundary), expected);
+                assert!(boundary >= previous && boundary <= n);
+                if part > 0 {
+                    assert!(boundary - previous <= n.div_ceil(count));
+                    covered += u64::from(boundary - previous);
+                }
+                previous = boundary;
+            }
+            assert_eq!(previous, n);
+            assert_eq!(covered, u64::from(n));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn quality_tail_partition_counts_preserve_all_estimate_bits_against_sixteen() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [33, 7];
+    let values: Vec<f32> = (0..extent[0] * extent[1])
+        .flat_map(|i| {
+            [
+                1000 + i * 337 % 14000,
+                1000 + i * 149 % 14000,
+                1000 + i * 607 % 14000,
+            ]
+        })
+        .map(|value| value as f32 / 65535.)
+        .collect();
+    let input = gpu
+        .upload("haze tail partition-count fixture", &values)
+        .unwrap();
+    for mono in [false, true] {
+        let mut params = Estimate::new(
+            extent,
+            test_basis(ColorSpace::Srgb),
+            1.,
+            mono,
+            [0, 0, extent[0], extent[1]],
+            ProcessingQuality::Quality,
+        );
+        params.selection[2] = 37;
+        params.partitions[0] = 16;
+        let baseline = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+        let expected = gpu.readback(&baseline).unwrap();
+        for partitions in [1, 3, 17, 31, 64, 128, 256] {
+            params.partitions[0] = partitions;
+            let actual = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
+            assert_eq!(
+                expected,
+                gpu.readback(&actual).unwrap(),
+                "partitions {partitions}, mono {mono}"
+            );
+        }
+    }
+}
+
+// Direct rectangular enumeration has no separable or staged filtering assumptions.
+fn square_minimum_truth(pixels: &[[u32; 4]], extent: [u32; 2], radius: u32) -> Vec<u32> {
+    let [width, height] = extent;
+    (0..height)
+        .flat_map(|y| {
+            (0..width).map(move |x| {
+                (y.saturating_sub(radius)..=y.saturating_add(radius).min(height - 1))
+                    .flat_map(|row| {
+                        (x.saturating_sub(radius)..=x.saturating_add(radius).min(width - 1))
+                            .flat_map(move |column| {
+                                pixels[(row * width + column) as usize][..3].iter().copied()
+                            })
+                    })
+                    .min()
+                    .unwrap()
+            })
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn expanded_dark_minima_match_rectangular_cpu_truth_at_edges_and_partial_steps() {
+    let gpu = Gpu::new().unwrap();
+    for (extent, radii) in [
+        ([1, 1], &[0, 1, 17, 384][..]),
+        ([7, 3], &[0, 1, 2, 3, 4, 17, 121, 122, 384][..]),
+        (
+            [65, 49],
+            &[0, 1, 2, 3, 4, 12, 13, 14, 16, 17, 39, 40, 41][..],
+        ),
+    ] {
+        for constant in [false, true] {
+            // Includes full-range channel values, zeros, ties and distinct edge extrema.
+            // The fourth component must never contribute to the dark score.
+            let pixels: Vec<[u32; 4]> = (0..extent[1])
+                .flat_map(|y| {
+                    (0..extent[0]).map(move |x| {
+                        if constant {
+                            [65535, 65535, 65535, 0]
+                        } else {
+                            [
+                                (x * 4001 + y * 337 + 65535) % 65536,
+                                (x * 23 + y * 7001) % 65536,
+                                65535 - (x * 503 + y * 901) % 65536,
+                                0,
+                            ]
+                        }
+                    })
+                })
+                .collect();
+            let input = gpu.upload("integer dark minima fixture", &pixels).unwrap();
+            for &radius in radii {
+                let mut p = Estimate::new(
+                    extent,
+                    Basis::monochrome(),
+                    1.,
+                    false,
+                    [0, 0, extent[0], extent[1]],
+                    ProcessingQuality::Quality,
+                );
+                p.selection[0] = radius;
+                let uniform = gpu.uniform(&p);
+                let expected = square_minimum_truth(&pixels, extent, radius);
+                for expanded in [false, true] {
+                    let actual = neighborhood_minimum(
+                        &gpu,
+                        &input,
+                        p,
+                        &uniform,
+                        &minimum_offsets(radius),
+                        expanded,
+                        &mut gpu.trace(false, 0),
+                    )
+                    .unwrap();
+                    let bytes = gpu.readback(&actual).unwrap();
+                    assert_eq!(
+                        bytemuck::cast_slice::<u8, u32>(&bytes),
+                        expected,
+                        "extent {extent:?}, radius {radius}, constant {constant}, expanded {expanded}"
+                    );
+                }
+            }
+            assert_eq!(
+                bytemuck::cast_slice::<u8, [u32; 4]>(&gpu.readback(&input).unwrap()),
+                pixels
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn expanded_minima_preserve_complete_estimates_and_corrections_in_both_policies() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [561, 153];
+    let crop = [7, 5, 552, 148];
+    let values: Vec<f32> = (0..extent[1])
+        .flat_map(|y| {
+            (0..extent[0]).flat_map(move |x| {
+                let sample = 1000 + (x * 73 + y * 151 + x * y * 7) % 14000;
+                [sample as f32 / 65535., (sample + 237) as f32 / 65535., 0.2]
+            })
+        })
+        .collect();
+    let input = gpu
+        .upload("whole-photo minima comparison", &values)
+        .unwrap();
+    for quality in [ProcessingQuality::Speed, ProcessingQuality::Quality] {
+        for mono in [false, true] {
+            let basis = Basis::monochrome();
+            let p = Estimate::new(extent, basis, 1., mono, crop, quality);
+            assert_eq!(
+                p.selection[0],
+                if quality == ProcessingQuality::Speed {
+                    16
+                } else {
+                    32
+                }
+            );
+            for auto in [false, true] {
+                let p = p.with_color_estimation(auto);
+                let baseline =
+                    estimate_impl(&gpu, &input, p, &mut Profile::default(), true, false).unwrap();
+                let candidate = estimate(&gpu, &input, p, &mut Profile::default()).unwrap();
+                assert_eq!(
+                    gpu.readback(&baseline).unwrap(),
+                    gpu.readback(&candidate).unwrap(),
+                    "quality {quality:?}, mono {mono}, auto {auto}"
+                );
+                let controls = Controls {
+                    amount: 45.,
+                    shadow: if auto { None } else { Some([0.08, 0.1, 0.12]) },
+                };
+                let params = Params::new(extent, basis, 1., mono, controls);
+                let baseline = apply(
+                    &gpu,
+                    &input,
+                    &baseline,
+                    params,
+                    extent,
+                    &mut Profile::default(),
+                )
+                .unwrap();
+                let candidate = apply(
+                    &gpu,
+                    &input,
+                    &candidate,
+                    params,
+                    extent,
+                    &mut Profile::default(),
+                )
+                .unwrap();
+                assert_eq!(
+                    gpu.readback(&baseline).unwrap(),
+                    gpu.readback(&candidate).unwrap()
+                );
+            }
+        }
+    }
+    assert_eq!(floats(&gpu, &input), values);
 }

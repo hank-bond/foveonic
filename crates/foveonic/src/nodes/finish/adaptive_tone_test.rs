@@ -1194,10 +1194,18 @@ fn dense_large_windows_preserve_constant_and_weak_population_variance() {
                 / values.len() as f64;
             (mean, variance.sqrt())
         };
-        let all = moments(&cycle);
-        let dark = moments(&cycle[..8]);
-        let bright = moments(&cycle[8..]);
         for (index, region) in regions.iter().enumerate() {
+            let (low, high) = dense_summary_window(extent, index);
+            let selected: Vec<_> = dense_summary_axis(low[0], high[0])
+                .into_iter()
+                .map(|x| cycle[(x % 16) as usize])
+                .collect();
+            let all = moments(&selected);
+            let dark_values: Vec<_> = selected.iter().copied().filter(|v| v[0] < -4.).collect();
+            let bright_values: Vec<_> = selected.iter().copied().filter(|v| v[0] > -4.).collect();
+            let support = f64::from(high[0] - low[0]) * f64::from(high[1] - low[1]) * 65536.
+                / (f64::from(extent[0]) * f64::from(extent[1]));
+            assert!((f64::from(region[14]) - support).abs() < 0.001);
             assert!(
                 (f64::from(region[0]) - all.0).abs() < 0.000002,
                 "{extent:?} textured={textured} window {index} all mean {} vs {} (region {region:?})",
@@ -1220,7 +1228,8 @@ fn dense_large_windows_preserve_constant_and_weak_population_variance() {
                 assert_eq!(region[11], 0.);
             }
             if textured {
-                for (offset, expected) in [(4, bright), (8, dark)] {
+                for (offset, expected) in [(4, moments(&bright_values)), (8, moments(&dark_values))]
+                {
                     assert!(
                         (f64::from(region[offset]) - expected.0).abs() < 0.000002,
                         "window {index} population {offset} mean"
@@ -1236,5 +1245,199 @@ fn dense_large_windows_preserve_constant_and_weak_population_variance() {
                 assert!((region[13] / region[14] - 0.5).abs() < 0.000002);
             }
         }
+    }
+}
+
+fn dense_summary_window(extent: [u32; 2], index: usize) -> ([u32; 2], [u32; 2]) {
+    let (grid, step, size, local) = if index < 961 {
+        (31, 8, 16, index)
+    } else if index < 1186 {
+        (15, 16, 32, index - 961)
+    } else {
+        (7, 32, 64, index - 1186)
+    };
+    let start = [(local % grid * step) as u32, (local / grid * step) as u32];
+    (
+        [start[0] * extent[0] / 256, start[1] * extent[1] / 256],
+        [
+            ((start[0] + size) * extent[0]).div_ceil(256),
+            ((start[1] + size) * extent[1]).div_ceil(256),
+        ],
+    )
+}
+
+fn dense_summary_axis(low: u32, high: u32) -> Vec<u32> {
+    let extent = u64::from(high - low);
+    let count = extent.min(128);
+    (0..count)
+        .map(|index| low + ((2 * index + 1) * extent / (2 * count)) as u32)
+        .collect()
+}
+
+#[test]
+fn bounded_region_midpoints_are_distinct_and_inside_odd_narrow_windows() {
+    for (low, high) in [
+        (0, 1),
+        (7, 18),
+        (3, 130),
+        (5, 134),
+        (7, 4106),
+        (0, u32::MAX),
+    ] {
+        let points = dense_summary_axis(low, high);
+        assert_eq!(points.len(), ((high - low).min(128)) as usize);
+        assert!(points.iter().all(|point| (low..high).contains(point)));
+        assert!(points.windows(2).all(|pair| pair[0] < pair[1]));
+        if high - low <= 128 {
+            assert_eq!(points, (low..high).collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn bounded_dense_regions_keep_scheduled_support_and_thin_feature_phases() {
+    let gpu = Gpu::new().unwrap();
+    let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
+    let curve_buffer = gpu
+        .upload("Bounded-summary analytical curve", &curve)
+        .unwrap();
+    for (extent, phase) in [
+        ([1_u32, 1], 0_u32),
+        ([513, 259], 0),
+        ([4099, 17], 0),
+        ([4099, 17], 1),
+        ([4099, 17], 2),
+        ([4099, 17], 3),
+        ([4099, 17], 7),
+        ([4099, 17], 15),
+    ] {
+        let params = Params::new(
+            extent,
+            [0, 0, extent[0], extent[1]],
+            4095.,
+            ColorSpace::Srgb,
+            BaseResponse::Natural,
+            Tuning::default(),
+            &curve,
+            ProcessingQuality::Quality,
+        )
+        .unwrap();
+        let context = gpu.uniform(&params);
+        let values: Vec<[f32; 4]> = (0..extent[1])
+            .flat_map(|y| {
+                (0..extent[0]).map(move |x| {
+                    let light = if (x + 3 * y) % 11 == 0 {
+                        -32.
+                    } else if (x + phase) % 257 == 0 || (y + phase) % 13 == 0 {
+                        -0.3
+                    } else {
+                        -8.3 + (x % 17) as f32 * 0.001 + (y % 11) as f32 * 0.0001
+                    };
+                    [light, -6., 0., 0.5]
+                })
+            })
+            .collect();
+        let samples = gpu
+            .upload("Thin highlights, weak shadows and invalid cells", &values)
+            .unwrap();
+        let mut regions = gpu.storage("Bounded-window summaries", 1235 * 64).unwrap();
+        let mut trace = gpu.trace(false, 1);
+        gpu.dispatch(
+            Kernel::AdaptiveToneRegionSummary,
+            &mut [
+                (2, Read(&curve_buffer)),
+                (3, Read(&context)),
+                (8, Read(&samples)),
+                (9, Write(regions.write())),
+            ],
+            [1235_u32.div_ceil(64), 1],
+            &mut trace,
+        );
+        let bytes = gpu.readback(&regions).unwrap();
+        let regions: &[[f32; 16]] = bytemuck::cast_slice(&bytes);
+        let mut missed_highlight_windows = 0;
+        for (index, region) in regions.iter().enumerate() {
+            assert!(region.iter().all(|value| value.is_finite()));
+            let (low, high) = dense_summary_window(extent, index);
+            let xs = dense_summary_axis(low[0], high[0]);
+            let ys = dense_summary_axis(low[1], high[1]);
+            let scheduled = xs.len() * ys.len();
+            let mut selected = Vec::new();
+            for &y in &ys {
+                for &x in &xs {
+                    let light = values[(y * extent[0] + x) as usize][0];
+                    if light >= -20. {
+                        selected.push(light);
+                    }
+                }
+            }
+            let area = f64::from(high[0] - low[0]) * f64::from(high[1] - low[1]);
+            let support_per_point =
+                area * 65536. / (scheduled as f64 * f64::from(extent[0]) * f64::from(extent[1]));
+            for (offset, support_offset, population) in [
+                (0, 14, selected.clone()),
+                (
+                    4,
+                    12,
+                    selected.iter().copied().filter(|v| *v > -4.).collect(),
+                ),
+                (
+                    8,
+                    13,
+                    selected.iter().copied().filter(|v| *v < -4.).collect(),
+                ),
+            ] {
+                let expected_support = population.len() as f64 * support_per_point;
+                assert!(
+                    (f64::from(region[support_offset]) - expected_support).abs() < 0.001,
+                    "{extent:?} phase {phase} window {index} support {support_offset}"
+                );
+                if population.is_empty() {
+                    continue;
+                }
+                let mean =
+                    population.iter().map(|v| f64::from(*v)).sum::<f64>() / population.len() as f64;
+                let deviation = (population
+                    .iter()
+                    .map(|v| (f64::from(*v) - mean).powi(2))
+                    .sum::<f64>()
+                    / population.len() as f64)
+                    .sqrt();
+                assert!(
+                    (f64::from(region[offset]) - mean).abs() < 0.000003,
+                    "{extent:?} phase {phase} window {index} mean {offset}"
+                );
+                // A rare first highlight can put the all-population origin
+                // eight stops from most samples. Its variance subtracts large
+                // moments, so bound that cancellation at Float32 precision.
+                // The separate weak-population test keeps its tight bound.
+                let origin = f64::from(population[0]);
+                let residual_second = population
+                    .iter()
+                    .map(|v| (f64::from(*v) - origin).powi(2))
+                    .sum::<f64>()
+                    / population.len() as f64;
+                let depth = usize::BITS - (population.len() - 1).leading_zeros();
+                let variance_roundoff = f64::from(depth + 4)
+                    * f64::from(f32::EPSILON)
+                    * (residual_second + (mean - origin).powi(2));
+                let tolerance = 0.000005 * (2. * deviation + 0.000005) + variance_roundoff;
+                let actual = f64::from(region[offset + 3]);
+                assert!(
+                    (actual.powi(2) - deviation.powi(2)).abs() <= tolerance,
+                    "{extent:?} phase {phase} window {index} deviation component {offset}: \
+                     {actual} vs {deviation}, variance tolerance {tolerance}"
+                );
+            }
+            if region[12] == 0.
+                && (low[1]..high[1]).any(|y| {
+                    (low[0]..high[0]).any(|x| values[(y * extent[0] + x) as usize][0] > -4.)
+                })
+            {
+                missed_highlight_windows += 1;
+            }
+        }
+        eprintln!("bounded summary {extent:?} phase {phase}: {missed_highlight_windows} windows missed thin highlights");
     }
 }

@@ -4,7 +4,7 @@ struct Basis {
     to_srgb:array<vec4<f32>,3>, from_srgb:array<vec4<f32>,3>, luma:vec4<f32>,
 }
 struct Estimate {
-    shape: vec4<u32>, region: vec4<u32>, selection: vec4<u32>,
+    shape: vec4<u32>, region: vec4<u32>, selection: vec4<u32>, partitions: vec4<u32>,
     normalization: vec4<f32>, basis:Basis,
 }
 @group(0) @binding(0) var<storage,read> src: array<f32>;
@@ -135,7 +135,7 @@ fn dehaze_partition(@builtin(workgroup_id) group: vec3<u32>) {
     for(var b=0u;b<256u;b++) { partial_hist[hbase+b]=vec4(0u); }
     var count=0u;
     let n=p.shape.z*p.shape.w;
-    let start=n*part/16u; let end=n*(part+1u)/16u;
+    let start=n*part/p.partitions.x; let end=n*(part+1u)/p.partitions.x;
     let radius=p.selection.x;
     for(var index=start;index<end;index++) {
         let x=index%p.shape.z; let y=index/p.shape.z;
@@ -173,14 +173,14 @@ fn dehaze_partition(@builtin(workgroup_id) group: vec3<u32>) {
 }
 @compute @workgroup_size(1)
 fn dehaze_merge() {
-    let base=16u*p.selection.z;
+    let base=p.partitions.x*p.selection.z;
     for(var b=0u;b<256u;b++) {
         var total=vec4(0u);
-        for(var part=0u;part<16u;part++) { total+=partial_hist[part*256u+b]; }
+        for(var part=0u;part<p.partitions.x;part++) { total+=partial_hist[part*256u+b]; }
         histogram[b]=total;
     }
     var count=0u;
-    for(var part=0u;part<16u;part++) { for(var i=0u;i<partial_count[part];i++) {
+    for(var part=0u;part<p.partitions.x;part++) { for(var i=0u;i<partial_count[part];i++) {
         let candidate=partial_heap[part*p.selection.z+i];
         if count<p.selection.z {
             var child=count; count++;
@@ -211,6 +211,94 @@ fn dehaze_merge() {
         carry+=select(vec3(0u),vec3(1u),sum<previous);
     }
     let total=vec3<f32>(carry)*4294967296.+vec3<f32>(sum);
+    var color=total/(65535.*f32(max(count,1u)));
+    if p.selection.w==0u {
+        color=vec3(dot(color,p.basis.to_srgb[0].xyz),dot(color,p.basis.to_srgb[1].xyz),dot(color,p.basis.to_srgb[2].xyz));
+    }
+    // Canonical storage and the swatch share this bounded color. Auto and manual
+    // both convert it back through the same basis, so freezing Auto is exact.
+    color=clamp(color,vec3(0.),vec3(1.));
+    result[0]=vec4(color,select(0.,1.,count>0u && any(color>vec3(0.))));
+    let percentile_count=max(1u,p.shape.z*p.shape.w/100u);
+    var lows=vec3(0.); var highs=vec3(1.);
+    var low_count=vec3(0u); var high_count=vec3(0u);
+    for(var b=0u;b<256u;b++) {
+        let lc=histogram[b].xyz; let hc=histogram[255u-b].xyz;
+        lows=select(lows,vec3(f32(b)/255.),low_count<vec3(percentile_count));
+        highs=select(highs,vec3(f32(255u-b)/255.),high_count<vec3(percentile_count));
+        low_count+=lc; high_count+=hc;
+    }
+    lows=min(lows,vec3(.95)); highs=max(highs,vec3(.05));
+    let center=sqrt(lows*highs);
+    let narrow=highs<=4.*lows;
+    lows=select(lows,min(vec3(.95),.5*center),narrow);
+    highs=select(highs,max(vec3(.05),2.*center),narrow);
+    result[1]=vec4(min(lows.x,min(lows.y,lows.z)),max(highs.x,max(highs.y,highs.z)),0.,0.);
+}
+
+// Quality Auto selection. The boundary bin deliberately averages
+// finer dark-score, intensity and index ranks instead of choosing exact top K.
+@compute @workgroup_size(1)
+fn dehaze_tail_partition(@builtin(workgroup_id) group: vec3<u32>) {
+    let part=group.x; let base=part*512u; let hbase=part*256u;
+    for(var b=0u;b<256u;b++) {
+        partial_heap[base+2u*b]=vec4(0u);
+        partial_heap[base+2u*b+1u]=vec4(0u);
+        partial_hist[hbase+b]=vec4(0u);
+    }
+    let n=p.shape.z*p.shape.w;
+    // This equals floor(n*part/count) without overflowing n*part.
+    let quotient=n/p.partitions.x; let remainder=n%p.partitions.x;
+    let start=quotient*part+remainder*part/p.partitions.x;
+    let end=quotient*(part+1u)+remainder*(part+1u)/p.partitions.x;
+    let radius=p.selection.x;
+    for(var index=start;index<end;index++) {
+        let x=index%p.shape.z; let y=index/p.shape.z;
+        let rgb=pixels[index];
+        partial_hist[hbase+(rgb.x>>8u)].x++;
+        partial_hist[hbase+(rgb.y>>8u)].y++;
+        partial_hist[hbase+(rgb.z>>8u)].z++;
+        if x<radius || y<radius || x+radius>=p.shape.z || y+radius>=p.shape.w { continue; }
+        let score=dark[index];
+        if score==0u || rgb.w>p.selection.y { continue; }
+        let bin=base+2u*(score>>8u);
+        let previous=partial_heap[bin];
+        let sum=previous.xyz+rgb.xyz;
+        partial_heap[bin]=vec4(sum,previous.w+1u);
+        partial_heap[bin+1u]+=vec4(select(vec3(0u),vec3(1u),sum<previous.xyz),0u);
+    }
+}
+@compute @workgroup_size(1)
+fn dehaze_tail_merge() {
+    var sum=vec3(0u); var carry=vec3(0u);
+    var fractional=vec3(0.); var count=0u;
+    for(var offset=0u;offset<256u;offset++) {
+        let b=255u-offset;
+        var calibration=vec4(0u);
+        var bin_sum=vec3(0u); var bin_carry=vec3(0u); var bin_count=0u;
+        for(var part=0u;part<p.partitions.x;part++) {
+            calibration+=partial_hist[part*256u+b];
+            let index=part*512u+2u*b;
+            let low=partial_heap[index]; let high=partial_heap[index+1u];
+            let previous=bin_sum;
+            bin_sum+=low.xyz;
+            bin_carry+=high.xyz+select(vec3(0u),vec3(1u),bin_sum<previous);
+            bin_count+=low.w;
+        }
+        histogram[b]=calibration;
+        let take=min(p.selection.z-count,bin_count);
+        if take==0u { continue; }
+        if take==bin_count {
+            let previous=sum;
+            sum+=bin_sum;
+            carry+=bin_carry+select(vec3(0u),vec3(1u),sum<previous);
+        } else {
+            let total=vec3<f32>(bin_carry)*4294967296.+vec3<f32>(bin_sum);
+            fractional=total*(f32(take)/f32(bin_count));
+        }
+        count+=take;
+    }
+    let total=vec3<f32>(carry)*4294967296.+vec3<f32>(sum)+fractional;
     var color=total/(65535.*f32(max(count,1u)));
     if p.selection.w==0u {
         color=vec3(dot(color,p.basis.to_srgb[0].xyz),dot(color,p.basis.to_srgb[1].xyz),dot(color,p.basis.to_srgb[2].xyz));
