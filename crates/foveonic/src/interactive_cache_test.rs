@@ -3,6 +3,206 @@
 use super::*;
 use crate::graph::Operation;
 
+fn admission_cache() -> Cache {
+    let mut cache = Cache {
+        frame: 10,
+        ..Cache::default()
+    };
+    for name in [
+        "higher",
+        "incoming",
+        "dehaze.result",
+        "sealed",
+        "old",
+        "newer",
+        "alias",
+    ] {
+        let version = cache.intern(
+            Recipe {
+                operation: std::mem::discriminant(&Operation::Source),
+                parameters: Key::pod(&0_u32),
+                data: DataType::SensorLayers,
+                role: name,
+                view: None,
+                inputs: Vec::new(),
+            },
+            Vec::new(),
+        );
+        cache.working.versions.insert(name.into(), version);
+    }
+    cache.working.selected = ["higher", "incoming", "dehaze.result", "sealed", "alias"]
+        .map(String::from)
+        .into();
+    cache
+}
+
+fn admission_value(gpu: &crate::gpu::Gpu, bytes: usize) -> Value {
+    Value {
+        view_baked: false,
+        buffer: gpu
+            .upload("Cache admission fixture", &vec![0_u32; bytes / 4])
+            .unwrap(),
+        description: None,
+        working_scale: crate::render::Scale::NATIVE,
+        view: None,
+    }
+}
+
+fn retain_admission_value(cache: &mut Cache, name: &str, value: &Value, pinned: bool, used: u64) {
+    cache.entries.push(Entry {
+        version: cache.working.versions[name].clone(),
+        value: value.clone(),
+        pinned,
+        used,
+    });
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn rejected_admission_preserves_existing_checkpoints() {
+    let gpu = crate::gpu::Gpu::new().unwrap();
+    let mut cache = admission_cache();
+    let sealed = admission_value(&gpu, 64);
+    let higher = admission_value(&gpu, 64);
+    let dehaze = admission_value(&gpu, 32);
+    let incoming = admission_value(&gpu, 64);
+    retain_admission_value(&mut cache, "sealed", &sealed, true, 1);
+    retain_admission_value(&mut cache, "higher", &higher, false, 2);
+    retain_admission_value(&mut cache, "dehaze.result", &dehaze, false, 3);
+    let snapshot = |cache: &Cache| {
+        cache
+            .entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.version.generation,
+                    entry.value.buffer.identity(),
+                    entry.pinned,
+                    entry.used,
+                    entry.value.buffer.readers(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = snapshot(&cache);
+    let identity_state = (cache.counter, cache.frame);
+
+    // The 32-byte estimate is expendable, but removing it cannot admit the
+    // result alongside both the sealed input and the higher-priority result.
+    cache.put_with_limit("incoming", &incoming, 160);
+
+    assert_eq!(snapshot(&cache), before);
+    assert_eq!((cache.counter, cache.frame), identity_state);
+    assert_eq!(cache.bytes(), 160);
+    assert!(cache.get("incoming").is_none());
+    assert!(cache
+        .get("dehaze.result")
+        .unwrap()
+        .buffer
+        .shares_storage(&dehaze.buffer));
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn successful_admission_preserves_eviction_priority_and_recency() {
+    let gpu = crate::gpu::Gpu::new().unwrap();
+    for incoming_bytes in [32, 64] {
+        let mut cache = admission_cache();
+        let sealed = admission_value(&gpu, 64);
+        let higher = admission_value(&gpu, 32);
+        let dehaze = admission_value(&gpu, 64);
+        let old = admission_value(&gpu, 32);
+        let newer = admission_value(&gpu, 32);
+        let incoming = admission_value(&gpu, incoming_bytes);
+        retain_admission_value(&mut cache, "sealed", &sealed, true, 1);
+        retain_admission_value(&mut cache, "higher", &higher, false, 2);
+        retain_admission_value(&mut cache, "dehaze.result", &dehaze, false, 3);
+        retain_admission_value(&mut cache, "old", &old, false, 4);
+        retain_admission_value(&mut cache, "newer", &newer, false, 5);
+
+        cache.put_with_limit("incoming", &incoming, 224);
+
+        let retained: Vec<_> = cache
+            .entries
+            .iter()
+            .map(|entry| (entry.version.recipe.role, entry.pinned, entry.used))
+            .collect();
+        let mut expected = vec![
+            ("sealed", true, 1),
+            ("higher", false, 2),
+            ("dehaze.result", false, 3),
+        ];
+        if incoming_bytes == 32 {
+            expected.push(("newer", false, 5));
+        }
+        expected.push(("incoming", false, cache.frame));
+        assert_eq!(retained, expected);
+        assert_eq!(cache.bytes(), 224);
+        assert!(cache
+            .get("incoming")
+            .unwrap()
+            .buffer
+            .shares_storage(&incoming.buffer));
+    }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn admission_counts_shared_protected_allocations_once() {
+    let gpu = crate::gpu::Gpu::new().unwrap();
+    let mut cache = admission_cache();
+    let protected = admission_value(&gpu, 64);
+    let dehaze = admission_value(&gpu, 32);
+    let incoming = admission_value(&gpu, 32);
+    retain_admission_value(&mut cache, "sealed", &protected, true, 1);
+    retain_admission_value(&mut cache, "higher", &protected, false, 2);
+    retain_admission_value(&mut cache, "dehaze.result", &dehaze, false, 3);
+
+    cache.put_with_limit("incoming", &incoming, 96);
+
+    assert!(cache.get("dehaze.result").is_none());
+    assert!(cache.get("incoming").is_some());
+    assert_eq!(cache.bytes(), 96);
+    assert_eq!(cache.entries.len(), 3);
+
+    cache.put_with_limit("alias", &protected, 96);
+
+    assert_eq!(cache.bytes(), 96);
+    assert_eq!(cache.entries.len(), 4);
+    assert!(cache
+        .get("alias")
+        .unwrap()
+        .buffer
+        .shares_storage(&protected.buffer));
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn existing_version_admission_keeps_its_original_buffer() {
+    let gpu = crate::gpu::Gpu::new().unwrap();
+    let mut cache = admission_cache();
+    let sealed = admission_value(&gpu, 64);
+    let original = admission_value(&gpu, 32);
+    let repeated = admission_value(&gpu, 64);
+    retain_admission_value(&mut cache, "sealed", &sealed, true, 1);
+    retain_admission_value(&mut cache, "incoming", &original, false, 2);
+    cache
+        .working
+        .cuts
+        .insert(cache.working.versions["incoming"].generation);
+
+    cache.put_with_limit("incoming", &repeated, 96);
+
+    assert_eq!(cache.bytes(), 96);
+    assert_eq!(cache.entries.len(), 2);
+    let entry = &cache.entries[1];
+    assert!(entry.value.buffer.shares_storage(&original.buffer));
+    assert!(!entry.value.buffer.shares_storage(&repeated.buffer));
+    assert!(entry.pinned);
+    assert_eq!(entry.used, cache.frame);
+    assert_eq!(cache.entries[0].used, 1);
+}
+
 #[test]
 fn parameter_resource_attribution_matches_the_unique_inventory() {
     let mut cache = Cache::default();

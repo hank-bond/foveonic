@@ -676,11 +676,35 @@ impl Cache {
             .filter(|entry| entry.pinned)
             .map(|entry| &entry.value.buffer)
     }
-    fn room_for(&self, value: &Value) -> bool {
+    fn room_for(&self, value: &Value, limit: u64) -> bool {
         self.entries
             .iter()
             .any(|entry| entry.value.buffer.shares_storage(&value.buffer))
-            || self.bytes() + value.buffer.size() <= Self::LIMIT
+            || self.bytes() + value.buffer.size() <= limit
+    }
+    fn can_evict(&self, entry: &Entry, pinned: bool, priority: (u8, usize)) -> bool {
+        pinned
+            || (!entry.pinned
+                && self
+                    .current_priority(entry.version.generation)
+                    .is_none_or(|rank| rank > priority))
+    }
+    fn room_after_eviction(
+        &self,
+        value: &Value,
+        pinned: bool,
+        priority: (u8, usize),
+        limit: u64,
+    ) -> bool {
+        let mut allocations = HashSet::from([value.buffer.identity()]);
+        let retained_bytes: u64 = self
+            .entries
+            .iter()
+            .filter(|entry| !self.can_evict(entry, pinned, priority))
+            .filter(|entry| allocations.insert(entry.value.buffer.identity()))
+            .map(|entry| entry.value.buffer.size())
+            .sum();
+        value.buffer.size() + retained_bytes <= limit
     }
     fn intern(&mut self, recipe: Recipe, parents: Vec<Arc<Version>>) -> Arc<Version> {
         let bucket = self.identities.entry(recipe.bucket()).or_default();
@@ -961,7 +985,10 @@ impl Cache {
             .map(|entry| entry.value.clone())
     }
     fn put(&mut self, name: &str, value: &Value) {
-        if value.buffer.size() > Self::LIMIT {
+        self.put_with_limit(name, value, Self::LIMIT);
+    }
+    fn put_with_limit(&mut self, name: &str, value: &Value, limit: u64) {
+        if value.buffer.size() > limit {
             if self
                 .working
                 .selected
@@ -1009,18 +1036,25 @@ impl Cache {
         let priority = self
             .current_priority(version.generation)
             .unwrap_or((u8::MAX, usize::MAX));
-        while !self.room_for(value) {
+        // A rejected result must not discard useful checkpoints on its way to
+        // discovering that the protected allocations leave too little room.
+        if !self.room_for(value, limit) && !self.room_after_eviction(value, pinned, priority, limit)
+        {
+            self.observe_checkpoint(
+                "cache.checkpoint.rejected",
+                "local-priority",
+                &version,
+                value.buffer.size(),
+                value.buffer.identity(),
+            );
+            return;
+        }
+        while !self.room_for(value, limit) {
             let candidate = self
                 .entries
                 .iter()
                 .enumerate()
-                .filter(|(_, entry)| {
-                    pinned
-                        || (!entry.pinned
-                            && self
-                                .current_priority(entry.version.generation)
-                                .is_none_or(|rank| rank > priority))
-                })
+                .filter(|(_, entry)| self.can_evict(entry, pinned, priority))
                 .max_by_key(|(_, entry)| {
                     (
                         u8::from(!entry.pinned),
@@ -1989,7 +2023,7 @@ mod tests {
             },
         ];
         assert_eq!(cache.bytes(), value.buffer.size());
-        assert!(cache.room_for(&value));
+        assert!(cache.room_for(&value, Cache::LIMIT));
     }
 
     #[test]
