@@ -38,6 +38,30 @@ Use `--capture-float OUTPUT NEW_FILE` to render a named floating image output af
 
 Request `--profile gpu` for one additional synchronized diagnostic iteration after the ordinary warm repetitions. Its results remain in a separate mode group. Render and TIFF export have separate profiles/activity deltas. Optional `--goldens DIR` compares or creates full-float snapshots outside timed intervals; choose a distinct golden directory per intended recipe. Byte equality applies to output-equivalent optimizations, not to different denoisers or recovery methods. Evaluate photographic quality separately.
 
+## Fresh-processing matrix comparisons
+
+Use `pipeline_benchmark.py` to compare fixed engine workloads before changing processing code. It shares the render matrix's case declarations and expands resolution separately from processing quality. Supply reproducible cases from the [maintained input setup](./testing-coverage.md).
+
+```sh
+python3 scripts/profiling/pipeline_benchmark.py record \
+  --binary PATH_TO_BASELINE_RENDERER --cases CASES.json \
+  --directory .local/pipeline-before --warmups 1 --samples 5
+python3 scripts/profiling/pipeline_benchmark.py record \
+  --binary target/release/examples/profile_pipeline --cases CASES.json \
+  --directory .local/pipeline-after --warmups 1 --samples 5
+python3 scripts/profiling/pipeline_benchmark.py compare \
+  .local/pipeline-before/report.json .local/pipeline-after/report.json \
+  --output .local/pipeline-comparison.json
+```
+
+Each invocation uses profiling Off. The declared warmup iterations are excluded from the reported distributions. Subsequent iterations are fresh graphs from the already-decoded source, not retained edits. Source loading and the first image's numerical readback remain separate from measured processing. The runner records per-case median and nearest-rank p95, actual settings and geometry, input hashes, measured executable identity and hardware. `--build-source-revision` adds a caller-declared label rather than attesting which sources produced the executable.
+
+Comparison requires matching workloads and hardware. Without an explicit `--max-regression-percent`, timing remains observational. Exact photographic SHA-256 and geometry are checked independently of the timing decision. A heuristic candidate can differ intentionally, but its failed exact comparison is not a new approved baseline. Review its quality separately.
+
+The runner monitors known competing workloads through each owned renderer and uses the sampled memory guard described below. Successful full-float files are discarded after hashing by default. Use `--retain-floats` for numerical or crop investigations. Failed or contended evidence is retained. Compact reports can accompany release baselines, while raw records and large images remain separate artifacts.
+
+Retained-edit measurements use the existing checkpoint probe. Native and multi-photo behavior use the native scenario reports and their separate [Off comparison](#compare-controlled-off-baselines). A fresh-processing matrix alone does not establish complete release workflow coverage.
+
 ## Native-detail transitions
 
 Compare detail-first refinement with direct Full from equivalent Merrill or Quattro Fast sessions:

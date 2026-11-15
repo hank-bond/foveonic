@@ -63,6 +63,26 @@ class ProcessMemoryTests(unittest.TestCase):
             self.assertEqual(len(result.stdout), 100001)
             self.assertEqual(result.stderr, 'error\n')
 
+    def test_environment_and_owned_pid_callback_without_guard(self):
+        started = []
+        result = run_captured([sys.executable, '-c', "import os; print(os.environ['BENCHMARK_TEST'])"],
+                              env={**os.environ, 'BENCHMARK_TEST': 'explicit'}, on_started=started.append)
+        self.assertEqual(result.stdout, 'explicit\n')
+        self.assertEqual(len(started), 1)
+        self.assertGreater(started[0], 0)
+
+    def test_callback_failure_kills_and_reaps_owned_child_on_both_paths(self):
+        for guarded in (False, True):
+            child = Child()
+            with tempfile.TemporaryDirectory() as directory, \
+                    patch('process_memory.subprocess.Popen', return_value=child):
+                with self.subTest(guarded=guarded), self.assertRaisesRegex(ValueError, 'callback failed'):
+                    run_captured(['owned-test'], limit_bytes=1024 if guarded else None,
+                                 samples=Path(directory) / 'memory.jsonl',
+                                 on_started=lambda _: (_ for _ in ()).throw(ValueError('callback failed')))
+            self.assertTrue(child.killed)
+            self.assertEqual(child.returncode, -9)
+
     @unittest.skipUnless(sys.platform == 'darwin', 'requires macOS libproc')
     def test_native_reader_observes_own_process(self):
         self.assertGreater(footprint_reader()(os.getpid()), 0)

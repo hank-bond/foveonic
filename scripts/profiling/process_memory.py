@@ -67,17 +67,29 @@ def wait_guarded(process, timeout, limit_bytes, samples, *, reader=None):
     return process.wait()
 
 
-def run_captured(command, *, limit_bytes=None, samples=None, timeout=600):
-    """Capture a renderer's output while applying the same optional child guard."""
+def run_captured(command, *, limit_bytes=None, samples=None, timeout=600, env=None, on_started=None):
+    """Capture a child with optional environment, owned-PID notification and memory guard."""
     if limit_bytes is None:
-        return subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        if on_started is None:
+            return subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=env)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        try:
+            on_started(process.pid)
+            output, errors = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(command, process.returncode, output, errors)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
     if limit_bytes <= 0:
         raise ValueError('physical-footprint limit must be positive')
     # Files keep partial renderer evidence when the guard aborts a large run.
     output_path, error_path = Path(samples).with_suffix('.stdout'), Path(samples).with_suffix('.stderr')
     with output_path.open('x') as output, error_path.open('x') as errors:
-        process = subprocess.Popen(command, stdout=output, stderr=errors)
+        process = subprocess.Popen(command, stdout=output, stderr=errors, env=env)
         try:
+            if on_started is not None:
+                on_started(process.pid)
             returncode = wait_guarded(process, timeout, limit_bytes, samples)
         finally:
             if process.poll() is None:
