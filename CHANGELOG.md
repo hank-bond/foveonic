@@ -12,6 +12,9 @@ Preserve capture metadata in processed photographs.
 ### Changes
 
 - Carry available camera, lens, exposure, capture date, authorship and location metadata from X3F files into DNG, TIFF, JPEG, PNG and JPEG XL exports. Exported dimensions and orientation match the processed image.
+- Reduce memory use when loading Merrill photographs, preparing previews and exporting images.
+- Bound browser loading memory and recover from GPU preview upload failures with a usable error state.
+- Show a responsive startup window with progress while graphics processing is prepared.
 - Reduce stack usage when retaining photographs for multi-editing.
 
 ## 0.8.0
