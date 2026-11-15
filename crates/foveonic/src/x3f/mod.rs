@@ -525,41 +525,14 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     };
     let mut timings = vec![Timing::elapsed("sensor planes wall", start_time)];
     timings.extend(planes.iter().map(|(_, timing)| timing.clone()));
-    let start_time = Instant::now();
-    let assembly_scope = diagnostics::scope(Category::Cpu, "decode.sensor.assemble");
-    let mut pixels = {
-        let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.output.allocate");
-        vec![0_u16; product(count, 3)?]
-    };
-    // Disjoint contiguous triplets let the compiler vectorize this pass
-    // without changing the channel-interleaving order.
-    // Keep the existing contiguous triplets while bounding speculative CPU work.
-    let samples_per_chunk = crate::background::IO_CHUNK_BYTES / std::mem::size_of::<u16>() / 3;
-    for (((chunk, red), green), blue) in pixels
-        .chunks_mut(samples_per_chunk * 3)
-        .zip(planes[0].0.chunks(samples_per_chunk))
-        .zip(planes[1].0.chunks(samples_per_chunk))
-        .zip(planes[2].0.chunks(samples_per_chunk))
-    {
-        crate::background::checkpoint_or_cancel()?;
-        for (((pixel, red), green), blue) in chunk
-            .as_chunks_mut::<3>()
-            .0
-            .iter_mut()
-            .zip(red)
-            .zip(green)
-            .zip(blue)
-        {
-            *pixel = [*red, *green, *blue];
-        }
-    }
-    drop(assembly_scope);
-    timings.push(Timing::elapsed("sensor interleave", start_time));
+    let [red, green, blue]: [(Vec<u16>, Timing); 3] = planes
+        .try_into()
+        .map_err(|_| "expected three sensor planes")?;
     Ok((
         width,
         height,
         SourceStorage::InterleavedRgb,
-        SensorSamples::Unsigned(pixels),
+        SensorSamples::UnsignedPlanes([red.0, green.0, blue.0]),
         timings,
     ))
 }

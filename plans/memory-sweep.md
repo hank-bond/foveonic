@@ -22,6 +22,7 @@ The owner requested an autonomous sweep, prioritizing peak memory and simpler de
 - [x] Stream uncompressed TIFF repacking one encoder strip at a time. Exact multi-strip output and existing compression/profile tests pass. Three alternating native example exports per variant gave byte-identical TIFFs. RSS fell from 846–848 MiB to 782–785 MiB while peak footprint overlapped at 1736–1739 MiB versus 1734–1740 MiB. Compressed TIFF retains the existing whole-image path because the encoder enables compression only through its whole-image API.
 - [x] Stream RGB16 PNG output by row, avoiding full-image RGB16 and endian-reordered buffers. Three alternating native example exports per variant reduced RSS from 901–940 MiB to 778–785 MiB. Peak physical footprint overlapped at 1729–1739 MiB versus 1736–1740 MiB. Decoded full-resolution RGB16 samples and ICC profiles matched. Chunking changed compressed bytes and increased the measured file from 81,974,414 to 82,214,589 bytes. Multirow and injected writer-error tests pass.
 - [x] Retain unsigned format-30 sensor codes as 16-bit samples in memory and widen directly into the GPU upload buffer. Existing signed and synthetic float sources remain floating. Warm decoded-cache entries keep unsigned Merrill samples compact without changing their disk format. The public `Source::samples()` returns a borrowed or owned `Cow` and allocates a full float copy when called for compact sources. Production upload and cache paths avoid that conversion.
+- [x] Retain the three original decoded Merrill planes and interleave while uploading or writing cache chunks. Five alternating example `inspect` runs reduced peak RSS from 252 MiB to 160 MiB and footprint from 247 MiB to 154 MiB. Three TIFF export runs reduced RSS from 687–688 MiB to 597–604 MiB and footprint from 1602–1646 MiB to 1517–1559 MiB. The TIFF files matched byte-for-byte. Warm elapsed times were comparable in these limited runs.
 - [ ] Investigate other GPU transient allocations. Measure representative workloads before claiming process-level savings or accepting complexity.
 - [x] Run applicable checks and independent review for each change. Record limits and remaining opportunities.
 
@@ -36,7 +37,7 @@ The first JPEG comparison overlapped a separate build and is excluded. Physical 
 
 ## Remaining investigation
 
-Merrill decoding still retains three 16-bit planes while assembling the compact interleaved source. A serial plane prototype could save two temporary planes, about 61 MiB at full resolution, but review found that it bypassed the shared decode pool admission and priority rules, changed diagnostic boundaries, and forfeited parallel decoding. It was discarded before benchmarking. A different design would need to preserve those requirements and demonstrate an acceptable loading tradeoff. Within-node GPU scratch and native multi-photo application memory also need representative measurements.
+Merrill decoding retains its three original planes. An earlier serial plane prototype was discarded because it bypassed shared decode pool admission and priority rules, changed diagnostic boundaries, and forfeited parallel decoding. Any future streaming design must preserve those requirements and demonstrate an acceptable loading tradeoff. Within-node GPU scratch and native multi-photo application memory also need representative measurements.
 
 ## Compact source observations
 
@@ -56,3 +57,5 @@ The original-file sample checks used these source and canonical-sample SHA-256 p
 | `sd1-merrill-low.x3f` | `9ec396fc82590e1fdd5cbc77de4d333c214f007ab32b38a9790e5d865f28cc56` | `b41c9addb03abd1c0211eba4af4914c73f10e7b599a751774cf494d8bd1f694b` |
 | `dp3-merrill-low.x3f` | `209f753ed5de24a2bb79e7e851c8c77255d0298ac79685963a20792bc6e9294e` | `dace59cf90a4bcf75705d77a240aa96c86d9aae2894039cdb59db3706dac1634` |
 | `dp3-merrill-medium.x3f` | `6ce000fe95068b515080428c858b328574a3820b6ff08beac32f705d9fe39754` | `bdfcc0542e0b83218e7f85970f6dd14dcea05bf493e955873436e6ee09e35ee5` |
+
+The planar follow-up preserved the same canonical source hashes for the four declared SD1/DP3 HI, MED and LOW originals. Their color and monochrome TIFF exports were byte-identical to the compact interleaved path. A generated LOW cache test verifies that planar and interleaved inputs produce identical complete cache files across chunk boundaries. GPU upload, logical sample ordering, capacity accounting, unequal-plane rejection and real-file cache publication checks passed.

@@ -477,6 +477,32 @@ fn merrill_unsigned_cache_stays_compact_and_preserves_codes() {
         unreachable!()
     };
     assert_eq!(actual, expected);
+    let mut planes: [Vec<u16>; 3] = std::array::from_fn(|_| Vec::with_capacity(expected.len() / 3));
+    for pixel in expected.as_chunks::<3>().0 {
+        for (plane, &sample) in planes.iter_mut().zip(pixel) {
+            plane.push(sample);
+        }
+    }
+    let planar_root = fixture.root.join("planar-cache");
+    source.pixels = crate::source::SensorSamples::UnsignedPlanes(planes);
+    source.validate().unwrap();
+    store(
+        &planar_root,
+        &fixture.source,
+        identity.clone(),
+        &source,
+        DEFAULT_BUDGET,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(root.join(identity.name())).unwrap(),
+        fs::read(planar_root.join(identity.name())).unwrap()
+    );
+    let crate::source::SensorSamples::UnsignedPlanes(planes) = &mut source.pixels else {
+        unreachable!()
+    };
+    planes[1].pop();
+    assert!(source.validate().is_err());
     let expected_bytes = std::mem::size_of::<Source>()
         + actual.capacity() * std::mem::size_of::<u16>()
         + restored.camf.capacity()

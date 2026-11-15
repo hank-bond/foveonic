@@ -3,6 +3,48 @@
 use super::*;
 
 #[test]
+fn planar_samples_preserve_rgb_order_and_account_for_capacity() {
+    let mut first = Vec::with_capacity(10);
+    first.extend([1, 4]);
+    let mut source = Source {
+        origin: Default::default(),
+        metadata: std::sync::Arc::new(Metadata {
+            width: 2464,
+            height: 1632,
+            rotation: 0,
+            processing_version: None,
+            properties: [
+                ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
+                ("RESOLUTION".into(), "LOW".into()),
+            ]
+            .into(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        }),
+        pixels: SensorSamples::UnsignedPlanes([first, vec![2, 5], vec![3, 6]]),
+        storage: SourceStorage::InterleavedRgb,
+        camf: vec![],
+        timings: vec![],
+    };
+    assert_eq!(source.samples().as_ref(), &[1., 2., 3., 4., 5., 6.]);
+    let SensorSamples::UnsignedPlanes(planes) = &source.pixels else {
+        unreachable!()
+    };
+    let expected =
+        std::mem::size_of::<Source>() + planes.iter().map(|p| p.capacity() * 2).sum::<usize>();
+    assert_eq!(source.retained_source_bytes(), expected as u64);
+    let SensorSamples::UnsignedPlanes(planes) = &mut source.pixels else {
+        unreachable!()
+    };
+    planes[1].push(7);
+    assert!(source
+        .validate()
+        .unwrap_err()
+        .to_string()
+        .contains("plane geometry"));
+}
+
+#[test]
 fn accepts_merrill_models() {
     for model in [
         "SIGMA DP1 Merrill",

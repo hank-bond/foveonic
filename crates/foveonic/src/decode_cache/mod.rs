@@ -684,6 +684,7 @@ fn load(
                     }
                 }
             }
+            SensorSamples::UnsignedPlanes(_) => unreachable!("cache reads use interleaved storage"),
         }
         for chunk in camf.chunks_mut(crate::background::IO_CHUNK_BYTES) {
             crate::background::checkpoint_or_cancel()?;
@@ -874,6 +875,25 @@ fn for_code_chunks(
                 consume(chunk)?;
             }
         }
+        SensorSamples::UnsignedPlanes(planes) => {
+            let pixels_per_chunk = SAMPLES_PER_CHUNK / 3;
+            let mut codes = Vec::with_capacity(pixels_per_chunk.min(planes[0].len()) * 3);
+            for ((red, green), blue) in planes[0]
+                .chunks(pixels_per_chunk)
+                .zip(planes[1].chunks(pixels_per_chunk))
+                .zip(planes[2].chunks(pixels_per_chunk))
+            {
+                crate::background::checkpoint_or_cancel()?;
+                codes.clear();
+                codes.extend(
+                    red.iter()
+                        .zip(green)
+                        .zip(blue)
+                        .flat_map(|((&r, &g), &b)| [r, g, b]),
+                );
+                consume(&codes)?;
+            }
+        }
         SensorSamples::Float(values) => {
             let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(values.len())];
             for chunk in values.chunks(SAMPLES_PER_CHUNK) {
@@ -890,7 +910,9 @@ fn for_code_chunks(
 /// Check compact sample encoding without allocating another full sensor buffer.
 fn prepare_decoded(identity: Identity, source: &Source) -> Result<PreparedDecoded> {
     let sample_encoding = match &source.pixels {
-        SensorSamples::Unsigned(_) => samples::Encoding::Unsigned16,
+        SensorSamples::Unsigned(_) | SensorSamples::UnsignedPlanes(_) => {
+            samples::Encoding::Unsigned16
+        }
         SensorSamples::Float(values) => samples::Encoding::for_samples(values),
     };
     let mut checksum = crc32fast::Hasher::new();
