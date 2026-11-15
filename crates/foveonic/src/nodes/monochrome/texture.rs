@@ -1,6 +1,7 @@
 //! Restores Fine and Coarse monochrome texture independently of noise cleanup.
 use crate::{
     gpu::{
+        scratch::Scratch,
         Binding::{Read, Write},
         Gpu, Kernel, ReadGuard,
     },
@@ -20,6 +21,7 @@ struct Params {
 }
 fn pass(
     gpu: &Gpu,
+    scratch: &mut Scratch,
     kernel: Kernel,
     inputs: &[&ReadGuard],
     p: Params,
@@ -29,7 +31,7 @@ fn pass(
     if inputs.iter().any(|b| b.size() != bytes) {
         return Err("mono texture geometry mismatch".into());
     }
-    let mut output = gpu.storage(kernel.label(), bytes)?;
+    let mut output = scratch.take(gpu, bytes)?;
     let uniform = gpu.uniform(&p);
     let mut bindings = vec![
         (0, Read(inputs[0])),
@@ -72,7 +74,15 @@ pub(crate) fn apply(
         shape: [extent[0], extent[1], 0, 0],
         values: [controls.fine, controls.coarse, 0., 0.],
     };
-    let log = pass(gpu, Kernel::MonoTextureExtract, &[input], p, profile)?;
+    let mut scratch = Scratch::default();
+    let log = pass(
+        gpu,
+        &mut scratch,
+        Kernel::MonoTextureExtract,
+        &[input],
+        p,
+        profile,
+    )?;
     let mut current = log.clone();
     let mut fine = log.clone();
     for (index, step) in NATIVE_STEPS.into_iter().enumerate() {
@@ -85,7 +95,15 @@ pub(crate) fn apply(
             };
         for axis in 0..2 {
             p.shape[3] = axis;
-            current = pass(gpu, Kernel::MonoTextureBlur, &[&current], p, profile)?;
+            let output = pass(
+                gpu,
+                &mut scratch,
+                Kernel::MonoTextureBlur,
+                &[&current],
+                p,
+                profile,
+            )?;
+            scratch.release(std::mem::replace(&mut current, output));
         }
         if index == FINE_BOUNDARY_STEP {
             fine = current.clone();
@@ -93,6 +111,7 @@ pub(crate) fn apply(
     }
     pass(
         gpu,
+        &mut scratch,
         Kernel::MonoTextureApply,
         &[input, &log, &fine, &current],
         p,
