@@ -246,12 +246,8 @@ fn all_column_banding_presets_match_native_windows_and_coefficients() {
         p.tile = [80, 112, 0, 11];
         p.area = [0, 0, 80, 112];
         p.column_area = [0, 8, 80, 104];
-        p.column = [
-            row["coefficient"].as_f64().unwrap() as f32,
-            row["window"].as_f64().unwrap() as f32,
-            0.,
-            0.,
-        ];
+        p.column[0] = row["coefficient"].as_f64().unwrap() as f32;
+        p.column[1] = row["window"].as_f64().unwrap() as f32;
         let result = column(&gpu, &input, p, &mut Profile::default()).unwrap();
         let actual = floats(&gpu, &result);
         let expected = row["corrected"].as_array().unwrap();
