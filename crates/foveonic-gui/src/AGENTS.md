@@ -53,7 +53,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[framing.rs](./framing.rs)** Shares the rotated editing plane, crop frame, exterior shading and dimensions across framing tools.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.
 - **[help_examples.rs](./help_examples.rs)** Presents embedded photographic comparisons through one image-switching popover template.
-- **[icon.rs](./icon.rs)** Loads the window icon while leaving macOS Dock appearances to the app bundle.
+- **[icon.rs](./icon.rs)** Loads window and startup artwork while leaving macOS Dock appearances to the app bundle.
 - **[import_review.rs](./import_review.rs)** Prepares frozen processing selections and tracks destination-scoped import review and batch status.
 - **[information.rs](./information.rs)** Shows selectable capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
 - **[inspect.rs](./inspect.rs)** Groups viewport background, processing quality, pipeline views, and display-only comparisons.
@@ -78,6 +78,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[sections.rs](./sections.rs)** Draws shared disclosure triangles and tool-section headers, accepting section drops only inside the tools pane.
 - **[shortcuts.rs](./shortcuts.rs)** Defines workspace actions and routes their keys before widgets, preserving text and modal input.
 - **[sidecars.rs](./sidecars.rs)** Keeps each photo's latest edits saved without making rendering wait for disk access.
+- **[startup.rs](./startup.rs)** Presents a responsive loading window while one worker prepares the photographic application.
 - **[timing.rs](./timing.rs)** Connects GUI tasks, native drawing and existing measurements to the shared Perfetto capture.
 - **[toolbar.rs](./toolbar.rs)** Shares padded processing rows and a responsive right-aligned image-tool region.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.

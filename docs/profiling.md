@@ -315,7 +315,7 @@ target/release/Foveonic.app/Contents/MacOS/foveonic-gui INPUT.x3f
 
 Use each suite's existing fixture and setup requirements. Capture does not broaden its assertions or impose a different photo-completion order. `smoke.step` records suite, target, mode, begin and checked phases. Checked frames retain original delivered identities separately from presentation revision. The analyzer requires all declared checks and the terminal `smoke.completed` marker. It preserves intentional pending-preview checks rather than requiring every target to have an idle worker.
 
-`smoke.tick` scopes identify driver work, with screenshot PNG encoding under `smoke.artifact.png`. These smoke intervals include existing screenshot readback and artifact work, so use the named scenarios or Off comparisons for latency measurements. A fatal assertion after App construction preserves an active smoke capture during unwinding, emits `smoke.failed` and records the failure in the manifest. This failure-only path waits for the existing background save after the measured interaction has failed. The analyzer reports behavioral failure even if no step marker was reached or trace saving completed successfully. External termination and startup failures before App construction can still prevent a save.
+`smoke.tick` scopes identify driver work, with screenshot PNG encoding under `smoke.artifact.png`. These smoke intervals include existing screenshot readback and artifact work, so use the named scenarios or Off comparisons for latency measurements. A fatal assertion after App construction preserves an active smoke capture during unwinding, emits `smoke.failed` and records the failure in the manifest. This failure-only path waits for the existing background save after the measured interaction has failed. The analyzer reports behavioral failure even if no step marker was reached or trace saving completed successfully. Startup also owns a save guard before App construction. External termination can still prevent a save.
 
 ## Analyze a shared capture
 
@@ -353,7 +353,13 @@ Run `cargo test --release -p foveonic-gui batch_progress_profile -- --ignored --
 
 ## Startup host work
 
-Startup observations begin after eframe creates the native window and device. The shared capture records App construction and later update work when recording is active. Existing engine-initialization spans distinguish pipeline creation and calibration-map preparation. Nested host spans overlap and must not be added. Capture-start readiness bounds what can be observed, so startup capture does not imply coverage before the recorder becomes active. The first update is not a screen-presentation measurement.
+Set `FOVEONIC_PROFILE=wall` or `gpu` and launch the app normally. Startup starts the existing recorder asynchronously and retains early host intervals until it is ready. `startup.entry_to_arguments`, `startup.entry_to_app_creator`, `startup.entry_to_first_present` and `startup.entry_to_ready` share the process-entry origin. The first root Present records the native painter's presentation call, not physical screen scanout. OS launch work before process entry, such as loading dynamic libraries, is outside this capture.
+
+`startup.window_options` measures native options and icon preparation. The vendored painter's optional setup observer adds `startup.graphics_instance`, `startup.adapter_enumeration`, `startup.adapter_selection`, `startup.graphics_device`, `startup.ui_renderer`, `startup.surface_create` and `startup.surface_configure`. These are host elapsed observations with explicit endpoints, including backend waits. Window/event-loop work remains inside the enclosing entry intervals rather than receiving fictitious execution slices. The manifest records actual GPU-timestamp availability once the adapter is known.
+
+The photographic engine starts on a worker after the loading window's first root presentation. `startup.prepare_app`, individual pipeline creation scopes and `startup.prepare_workspace` distinguish compilation and remaining application setup. A recording run also waits for recorder readiness before starting this worker, so its preparation scopes are captured. This capture-only gate leaves the loading window responsive. Nested and enclosing intervals overlap and must not be added.
+
+Closing during preparation, or native-framework setup failure, saves the capture through the existing exit path. Its manifest identifies an exit before readiness. No capture or recorder worker is created for ordinary Off startup.
 
 ## Cached multi-photo edits and host scheduling
 

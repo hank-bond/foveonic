@@ -110,13 +110,31 @@ def export_png(compiled, output, size=1024):
         shutil.copyfile(iconset / names[size], output)
 
 
+
+def export_startup_images(assets, tool):
+    """Export the Composer appearances at 2x for the 128-point loading-window icon."""
+    for appearance, rendition in [("light", "Default"), ("dark", "Dark")]:
+        subprocess.run([
+            str(tool), str(assets / "Foveonic.icon"), "--export-image",
+            "--output-file", str(assets / f"startup-{appearance}.png"),
+            "--platform", "macOS", "--rendition", rendition,
+            "--width", "128", "--height", "128", "--scale", "2",
+            "--design-generation", "26",
+        ], check=True)
+
+
 def generate():
     assets = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--size", type=int, choices=[16, 32, 64, 128, 256, 512, 1024], default=1024)
     parser.add_argument("--output", type=Path, default=assets / "icon.png")
     parser.add_argument("--compile-dir", type=Path, help="retain compiled resources for an app bundle")
+    parser.add_argument("--startup-images", action="store_true", help="export startup appearances instead of the native fallback icon")
+    parser.add_argument("--preview-tool", type=Path, default=Path("/Applications/Icon Composer.app/Contents/Executables/ictool"))
     args = parser.parse_args()
+    if args.startup_images:
+        export_startup_images(assets, args.preview_tool)
+        return
     with tempfile.TemporaryDirectory(prefix="foveonic-icon-") as work:
         compiled = (args.compile_dir or Path(work)).resolve()
         compile_icon(assets, compiled)

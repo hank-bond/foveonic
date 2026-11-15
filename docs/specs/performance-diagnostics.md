@@ -11,6 +11,12 @@ implementation: incomplete
 
 The application must support empirical attribution of runtime across UI interaction, scheduling, source access, caching, processing and presentation. Diagnostics must support both exploratory profiling and repeatable correctness and performance-regression checks. Renderer experiments must use validated capture and correctness checks.
 
+## Startup capture
+
+An opt-in process-startup capture must retain host timestamps from application entry, including graphics instance, adapter, device, UI renderer and surface preparation. Start the recorder asynchronously and preserve early intervals until it is ready. Distinguish first root presentation from application readiness and per-program engine preparation. These observations measure host elapsed time, including backend waits. They do not measure OS launch work before process entry or physical screen scanout.
+
+Closing or failing during startup must save the active capture through the existing recorder. Ordinary unrecorded startup must not start a recorder. Instrumentation must not add GPU completion waits or block interaction while the recorder starts.
+
 ## Measurement contract
 
 Measurements must distinguish elapsed latency, CPU execution scopes, queue residence, explicit waits, GPU execution, resource retention and delivery. Host elapsed time must not be described as CPU-active time or inferred GPU execution. Parallel and nested intervals must remain distinguishable rather than being added into misleading totals. CPU work must use a common monotonic timeline. GPU timestamps must retain their clock provenance and associate with submissions without inventing a calibrated host position.

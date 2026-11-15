@@ -139,8 +139,19 @@ impl Engine {
         adapter_name: String,
         profile: &mut crate::profile::Profile,
     ) -> Result<Self> {
+        Self::from_device_with_progress(device, queue, adapter_name, profile, |_, _| {})
+    }
+
+    /// Report completed compute-pipeline preparation without synchronizing GPU work.
+    pub fn from_device_with_progress(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_name: String,
+        profile: &mut crate::profile::Profile,
+        mut progress: impl FnMut(usize, usize),
+    ) -> Result<Self> {
         let began = profile.mode.enabled().then(std::time::Instant::now);
-        let gpu = Gpu::from_device_profiled(device, queue, adapter_name, profile)?;
+        let gpu = Gpu::from_device_progress(device, queue, adapter_name, profile, &mut progress)?;
         let calibration_resources = profile.measure("bundled calibration maps", || {
             recipes::quattro::resources::ResourceDirectory::bundled()
         })?;

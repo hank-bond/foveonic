@@ -179,6 +179,7 @@ impl RenderState {
                 wgpu::Backends::all()
             };
 
+            let _setup = config.setup_timer(SetupStage::AdapterEnumeration);
             instance.enumerate_adapters(backends)
         };
 
@@ -190,6 +191,7 @@ impl RenderState {
                 device_descriptor,
             }) => {
                 let adapter = {
+                    let _setup = config.setup_timer(SetupStage::AdapterSelection);
                     #[cfg(target_arch = "wasm32")]
                     {
                         request_adapter(instance, power_preference, compatible_surface, &[]).await
@@ -211,6 +213,7 @@ impl RenderState {
 
                 let (device, queue) = {
                     profiling::scope!("request_device");
+                    let _setup = config.setup_timer(SetupStage::Device);
                     adapter
                         .request_device(&(*device_descriptor)(&adapter))
                         .await?
@@ -239,13 +242,16 @@ impl RenderState {
             .map(Ok)
             .unwrap_or_else(|| crate::preferred_framebuffer_format(&surface_formats))?;
 
-        let renderer = Renderer::new(
-            &device,
-            target_format,
-            depth_format,
-            msaa_samples,
-            dithering,
-        );
+        let renderer = {
+            let _setup = config.setup_timer(SetupStage::Renderer);
+            Renderer::new(
+                &device,
+                target_format,
+                depth_format,
+                msaa_samples,
+                dithering,
+            )
+        };
 
         // On wasm, depending on feature flags, wgpu objects may or may not implement sync.
         // It doesn't make sense to switch to Rc for that special usecase, so simply disable the lint.
@@ -304,6 +310,56 @@ pub struct PaintTiming {
     pub finished: web_time::Instant,
 }
 
+/// Host preparation stages before the application can draw its first frame.
+#[derive(Clone, Copy, Debug)]
+pub enum SetupStage {
+    Instance,
+    AdapterEnumeration,
+    AdapterSelection,
+    Device,
+    Renderer,
+    SurfaceCreation,
+    SurfaceConfiguration,
+}
+
+/// Host elapsed interval, including backend work and waits.
+#[derive(Clone, Copy, Debug)]
+pub struct SetupTiming {
+    pub stage: SetupStage,
+    pub started: web_time::Instant,
+    pub finished: web_time::Instant,
+}
+
+pub(crate) struct SetupTimer<'a> {
+    configuration: &'a WgpuConfiguration,
+    stage: SetupStage,
+    started: Option<web_time::Instant>,
+}
+impl Drop for SetupTimer<'_> {
+    fn drop(&mut self) {
+        if let (Some(observer), Some(started)) = (&self.configuration.on_setup_stage, self.started)
+        {
+            observer(SetupTiming {
+                stage: self.stage,
+                started,
+                finished: web_time::Instant::now(),
+            });
+        }
+    }
+}
+impl WgpuConfiguration {
+    pub(crate) fn setup_timer(&self, stage: SetupStage) -> SetupTimer<'_> {
+        SetupTimer {
+            configuration: self,
+            stage,
+            started: self
+                .on_setup_stage
+                .as_ref()
+                .map(|_| web_time::Instant::now()),
+        }
+    }
+}
+
 /// Configuration for using wgpu with eframe or the egui-wgpu winit feature.
 #[derive(Clone)]
 pub struct WgpuConfiguration {
@@ -332,6 +388,10 @@ pub struct WgpuConfiguration {
     /// Optional observer for the native painter's existing host timings.
     /// Called after each stage. Keep the observer nonblocking.
     pub on_paint_stage: Option<Arc<dyn Fn(PaintTiming) + Send + Sync>>,
+
+    /// Optional observer for initialization. Called after each stage, including failures.
+    /// Keep the observer nonblocking.
+    pub on_setup_stage: Option<Arc<dyn Fn(SetupTiming) + Send + Sync>>,
 }
 
 #[test]
@@ -349,6 +409,7 @@ impl std::fmt::Debug for WgpuConfiguration {
             wgpu_setup,
             on_surface_error: _,
             on_paint_stage: _,
+            on_setup_stage: _,
         } = self;
         f.debug_struct("WgpuConfiguration")
             .field("preferred_framebuffer_format", preferred_framebuffer_format)
@@ -370,6 +431,7 @@ impl Default for WgpuConfiguration {
             desired_maximum_frame_latency: None,
             wgpu_setup: Default::default(),
             on_paint_stage: None,
+            on_setup_stage: None,
             on_surface_error: Arc::new(|err| {
                 if err == wgpu::SurfaceError::Outdated {
                     // This error occurs when the app is minimized on Windows.

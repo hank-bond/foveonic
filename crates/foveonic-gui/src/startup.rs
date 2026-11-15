@@ -1,0 +1,521 @@
+//! Presents a responsive loading window while one worker prepares the photographic application.
+
+use crate::{diagnostics, display, preferences, timing, widgets, App};
+use eframe::{egui, egui_wgpu};
+use foveonic::{diagnostics as trace, render::Settings};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
+
+#[cfg(test)]
+#[path = "startup_test.rs"]
+mod tests;
+
+pub const WINDOW_SIZE: egui::Vec2 = egui::vec2(560., 200.);
+
+// Eframe 0.32 writes this opaque value before App::save. Preserve it while the
+// loading window is visible so its temporary geometry cannot replace the workspace.
+const WINDOW_STORAGE_KEY: &str = "window";
+struct Window {
+    workspace: egui::ViewportBuilder,
+    saved: String,
+    positioned: bool,
+    workspace_position: Option<egui::Pos2>,
+    resizing_from: Option<egui::Vec2>,
+}
+impl Window {
+    fn new(workspace: egui::ViewportBuilder, storage: Option<&dyn eframe::Storage>) -> Self {
+        Self {
+            workspace,
+            // Storage has no removal API. An empty value reloads as no settings.
+            saved: storage
+                .and_then(|storage| storage.get_string(WINDOW_STORAGE_KEY))
+                .unwrap_or_default(),
+            positioned: false,
+            workspace_position: None,
+            resizing_from: None,
+        }
+    }
+    fn place(&mut self, context: &egui::Context) {
+        if std::mem::replace(&mut self.positioned, true) {
+            return;
+        }
+        if let Some(command) = egui::ViewportCommand::center_on_screen(context) {
+            if self.workspace.position.is_some() {
+                // Snapshot the actual outer position. The builder contains an
+                // inner position on macOS and cannot be replayed as an outer one.
+                self.workspace_position =
+                    context.input(|input| input.viewport().outer_rect.map(|rect| rect.min));
+            }
+            context.send_viewport_cmd(command);
+        }
+    }
+    fn commands(&self) -> Vec<egui::ViewportCommand> {
+        use egui::ViewportCommand as Command;
+        let mut commands = vec![
+            Command::Resizable(self.workspace.resizable.unwrap_or(true)),
+            Command::MinInnerSize(self.workspace.min_inner_size.unwrap_or_default()),
+            Command::InnerSize(
+                self.workspace
+                    .inner_size
+                    .unwrap_or(egui::vec2(1440., 1000.)),
+            ),
+        ];
+        if let Some(position) = self.workspace_position {
+            commands.push(Command::OuterPosition(position));
+        }
+        commands.extend([
+            Command::Maximized(self.workspace.maximized.unwrap_or(false)),
+            Command::Fullscreen(self.workspace.fullscreen.unwrap_or(false)),
+        ]);
+        commands
+    }
+    fn restore(&mut self, context: &egui::Context) {
+        self.resizing_from =
+            context.input(|input| input.viewport().inner_rect.map(|rect| rect.size()));
+        if self.workspace.position.is_none() {
+            // On first launch, expand around the loading window's center rather
+            // than keeping its small-window origin and extending offscreen.
+            self.workspace_position = context.input(|input| {
+                let viewport = input.viewport();
+                Some(
+                    viewport.outer_rect?.min
+                        + (viewport.inner_rect?.size() - self.workspace.inner_size?) / 2.,
+                )
+            });
+        }
+        for command in self.commands() {
+            context.send_viewport_cmd(command);
+        }
+    }
+    fn observe_size(&mut self, size: Option<egui::Vec2>) {
+        if size.is_some() && size != self.resizing_from {
+            self.resizing_from = None;
+        }
+    }
+    fn preserve(&self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(WINDOW_STORAGE_KEY, self.saved.clone());
+    }
+}
+
+/// The native hook receives the already restored and monitor-clamped workspace.
+pub fn compact_window(workspace: egui::ViewportBuilder) -> egui::ViewportBuilder {
+    workspace
+        .with_inner_size(WINDOW_SIZE)
+        .with_min_inner_size(WINDOW_SIZE)
+        .with_fullscreen(false)
+        .with_maximized(false)
+        .with_resizable(false)
+}
+
+pub(crate) struct Inputs {
+    pub context: egui::Context,
+    pub render_state: egui_wgpu::RenderState,
+    pub preferences: preferences::Preferences,
+    pub target: display::Target,
+    pub path: Option<PathBuf>,
+    pub settings: Settings,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Progress {
+    completed: usize,
+    total: usize,
+}
+
+type Prepare<T> = Box<dyn FnOnce(Arc<Mutex<Progress>>) -> Result<T, String> + Send>;
+struct Preparation<T> {
+    work: Option<Prepare<T>>,
+    receiver: Option<mpsc::Receiver<Result<T, String>>>,
+    progress: Arc<Mutex<Progress>>,
+}
+impl<T: Send + 'static> Preparation<T> {
+    fn new(work: impl FnOnce(Arc<Mutex<Progress>>) -> Result<T, String> + Send + 'static) -> Self {
+        Self {
+            work: Some(Box::new(work)),
+            receiver: None,
+            progress: Arc::default(),
+        }
+    }
+    fn start_if_ready(
+        &mut self,
+        presented: bool,
+        recorder_ready: bool,
+        context: &egui::Context,
+    ) -> Result<(), String> {
+        if !presented || !recorder_ready {
+            return Ok(());
+        }
+        let Some(work) = self.work.take() else {
+            return Ok(());
+        };
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let progress = self.progress.clone();
+        let context = context.clone();
+        std::thread::Builder::new()
+            .name("graphics-startup".into())
+            .spawn(move || {
+                let result = work(progress);
+                let _ = sender.send(result);
+                context.request_repaint();
+            })
+            .map_err(|error| format!("Cannot start graphics preparation: {error}"))?;
+        self.receiver = Some(receiver);
+        Ok(())
+    }
+    fn receive(&mut self) -> Option<Result<T, String>> {
+        match self.receiver.as_ref()?.try_recv() {
+            Ok(result) => {
+                self.receiver = None;
+                Some(result)
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.receiver = None;
+                Some(Err(
+                    "Graphics engine preparation stopped unexpectedly.".into()
+                ))
+            }
+            Err(mpsc::TryRecvError::Empty) => None,
+        }
+    }
+}
+
+struct Observation {
+    name: &'static str,
+    started: Instant,
+    finished: Instant,
+}
+pub(crate) struct Observations {
+    began: Instant,
+    requested: bool,
+    pending: Mutex<Vec<Observation>>,
+    presented: AtomicBool,
+    attached: AtomicBool,
+}
+impl Observations {
+    pub fn new(began: Instant) -> Arc<Self> {
+        Arc::new(Self {
+            began,
+            requested: timing::requested_mode().is_some(),
+            pending: Mutex::new(Vec::new()),
+            presented: AtomicBool::new(false),
+            attached: AtomicBool::new(false),
+        })
+    }
+    pub(super) fn record(&self, name: &'static str, started: Instant, finished: Instant) {
+        if self.requested && !self.attached.load(Ordering::Acquire) {
+            self.pending.lock().unwrap().push(Observation {
+                name,
+                started,
+                finished,
+            });
+        }
+    }
+    pub fn setup(&self, value: egui_wgpu::SetupTiming) {
+        let name = match value.stage {
+            egui_wgpu::SetupStage::Instance => "startup.graphics_instance",
+            egui_wgpu::SetupStage::AdapterEnumeration => "startup.adapter_enumeration",
+            egui_wgpu::SetupStage::AdapterSelection => "startup.adapter_selection",
+            egui_wgpu::SetupStage::Device => "startup.graphics_device",
+            egui_wgpu::SetupStage::Renderer => "startup.ui_renderer",
+            egui_wgpu::SetupStage::SurfaceCreation => "startup.surface_create",
+            egui_wgpu::SetupStage::SurfaceConfiguration => "startup.surface_configure",
+        };
+        self.record(name, value.started, value.finished);
+    }
+    pub fn paint(&self, value: egui_wgpu::PaintTiming) {
+        timing::paint_stage(value);
+        if matches!(value.stage, egui_wgpu::PaintStage::Present)
+            && value.viewport == egui::ViewportId::ROOT
+            && !self.presented.swap(true, Ordering::AcqRel)
+        {
+            self.record("startup.entry_to_first_present", self.began, value.finished);
+        }
+    }
+    fn flush(&self) {
+        if !trace::enabled() {
+            return;
+        }
+        for value in self.pending.lock().unwrap().drain(..) {
+            if let (Some(start), Some(end)) = (
+                trace::timestamp_at(value.started),
+                trace::timestamp_at(value.finished),
+            ) {
+                trace::interval(trace::Category::Ui, value.name, start, end, |fields| {
+                    fields.str("measurement", "host_elapsed");
+                });
+            }
+        }
+    }
+}
+
+/// Keeps one startup recording owned even when native framework setup fails.
+pub(crate) struct Capture {
+    controller: Option<diagnostics::Controller>,
+    observations: Arc<Observations>,
+}
+impl Capture {
+    pub fn new(observations: Arc<Observations>) -> Result<Self, String> {
+        let mut controller = diagnostics::Controller::default();
+        if let Some(mode) = timing::requested_mode() {
+            controller.start(
+                mode,
+                serde_json::json!({"entry":"process_startup", "pre_main_included":false}),
+            )?;
+        }
+        Ok(Self {
+            controller: Some(controller),
+            observations,
+        })
+    }
+    fn controller(&mut self) -> &mut diagnostics::Controller {
+        self.controller.as_mut().unwrap()
+    }
+    fn take(&mut self) -> diagnostics::Controller {
+        self.controller.take().unwrap()
+    }
+}
+impl Drop for Capture {
+    fn drop(&mut self) {
+        if let Some(controller) = self
+            .controller
+            .as_mut()
+            .filter(|controller| controller.save_on_exit_enabled())
+        {
+            controller.set_end_state(serde_json::json!({"startup":"closed_before_ready"}));
+            let saved = controller.wait_for_start().and_then(|()| {
+                self.observations.flush();
+                controller.save_on_exit()
+            });
+            if let Err(error) = saved {
+                eprintln!("Cannot save startup capture: {error}");
+            }
+        }
+    }
+}
+
+pub(crate) struct Startup {
+    preparation: Preparation<App>,
+    app: Option<Box<App>>,
+    error: Option<String>,
+    display: display::Host,
+    window: Window,
+    icons: [egui::TextureHandle; 2],
+    preferences: preferences::Preferences,
+    capture: Capture,
+    observations: Arc<Observations>,
+}
+impl Startup {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        path: Option<PathBuf>,
+        settings: Settings,
+        mut capture: Capture,
+        observations: Arc<Observations>,
+        workspace: egui::ViewportBuilder,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        observations.record(
+            "startup.entry_to_app_creator",
+            observations.began,
+            Instant::now(),
+        );
+        let rs = cc
+            .wgpu_render_state
+            .as_ref()
+            .ok_or("wgpu renderer unavailable")?;
+        timing::check_gpu_features(rs.device.features())?;
+        crate::display_image::install_upload_error_handler(&rs.device);
+        let display = display::Host::new(cc)?;
+        let window = Window::new(workspace, cc.storage);
+        let icons = crate::icon::startup_icons(&cc.egui_ctx);
+        let preferences = preferences::Preferences::load(cc.storage);
+        widgets::install_style(&cc.egui_ctx);
+        if crate::smoke::screenshot_active() {
+            cc.egui_ctx.set_theme(egui::Theme::Dark);
+        } else if std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_some()
+            && std::env::var_os("FOVEONIC_GUI_SMOKE_LIGHT").is_some()
+        {
+            cc.egui_ctx.set_theme(egui::Theme::Light);
+        }
+        capture.controller().set_configuration(serde_json::json!({"entry":"process_startup", "pre_main_included":false,
+            "adapter":rs.adapter.get_info().name,"gpu_timestamps_available":timing::gpu_available(),"display_format":format!("{:?}",rs.target_format)}));
+        let inputs = Inputs {
+            context: cc.egui_ctx.clone(),
+            render_state: rs.clone(),
+            preferences: preferences.clone(),
+            target: display.target,
+            path,
+            settings,
+        };
+        let observed = observations.clone();
+        let preparation = Preparation::new(move |progress| {
+            let began = Instant::now();
+            let app = App::prepare(inputs, |completed, total| {
+                *progress.lock().unwrap() = Progress { completed, total };
+            });
+            observed.record("startup.prepare_workspace", began, Instant::now());
+            app
+        });
+        Ok(Self {
+            preparation,
+            app: None,
+            error: None,
+            display,
+            window,
+            icons,
+            preferences,
+            capture,
+            observations,
+        })
+    }
+}
+impl eframe::App for Startup {
+    fn raw_input_hook(&mut self, context: &egui::Context, input: &mut egui::RawInput) {
+        if let Some(app) = &mut self.app {
+            app.raw_input_hook(context, input);
+        }
+    }
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Some(app) = &mut self.app {
+            app.save(storage);
+        } else {
+            self.preferences.save(storage);
+        }
+        if self.app.is_none() || self.window.resizing_from.is_some() {
+            self.window.preserve(storage);
+        }
+    }
+    fn update(&mut self, context: &egui::Context, frame: &mut eframe::Frame) {
+        self.window.place(context);
+        let display_error = self
+            .display
+            .refresh(frame)
+            .err()
+            .map(|error| format!("Display color management: {error}"));
+        if let Some(app) = &mut self.app {
+            let size = context.input(|input| input.viewport().inner_rect.map(|rect| rect.size()));
+            self.window.observe_size(size);
+            // Window managers may ignore or cap resize requests. The workspace
+            // uses the available geometry and never waits for a resize event.
+            if !self.observations.attached.load(Ordering::Acquire) {
+                self.observations.record(
+                    "startup.entry_to_ready",
+                    self.observations.began,
+                    Instant::now(),
+                );
+                self.observations.flush();
+                self.observations.attached.store(true, Ordering::Release);
+                if app.diagnostics.active() {
+                    app.diagnostics.set_start_state(app.diagnostic_state());
+                }
+            }
+            app.activity
+                .observe(crate::activity::Origin::Display, display_error);
+            app.update(context, frame);
+            return;
+        }
+        self.capture.controller().poll(context);
+        self.observations.flush();
+        if self.error.is_none() {
+            if let Err(error) = self.preparation.start_if_ready(
+                self.observations.presented.load(Ordering::Acquire),
+                !self.capture.controller().starting(),
+                context,
+            ) {
+                self.error = Some(error);
+            }
+            if let Some(result) = self.preparation.receive() {
+                match result {
+                    Ok(mut app) => {
+                        app.diagnostics = self.capture.take();
+                        app.startup_ready = Some(Instant::now());
+                        self.window.restore(context);
+                        self.app = Some(Box::new(app));
+                        context.request_repaint();
+                    }
+                    Err(error) => self.error = Some(error),
+                }
+            }
+        }
+        self.show_loading(context);
+    }
+}
+
+impl Startup {
+    fn show_loading(&self, context: &egui::Context) {
+        let progress = *self.preparation.progress.lock().unwrap();
+        loading_panel(context, &self.icons, progress, self.error.as_deref());
+        if self.error.is_none() {
+            context.request_repaint_after(Duration::from_millis(16));
+        }
+    }
+}
+
+fn loading_panel(
+    context: &egui::Context,
+    icons: &[egui::TextureHandle; 2],
+    progress: Progress,
+    error: Option<&str>,
+) {
+    egui::CentralPanel::default()
+        .frame(egui::Frame::central_panel(&context.style()).inner_margin(24))
+        .show(context, |ui| {
+            ui.spacing_mut().item_spacing.x = 24.;
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let icon = &icons[usize::from(context.theme() == egui::Theme::Dark)];
+                ui.add(
+                    egui::Image::new(icon)
+                        .fit_to_exact_size(egui::vec2(128., 128.))
+                        .alt_text("Foveonic"),
+                );
+                let content_height = if error.is_some() { 128. } else { 96. };
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), content_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.label(
+                            egui::RichText::new(preferences::APP_NAME)
+                                .size(24.)
+                                .strong(),
+                        );
+                        ui.add_space(10.);
+                        if let Some(error) = error {
+                            egui::ScrollArea::vertical().max_height(64.).show(ui, |ui| {
+                                ui.label("The graphics engine could not be prepared.");
+                                ui.label(error);
+                            });
+                            if ui.button("Close").clicked() {
+                                context.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        } else {
+                            ui.label(if progress.total == 0 {
+                                "Preparing graphics engine…"
+                            } else if progress.completed == progress.total {
+                                "Finishing setup…"
+                            } else {
+                                "Preparing graphics programs…"
+                            });
+                            ui.add_space(8.);
+                            let fraction = if progress.total == 0 {
+                                0.
+                            } else {
+                                progress.completed as f32 / progress.total as f32
+                            };
+                            let mut bar = egui::ProgressBar::new(fraction)
+                                .desired_width(ui.available_width());
+                            if progress.total > 0 {
+                                bar = bar
+                                    .text(format!("{} / {}", progress.completed, progress.total));
+                            }
+                            ui.add(bar);
+                        }
+                    },
+                );
+            });
+        });
+}

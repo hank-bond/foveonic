@@ -1,8 +1,8 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
-use crate::capture::{CaptureReceiver, CaptureSender, CaptureState, capture_channel};
-use crate::{RenderState, SurfaceErrorAction, WgpuConfiguration, renderer};
+use crate::capture::{capture_channel, CaptureReceiver, CaptureSender, CaptureState};
+use crate::{renderer, RenderState, SurfaceErrorAction, WgpuConfiguration};
 use egui::{Context, Event, UserData, ViewportId, ViewportIdMap, ViewportIdSet};
 use std::{num::NonZeroU32, sync::Arc};
 
@@ -60,7 +60,10 @@ impl Painter {
         dithering: bool,
     ) -> Self {
         let (capture_tx, capture_rx) = capture_channel();
-        let instance = configuration.wgpu_setup.new_instance().await;
+        let instance = {
+            let _setup = configuration.setup_timer(crate::SetupStage::Instance);
+            configuration.wgpu_setup.new_instance().await
+        };
 
         Self {
             context,
@@ -116,6 +119,7 @@ impl Painter {
             surf_config.desired_maximum_frame_latency = desired_maximum_frame_latency;
         }
 
+        let _setup = config.setup_timer(crate::SetupStage::SurfaceConfiguration);
         surface_state
             .surface
             .configure(&render_state.device, &surf_config);
@@ -152,7 +156,12 @@ impl Painter {
         if let Some(window) = window {
             let size = window.inner_size();
             if !self.surfaces.contains_key(&viewport_id) {
-                let surface = self.instance.create_surface(window)?;
+                let surface = {
+                    let _setup = self
+                        .configuration
+                        .setup_timer(crate::SetupStage::SurfaceCreation);
+                    self.instance.create_surface(window)?
+                };
                 self.add_surface(surface, viewport_id, size).await?;
             }
         } else {
@@ -179,6 +188,9 @@ impl Painter {
             let size = window.inner_size();
             if !self.surfaces.contains_key(&viewport_id) {
                 let surface = unsafe {
+                    let _setup = self
+                        .configuration
+                        .setup_timer(crate::SetupStage::SurfaceCreation);
                     self.instance
                         .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&window)?)?
                 };

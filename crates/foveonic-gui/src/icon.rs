@@ -1,4 +1,4 @@
-//! Loads the window icon while leaving macOS Dock appearances to the app bundle.
+//! Loads window and startup artwork while leaving macOS Dock appearances to the app bundle.
 
 const PNG: &[u8] = include_bytes!("../assets/icon.png");
 
@@ -11,6 +11,33 @@ pub fn window_icon() -> eframe::egui::IconData {
         height: image.height(),
         rgba: image.into_raw(),
     }
+}
+
+/// Composer exports for the loading window. The native Dock icon remains system-owned.
+pub fn startup_icons(context: &eframe::egui::Context) -> [eframe::egui::TextureHandle; 2] {
+    [
+        (
+            "startup-light",
+            include_bytes!("../assets/startup-light.png").as_slice(),
+        ),
+        (
+            "startup-dark",
+            include_bytes!("../assets/startup-dark.png").as_slice(),
+        ),
+    ]
+    .map(|(name, bytes)| {
+        let image = image::load_from_memory(bytes)
+            .expect("embedded startup icon")
+            .into_rgba8();
+        context.load_texture(
+            name,
+            eframe::egui::ColorImage::from_rgba_unmultiplied(
+                [image.width() as usize, image.height() as usize],
+                image.as_raw(),
+            ),
+            Default::default(),
+        )
+    })
 }
 
 #[cfg(test)]

@@ -35,9 +35,17 @@ Completion classification must explicitly distinguish reusable pixels, per-photo
 
 Use existing Rust worker/channel primitives. Test the observed completion-order, target-removal, Before-cancellation and continuous-input cases with a deterministic fake executor, then validate real GPU delivery. The first version does not require a generic actor framework, additional runtime, parallel GPU executor or speculative recovery system.
 
-## Progress display
+## Startup
 
-The loading area must show a progress bar and total milliseconds instead of a spinner and loading text. Normal processing uses five equally sized sections: file reading, decoding and metadata, recipe preparation, graph execution, and display preparation/delivery. The graph section advances in equal increments at completed required graph operations. Interactive GPU stages report after their existing completion waits. No time-based interpolation or new per-stage GPU waits are permitted.
+The application must present a loading window before preparing the photographic engine. Engine pipeline preparation, calibration loading and processing-worker initialization must run off the UI thread. Native window/display configuration stays on the UI thread. The loading window must remain responsive and show actual completed graphics-program counts when available, followed by finishing setup. Counts indicate completed pipeline creation calls, not a time estimate or driver-internal compilation percentage.
+
+The initial loading window should be compact and centered horizontally and vertically on the screen where native placement is available, with a large Foveonic icon on the left and application name, status and progress on the right. Its light or dark artwork must match the effective system appearance. When preparation completes, restore the workspace's remembered size and maximized/fullscreen state and its remembered native position. Without a remembered position, the workspace should expand around the loading window's center. The workspace must remain usable if the window manager ignores a resize request.
+
+Closing during preparation must not join the preparation worker or replace saved preferences or workspace geometry with loading-window defaults. Preparation failures must show a readable error and allow closing the window. The native framework still prepares its graphics device and basic UI renderer before application drawing becomes possible.
+
+## Photograph-loading progress
+
+The photograph-loading area must show a progress bar and total milliseconds instead of a spinner and loading text. Normal processing uses five equally sized sections: file reading, decoding and metadata, recipe preparation, graph execution, and display preparation/delivery. The graph section advances in equal increments at completed required graph operations. Interactive GPU stages report after their existing completion waits. No time-based interpolation or new per-stage GPU waits are permitted.
 
 The timer starts when the request enters the worker queue and freezes when its display-ready image reaches the UI. It includes queueing, source I/O, decoding, metadata, preparation, rendering and display texture completion. Deferred scopes and navigator work are excluded. Physical screen scanout is not measured. Cached loading and cached graph work complete their applicable sections immediately. Superseded requests must not advance or finish a newer request's progress. Progress reporting must remain separate from the bounded image-reply channel. Errors must remain visible.
 

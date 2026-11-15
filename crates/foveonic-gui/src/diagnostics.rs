@@ -14,7 +14,8 @@ pub enum Action {
 }
 
 pub struct Controller {
-    recorder: Recorder,
+    recorder: Option<Recorder>,
+    capture: Option<u64>,
     starting: Option<Reply<()>>,
     saving: Option<Reply<SavedCapture>>,
     manifest: Value,
@@ -28,7 +29,8 @@ pub struct Controller {
 impl Default for Controller {
     fn default() -> Self {
         Self {
-            recorder: Recorder::new(),
+            recorder: None,
+            capture: None,
             starting: None,
             saving: None,
             manifest: Value::Null,
@@ -52,6 +54,7 @@ impl Controller {
         };
         self.starting = Some(
             self.recorder
+                .get_or_insert_with(Recorder::new)
                 .start(config)
                 .map_err(|error| error.to_string())?,
         );
@@ -66,6 +69,9 @@ impl Controller {
     pub fn mark(&mut self, label: &str, metadata: Value) {
         self.action("mark", json!({"label":label,"metadata":metadata}));
         crate::timing::scenario_step(label, "user-marker", metadata);
+    }
+    pub fn set_configuration(&mut self, configuration: Value) {
+        self.manifest["configuration"] = configuration;
     }
     pub fn set_start_state(&mut self, state: Value) {
         self.manifest["starting_state"] = state;
@@ -96,14 +102,14 @@ impl Controller {
             return Err("No completed diagnostic capture is ready to save".into());
         }
         self.action("stop_save_requested", json!({"directory":directory}));
+        let recorder = self.recorder.as_ref().ok_or("No diagnostic recorder")?;
         let reply = if retain {
-            self.recorder
-                .stop_save_retaining(directory.clone(), self.manifest.clone(), 4)
+            recorder.stop_save_retaining(directory.clone(), self.manifest.clone(), 4)
         } else {
-            self.recorder
-                .stop_save(directory.clone(), self.manifest.clone())
+            recorder.stop_save(directory.clone(), self.manifest.clone())
         };
         self.saving = Some(reply.map_err(|error| error.to_string())?);
+        self.capture = None;
         self.saved_directory = Some(directory);
         Ok(())
     }
@@ -129,12 +135,14 @@ impl Controller {
         }
         self.wait_for_save()
     }
-    fn wait_for_start(&mut self) -> Result<(), String> {
+    /// Shutdown-only wait. Interaction must use `poll` instead.
+    pub(crate) fn wait_for_start(&mut self) -> Result<(), String> {
         if let Some(reply) = self.starting.take() {
             reply
                 .recv()
                 .map_err(|error| error.to_string())?
                 .map_err(|error| error.to_string())?;
+            self.capture = trace::capture_id();
         }
         Ok(())
     }
@@ -178,7 +186,7 @@ impl Controller {
         }
     }
     pub fn active(&self) -> bool {
-        trace::enabled()
+        self.capture.is_some() && self.capture == trace::capture_id()
     }
     pub fn starting(&self) -> bool {
         self.starting.is_some()
@@ -197,8 +205,9 @@ impl Controller {
             match reply.try_recv() {
                 Ok(result) => {
                     self.starting = None;
-                    if let Err(error) = result {
-                        self.error = Some(error.to_string());
+                    match result {
+                        Ok(()) => self.capture = trace::capture_id(),
+                        Err(error) => self.error = Some(error.to_string()),
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -496,7 +505,7 @@ fn smoke_panic_saves_active_sdk_capture() {
     controller
         .start(Mode::Wall, json!({"entry":"smoke-unwind-proof"}))
         .unwrap();
-    controller.starting.take().unwrap().recv().unwrap().unwrap();
+    controller.wait_for_start().unwrap();
     controller.set_start_state(json!({"proof":"preserved"}));
     let failure_directory = directory.clone();
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -558,7 +567,7 @@ pub fn test_capture() -> Option<TestCapture> {
             json!({"entry":"isolated-worker-test","process_id":std::process::id()}),
         )
         .unwrap();
-    controller.starting.take().unwrap().recv().unwrap().unwrap();
+    controller.wait_for_start().unwrap();
     let directory = std::env::var_os("FOVEONIC_DIAGNOSTICS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -582,4 +591,27 @@ impl Drop for TestCapture {
             Err(error) => eprintln!("Worker capture recorder disconnected: {error}"),
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "owns global SDK capture state; run alone with --exact"]
+fn inactive_controllers_never_own_another_controllers_capture() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut owner = Controller::default();
+    let mut placeholder = Controller::default();
+    assert!(placeholder.recorder.is_none());
+    owner
+        .start(Mode::Wall, json!({"entry":"startup-ownership"}))
+        .unwrap();
+    owner.wait_for_start().unwrap();
+    assert!(owner.active());
+    assert!(!placeholder.active());
+    assert!(!placeholder.save_on_exit_enabled());
+    placeholder.save_on_exit().unwrap();
+    assert!(placeholder.recorder.is_none());
+    assert!(owner.active());
+    owner.stop_to(temporary.path().join("capture")).unwrap();
+    owner.wait_for_save().unwrap();
+    assert!(!owner.active());
 }

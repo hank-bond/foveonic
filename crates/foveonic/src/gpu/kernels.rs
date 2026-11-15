@@ -710,6 +710,16 @@ impl Gpu {
         adapter_name: String,
         profile: &mut crate::profile::Profile,
     ) -> Result<Self> {
+        Self::from_device_progress(device, queue, adapter_name, profile, &mut |_, _| {})
+    }
+
+    pub(crate) fn from_device_progress(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_name: String,
+        profile: &mut crate::profile::Profile,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Self> {
         let began = profile.mode.enabled().then(std::time::Instant::now);
         let _scope =
             crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.pipelines.create");
@@ -1599,6 +1609,7 @@ impl Gpu {
         #[cfg(test)]
         let mut shader_writes = Vec::new();
         let same_grid_constants = [("SAME_GRID_APPLICATION", 1.)];
+        progress(0, kernels.len());
         let pipelines = kernels
             .iter()
             .enumerate()
@@ -1706,14 +1717,16 @@ impl Gpu {
                 } else {
                     Default::default()
                 };
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some(entry),
                     layout: None,
                     module: &shader,
                     entry_point: Some(entry),
                     compilation_options,
                     cache: None,
-                })
+                });
+                progress(index + 1, kernels.len());
+                pipeline
             })
             .collect();
         let validation = pollster::block_on(device.pop_error_scope());
