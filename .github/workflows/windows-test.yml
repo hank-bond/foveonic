@@ -49,8 +49,8 @@ jobs:
           Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-LLVM.txt') $stage
           Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-MS.txt') $stage
           Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENCE-MIT.txt') $stage
-          & (Join-Path $stage 'foveonic-gui.exe') --help
-          if ($LASTEXITCODE -ne 0) { throw 'Windows executable failed startup check' }
+          $process = Start-Process (Join-Path $stage 'foveonic-gui.exe') -ArgumentList '--help' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Windows executable failed startup check: $($process.ExitCode)" }
           Compress-Archive -Path $stage -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64.zip')
       - uses: actions/upload-artifact@v4
         with:

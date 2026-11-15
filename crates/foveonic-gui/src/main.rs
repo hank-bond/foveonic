@@ -1,5 +1,7 @@
 //! Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use foveonic::render::ProcessingQuality;
 mod actions;
 mod activity;
@@ -2133,7 +2135,36 @@ impl eframe::App for App {
 fn multi_photo_overview(paths: &[PathBuf], active: Option<&std::path::Path>) -> bool {
     paths.len() > 1 && active.is_some_and(|active| paths.iter().any(|path| path == active))
 }
+#[cfg(target_os = "windows")]
+fn main() {
+    if let Err(error) = run() {
+        show_startup_error(&error.to_string());
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
 fn main() -> eframe::Result {
+    run()
+}
+
+#[cfg(target_os = "windows")]
+fn show_startup_error(message: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = "Foveonic".encode_utf16().chain(Some(0)).collect();
+    // The pointers remain valid for the duration of this synchronous call.
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+fn run() -> eframe::Result {
     timing::configure().map_err(eframe::Error::AppCreation)?;
     let mut args = std::env::args().skip(1);
     let mut path = None;
@@ -2150,7 +2181,10 @@ fn main() -> eframe::Result {
             }
             _ => {
                 if path.is_some() || arg.starts_with('-') {
-                    eprintln!("unexpected argument: {arg}");
+                    let message = format!("Unexpected argument: {arg}");
+                    eprintln!("{message}");
+                    #[cfg(target_os = "windows")]
+                    show_startup_error(&message);
                     std::process::exit(2);
                 }
                 path = Some(PathBuf::from(arg));
