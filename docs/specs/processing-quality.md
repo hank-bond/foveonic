@@ -7,7 +7,7 @@ implementation: incomplete
 
 # Processing quality
 
-The preview offers two choices: **Quality** and **Speed**. Both choose a power-of-two working image resolution from displayed image pixels, zoom and camera capabilities. Quality avoids display enlargement beyond the chosen samples. Speed may use the existing bounded enlargement allowance. The selected mode is workspace state, not an authored photographic edit.
+The preview offers two choices: **Quality** and **Speed**. Both choose a power-of-two working image resolution from displayed image pixels, zoom and camera capabilities. Both use the bounded display-enlargement margins defined by [viewport workflows](./viewport-workflows.md#processing-quality). The selected mode is workspace state, not an authored photographic edit.
 
 Quality must use complete working-resolution inputs for scene estimation and as the basis of spatial guidance. This includes Adaptive Tone, Dynamic Range and Dehaze. Both policies retain the shared multiscale brightness filter's half-width, half-height guide cells and gain anchors. Large neighborhoods use its additional fourfold coefficient reduction. These internal grids do not reduce the photographic image's requested resolution. Quality scene estimation may use the documented bounded Adaptive regional summaries and Dehaze score-bin averaging while retaining complete working-resolution inputs. These statistical summaries do not resize the photographic signal. Speed may additionally use validated smaller guidance inputs, statistical sampling and other documented approximations while retaining the authored controls.
 

@@ -2,11 +2,17 @@
 
 import hashlib
 import math
+import struct
 
 RESOLUTIONS = ('full', 'fast', 'draft', 'thumb')
 PROCESSING_QUALITIES = ('quality', 'speed')
 IMAGE_GEOMETRY_FIELDS = ('extent', 'layout', 'space', 'linear_white', 'view_baked',
                          'view_extent', 'view_crop', 'view_rotation', 'endianness')
+
+
+def _f32(value):
+    """Match the app's geometry precision at arithmetic boundaries."""
+    return struct.unpack('<f', struct.pack('<f', value))[0]
 
 
 # Numeric resolution probes are distinct from the application's automatic sizing.
@@ -25,9 +31,10 @@ def expected_display_scale(processing_quality, family, density):
         raise ValueError(f'unknown processing quality: {processing_quality}')
     if family not in ('Classic', 'Merrill', 'Quattro') or not isinstance(density, (float, int)) or not math.isfinite(density) or density <= 0:
         return None
-    limit = 1. if processing_quality == 'quality' else 1.5
+    density = _f32(density)
+    limit = _f32(1.1 if processing_quality == 'quality' else 1.2)
     for divisor in (8, 4, 2, 1):
-        if density * divisor <= limit or divisor == 1:
+        if _f32(density * divisor) <= limit or divisor == 1:
             return min(divisor, 4) if family == 'Classic' else divisor
 
 
@@ -39,7 +46,7 @@ def observation_density(observation):
                 or len(size) != 2 or len(extent) != 2
                 or any(not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0 for value in (*size, *extent, dpr))):
             return None
-        return max(size[axis] / extent[axis] for axis in (0, 1)) * dpr
+        return _f32(max(_f32(_f32(size[axis]) / _f32(extent[axis])) for axis in (0, 1)) * _f32(dpr))
     return observation.get('display_density')
 
 

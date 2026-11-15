@@ -23,8 +23,8 @@ pub(crate) fn resolve(policy: ProcessingQuality, pixels_per_native_pixel: Option
         return Scale::new(2).unwrap();
     };
     let max_upscale = match policy {
-        ProcessingQuality::Quality => 1.,
-        ProcessingQuality::Speed => 1.5,
+        ProcessingQuality::Quality => 1.1,
+        ProcessingQuality::Speed => 1.2,
     };
     [8, 4, 2]
         .into_iter()
@@ -79,8 +79,8 @@ mod tests {
     #[test]
     fn both_policies_resolve_display_density_with_their_upscale_limit() {
         for (policy, limit) in [
-            (ProcessingQuality::Quality, 1.),
-            (ProcessingQuality::Speed, 1.5),
+            (ProcessingQuality::Quality, 1.1),
+            (ProcessingQuality::Speed, 1.2),
         ] {
             for divisor in [8, 4, 2] {
                 assert_eq!(
@@ -96,6 +96,19 @@ mod tests {
             for density in [None, Some(0.), Some(f32::NAN)] {
                 assert_eq!(resolve(policy, density).divisor(), 2);
             }
+        }
+    }
+
+    #[test]
+    fn fitted_half_resolution_uses_the_approved_enlargement_margins() {
+        for (policy, density, divisor) in [
+            (ProcessingQuality::Quality, 0.52, 2),
+            (ProcessingQuality::Quality, 0.55, 2),
+            (ProcessingQuality::Quality, 0.5501, 1),
+            (ProcessingQuality::Speed, 0.60, 2),
+            (ProcessingQuality::Speed, 0.6001, 1),
+        ] {
+            assert_eq!(resolve(policy, Some(density)).divisor(), divisor);
         }
     }
 

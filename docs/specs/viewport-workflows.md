@@ -11,7 +11,7 @@ The [viewport plan](../../plans/viewport-workflows.md) records the reviewed impl
 
 ## Processing quality
 
-The workspace offers exactly **Quality** and **Speed**, independently of authored photograph edits. Quality is the default. Both choose the main preview's working resolution from physical display-pixel demand for each photograph, including zoom. Quality should use at most one physical display pixel per working sample before selecting a finer grid. Speed may allow up to 1.5. Photograph count is not a quality input. Camera-specific working scales remain governed by [small previews](./small-previews.md).
+The workspace offers exactly **Quality** and **Speed**, independently of authored photograph edits. Quality is the default. Both choose the main preview's working resolution from physical display-pixel demand for each photograph, including zoom. Quality allows at most 1.1 physical display pixels per working sample before selecting a finer grid; Speed allows 1.2. These are 10% and 20% linear enlargement margins. A Half preview therefore remains sufficient through 55% zoom in Quality or 60% in Speed. Photograph count is not a quality input. Camera-specific working scales remain governed by [small previews](./small-previews.md).
 
 Processing quality and working resolution must remain distinct. Native viewport zoom, regional detail and whole-image continuation preserve the selected processing policy. A region does not imply either policy. Export and pipeline inspection explicitly use Quality.
 

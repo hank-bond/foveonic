@@ -43,8 +43,8 @@ fn automatic_scale_bound(
     let density = (image.width() / extent[0] as f32).max(image.height() / extent[1] as f32)
         * pixels_per_point;
     let limit = match policy {
-        ProcessingQuality::Quality => 1.,
-        ProcessingQuality::Speed => 1.5,
+        ProcessingQuality::Quality => 1.1,
+        ProcessingQuality::Speed => 1.2,
     };
     let divisor = [8, 4, 2, 1]
         .into_iter()

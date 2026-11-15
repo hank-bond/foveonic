@@ -70,18 +70,30 @@ class ResultTests(unittest.TestCase):
 
 class DisplayDemandTests(unittest.TestCase):
     def test_quality_and_speed_thresholds_are_independent_of_the_application_resolver(self):
-        for mode,limit in [('quality',1.),('speed',1.5)]:
+        for mode,limit in [('quality',1.1),('speed',1.2)]:
             for divisor in (8,4,2):
                 self.assertEqual(expected_display_scale(mode,'Merrill',limit/divisor),divisor)
                 self.assertEqual(expected_display_scale(mode,'Merrill',limit/divisor+0.0001),divisor//2)
         self.assertEqual(expected_display_scale('quality','Classic',0.01),4)
         self.assertIsNone(expected_display_scale('quality','Merrill',None))
 
+    def test_fitted_half_resolution_uses_the_approved_enlargement_margins(self):
+        for mode,density,expected in [('quality',0.52,2),('quality',0.55,2),
+                                      ('quality',0.5501,1),('speed',0.60,2),('speed',0.6001,1)]:
+            self.assertEqual(expected_display_scale(mode,'Merrill',density),expected)
+
+    def test_captured_float_geometry_matches_the_app_at_decimal_thresholds(self):
+        for mode,size,extent in [('quality',1724.800048828125,3136),
+                                 ('speed',2822.400146484375,4704)]:
+            observation={'display_size_points':[size,size],'native_extent':[extent,extent],
+                         'pixels_per_point':1.}
+            self.assertEqual(expected_display_scale(mode,'Merrill',observation_density(observation)),2)
+
     def test_raw_geometry_drives_density_and_same_policy_finer_images_remain_valid(self):
         observation={'step':'render','source':'a.x3f','family':'Merrill','processing_quality':'quality',
                      'display_size_points':[400,200],'native_extent':[4000,2000],'pixels_per_point':2.,
                      'display_density':0.01,'scale_divisor':2}
-        self.assertEqual(observation_density(observation),0.2)
+        self.assertAlmostEqual(observation_density(observation),0.2)
         result=render_result('application','initial','quality',[observation],True)
         self.assertEqual(result['assertions'][0]['expected'],4)
         self.assertEqual(result['outcome'],'passed')
