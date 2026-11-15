@@ -144,6 +144,28 @@ impl EncodingOptions {
     }
 }
 
+fn rgb_samples(bytes: &[u8]) -> impl Iterator<Item = u16> + '_ {
+    bytes.as_chunks::<8>().0.iter().flat_map(|pixel| {
+        [0, 2, 4].map(|offset| u16::from_le_bytes([pixel[offset], pixel[offset + 1]]))
+    })
+}
+
+fn repack_rgb8(bytes: &[u8], profile: &mut crate::profile::Profile) -> Vec<u8> {
+    let start = std::time::Instant::now();
+    let pixels = rgb_samples(bytes)
+        .map(|v| ((u32::from(v) + 128) / 257) as u8)
+        .collect();
+    profile.record("export RGB8 repack", start);
+    pixels
+}
+
+fn repack_rgb16(bytes: &[u8], profile: &mut crate::profile::Profile) -> Vec<u16> {
+    let start = std::time::Instant::now();
+    let pixels = rgb_samples(bytes).collect();
+    profile.record("export RGB16 repack", start);
+    pixels
+}
+
 /// Samples arrive as little-endian RGB16 with one padding component per pixel.
 /// Encoders receive the already oriented, resized, destination-encoded image.
 /// Lossy JXL uses native color signaling with a pure gamma ProPhoto transfer.
@@ -165,41 +187,12 @@ pub fn write<W: Write + Seek>(
     if count.checked_mul(8) != Some(bytes.len()) {
         return Err("invalid packed RGB16 output".into());
     }
-    let start = std::time::Instant::now();
-    let samples = bytes.as_chunks::<8>().0.iter().flat_map(|pixel| {
-        [0, 2, 4].map(|offset| u16::from_le_bytes([pixel[offset], pixel[offset + 1]]))
-    });
-    let eight_bit =
-        format == Format::Jpeg || (format == Format::Png && options.png_depth == BitDepth::Eight);
-    let streaming_tiff =
-        format == Format::Tiff && options.tiff_compression == TiffCompression::None;
-    let streaming_png = format == Format::Png && options.png_depth == BitDepth::Sixteen;
-    let (pixels, rgb8): (Vec<u16>, Vec<u8>) = if eight_bit {
-        (
-            Vec::new(),
-            samples
-                .map(|v| ((u32::from(v) + 128) / 257) as u8)
-                .collect(),
-        )
-    } else if streaming_tiff || streaming_png {
-        (Vec::new(), Vec::new())
-    } else {
-        (samples.collect(), Vec::new())
-    };
-    if !streaming_tiff && !streaming_png {
-        profile.record(
-            if eight_bit {
-                "export RGB8 repack"
-            } else {
-                "export RGB16 repack"
-            },
-            start,
-        );
-    }
-    let start = std::time::Instant::now();
-    match format {
+    let start = match format {
         Format::Tiff => {
             use tiff::encoder::{compression::DeflateLevel, Compression, Predictor};
+            let pixels = (options.tiff_compression != TiffCompression::None)
+                .then(|| repack_rgb16(bytes, profile));
+            let start = std::time::Instant::now();
             let compression = match options.tiff_compression {
                 TiffCompression::None => Compression::Uncompressed,
                 TiffCompression::Lzw => Compression::Lzw,
@@ -223,40 +216,37 @@ pub fn write<W: Write + Seek>(
             image
                 .encoder()
                 .write_tag(tiff::tags::Tag::Software, "Foveonic GPU")?;
-            if streaming_tiff {
+            if let Some(pixels) = pixels {
+                image.write_data(&pixels)?;
+            } else {
                 let mut offset = 0;
                 let mut strip = Vec::new();
                 while image.next_strip_sample_count() > 0 {
                     let samples = usize::try_from(image.next_strip_sample_count())?;
                     let packed_bytes = samples / 3 * 8;
                     strip.clear();
-                    strip.extend(
-                        bytes[offset..offset + packed_bytes]
-                            .as_chunks::<8>()
-                            .0
-                            .iter()
-                            .flat_map(|pixel| {
-                                [0, 2, 4].map(|i| u16::from_le_bytes([pixel[i], pixel[i + 1]]))
-                            }),
-                    );
+                    strip.extend(rgb_samples(&bytes[offset..offset + packed_bytes]));
                     image.write_strip(&strip)?;
                     offset += packed_bytes;
                 }
                 image.finish()?;
-            } else {
-                image.write_data(&pixels)?;
             }
+            start
         }
         Format::Jpeg => {
+            let rgb8 = repack_rgb8(bytes, profile);
+            let start = std::time::Instant::now();
             let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
                 &mut writer,
                 options.jpeg_quality,
             );
             encoder.set_icc_profile(space.profile().to_vec())?;
             encoder.encode(&rgb8, width, height, image::ExtendedColorType::Rgb8)?;
+            start
         }
         Format::Png => {
-            if streaming_png {
+            if options.png_depth == BitDepth::Sixteen {
+                let start = std::time::Instant::now();
                 let mut info = png::Info::with_size(width, height);
                 info.icc_profile = Some(std::borrow::Cow::Borrowed(space.profile()));
                 let mut encoder = png::Encoder::with_info(&mut writer, info)?;
@@ -278,8 +268,11 @@ pub fn write<W: Write + Seek>(
                     stream.finish()?;
                 }
                 png_writer.finish()?;
+                start
             } else {
                 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+                let rgb8 = repack_rgb8(bytes, profile);
+                let start = std::time::Instant::now();
                 let mut encoder = PngEncoder::new_with_quality(
                     &mut writer,
                     CompressionType::Best,
@@ -287,11 +280,17 @@ pub fn write<W: Write + Seek>(
                 );
                 encoder.set_icc_profile(space.profile().to_vec())?;
                 encoder.write_image(&rgb8, width, height, image::ExtendedColorType::Rgb8)?;
+                start
             }
         }
-        Format::Jxl => jxl::encode(&mut writer, &pixels, width, height, space, options)?,
+        Format::Jxl => {
+            let pixels = repack_rgb16(bytes, profile);
+            let start = std::time::Instant::now();
+            jxl::encode(&mut writer, &pixels, width, height, space, options)?;
+            start
+        }
         Format::Dng => unreachable!("validated photographic format"),
-    }
+    };
     writer.flush()?;
     profile.record(format.label(), start);
     Ok(())
