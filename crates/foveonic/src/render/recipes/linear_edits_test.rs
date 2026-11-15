@@ -1381,7 +1381,7 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                         let bytes = gpu.readback(&image.buffer).unwrap();
                         let values: &[f32] = bytemuck::cast_slice(&bytes);
                         let [width, height] = image.description.extent;
-                        let step = crate::nodes::finish::tone_equalizer::cell_step(policy) as usize;
+                        let step = crate::nodes::finish::tone_equalizer::GUIDE_SCALE as usize;
                         let cells: Vec<f32> = (0..height)
                             .step_by(step)
                             .flat_map(|y| {

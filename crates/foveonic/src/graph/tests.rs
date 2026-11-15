@@ -514,9 +514,7 @@ fn brightness_guides_are_distinct_from_expanded_scalar_inspections() {
     use crate::{color_space::ColorSpace, nodes::finish::tone_equalizer};
     let mut graph = Graph::default();
     let space = ColorSpace::Srgb;
-    let guide =
-        tone_equalizer::Guide::new([25, 3], 8, space, crate::render::ProcessingQuality::Speed)
-            .unwrap();
+    let guide = tone_equalizer::Guide::new([25, 3], 8, space).unwrap();
     let rgb = graph
         .add(
             Operation::RenderedInput {

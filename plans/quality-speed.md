@@ -10,7 +10,7 @@ Requirements: [processing quality](../docs/specs/processing-quality.md). Recover
 
 One engine `ProcessingQuality` enum accompanies the existing numeric working `Scale`. Settings keep it transient. Diagnostics preserve it. The GUI offers Quality and Speed and selects scale automatically for both. Requests, results and presentation compatibility carry the same policy. Bounds choose coverage only. Exports force Quality. No new cache owner, worker type or scheduling architecture is needed.
 
-Quality covers all working pixels for optional guides and estimators. Speed retains the existing bounded approximations. The same algorithms consume explicit sampling parameters where possible. Dense brightness guidance preserves physical neighborhoods and uses full-grid gains. Adaptive's normalized regional scoring windows remain the same statistical model while dense Quality covers all contributing pixels. Dehaze must preserve photographic neighborhood size when removing its estimation-grid reduction.
+Quality scene estimation covers all working pixels, and Quality spatial guidance begins from working-grid RGB. The owner approved restoring the shared brightness filter's half-grid cells and gain anchors after profiling its dense variant. Large neighborhoods retain the established coefficient reduction. Speed may additionally reduce whole-photo guidance inputs and statistical sampling. The same algorithms consume explicit sampling parameters where possible. Adaptive's normalized regional scoring windows remain the same statistical model while dense Quality covers all contributing pixels. Dehaze must preserve photographic neighborhood size when removing its estimation-grid reduction.
 
 ## Inventory
 
@@ -18,8 +18,8 @@ Quality covers all working pixels for optional guides and estimators. Speed reta
 | --- | --- | --- | --- |
 | Adaptive input statistics | Thumb or half-Thumb RGB branch | Working-grid RGB | Existing profile target |
 | Adaptive histogram and region statistics | 256 by 256 point samples | Complete working-grid coverage | Bounded samples |
-| Brightness base | 2 by 2 cells and additional coarse coefficient grid | Dense cells and coefficients | Existing compact/coarse grids |
-| Adaptive and Dynamic Range gains | Half-grid gain anchors | Full-grid anchors | Half-grid anchors |
+| Brightness base | 2 by 2 cells and additional coarse coefficient grid | Shared compact/coarse grids | Shared compact/coarse grids |
+| Adaptive and Dynamic Range gains | Half-grid gain anchors | Half-grid anchors | Half-grid anchors |
 | Regional application guides | Fast branch selected by region | Whole guide at the working scale | Whole guide at a Fast ceiling |
 | Dehaze input | Family/mode-specific half-size branch | Working-grid branch in all families/modes | Shared Fast ceiling |
 | Dehaze estimator | Pooling to a 512-pixel long edge | Dense grid with preserved physical radius | Bounded pooled grid |
@@ -118,3 +118,25 @@ Automatic resolution exposed another obsolete harness assumption: a native Whole
 The final GUI suite passed 533 ordinary tests with 52 opt-in tests ignored. Python profiling tools passed 170 tests with one skip, and artwork tools passed five. The earlier full-workspace checks, GPU arithmetic suites, 80 unaffected-output comparisons, 32 exact allocation-change comparisons and policy-independent exports remain separate evidence. Formatting, strict Clippy and generated documentation checks complete the review build. The app is left closed after testing.
 
 The implementation is ready for the owner's visual checklist. Keep the specification incomplete until that acceptance is recorded. Further data-structure, element-type and resource-lifetime memory work belongs to the deferred follow-up rather than this migration.
+
+## Owner review: flower latency and UI stalls
+
+The owner reported about ten seconds to show the fitted sunlit red flower in Quality, with several UI freezes. Isolated measurements used its saved recipe, including Auto Dehaze 61, Natural Adaptive Tone, Blacks/Highlights, Color Editor, Local Contrast and sharpening. The original sidecar was preserved. Tests used the release build and a 5 GiB sampled-footprint guard, with no competing app or compiler.
+
+Single fresh headless renders with profiling Off took 2.47 seconds at divisor two in Quality, 14.78 seconds at native Quality, and 0.41 seconds at divisor two in Speed. Source opening was outside those render intervals. These are individual diagnostic observations, not repeated benchmark distributions. The exact working resolution of the owner's original ten-second render was not recorded. The controlled fitted viewport selected divisor two. A larger viewport can require native sampling under the current Quality density policy.
+
+The loss-free native-app GPU capture took about 3.02 seconds at divisor two, including loading a decoded-cache payload and delivery. Its largest operation costs were the Adaptive brightness guide (709 ms host, 698 ms GPU), Dynamic Range brightness guide (714/697 ms), Adaptive fit (418/379 ms) and Dehaze estimation (361/353 ms). Color Field contributed 236 ms host and 96 ms GPU. A separate instrumented native-resolution session attributed about 5.45 and 5.29 seconds to the two guides, 1.76 seconds to Dehaze estimation and 1.39 seconds to Adaptive fitting. Instrumented and Off timings are separate evidence.
+
+Dense box filters scan every neighbor at every working pixel across multiple radii. Their work therefore grows with both pixel population and neighborhood width. Dense Adaptive fitting also scans overlapping windows serially within each region invocation. The dense Dehaze candidate selector uses much larger heaps. These costs are primarily numerical GPU work, rather than source reading or graph planning.
+
+The GPU capture observed display-surface acquisition waits up to 526 ms. The five largest waits overlapped the two guide operations, Adaptive fitting and Dehaze estimation. Application UI-update scopes stayed below ten milliseconds. A separate profiling-Off app run still took 2.83 seconds and recorded a maximum UI-update gap of 387 ms, confirming that timestamp recording is not required for the stalls. Surface acquisition on the main thread waits behind long GPU workloads despite rendering coordination living on workers.
+
+Owner acceptance remains open. The next design decision is which guidance and scene-estimation grids Quality actually needs, versus which dense operations should receive more efficient neighborhood/reduction algorithms. Preserve native photographic detail and consistent section/Whole policy while evaluating that decision. No processing policy or algorithm was changed during this profiling investigation.
+
+The owner subsequently approved restoring half-size brightness guides and gain anchors before further optimization. The [finishing optimization plan](./finishing-optimization.md) tracks that reviewed rollback, its preserved photographic resolution, boundary regressions and new performance observations. Dense-guide measurements above describe the superseded checkpoint. Dense Quality scene estimation and Dehaze remain for the next optimization round.
+
+## Requested release performance baseline
+
+The owner requests performance coverage across all test photographs, with a versioned baseline accompanying each release so development runs can detect regressions. Extend the existing Off-mode recording and comparison tools rather than introducing another timing framework. Fixed, checked-in recipes must exercise expensive enabled features as well as camera defaults. Mutable local sidecars must not define release workloads.
+
+The proposed slice should cover fresh processing from decoded inputs, retained edits, fitted previews, native zoom/loupe and representative multi-photo groups in both processing policies. Report each photograph and workflow separately, including effective scale and UI-update gaps. Keep loading, foreground delivery and background completion distinct. Record repeated samples, build/input identities, hardware, display geometry and cache conditions with the baseline. Compare matched workloads on the same host, or run the released binary and candidate on a new host. Preserve raw results as release evidence and review regression budgets explicitly. Recording a baseline does not approve the flower latency or UI stalls identified above. Concrete matrix size, release-asset layout and thresholds remain to be agreed before implementation.

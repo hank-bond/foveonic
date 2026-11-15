@@ -11,18 +11,16 @@ use crate::{
     },
     profile::Profile,
     recipe::Key,
-    render::ProcessingQuality,
     source::Result,
 };
 
-/// Speed uses half-grid gains and fourfold coefficient reduction. Regional
-/// crops preserve that lattice. Quality uses each working pixel throughout.
+/// Half-grid brightness cells and gain anchors use fourfold coefficient
+/// reduction at broad scales. Regional crops preserve that lattice.
 pub(crate) const GUIDE_SCALE: u32 = 2;
 pub(crate) const GUIDE_ALIGNMENT: u32 = GUIDE_SCALE * COARSE_SCALE;
 const COARSE_SCALE: u32 = 4;
 const COARSE_THRESHOLD: u32 = 15;
 const NATIVE_RADIUS: u32 = 384;
-const NATIVE_RADII: [u32; 8] = [2, 6, 12, 24, 48, 96, 192, 384];
 const PIVOT_OUTPUT: f32 = 0.25;
 const NOMINAL_WHITE: f32 = 4095.;
 const EDGE_SIGMA_EV: f32 = 0.45;
@@ -132,12 +130,7 @@ pub(crate) struct Guide {
 }
 impl Guide {
     /// The maximum radius is measured in working RGB pixels.
-    pub(crate) fn new(
-        extent: [u32; 2],
-        radius: u32,
-        space: ColorSpace,
-        processing_quality: ProcessingQuality,
-    ) -> Result<Self> {
+    pub(crate) fn new(extent: [u32; 2], radius: u32, space: ColorSpace) -> Result<Self> {
         if extent.contains(&0)
             || radius == 0
             || radius > NATIVE_RADIUS
@@ -145,7 +138,7 @@ impl Guide {
         {
             return Err("invalid HDR mask geometry".into());
         }
-        let step = cell_step(processing_quality);
+        let step = GUIDE_SCALE;
         Ok(Self {
             shape: [
                 extent[0],
@@ -167,7 +160,7 @@ impl Guide {
     }
     /// Keep the established guide lattice when its RGB backing becomes compact.
     pub(crate) fn with_input_bounds(self, bounds: [u32; 4]) -> Result<Self> {
-        let alignment = self.alignment();
+        let alignment = GUIDE_ALIGNMENT;
         if !bounds[0].is_multiple_of(alignment)
             || !bounds[1].is_multiple_of(alignment)
             || bounds[0] >= bounds[2]
@@ -192,7 +185,7 @@ impl Guide {
             return Err("invalid requested HDR bounds".into());
         }
         let margin = support();
-        let alignment = self.alignment();
+        let alignment = GUIDE_ALIGNMENT;
         Ok([
             bounds[0].saturating_sub(margin) / alignment * alignment,
             bounds[1].saturating_sub(margin) / alignment * alignment,
@@ -221,41 +214,16 @@ impl Guide {
     pub(crate) fn cell_step(self) -> u32 {
         self.filter[3] as u32
     }
-    fn alignment(self) -> u32 {
-        if self.cell_step() == 1 {
-            1
-        } else {
-            GUIDE_ALIGNMENT
-        }
-    }
     fn stages(self) -> Vec<(u32, u32)> {
         let maximum = self.filter[0] as u32;
-        if self.cell_step() != 1 {
-            let radius = (maximum as f32 / GUIDE_SCALE as f32).round().max(1.) as u32;
-            return (0..=radius.ilog2())
-                .rev()
-                .map(|level| {
-                    let r = radius >> level;
-                    (r * GUIDE_SCALE, (r / 2) * GUIDE_SCALE)
-                })
-                .collect();
-        }
-        let scale = maximum as f32 / NATIVE_RADIUS as f32;
-        let mut stages = Vec::with_capacity(NATIVE_RADII.len());
-        for native in NATIVE_RADII {
-            let radius = (native as f32 * scale).round().max(1.) as u32;
-            if stages
-                .last()
-                .is_some_and(|&(previous, _)| previous == radius)
-            {
-                continue;
-            }
-            // Match the original half-grid residual neighborhoods, including
-            // their zero-radius sentinel at the two-native-pixel stage.
-            let residual = ((native / 4 * 2) as f32 * scale).round() as u32;
-            stages.push((radius, residual));
-        }
-        stages
+        let radius = (maximum as f32 / GUIDE_SCALE as f32).round().max(1.) as u32;
+        (0..=radius.ilog2())
+            .rev()
+            .map(|level| {
+                let r = radius >> level;
+                (r * GUIDE_SCALE, (r / 2) * GUIDE_SCALE)
+            })
+            .collect()
     }
     fn at_scale(
         mut self,
@@ -295,14 +263,6 @@ impl Guide {
     }
 }
 
-/// Quality keeps a brightness and gain cell at every working pixel.
-pub(crate) fn cell_step(processing_quality: ProcessingQuality) -> u32 {
-    match processing_quality {
-        ProcessingQuality::Quality => 1,
-        ProcessingQuality::Speed => GUIDE_SCALE,
-    }
-}
-
 /// One encoded Float32 cell represents each covered image block.
 pub(crate) fn guide_storage_bytes(extent: [u32; 2], step: u32) -> u64 {
     u64::from(extent[0].div_ceil(step)) * u64::from(extent[1].div_ceil(step)) * 4
@@ -318,10 +278,16 @@ struct GuideStorage {
 impl GuideStorage {
     fn new(guide: Guide) -> Self {
         let mask = guide_storage_bytes(guide.extent(), guide.cell_step());
-        let coarse_moments = (guide.cell_step() != 1).then(|| {
-            let step = guide.cell_step() * COARSE_SCALE;
-            u64::from(guide.shape[0].div_ceil(step)) * u64::from(guide.shape[1].div_ceil(step)) * 16
-        });
+        let coarse_moments = guide
+            .stages()
+            .iter()
+            .any(|&(radius, _)| radius / GUIDE_SCALE > COARSE_THRESHOLD)
+            .then(|| {
+                let step = guide.cell_step() * COARSE_SCALE;
+                u64::from(guide.shape[0].div_ceil(step))
+                    * u64::from(guide.shape[1].div_ceil(step))
+                    * 16
+            });
         Self {
             mask,
             moments: mask * 4,
@@ -343,9 +309,9 @@ pub(crate) fn build_guide(
     let storage = GuideStorage::new(guide);
     let mut output = gpu.storage("Compact HDR brightness base", storage.mask)?;
     let fine_groups = [guide.shape[2].div_ceil(8), guide.shape[3].div_ceil(8)];
-    let speed = guide.cell_step() != 1;
     let stages = guide.stages();
-    let passes = 2 + u32::from(speed) + PASSES_PER_SCALE * stages.len() as u32;
+    let passes =
+        2 + u32::from(storage.coarse_moments.is_some()) + PASSES_PER_SCALE * stages.len() as u32;
     let mut trace = gpu.trace(profile.mode.gpu(), passes);
     let mut fine = gpu.storage("HDR original fine guide", storage.moments)?;
     let coarse_guide = guide.at_scale(true, 8, 0, 0, false);
@@ -374,10 +340,10 @@ pub(crate) fn build_guide(
     let mut b = gpu.storage("HDR horizontal means", storage.moments)?;
     for (index, &(radius, residual_radius)) in stages.iter().enumerate() {
         let largest = index + 1 == stages.len();
-        let reduced = speed && radius / GUIDE_SCALE > COARSE_THRESHOLD;
+        let reduced = radius / GUIDE_SCALE > COARSE_THRESHOLD;
         let parameters = guide.at_scale(reduced, radius, residual_radius, 0, largest);
         let signal = if reduced {
-            coarse.as_ref().expect("Speed coarse guide")
+            coarse.as_ref().expect("broad-scale coarse guide")
         } else {
             &fine
         };
@@ -557,7 +523,6 @@ impl GuideSampling {
 }
 
 pub(crate) struct Response {
-    pub processing_quality: ProcessingQuality,
     pub sampling: Option<GuideSampling>,
     pub controls: Controls,
     pub pivot: f32,
@@ -574,7 +539,6 @@ pub(crate) fn apply_with_white(
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
     let Response {
-        processing_quality,
         controls,
         pivot,
         space,
@@ -587,9 +551,9 @@ pub(crate) fn apply_with_white(
         || mask.size()
             != guide_storage_bytes(
                 sampling.map_or(extent, GuideSampling::extent),
-                sampling.map_or(cell_step(processing_quality), GuideSampling::cell_step),
+                sampling.map_or(GUIDE_SCALE, GuideSampling::cell_step),
             )
-        || sampling.is_some_and(|s| s.gain_step() != cell_step(processing_quality))
+        || sampling.is_some_and(|s| s.gain_step() != GUIDE_SCALE)
         || !pivot.is_finite()
     {
         return Err("invalid HDR input geometry or pivot".into());
@@ -605,7 +569,7 @@ pub(crate) fn apply_with_white(
         luma: [f32; 4],
         pivot: [f32; 4],
     }
-    let sample = cell_step(processing_quality);
+    let sample = GUIDE_SCALE;
     let half = extent.map(|v| v.div_ceil(sample));
     let uniform = gpu.uniform(&Adjustment {
         shape: [extent[0], extent[1], half[0], half[1]],

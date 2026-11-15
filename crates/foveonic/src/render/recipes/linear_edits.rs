@@ -256,13 +256,9 @@ pub(super) fn build(
         let mask = if separate_guide {
             None
         } else {
-            let guide = tone_equalizer::Guide::new(
-                extent,
-                tone_equalizer::radius_for_scale(scale),
-                space,
-                settings.processing_quality,
-            )?
-            .with_white(white);
+            let guide =
+                tone_equalizer::Guide::new(extent, tone_equalizer::radius_for_scale(scale), space)?
+                    .with_white(white);
             let mask = recipe
                 .graph
                 .add(Operation::AdaptiveToneGuide { guide, space }, &[input])?;
@@ -320,7 +316,6 @@ pub(super) fn build(
                         analysis.extent(),
                         tone_equalizer::radius_for_scale(analysis_scale.factor()),
                         space,
-                        settings.processing_quality,
                     )?
                     .with_white(white);
                     mask_inspection(
@@ -352,6 +347,7 @@ pub(super) fn build(
                 params.with_application_guide(
                     application,
                     guide_mapping(recipe.rgb_to_native, application_mapping)?,
+                    application_scale == settings.working_scale,
                 )?,
             )
         } else {
@@ -498,32 +494,28 @@ pub(super) fn build(
         let guide_scale = settings
             .processing_quality
             .guide_scale(settings.working_scale);
-        let (mask, sampling) =
-            if settings.preview_region.is_some() || guide_scale != settings.working_scale {
-                let (mask, sampling) =
-                    dynamic_range_guide(engine, source, settings, recipe, profile, execution)?;
-                (mask, Some(sampling))
-            } else {
-                let guide = tone_equalizer::Guide::new(
-                    extent,
-                    tone_equalizer::radius_for_scale(scale),
-                    space,
-                    settings.processing_quality,
-                )?
-                .with_white(white);
-                let mask = recipe
-                    .graph
-                    .add(Operation::ToneMask { guide, space }, &[input])?;
-                recipe.graph.retain_for_session(mask);
-                mask_inspection(&mut recipe.graph, mask, guide, "tonal-ranges.mask", names)?;
-                (mask, None)
-            };
+        let (mask, sampling) = if settings.preview_region.is_some()
+            || guide_scale != settings.working_scale
+        {
+            let (mask, sampling) =
+                dynamic_range_guide(engine, source, settings, recipe, profile, execution)?;
+            (mask, Some(sampling))
+        } else {
+            let guide =
+                tone_equalizer::Guide::new(extent, tone_equalizer::radius_for_scale(scale), space)?
+                    .with_white(white);
+            let mask = recipe
+                .graph
+                .add(Operation::ToneMask { guide, space }, &[input])?;
+            recipe.graph.retain_for_session(mask);
+            mask_inspection(&mut recipe.graph, mask, guide, "tonal-ranges.mask", names)?;
+            (mask, None)
+        };
         if requested(&recipe.graph, names) {
             return Ok(());
         }
         recipe.final_id = recipe.graph.add(
             Operation::TonalRanges {
-                processing_quality: settings.processing_quality,
                 sampling,
                 window: Default::default(),
                 controls: settings.tonal_ranges,
@@ -679,9 +671,16 @@ fn dynamic_range_guide(
     else {
         return Err("Dynamic Range guide has an unexpected producer".into());
     };
+    // Same-grid Whole gains also read padding anchors beside the active crop.
+    // Keep those cells available when only the RGB backing becomes regional.
+    let guide_bounds = if overview.working_scale == settings.working_scale {
+        [0, 0, branch.rgb_extent[0], branch.rgb_extent[1]]
+    } else {
+        branch.rgb_bounds
+    };
     let sampling = tone_equalizer::GuideSampling::new(
         branch.rgb_extent,
-        branch.rgb_bounds,
+        guide_bounds,
         guide_mapping(recipe.rgb_to_native, branch.rgb_to_native)?,
         guide.cell_step(),
         guide.cell_step(),
@@ -797,7 +796,6 @@ fn adaptive_application_guide(
         branch.rgb_extent,
         tone_equalizer::radius_for_scale(scale.factor()),
         space,
-        settings.processing_quality,
     )?
     .with_white(white);
     // Keep the ordinary guide's direct RGB parent. An inspection alias before
@@ -857,7 +855,6 @@ fn adaptive_analysis(
         branch.rgb_extent,
         tone_equalizer::radius_for_scale(analysis_scale.factor()),
         space,
-        settings.processing_quality,
     )?
     .with_white(white);
     let mask = branch

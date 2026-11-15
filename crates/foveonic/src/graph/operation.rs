@@ -273,7 +273,6 @@ pub enum Operation {
         space: ColorSpace,
     },
     TonalRanges {
-        processing_quality: crate::render::ProcessingQuality,
         sampling: Option<crate::nodes::finish::tone_equalizer::GuideSampling>,
         window: crate::nodes::finish::image_region::Window,
         white: f32,
@@ -419,7 +418,6 @@ impl Operation {
                 Ok(None)
             }
             Self::TonalRanges {
-                processing_quality,
                 sampling,
                 white,
                 controls,
@@ -429,7 +427,6 @@ impl Operation {
             } => {
                 if let Some((_, Demand::Region(bounds))) = demands.first() {
                     Ok(Some(Self::TonalRanges {
-                        processing_quality: *processing_quality,
                         sampling: *sampling,
                         white: *white,
                         controls: *controls,
@@ -704,7 +701,6 @@ impl Operation {
                 ..
             } => window.key(params.key().join(analysis.key()).join(curve.key())),
             Self::TonalRanges {
-                processing_quality,
                 sampling,
                 window,
                 controls,
@@ -712,10 +708,7 @@ impl Operation {
                 white,
                 ..
             } => {
-                let key = Key::pod(&controls.amounts())
-                    .with(pivot)
-                    .with(white)
-                    .with(&(*processing_quality as u32));
+                let key = Key::pod(&controls.amounts()).with(pivot).with(white);
                 window.key(if let Some(sampling) = sampling {
                     key.join(sampling.key())
                 } else {

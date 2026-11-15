@@ -23,7 +23,7 @@ Fit scene targets on a fixed domain with refinement between coarse trials. Profi
 
 Apply the fitted response at the requested display or export geometry. At a fixed processing policy and working grid, pan and viewport bounds must not change the whole-photo fit. Quality and Speed may both fall back to whole-photo processing when sectional execution is unavailable. Regional bounds must not choose processing policy. A section and Whole continuation must preserve that policy and agree over their shared coordinates. Highlight recovery remains upstream of the fit and follows the working-grid contract.
 
-Quality brightness guides cover every working sample. Speed may retain an encoded half-width, half-height lattice. Consumers must honor the declared cell step and coordinate mapping. Full-size mask inspection remains available on demand. Compact Speed storage must preserve that policy's photographic and inspected values.
+Both policies use the shared brightness filter's encoded half-width, half-height guide lattice and gain anchors, with additional coefficient reduction for large neighborhoods. Quality prepares that filter from working-grid RGB. Speed may use a smaller whole-photo basis. Consumers must honor the declared cell step and coordinate mapping. Full-size mask inspection remains available on demand.
 
 Structure probes must retain usable nonzero support on every working grid. Scale-derived parameter preparation belongs beside the operation. Coarser previews must not lose structure evidence because a spatial offset rounds to zero. Preserve physical support wherever it is representable.
 

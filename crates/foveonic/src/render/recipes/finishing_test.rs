@@ -356,7 +356,10 @@ fn gpu_adaptive_hdr_cold_regions_pan_and_continue_to_whole() {
                             }
                         }
                     }
-                    assert!(maximum < 0.0001, "Adaptive/HDR region {rect:?}: {maximum}");
+                    assert!(
+                        maximum < 0.0001,
+                        "Adaptive/HDR {policy:?}/{rendering:?}/{response:?} region {rect:?}: {maximum}"
+                    );
                     bytes
                 };
 

@@ -28,6 +28,7 @@ pub(crate) fn support() -> u32 {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Params {
     shape: [u32; 4],
+    // Guide step, gain step, dense analysis, same-grid mapped application.
     sampling: [u32; 4],
     bounds: [u32; 4],
     luma: [f32; 4],
@@ -71,7 +72,7 @@ impl Params {
         } else {
             0.
         };
-        let step = tone_equalizer::cell_step(processing_quality);
+        let step = tone_equalizer::GUIDE_SCALE;
         let analysis_extent = if processing_quality == ProcessingQuality::Quality {
             [bounds[2] - bounds[0], bounds[3] - bounds[1]]
         } else {
@@ -135,12 +136,15 @@ impl Params {
         Ok(self)
     }
     /// Map main RGB sample centers to sample centers in a separate guide image.
-    /// The guide carries its own encoded-cell lattice.
+    /// The guide carries its own encoded-cell lattice. Same-grid application
+    /// preserves Whole padding anchors and nearest-cell structure probes.
     pub(crate) fn with_application_guide(
         mut self,
         guide: Self,
         mapping: [[f32; 4]; 2],
+        same_grid: bool,
     ) -> Result<Self> {
+        self.sampling[3] = u32::from(same_grid);
         self.guide = tone_equalizer::GuideSampling::new(
             guide.extent(),
             guide.bounds,
@@ -164,11 +168,7 @@ impl Params {
     }
 
     pub(crate) fn aligned_output(self, bounds: [u32; 4]) -> Result<[u32; 4]> {
-        let alignment = if self.sampling[1] == 1 {
-            1
-        } else {
-            tone_equalizer::GUIDE_ALIGNMENT
-        };
+        let alignment = tone_equalizer::GUIDE_ALIGNMENT;
         if bounds[0] >= bounds[2] || bounds[1] >= bounds[3] {
             return Err("invalid adaptive output bounds".into());
         }
@@ -331,7 +331,11 @@ pub(crate) fn apply_with_analysis(
         fit(gpu, &mut buffers, params, true, &mut trace);
     }
     gpu.dispatch(
-        Kernel::AdaptiveToneGain,
+        if params.sampling[3] != 0 {
+            Kernel::AdaptiveToneGainSameGrid
+        } else {
+            Kernel::AdaptiveToneGain
+        },
         &mut [
             (0, Read(input)),
             (1, Read(mask)),

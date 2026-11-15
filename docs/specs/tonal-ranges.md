@@ -29,7 +29,7 @@ Review portraits, bright skies, textured objects and deep shadows. Check exact n
 
 ### Processing guide policy
 
-[Quality](./processing-quality.md) derives Dynamic Range guidance from complete working-grid RGB. Speed may use a reduced guide after the preceding edits while retaining local brightness measurements and photographic samples at the requested working resolution. The selected policy applies equally to Whole, native-detail regions and their continuations. Regional bounds must not select an approximation. Each policy must preserve sampling alignment, overlapping pixels and cached/fresh equality. Photographic and DNG exports use native Quality processing.
+[Quality](./processing-quality.md) derives Dynamic Range guidance from complete working-grid RGB through the shared half-grid brightness filter and gain anchors. Speed may use a smaller guidance input after the preceding edits. The photographic image retains its requested working resolution in both policies. The selected policy applies equally to Whole, native-detail regions and their continuations. Regional bounds must not select an approximation. Each policy must preserve sampling alignment, overlapping pixels and cached/fresh equality. Photographic and DNG exports use native Quality processing.
 
 The earlier regional-only half-resolution guide experiment and its pending photographic comparison remain recorded in the [loupe investigation](../../plans/loupe-motion-diagnostics.md#separate-reduced-dynamic-range-guide). The selected Quality/Speed contract now controls approximation independently of regional bounds.
 

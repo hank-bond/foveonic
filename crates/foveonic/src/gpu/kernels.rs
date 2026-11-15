@@ -310,6 +310,7 @@ pub enum Kernel {
     AdaptiveToneFit,
     AdaptiveToneSelect,
     AdaptiveToneGain,
+    AdaptiveToneGainSameGrid,
     AdaptiveToneSampleRegions,
     AdaptiveToneRegionSummary,
     AdaptiveToneRegionFit,
@@ -646,6 +647,7 @@ impl Kernel {
             Self::AdaptiveToneFit => "adaptive tone candidate fit",
             Self::AdaptiveToneSelect => "adaptive tone response selection",
             Self::AdaptiveToneGain => "adaptive tone adaptive gains",
+            Self::AdaptiveToneGainSameGrid => "adaptive tone same-grid gains",
             Self::AdaptiveToneSampleRegions => "adaptive tone regional samples",
             Self::AdaptiveToneRegionSummary => "adaptive tone regional summaries",
             Self::AdaptiveToneRegionFit => "adaptive tone regional candidate fit",
@@ -1564,6 +1566,7 @@ impl Gpu {
             (visibility.as_str(), "fit"),
             (visibility.as_str(), "select_fit"),
             (visibility.as_str(), "adaptive_gain"),
+            (visibility.as_str(), "adaptive_gain"),
             (visibility.as_str(), "sample_regions"),
             (visibility.as_str(), "summarize_regions"),
             (visibility.as_str(), "fit_regions"),
@@ -1571,6 +1574,8 @@ impl Gpu {
         ];
         #[cfg(test)]
         let mut shader_writes = Vec::new();
+        let same_grid_constants =
+            std::collections::HashMap::from([("SAME_GRID_APPLICATION".into(), 1.)]);
         let pipelines = kernels
             .iter()
             .enumerate()
@@ -1670,12 +1675,20 @@ impl Gpu {
                     label: Some(entry),
                     source: wgpu::ShaderSource::Wgsl(code),
                 });
+                let compilation_options = if index == Kernel::AdaptiveToneGainSameGrid as usize {
+                    wgpu::PipelineCompilationOptions {
+                        constants: &same_grid_constants,
+                        ..Default::default()
+                    }
+                } else {
+                    Default::default()
+                };
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some(entry),
                     layout: None,
                     module: &shader,
                     entry_point: Some(entry),
-                    compilation_options: Default::default(),
+                    compilation_options,
                     cache: None,
                 })
             })

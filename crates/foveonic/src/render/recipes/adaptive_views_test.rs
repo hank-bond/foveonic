@@ -242,7 +242,13 @@ fn capture_views(adaptive_variants: bool) {
             else {
                 unreachable!()
             };
-            *params = params.with_application_guide(*analysis, mapping).unwrap();
+            *params = params
+                .with_application_guide(
+                    *analysis,
+                    mapping,
+                    analysis_scale == effective.working_scale,
+                )
+                .unwrap();
             node.inputs[1] = node.inputs[3];
             for &output in &node.outputs {
                 built.graph.outputs[output]

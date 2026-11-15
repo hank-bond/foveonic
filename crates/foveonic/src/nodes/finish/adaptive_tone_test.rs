@@ -435,7 +435,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
     let guide = tone_equalizer::build_guide(
         &gpu,
         &input,
-        tone_equalizer::Guide::new(extent, 48, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap(),
+        tone_equalizer::Guide::new(extent, 48, ColorSpace::Srgb).unwrap(),
         &mut Profile::default(),
     )
     .unwrap();
@@ -526,7 +526,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
     let guide = tone_equalizer::build_guide(
         &gpu,
         &uniform,
-        tone_equalizer::Guide::new(extent, 48, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap(),
+        tone_equalizer::Guide::new(extent, 48, ColorSpace::Srgb).unwrap(),
         &mut Profile::default(),
     )
     .unwrap();
@@ -589,7 +589,7 @@ fn blacks_rescue_only_structured_near_black_without_flattening_or_touching_visib
     let mask = tone_equalizer::build_guide(
         &gpu,
         &input,
-        tone_equalizer::Guide::new(extent, 48, ColorSpace::Srgb, ProcessingQuality::Speed).unwrap(),
+        tone_equalizer::Guide::new(extent, 48, ColorSpace::Srgb).unwrap(),
         &mut Profile::default(),
     )
     .unwrap();
@@ -689,7 +689,7 @@ fn mapped_application_guide_keeps_fit_and_overlapping_sections_aligned() {
     let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
     let params = Params::new(
         extent,
-        [0, 0, 64, 64],
+        [3, 5, 60, 58],
         4095.,
         ColorSpace::Srgb,
         BaseResponse::Natural,
@@ -709,7 +709,7 @@ fn mapped_application_guide_keeps_fit_and_overlapping_sections_aligned() {
     for application in [
         params,
         params
-            .with_application_guide(params, [[1., 0., 0., 0.], [0., 1., 0., 0.]])
+            .with_application_guide(params, [[1., 0., 0., 0.], [0., 1., 0., 0.]], true)
             .unwrap(),
     ] {
         let result = apply_with_analysis(
@@ -739,6 +739,47 @@ fn mapped_application_guide_keeps_fit_and_overlapping_sections_aligned() {
         identity_outputs[0], identity_outputs[1],
         "mapped identity shifted compact guide centers"
     );
+    // Odd active boundaries exercise nearest-cell probes, while variable
+    // padding cells still contribute to the interpolated application gains.
+    let cropped: Vec<f32> = (16..64)
+        .flat_map(|y| values[(y * 64 + 16) * 3..(y * 64 + 64) * 3].iter().copied())
+        .collect();
+    let cropped = gpu.upload("Same-grid edge RGB", &cropped).unwrap();
+    let regional = apply_with_analysis(
+        &gpu,
+        Samples {
+            rgb: &cropped,
+            mask: &native_mask,
+        },
+        Samples {
+            rgb: &analysis_rgb,
+            mask: &mask,
+        },
+        &curve,
+        params
+            .with_geometry([48, 48], [0, 0, 44, 42], 1.)
+            .unwrap()
+            .with_application_guide(params, [[1., 0., 16., 0.], [0., 1., 16., 0.]], true)
+            .unwrap(),
+        analysis_params,
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let regional = gpu.readback(&regional.rgb).unwrap();
+    let regional: &[f32] = bytemuck::cast_slice(&regional);
+    let whole: &[f32] = bytemuck::cast_slice(&identity_outputs[0]);
+    // Include odd view coordinates and the active right and bottom edges.
+    for y in 5..42 {
+        for x in 5..44 {
+            let a = (y * 48 + x) * 3;
+            let b = ((y + 16) * 64 + x + 16) * 3;
+            assert_eq!(
+                &regional[a..a + 3],
+                &whole[b..b + 3],
+                "same-grid edge shifted at {x},{y}"
+            );
+        }
+    }
     for mapping in [
         [[0.25, 0., -0.375, 0.], [0., 0.25, -0.375, 0.]],
         [[0., 0.25, -0.375, 0.], [-0.25, 0., 15.375, 0.]],
@@ -755,7 +796,7 @@ fn mapped_application_guide_keeps_fit_and_overlapping_sections_aligned() {
             },
             &curve,
             params
-                .with_application_guide(analysis_params, mapping)
+                .with_application_guide(analysis_params, mapping, false)
                 .unwrap(),
             analysis_params,
             &mut Profile::default(),
@@ -783,7 +824,7 @@ fn mapped_application_guide_keeps_fit_and_overlapping_sections_aligned() {
             params
                 .with_geometry([32, 32], [0, 0, 32, 32], 1.)
                 .unwrap()
-                .with_application_guide(analysis_params, regional_mapping)
+                .with_application_guide(analysis_params, regional_mapping, false)
                 .unwrap(),
             analysis_params,
             &mut Profile::default(),
@@ -840,7 +881,7 @@ fn mapped_application_guide_clamps_probes_to_photo_cells_inside_padding() {
         .with_geometry([16, 16], [4, 4, 12, 12], 0.25)
         .unwrap();
     let params = params
-        .with_application_guide(analysis, [[0.25, 0., 4., 0.], [0., 0.25, 4., 0.]])
+        .with_application_guide(analysis, [[0.25, 0., 4., 0.], [0., 0.25, 4., 0.]], false)
         .unwrap();
     let mut outputs = Vec::new();
     for padding in [0_f32, 1_f32] {
@@ -884,7 +925,7 @@ fn mapped_application_guide_clamps_probes_to_photo_cells_inside_padding() {
 }
 
 #[test]
-fn quality_analysis_and_gain_geometry_cover_the_valid_working_grid() {
+fn quality_analysis_covers_valid_pixels_with_half_grid_gains() {
     let curve: Vec<_> = (0..4096).map(|v| v as f32 / 4095.).collect();
     let create = |quality| {
         Params::new(
@@ -901,10 +942,10 @@ fn quality_analysis_and_gain_geometry_cover_the_valid_working_grid() {
     };
     let quality = create(ProcessingQuality::Quality);
     assert_eq!(quality.shape, [321, 257, 316, 250]);
-    assert_eq!(quality.sampling, [1, 1, 1, 0]);
+    assert_eq!(quality.sampling, [2, 2, 1, 0]);
     assert_eq!(
         quality.aligned_output([3, 5, 17, 21]).unwrap(),
-        [3, 5, 17, 21]
+        [0, 0, 24, 24]
     );
     let speed = create(ProcessingQuality::Speed);
     assert_eq!(speed.shape, [321, 257, 256, 256]);
@@ -914,10 +955,14 @@ fn quality_analysis_and_gain_geometry_cover_the_valid_working_grid() {
         .unwrap();
     assert_eq!(reduced.shape, [81, 65, 78, 61]);
     let mapped = quality
-        .with_application_guide(reduced, [[0.25, 0., -0.375, 0.], [0., 0.25, -0.375, 0.]])
+        .with_application_guide(
+            reduced,
+            [[0.25, 0., -0.375, 0.], [0., 0.25, -0.375, 0.]],
+            false,
+        )
         .unwrap();
-    assert_eq!(mapped.guide.cell_step(), 1);
-    assert_eq!(mapped.guide.gain_step(), 1);
+    assert_eq!(mapped.guide.cell_step(), 2);
+    assert_eq!(mapped.guide.gain_step(), 2);
 }
 
 #[test]
@@ -945,8 +990,8 @@ fn dense_analysis_counts_every_valid_pixel_carries_structure_and_summarizes_comp
         .unwrap();
     let mask = gpu
         .upload(
-            "Dense constant brightness guide",
-            &vec![0.5_f32; (extent[0] * extent[1]) as usize],
+            "Constant half-grid analysis guide",
+            &vec![0.5_f32; (extent[0].div_ceil(2) * extent[1].div_ceil(2)) as usize],
         )
         .unwrap();
     let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();

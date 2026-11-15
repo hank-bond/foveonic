@@ -1,7 +1,9 @@
 // Regional visibility fit using the shared coordinated HDR response.
+// Compile the two application sampling contracts separately.
+override SAME_GRID_APPLICATION: bool = false;
 struct Context {
     shape: vec4<u32>,
-    sampling: vec4<u32>, // guide cell step, gain-anchor step, dense analysis, reserved
+    sampling: vec4<u32>, // guide cell step, gain-anchor step, dense analysis, same-grid mapped application
     bounds: vec4<u32>,
     luma: vec4<f32>,
     values: vec4<f32>, // nominal white, HDR pivot, profile strength, Exposure gain
@@ -40,6 +42,15 @@ fn encoded_guide(point: vec2<u32>) -> f32 {
 // Gain anchors carry their block step. Map their center before changing lattices.
 fn application_guide(point: vec2<f32>) -> f32 {
     if context.guide.shape.z == 0u { return encoded_guide(vec2<u32>(point)); }
+    if SAME_GRID_APPLICATION {
+        // Whole application also calculates padding anchors beside the photo.
+        var sampling = context.guide;
+        sampling.bounds = vec4<u32>(0u, 0u, sampling.shape.xy);
+        let sample = brightness_sample(point, sampling);
+        let top = mix(base_mask[sample.indices.x],base_mask[sample.indices.y],sample.phase.x);
+        let bottom = mix(base_mask[sample.indices.z],base_mask[sample.indices.w],sample.phase.x);
+        return mix(top,bottom,sample.phase.y);
+    }
     let sample = brightness_sample(point, context.guide);
     let top = mix(base_mask[sample.indices.x],base_mask[sample.indices.y],sample.phase.x);
     let bottom = mix(base_mask[sample.indices.z],base_mask[sample.indices.w],sample.phase.x);
@@ -180,6 +191,14 @@ fn refine(@builtin(global_invocation_id) id:vec3<u32>) {
     candidates[id.x]=vec4<f32>(score,amounts.yzw);
 }
 fn guide_ev(point:vec2<i32>)->f32 {
+    if SAME_GRID_APPLICATION {
+        // Same-grid Whole probes clamp to the photo, then use the containing
+        // cell. Mapping the raw probe avoids clamping to a regional RGB halo.
+        let p = vec3<f32>(vec2<f32>(point), 1.0);
+        let mapped = vec2<f32>(dot(context.guide.mapping[0].xyz, p), dot(context.guide.mapping[1].xyz, p));
+        let sample = vec2<u32>(clamp(mapped, vec2<f32>(context.guide.bounds.xy), vec2<f32>(context.guide.bounds.zw) - 1.0));
+        return base_mask[brightness_cell_index(sample, context.guide.shape.xy, context.guide.shape.z)] * 8.0 - 8.0;
+    }
     let p=vec2<u32>(clamp(point,vec2<i32>(context.bounds.xy),vec2<i32>(context.bounds.zw)-1));
     if context.guide.shape.z != 0u { return application_guide(vec2<f32>(point))*8.0-8.0; }
     return encoded_guide(p)*8.0-8.0;

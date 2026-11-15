@@ -2,7 +2,7 @@
 summary: "Profiling separates ordinary completed work, synchronized GPU diagnostics, and native feedback with reproducible context."
 kind: reference
 status: accepted
-implementation: conforming
+implementation: incomplete
 ---
 
 # Profiling
@@ -40,3 +40,13 @@ Node diagnostics should distinguish operation work, cache publication, existing 
 Optional graph diagnostics should connect stage timings with output dependencies, buffer identities and logical byte sizes. Retained-checkpoint snapshots should describe exact version ancestry and cache roles. Diagnostic records must own metadata only and must not extend processing-buffer or parameter-payload lifetimes. Memory scans and verification belong outside ordinary node timings. Boundary ownership counts must identify their scope and must not be described as transient GPU peaks or process footprint.
 
 Checkpoint investigations should distinguish the first changed edit from later same-control edits. Use separate ordinary latency and diagnostic runs, and validate reused output against fresh processing. Graph ancestry timing estimates must remain distinguishable from measured cache-policy benefits.
+
+## Release performance baselines
+
+Each release should include a versioned performance baseline covering the maintained test photographs and fixed, reproducible recipes. Include enabled expensive features as well as camera defaults. Mutable local sidecars must not define the workload. Record processing policy and effective working resolution separately.
+
+Baselines must retain repeated Off-mode timing observations, input and recipe identities, build identity, hardware, cache setup and relevant display geometry. Cover decoded-input preparation, retained edits, native detail and representative multi-photo workflows separately. Keep source loading, foreground delivery and background completion distinguishable. Report UI-update gaps independently of engine processing time.
+
+Compare matched workloads per photograph and workflow so aggregate improvements cannot hide individual regressions. Hardware-dependent comparisons require the same host, or new matched runs of the released binary and candidate. Regression budgets require explicit approval. Recording slow behavior does not make it an acceptable target. Keep synchronized GPU attribution and numerical output verification separate from baseline timing, and preserve raw evidence with the release results.
+
+The [finishing optimization plan](../../plans/finishing-optimization.md) tracks the release-baseline and comparison-tool extension.
