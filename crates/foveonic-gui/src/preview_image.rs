@@ -23,17 +23,33 @@ impl PreparedPreview {
     ) -> foveonic::source::Result<Self> {
         let rotation = preview.rotation;
         let color_space = preview.color_space;
-        let mut native_extent = preview.native_extent;
-        let image = {
-            let image = preview.linear_image()?;
-            drop(preview);
+        let native_extent = preview.native_extent;
+        let image = preview.linear_image()?;
+        drop(preview);
+        Ok(Self::from_linear(
+            image,
+            rotation,
+            color_space,
+            native_extent,
+            large,
+        ))
+    }
+    pub(crate) fn from_linear(
+        image: image::Rgb32FImage,
+        rotation: u32,
+        color_space: foveonic::color_space::TiffColorSpace,
+        mut native_extent: [u32; 2],
+        large: bool,
+    ) -> Self {
+        fn rotate(image: image::Rgb32FImage, rotation: u32) -> image::Rgb32FImage {
             match rotation {
                 90 => image::imageops::rotate90(&image),
                 180 => image::imageops::rotate180(&image),
                 270 => image::imageops::rotate270(&image),
                 _ => image,
             }
-        };
+        }
+        let image = rotate(image, rotation);
         if matches!(rotation, 90 | 270) {
             native_extent.swap(0, 1);
         }
@@ -50,7 +66,7 @@ impl PreparedPreview {
             native_extent,
         };
         let preview = large.then(|| Pixels::from_linear(&image, color_space.into()));
-        Ok(Self { thumbnail, preview })
+        Self { thumbnail, preview }
     }
 }
 #[cfg(test)]

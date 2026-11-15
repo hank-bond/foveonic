@@ -136,17 +136,13 @@ impl Previews {
                     }
                     let _generate = trace::scope(trace::Category::Cpu, "preview.generate");
                     let preview = downsample(&rs, &job.source).ok()?;
-                    let prepared = PreparedPreview::new(
-                        Preview {
-                            rgb: preview.rgb.clone(),
-                            color_space: preview.color_space,
-                            extent: preview.extent,
-                            rotation: 0,
-                            native_extent: job.native_extent,
-                        },
+                    let prepared = PreparedPreview::from_linear(
+                        preview.linear_image().ok()?,
+                        0,
+                        preview.color_space,
+                        job.native_extent,
                         true,
-                    )
-                    .ok()?;
+                    );
                     let _persist = trace::scope(trace::Category::Cache, "preview.persist_request");
                     let persisted = cache.save_preview(
                         &job.path,

@@ -18,5 +18,6 @@ The owner requested an autonomous sweep, prioritizing peak memory and simpler de
 - [x] Widen ICC preview input in bounded chunks instead of a full RGB16 copy, avoiding 6 bytes per preview pixel. Preview tests and an exact multi-chunk comparison pass.
 - [x] Stream JPEG XL output through a 64 KiB buffer rather than retain the complete encoded file. Lossless multi-chunk round trip, writer failure and existing encoder tests pass.
 - [x] Release RGB16 preview samples before floating resize. Review caught an initial extended float lifetime; an inner scope fixes it. Preview tests pass.
+- [x] Prepare rendered display previews from their linearized samples without cloning the RGB16 payload needed for persistence. GUI preview tests pass.
 - [ ] Investigate decoded-source storage and other GPU transient allocations. Measure representative workloads before claiming process-level savings or accepting complexity.
 - [ ] Run applicable checks and independent review for each change. Record limits and remaining opportunities.
