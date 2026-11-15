@@ -256,6 +256,7 @@ impl App {
                 "managed": display.target.managed(),
             })
         });
+        display_image::install_upload_error_handler(&rs.device);
         viewport::install(rs);
         widgets::install_style(&cc.egui_ctx);
         if smoke::screenshot_active() {

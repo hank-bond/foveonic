@@ -1,4 +1,4 @@
-//! Checks asynchronous rating persistence, replacement-folder replies and Import source protection.
+//! Checks asynchronous metadata failures, rating persistence, folder replacement and Import source protection.
 
 use super::*;
 use std::time::{Duration, Instant};
@@ -49,4 +49,66 @@ fn import_ratings_remain_in_memory_and_do_not_create_source_files() {
     assert!(!review::path(folder.path()).exists());
     assert!(!foveonic::sidecar::path(&path).exists());
     assert_eq!(std::fs::read(&path).unwrap(), b"original");
+}
+
+#[test]
+fn damaged_metadata_does_not_stop_the_remaining_folder_thumbnails() {
+    let folder = tempfile::tempdir().unwrap();
+    let bad = folder.path().join("a-damaged.x3f");
+    let good = folder.path().join("b-healthy.x3f");
+    let mut section = b"SECp".to_vec();
+    for word in [0x20000_u32, 512, 0, 0, 65537] {
+        section.extend(word.to_le_bytes());
+    }
+    for i in 0..512_u32 {
+        section.extend(i.to_le_bytes());
+        section.extend(65536_u32.to_le_bytes());
+    }
+    section.extend(std::iter::repeat_n(65_u16, 65536).flat_map(u16::to_le_bytes));
+    section.extend(0_u16.to_le_bytes());
+    let mut bytes = vec![0; 40];
+    bytes[..4].copy_from_slice(b"FOVb");
+    bytes[4..8].copy_from_slice(&0x20000_u32.to_le_bytes());
+    bytes.extend(&section);
+    let directory = bytes.len() as u32;
+    bytes.extend(b"SECd");
+    for word in [0x20000_u32, 1, 40, section.len() as u32] {
+        bytes.extend(word.to_le_bytes());
+    }
+    bytes.extend(b"PROP");
+    bytes.extend(directory.to_le_bytes());
+    std::fs::write(&bad, &bytes).unwrap();
+    bytes.truncate(40);
+    bytes.extend(b"SECi");
+    for word in [0x20000_u32, 2, 3, 2, 1, 6] {
+        bytes.extend(word.to_le_bytes());
+    }
+    bytes.extend([128_u8; 6]);
+    let directory = bytes.len() as u32;
+    bytes.extend(b"SECd");
+    for word in [0x20000_u32, 1, 40, 34] {
+        bytes.extend(word.to_le_bytes());
+    }
+    bytes.extend(b"IMAG");
+    bytes.extend(directory.to_le_bytes());
+    std::fs::write(&good, &bytes).unwrap();
+    let ctx = eframe::egui::Context::default();
+    let mut browser = super::super::Browser::new(ctx.clone());
+    browser.open(folder.path()).unwrap();
+    assert_eq!(browser.files, vec![bad.clone(), good.clone()]);
+    browser.schedule_thumbnails(browser.files.clone());
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        browser.receive(&ctx);
+        if browser.cache.contains_key(&bad)
+            && browser.cache.contains_key(&good)
+            && browser.metadata_ready()
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "folder loading did not settle");
+        std::thread::yield_now();
+    }
+    assert!(browser.cache[&bad].is_none());
+    assert!(browser.thumbnail(&good).is_some());
 }

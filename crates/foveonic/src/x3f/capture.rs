@@ -2,8 +2,8 @@
 
 use super::{
     bytes::Bytes, read_properties, BASE_HEADER_BYTES, DIRECTORY_ENTRY_BYTES,
-    DIRECTORY_HEADER_BYTES, MAXIMUM_DIRECTORY_ENTRIES, MAXIMUM_FILE_BYTES, MINIMUM_FILE_BYTES,
-    SECTION_VERSION, SUPPORTED_FILE_VERSIONS,
+    DIRECTORY_HEADER_BYTES, MAXIMUM_DIRECTORY_ENTRIES, MAXIMUM_FILE_BYTES, MAXIMUM_PROPERTY_BYTES,
+    MINIMUM_FILE_BYTES, SECTION_VERSION, SUPPORTED_FILE_VERSIONS,
 };
 use crate::input_error::damaged;
 use crate::source::Result;
@@ -11,10 +11,6 @@ use std::{
     collections::BTreeMap,
     io::{Read, Seek, SeekFrom},
 };
-
-// Capture strings are small. A corrupt PROP length must not cause an
-// allocation as large as the sensor image.
-const MAXIMUM_PROPERTY_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, String>> {
     read_impl(reader, false)
@@ -98,7 +94,7 @@ fn read_impl(
         }
         if index.range(entry + 8, 4)? == b"PROP" {
             if size > MAXIMUM_PROPERTY_BYTES {
-                return Err("X3F capture properties too large".into());
+                return Err(damaged("X3F capture properties too large"));
             }
             if properties.replace((start, size)).is_some() {
                 return Err(damaged("duplicate X3F input section"));
