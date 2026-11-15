@@ -37,7 +37,6 @@ impl Engine {
         let params = image.params();
         let [w, h, _, _] = params.output;
         let size = u64::from(w) * u64::from(h);
-        let mut camera = self.gpu.storage("DNG camera coordinates", size * 12)?;
         let mut stats = self.gpu.storage("DNG needed range", 8)?;
         let mut packed = self.gpu.storage("DNG uint16 samples", size * 8)?;
         let geometry = self.gpu.uniform(&params);
@@ -74,7 +73,6 @@ impl Engine {
             &mut [
                 (0, Binding::Read(image.buffer())),
                 (1, Binding::Read(&geometry)),
-                (2, Binding::Write(camera.write())),
                 (3, Binding::Write(stats.write())),
                 (4, Binding::Read(&uniform)),
             ],
@@ -92,8 +90,8 @@ impl Engine {
         self.gpu.dispatch(
             Kernel::DngQuantize,
             &mut [
+                (0, Binding::Read(image.buffer())),
                 (1, Binding::Read(&geometry)),
-                (2, Binding::Read(&camera)),
                 (4, Binding::Read(&uniform)),
                 (5, Binding::Write(packed.write())),
             ],
