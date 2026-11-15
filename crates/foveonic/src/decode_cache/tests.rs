@@ -1442,3 +1442,117 @@ fn compare_active_and_speculative_decode_wall_time() {
         });
     }
 }
+
+pub(crate) fn small_x3f_with_exif() -> Vec<u8> {
+    let metadata = Metadata {
+        width: 8,
+        height: 6,
+        rotation: 0,
+        processing_version: None,
+        properties: [
+            ("CAMMODEL".into(), "SIGMA dp0 Quattro".into()),
+            ("ISO".into(), "400".into()),
+        ]
+        .into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    let exif = crate::capture_metadata::Capture::new(&metadata)
+        .payload([8, 6])
+        .unwrap();
+    let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+    jpeg.extend(((exif.len() + 8) as u16).to_be_bytes());
+    jpeg.extend(b"Exif\0\0");
+    jpeg.extend(exif);
+    let mut image = vec![0; 28];
+    image[..4].copy_from_slice(b"SECi");
+    image[8..12].copy_from_slice(&2_u32.to_le_bytes());
+    image[12..16].copy_from_slice(&18_u32.to_le_bytes());
+    image[16..20].copy_from_slice(&8_u32.to_le_bytes());
+    image[20..24].copy_from_slice(&6_u32.to_le_bytes());
+    image.extend(jpeg);
+    let units: Vec<u16> = "CAMMODEL\0SIGMA dp0 Quattro\0".encode_utf16().collect();
+    let mut prop = vec![0; 32];
+    prop[..4].copy_from_slice(b"SECp");
+    prop[4..8].copy_from_slice(&0x20000_u32.to_le_bytes());
+    prop[8..12].copy_from_slice(&1_u32.to_le_bytes());
+    prop[20..24].copy_from_slice(&(units.len() as u32).to_le_bytes());
+    prop[28..32].copy_from_slice(&9_u32.to_le_bytes());
+    prop.extend(units.into_iter().flat_map(u16::to_le_bytes));
+    let mut file = vec![0_u8; 52];
+    file[..4].copy_from_slice(b"FOVb");
+    file[4..8].copy_from_slice(&0x20003_u32.to_le_bytes());
+    let image_offset = file.len();
+    file.extend(&image);
+    let prop_offset = file.len();
+    file.extend(&prop);
+    let directory = file.len();
+    file.extend(b"SECd");
+    file.extend(0x20000_u32.to_le_bytes());
+    file.extend(2_u32.to_le_bytes());
+    for (offset, size, kind) in [
+        (image_offset, image.len(), *b"IMAG"),
+        (prop_offset, prop.len(), *b"PROP"),
+    ] {
+        file.extend((offset as u32).to_le_bytes());
+        file.extend((size as u32).to_le_bytes());
+        file.extend(kind);
+    }
+    file.extend((directory as u32).to_le_bytes());
+    file
+}
+
+fn make_cached_decode_legacy(cache: &Cache, identity: &Identity) {
+    let path = cache.root.join(identity.name());
+    let mut bytes = fs::read(&path).unwrap();
+    let length = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
+    let json = &mut bytes[20..20 + length];
+    let old = b"\"version\":3";
+    let offset = json.windows(old.len()).position(|w| w == old).unwrap();
+    json[offset + old.len() - 1] = b'2';
+    let checksum = crc32fast::hash(json);
+    bytes[16..20].copy_from_slice(&checksum.to_le_bytes());
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn legacy_decodes_reuse_browser_capture_metadata_without_redecoding() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.source, small_x3f_with_exif()).unwrap();
+    let (cache, _foreground, identity) = fixture.ready_cache();
+    make_cached_decode_legacy(&cache, &identity);
+    let properties = cache.capture_properties(&fixture.source).unwrap();
+    assert!(properties.contains_key("EXIF_CAPTURE_TAGS"));
+    assert!(properties.contains_key("EXIF_CAPTURE_CHECKED"));
+    fs::remove_file(&fixture.source).unwrap();
+    for _ in 0..2 {
+        let source = cache
+            .open_cached(&fixture.source, |_| {})
+            .expect("cached pixels remain usable");
+        assert_eq!(source.pixels, fixture.image().pixels);
+        assert_eq!(
+            source.metadata.properties["EXIF_CAPTURE_TAGS"],
+            properties["EXIF_CAPTURE_TAGS"]
+        );
+    }
+}
+
+#[test]
+fn legacy_decode_survives_missing_or_changed_original() {
+    for changed in [false, true] {
+        let fixture = Fixture::new();
+        fs::write(&fixture.source, small_x3f_with_exif()).unwrap();
+        let (cache, _foreground, identity) = fixture.ready_cache();
+        make_cached_decode_legacy(&cache, &identity);
+        if changed {
+            fs::write(&fixture.source, b"new and different original").unwrap();
+        } else {
+            fs::remove_file(&fixture.source).unwrap();
+        }
+        let source = cache
+            .open_cached(&fixture.source, |_| {})
+            .expect("cached pixels remain usable");
+        assert_eq!(source.pixels, fixture.image().pixels);
+        assert!(!source.metadata.properties.contains_key("EXIF_CAPTURE_TAGS"));
+    }
+}

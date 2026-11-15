@@ -45,3 +45,36 @@ Latency jobs are selected separately with `--domain latency` or a specific job. 
 Each legacy smoke step has a 60-second liveness deadline. A stalled step fails with its requested/displayed state, admission, scopes, navigator and thumbnail readiness in the owned log. The direct smoke launcher also terminates its own process group on interruption or its overall timeout. Delegated runners forward interruption to their scenario owner, which closes its application. Forced termination of an unresponsive wrapper can still prevent cleanup. Check owned processes before controlled measurements.
 
 The catalog explicitly leaves native file-dialog selection missing and preference-input/restart coverage partial. Other recorded gaps include native clipboard round-trips, rating filters and persistence, destination disconnects during export, and headed recorder-startup/save races. Unit or handler coverage is identified separately where it exists.
+
+## Test environment setup
+
+Run the [test setup command](../scripts/setup_tests.py) from the repository root. Python 3 and Rust 1.88+ with Cargo are bootstrap prerequisites. Native builds also need a C/C++ compiler. On macOS, install/select Xcode command-line tools first. Building the native app bundle still requires Xcode 26+ as described in [release guidance](./releases.md).
+
+```sh
+# Check installed tools without installing or downloading anything:
+python3 scripts/setup_tests.py
+# Explicitly install missing supported tools, then sync/verify the images:
+python3 scripts/setup_tests.py --install --images
+# Repeat using the existing tools and cached originals only:
+python3 scripts/setup_tests.py --images --offline
+```
+
+The command checks Rust, Cargo, rustfmt, Clippy, a C/C++ compiler, CMake and ExifTool. Online image preparation also requires GitHub CLI and an authenticated GitHub session for the example release. The tool list and install mappings live in the setup script. Missing prerequisites and failed installations return a failing exit status. `--install` installs only missing Homebrew packages on macOS and missing Rust components through rustup. Homebrew, Rust and Xcode must already be installed. On other systems, install the reported tools with the system's package manager and rerun the checker. Tests never install tools themselves. `--offline` cannot be combined with `--install`.
+
+`--images` reuses the existing example sync and external-sample verifier. Repeated runs preserve originals and sidecars. `--source-dir PATH` selects another image cache. For the generated recipes and aliases used by the larger behavioral suite, continue using `prepare_inputs.py` above with a new output directory. GPU availability, graphical sessions, independent pixel baselines and the optional Trace Processor remain requirements of the specific suites that use them.
+
+## Capture metadata exports
+
+The headless [capture export tests](../crates/foveonic/tests/capture_export.rs) process five real-image cases: Merrill TIFF and JPEG XL, Classic JPEG, Quattro PNG, and Quattro H DNG. Each checks the source against the maintained sample hashes, compares metadata-only loading with full decoding, removes a disposable source copy before exporting, and independently reads the exported capture details and geometry with ExifTool. Cases apply a quarter turn and centered half crop. All outputs resize to 96×64. The originals and saved editing recipes remain untouched. These checks cover the processing and export APIs, not desktop UI interactions.
+
+Requirements: a working GPU, the example collections prepared above, and `exiftool` on `PATH`. Use the [test environment setup command](#test-environment-setup) to check or explicitly install it. A missing photograph, changed source hash or unavailable ExifTool fails the selected test.
+
+Run all five cases serially from the repository root:
+
+```sh
+cargo test --offline --release -p foveonic --test capture_export -- --ignored --test-threads=1
+```
+
+The default source directory is `.local/example-photographs`. Set `FOVEONIC_FIXTURE_DIR` to use another prepared collection. Normal workspace runs list these file/GPU-dependent cases as ignored. The command above explicitly runs them. Existing synthetic encoder tests separately check decoded pixel values, precision and color declarations.
+
+These five cases verify exported metadata and container dimensions. They do not establish pixel-level crop/rotation correctness or full-image decoder interoperability. Existing numerical geometry and encoder tests provide separate evidence for those behaviors.

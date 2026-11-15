@@ -492,7 +492,7 @@ pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String
     crate::input_error::read(path, || {
         let file = std::fs::File::open(path)?;
         let mut file = crate::diagnostics::io::ObservedReader::new(file, "original-metadata", path);
-        let properties = crate::x3f::capture::read(&mut file)?;
+        let properties = crate::x3f::capture::read_for_export(&mut file)?;
         file.complete();
         if family(properties.get("CAMMODEL").map(String::as_str)).is_none() {
             return Err("unsupported camera family".into());

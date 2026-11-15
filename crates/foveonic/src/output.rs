@@ -1,6 +1,10 @@
-//! Shares photographic export formats and packages encoded RGB samples with their color profiles.
+//! Packages photographic RGB samples with destination colors and shared capture metadata.
 
-use crate::{nodes::sensor::calibration::EncodeParams, render::TiffColorSpace, source::Result};
+use crate::{
+    nodes::sensor::calibration::EncodeParams,
+    render::TiffColorSpace,
+    source::{Metadata, Result},
+};
 use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
 use std::io::{Seek, Write};
@@ -147,6 +151,7 @@ impl EncodingOptions {
 /// Samples arrive as little-endian RGB16 with one padding component per pixel.
 /// Encoders receive the already oriented, resized, destination-encoded image.
 /// Lossy JXL uses native color signaling with a pure gamma ProPhoto transfer.
+#[allow(clippy::too_many_arguments)]
 pub fn write<W: Write + Seek>(
     mut writer: W,
     bytes: &[u8],
@@ -154,6 +159,7 @@ pub fn write<W: Write + Seek>(
     space: TiffColorSpace,
     format: Format,
     options: EncodingOptions,
+    metadata: &Metadata,
     profile: &mut crate::profile::Profile,
 ) -> Result<()> {
     options.validate(format)?;
@@ -182,6 +188,7 @@ pub fn write<W: Write + Seek>(
             .map(|&v| ((u32::from(v) + 128) / 257) as u8)
             .collect::<Vec<_>>()
     };
+    let capture = crate::capture_metadata::Capture::new(metadata);
     match format {
         Format::Tiff => {
             use tiff::encoder::{compression::DeflateLevel, Compression, Predictor};
@@ -198,7 +205,9 @@ pub fn write<W: Write + Seek>(
             let mut encoder = tiff::encoder::TiffEncoder::new(&mut writer)?
                 .with_compression(compression)
                 .with_predictor(predictor);
+            let exif = capture.write_exif(&mut encoder, [width, height])?;
             let mut image = encoder.new_image::<tiff::encoder::colortype::RGB16>(width, height)?;
+            capture.write_primary(image.encoder(), exif)?;
             image
                 .encoder()
                 .write_tag(tiff::tags::Tag::Unknown(34675), space.profile())?;
@@ -211,11 +220,16 @@ pub fn write<W: Write + Seek>(
             image.write_data(&pixels)?;
         }
         Format::Jpeg => {
+            let exif = capture.payload([width, height])?;
+            if exif.len() > 65_527 {
+                return Err("EXIF metadata exceeds JPEG APP1 capacity".into());
+            }
             let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
                 &mut writer,
                 options.jpeg_quality,
             );
             encoder.set_icc_profile(space.profile().to_vec())?;
+            encoder.set_exif_metadata(exif)?;
             encoder.encode(&rgb8(), width, height, image::ExtendedColorType::Rgb8)?;
         }
         Format::Png => {
@@ -226,6 +240,7 @@ pub fn write<W: Write + Seek>(
                 FilterType::Adaptive,
             );
             encoder.set_icc_profile(space.profile().to_vec())?;
+            encoder.set_exif_metadata(capture.payload([width, height])?)?;
             match options.png_depth {
                 BitDepth::Eight => {
                     encoder.write_image(&rgb8(), width, height, image::ExtendedColorType::Rgb8)?
@@ -238,7 +253,14 @@ pub fn write<W: Write + Seek>(
                 )?,
             }
         }
-        Format::Jxl => writer.write_all(&jxl::encode(&pixels, width, height, space, options)?)?,
+        Format::Jxl => writer.write_all(&jxl::encode(
+            &pixels,
+            width,
+            height,
+            space,
+            options,
+            &capture.payload([width, height])?,
+        )?)?,
         Format::Dng => unreachable!("validated photographic format"),
     }
     writer.flush()?;

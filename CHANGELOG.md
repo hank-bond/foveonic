@@ -5,6 +5,15 @@ kind: reference
 
 # Changelog
 
+## 0.8.1
+
+Preserve capture metadata in processed photographs.
+
+### Changes
+
+- Carry available camera, lens, exposure, capture date, authorship and location metadata from X3F files into DNG, TIFF, JPEG, PNG and JPEG XL exports. Exported dimensions and orientation match the processed image.
+- Reduce stack usage when retaining photographs for multi-editing.
+
 ## 0.8.0
 
 White balance picking, rotation, streamlined previews and an initial Windows build.

@@ -3,6 +3,22 @@
 use super::*;
 use std::io::Cursor;
 
+fn metadata() -> crate::source::Metadata {
+    crate::source::Metadata {
+        width: 17,
+        height: 9,
+        rotation: 0,
+        processing_version: None,
+        properties: [
+            ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
+            ("ISO".into(), "200".into()),
+            ("SHUTTER".into(), "0.01".into()),
+        ]
+        .into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    }
+}
 fn fixture() -> (EncodeParams, Vec<u8>, Vec<u16>) {
     let params = EncodeParams {
         mapping: [[0.; 4]; 2],
@@ -31,6 +47,7 @@ fn encoded(format: Format, options: EncodingOptions, space: TiffColorSpace) -> V
         space,
         format,
         options,
+        &metadata(),
         &mut Default::default(),
     )
     .unwrap();
@@ -318,6 +335,7 @@ fn invalid_options_and_dimensions_do_not_write_output() {
             TiffColorSpace::Srgb,
             format,
             options,
+            &metadata(),
             &mut Default::default()
         )
         .is_err());
@@ -354,6 +372,7 @@ fn lossy_jxl_preserves_wide_rgb_values_and_native_destination_metadata() {
                 jxl_effort: 1,
                 ..Default::default()
             },
+            &metadata(),
             &mut Default::default(),
         )
         .unwrap();
@@ -408,5 +427,258 @@ fn maximum_jxl_quality_uses_the_exact_lossless_profile_and_samples() {
         assert!(decoded.color.is_none());
         assert_eq!(decoded.pixels, fixture().2);
         assert_eq!(decoded.profile, space.profile());
+    }
+}
+
+// These tiny, repository-generated captures exercise the real encoders and a
+// separate TIFF directory reader without depending on camera files or tools.
+fn metadata_with_embedded_tags() -> crate::source::Metadata {
+    use crate::capture_metadata::EmbeddedTag;
+    let tags = vec![
+        EmbeddedTag {
+            ifd: 1,
+            id: 0x9209,
+            kind: 3,
+            count: 1,
+            data: 1_u16.to_ne_bytes().to_vec(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: 0x9004,
+            kind: 2,
+            count: 20,
+            data: b"2020:01:02 03:04:05\0".to_vec(),
+        },
+        EmbeddedTag {
+            ifd: 2,
+            id: 1,
+            kind: 2,
+            count: 2,
+            data: b"N\0".to_vec(),
+        },
+        EmbeddedTag {
+            ifd: 2,
+            id: 2,
+            kind: 5,
+            count: 3,
+            data: [51_u32, 1, 30, 1, 0, 1]
+                .into_iter()
+                .flat_map(u32::to_ne_bytes)
+                .collect(),
+        },
+    ];
+    let mut m = metadata();
+    m.properties.insert(
+        "EXIF_CAPTURE_TAGS".into(),
+        serde_json::to_string(&tags).unwrap(),
+    );
+    m.properties.insert("TIME".into(), "1790791918".into());
+    m.properties
+        .insert("ARTIST".into(), "A Photographer".into());
+    m
+}
+
+fn tiff_tag(bytes: &[u8], ifd: usize, tag: u16) -> Option<Vec<u8>> {
+    let short =
+        |p| -> Option<u16> { Some(u16::from_le_bytes(bytes.get(p..p + 2)?.try_into().ok()?)) };
+    let long =
+        |p| -> Option<u32> { Some(u32::from_le_bytes(bytes.get(p..p + 4)?.try_into().ok()?)) };
+    let count: u16 = short(ifd)?;
+    for i in 0..usize::from(count) {
+        let p = ifd + 2 + i * 12;
+        if short(p)? != tag {
+            continue;
+        }
+        let kind = short(p + 2)?;
+        let count: u32 = long(p + 4)?;
+        let unit = match kind {
+            1 | 2 | 7 => 1,
+            3 => 2,
+            4 | 9 => 4,
+            5 | 10 => 8,
+            _ => return None,
+        };
+        let size = usize::try_from(count).ok()?.checked_mul(unit)?;
+        let start = if size <= 4 {
+            p + 8
+        } else {
+            long(p + 8)? as usize
+        };
+        return Some(bytes.get(start..start.checked_add(size)?)?.to_vec());
+    }
+    None
+}
+
+fn check_capture_tiff(bytes: &[u8]) {
+    assert_eq!(&bytes[..4], b"II\x2a\0");
+    let u32v = |v: Vec<u8>| u32::from_le_bytes(v.try_into().unwrap());
+    let root = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    assert_eq!(tiff_tag(bytes, root, 272).unwrap(), b"SIGMA DP2 Merrill\0");
+    assert_eq!(tiff_tag(bytes, root, 315).unwrap(), b"A Photographer\0");
+    assert_eq!(tiff_tag(bytes, root, 274).unwrap(), 1_u16.to_le_bytes());
+    let exif = u32v(tiff_tag(bytes, root, 0x8769).unwrap()) as usize;
+    assert_eq!(
+        tiff_tag(bytes, exif, 0x8827).unwrap(),
+        200_u16.to_le_bytes()
+    );
+    assert_eq!(tiff_tag(bytes, exif, 0x9209).unwrap(), 1_u16.to_le_bytes());
+    assert_eq!(
+        tiff_tag(bytes, exif, 0x9004).unwrap(),
+        b"2020:01:02 03:04:05\0"
+    );
+    assert_eq!(u32v(tiff_tag(bytes, exif, 0xa002).unwrap()), 17);
+    assert_eq!(u32v(tiff_tag(bytes, exif, 0xa003).unwrap()), 9);
+    assert!(tiff_tag(bytes, exif, 0x927c).is_none());
+    let gps = u32v(tiff_tag(bytes, root, 0x8825).unwrap()) as usize;
+    assert_eq!(tiff_tag(bytes, gps, 1).unwrap(), b"N\0");
+    assert_eq!(tiff_tag(bytes, gps, 2).unwrap().len(), 24);
+}
+
+fn encode_capture(format: Format) -> Vec<u8> {
+    let (params, bytes, _) = fixture();
+    let mut writer = Cursor::new(Vec::new());
+    write(
+        &mut writer,
+        &bytes,
+        &params,
+        TiffColorSpace::Srgb,
+        format,
+        EncodingOptions::default(),
+        &metadata_with_embedded_tags(),
+        &mut Default::default(),
+    )
+    .unwrap();
+    writer.into_inner()
+}
+
+#[test]
+fn tiff_exports_capture_metadata() {
+    check_capture_tiff(&encode_capture(Format::Tiff));
+}
+
+#[test]
+fn jpeg_exports_capture_metadata() {
+    use image::ImageDecoder;
+    let bytes = encode_capture(Format::Jpeg);
+    let mut decoder = image::codecs::jpeg::JpegDecoder::new(Cursor::new(bytes)).unwrap();
+    check_capture_tiff(&decoder.exif_metadata().unwrap().unwrap());
+}
+
+#[test]
+fn png_exports_capture_metadata() {
+    use image::ImageDecoder;
+    let bytes = encode_capture(Format::Png);
+    let mut decoder = image::codecs::png::PngDecoder::new(Cursor::new(bytes)).unwrap();
+    check_capture_tiff(&decoder.exif_metadata().unwrap().unwrap());
+}
+
+#[test]
+fn jxl_exports_capture_metadata() {
+    let bytes = encode_capture(Format::Jxl);
+    let mut offset = 0;
+    while offset + 8 <= bytes.len() {
+        let size = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+        assert!(size >= 8 && offset + size <= bytes.len());
+        if &bytes[offset + 4..offset + 8] == b"Exif" {
+            assert_eq!(&bytes[offset + 8..offset + 12], &[0; 4]);
+            check_capture_tiff(&bytes[offset + 12..offset + size]);
+            return;
+        }
+        offset += size;
+    }
+    panic!("missing JPEG XL Exif box");
+}
+
+#[test]
+fn jpeg_rejects_oversized_exif_without_writing_a_corrupt_segment() {
+    let mut metadata = metadata();
+    let entry = crate::capture_metadata::EmbeddedTag {
+        ifd: 1,
+        id: 0x9286,
+        kind: 7,
+        count: 65_500,
+        data: vec![42; 65_500],
+    };
+    metadata.properties.insert(
+        "EXIF_CAPTURE_TAGS".into(),
+        serde_json::to_string(&[entry]).unwrap(),
+    );
+    let (params, pixels, _) = fixture();
+    let mut output = Cursor::new(Vec::new());
+    assert!(write(
+        &mut output,
+        &pixels,
+        &params,
+        TiffColorSpace::Srgb,
+        Format::Jpeg,
+        EncodingOptions::default(),
+        &metadata,
+        &mut Default::default()
+    )
+    .is_err());
+    assert!(output.into_inner().is_empty());
+}
+
+#[test]
+fn x3f_embedded_capture_reaches_every_photographic_encoder() {
+    use image::ImageDecoder;
+    let original = crate::decode_cache::tests::small_x3f_with_exif();
+    let properties = crate::x3f::capture::read_for_export(&mut Cursor::new(original)).unwrap();
+    assert!(properties.contains_key("EXIF_CAPTURE_TAGS"));
+    let mut metadata = metadata();
+    metadata.properties = properties;
+    for format in [Format::Tiff, Format::Jpeg, Format::Png, Format::Jxl] {
+        let (params, packed, _) = fixture();
+        let mut file = Cursor::new(Vec::new());
+        write(
+            &mut file,
+            &packed,
+            &params,
+            TiffColorSpace::Srgb,
+            format,
+            EncodingOptions::default(),
+            &metadata,
+            &mut Default::default(),
+        )
+        .unwrap();
+        let file = file.into_inner();
+        let bytes = match format {
+            Format::Tiff => file,
+            Format::Jpeg => image::codecs::jpeg::JpegDecoder::new(Cursor::new(file))
+                .unwrap()
+                .exif_metadata()
+                .unwrap()
+                .unwrap(),
+            Format::Png => image::codecs::png::PngDecoder::new(Cursor::new(file))
+                .unwrap()
+                .exif_metadata()
+                .unwrap()
+                .unwrap(),
+            Format::Jxl => {
+                let mut offset = 0;
+                loop {
+                    let size =
+                        u32::from_be_bytes(file[offset..offset + 4].try_into().unwrap()) as usize;
+                    if &file[offset + 4..offset + 8] == b"Exif" {
+                        break file[offset + 12..offset + size].to_vec();
+                    }
+                    assert!(size >= 8);
+                    offset += size;
+                }
+            }
+            Format::Dng => unreachable!(),
+        };
+        let root = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        assert_eq!(tiff_tag(&bytes, root, 272).unwrap(), b"SIGMA dp0 Quattro\0");
+        let exif = u32::from_le_bytes(tiff_tag(&bytes, root, 0x8769).unwrap().try_into().unwrap())
+            as usize;
+        assert_eq!(
+            tiff_tag(&bytes, exif, 0x8827).unwrap(),
+            400_u16.to_le_bytes()
+        );
+        assert_eq!(
+            tiff_tag(&bytes, exif, 0xa002).unwrap(),
+            17_u32.to_le_bytes()
+        );
     }
 }

@@ -12,6 +12,6 @@ The parent output module owns shared format options and RGB sample packaging. Th
 
 ### Source files
 
-- **[jxl.rs](./jxl.rs)** Owns libjxl encoder resources and forwards photographic samples without changing their colors.
+- **[jxl.rs](./jxl.rs)** Owns libjxl resources and packages photographic samples, colors and EXIF.
 
 <!-- INDEX:END -->

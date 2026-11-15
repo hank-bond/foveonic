@@ -6,7 +6,7 @@ pub(crate) mod adjustments;
 mod bytes;
 pub(crate) mod camf;
 pub(crate) mod capture;
-mod exif;
+pub(crate) mod exif;
 mod format31;
 mod format6;
 mod huffman;
@@ -248,13 +248,8 @@ fn decode(data: &[u8]) -> Result<Source> {
         .map(read_properties)
         .transpose()?
         .unwrap_or_default();
-    if properties.is_empty()
-        || properties.get("CAMMODEL").is_some_and(|m| {
-            m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
-        })
-    {
-        merge_preview_properties(&mut properties, preview_properties);
-    }
+    merge_preview_properties(&mut properties, preview_properties);
+    properties.insert("EXIF_CAPTURE_CHECKED".into(), "1".into());
     properties.extend(adjustments::read(&data[..ranges[0].0])?);
     properties.insert("X3F_MARK_BITS".into(), mark_bits(data)?.to_string());
     record_image_extent(&mut properties, data)?;
@@ -298,11 +293,10 @@ fn merge_preview_properties(
     preview: BTreeMap<String, String>,
 ) {
     let fallback = properties.is_empty();
-    properties.extend(
-        preview
-            .into_iter()
-            .filter(|(name, _)| fallback || name.starts_with("EXIF_")),
-    );
+    let has_iso = properties.contains_key("ISO");
+    properties.extend(preview.into_iter().filter(|(name, _)| {
+        (fallback || name.starts_with("EXIF_")) && !(has_iso && name == "EXIF_PREVIEW_ISO")
+    }));
 }
 
 /// Keep the declared photograph size separate from compressed sensor storage.

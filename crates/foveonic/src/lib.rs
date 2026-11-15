@@ -1,6 +1,7 @@
 //! Shares X3F decoding and GPU photo processing between photographic and DNG exports.
 
 mod background;
+mod capture_metadata;
 pub mod color_space;
 pub mod crop;
 pub mod decode_cache;

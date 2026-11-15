@@ -1,4 +1,4 @@
-//! Owns libjxl encoder resources and forwards photographic samples without changing their colors.
+//! Owns libjxl resources and packages photographic samples, colors and EXIF.
 
 use super::EncodingOptions;
 use crate::{render::TiffColorSpace, source::Result};
@@ -26,6 +26,7 @@ pub(super) fn encode(
     height: u32,
     space: TiffColorSpace,
     options: EncodingOptions,
+    exif: &[u8],
 ) -> Result<Vec<u8>> {
     let lossless = options.jxl_lossless();
     // SAFETY: null selects libjxl's default allocator. Both allocations gain unique owners.
@@ -76,6 +77,16 @@ pub(super) fn encode(
         info.uses_original_profile = i32::from(lossless);
         check(JxlEncoderSetBasicInfo(enc, &info))?;
         check(JxlEncoderUseContainer(enc, 1))?;
+        check(JxlEncoderUseBoxes(enc))?;
+        let mut exif_box = vec![0_u8; 4];
+        exif_box.extend_from_slice(exif);
+        check(JxlEncoderAddBox(
+            enc,
+            c"Exif".as_ptr(),
+            exif_box.as_ptr(),
+            exif_box.len(),
+            0,
+        ))?;
         if lossless {
             let icc = space.profile();
             check(JxlEncoderSetICCProfile(enc, icc.as_ptr(), icc.len()))?;

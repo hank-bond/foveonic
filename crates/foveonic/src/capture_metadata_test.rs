@@ -66,12 +66,6 @@ fn capture_exif_roundtrips_without_changing_image_or_orientation() {
     assert_eq!(decoder.dimensions().unwrap(), (2, 1));
     assert_eq!(decoder.get_tag_u32(Tag::Orientation).unwrap(), 1);
     assert_eq!(
-        decoder
-            .get_tag_ascii_string(Tag::Unknown(CAMERA_SERIAL_NUMBER))
-            .unwrap(),
-        "90406890"
-    );
-    assert_eq!(
         decoder.get_tag_ascii_string(Tag::Artist).unwrap(),
         "Photographer"
     );
@@ -230,5 +224,120 @@ fn camera_dates_preserve_wall_clock_and_calendar_boundaries() {
         "2026-01-01 00:00:00",
     ] {
         assert!(!valid_date(value), "{value}");
+    }
+}
+
+#[test]
+fn rejects_malformed_embedded_capture_fields() {
+    let valid = EmbeddedTag {
+        ifd: 1,
+        id: 0x829a,
+        kind: 5,
+        count: 1,
+        data: [1_u32, 100]
+            .into_iter()
+            .flat_map(u32::to_ne_bytes)
+            .collect(),
+    };
+    assert!(valid.valid());
+    let mut invalid = valid.clone();
+    invalid.data[4..8].fill(0);
+    assert!(!invalid.valid());
+    invalid.kind = 2;
+    assert!(!invalid.valid());
+    let invalid_gps = EmbeddedTag {
+        ifd: 2,
+        id: 2,
+        kind: 3,
+        count: 1,
+        data: 1_u16.to_ne_bytes().to_vec(),
+    };
+    assert!(!invalid_gps.valid());
+    let invalid_date = EmbeddedTag {
+        ifd: 1,
+        id: 0x9003,
+        kind: 2,
+        count: 20,
+        data: b"2026:02:30 12:00:00\0".to_vec(),
+    };
+    assert!(!invalid_date.valid());
+    for id in [0x9214, 0xa214, 0xa302] {
+        let entry = EmbeddedTag {
+            ifd: 1,
+            id,
+            kind: 3,
+            count: 1,
+            data: 1_u16.to_ne_bytes().to_vec(),
+        };
+        assert!(!entry.valid());
+    }
+}
+
+#[test]
+fn embedded_extended_iso_is_not_replaced_by_its_sentinel() {
+    let embedded = [
+        EmbeddedTag {
+            ifd: 1,
+            id: 0x8827,
+            kind: 3,
+            count: 1,
+            data: 65535_u16.to_ne_bytes().to_vec(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: 0x8830,
+            kind: 3,
+            count: 1,
+            data: 3_u16.to_ne_bytes().to_vec(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: 0x8833,
+            kind: 4,
+            count: 1,
+            data: 102400_u32.to_ne_bytes().to_vec(),
+        },
+    ];
+    let encoded_tags = serde_json::to_string(&embedded).unwrap();
+    let mut decoder = encoded(&[
+        ("ISO", "65535"),
+        ("EXIF_PREVIEW_ISO", "1"),
+        ("EXIF_CAPTURE_TAGS", &encoded_tags),
+    ]);
+    let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
+    let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
+    let mut exif = decoder.read_directory_tags(&directory);
+    assert_eq!(
+        exif.get_tag_u32(Tag::Unknown(ISO_SPEED_RATINGS)).unwrap(),
+        65535
+    );
+    assert_eq!(exif.get_tag_u32(Tag::Unknown(ISO_SPEED)).unwrap(), 102400);
+}
+
+#[test]
+fn exif_version_is_validated_and_never_downgraded() {
+    for (version, firmware, expected) in [
+        (*b"xxxx", "", *b"0230"),
+        (*b"0220", "", *b"0230"),
+        (*b"0232", "", *b"0232"),
+        (*b"0232", "1.2", *b"0300"),
+        (*b"0310", "1.2", *b"0310"),
+    ] {
+        let tags = [EmbeddedTag {
+            ifd: 1,
+            id: EXIF_VERSION,
+            kind: 7,
+            count: 4,
+            data: version.to_vec(),
+        }];
+        let json = serde_json::to_string(&tags).unwrap();
+        let mut decoder = encoded(&[("EXIF_CAPTURE_TAGS", &json), ("FIRMVERS", firmware)]);
+        let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
+        let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
+        let mut exif = decoder.read_directory_tags(&directory);
+        assert_eq!(
+            exif.get_tag_u8_vec(Tag::Unknown(EXIF_VERSION)).unwrap(),
+            expected
+        );
     }
 }

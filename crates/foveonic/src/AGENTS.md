@@ -27,6 +27,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 ### Source files
 
 - **[background.rs](./background.rs)** Prioritizes selected photos and thumbnails over batches and interruptible speculative work.
+- **[capture_metadata.rs](./capture_metadata.rs)** Translates source capture details into shared EXIF directories for all exports.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 - **[crop.rs](./crop.rs)** Composes saved oriented crop coordinates with camera framing and final output sizing.
 - **[decode_pool.rs](./decode_pool.rs)** Runs independent processing CPU work on one host-sized pool with decode-specific FIFO admission.
@@ -43,7 +44,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[lib.rs](./lib.rs)** Shares X3F decoding and GPU photo processing between photographic and DNG exports.
 - **[main.rs](./main.rs)** Inspects supported X3Fs and exports photographs or linear DNG through shared rendering settings.
 - **[options.rs](./options.rs)** Shares photographic CLI option parsing between conversion and the completed-processing profiler.
-- **[output.rs](./output.rs)** Shares photographic export formats and packages encoded RGB samples with their color profiles.
+- **[output.rs](./output.rs)** Packages photographic RGB samples with destination colors and shared capture metadata.
 - **[preview.rs](./preview.rs)** Decodes embedded bitmap and JPEG previews while retaining their declared colors at RGB16 precision.
 - **[preview_color.rs](./preview_color.rs)** Preserves embedded display colors from camera metadata and JPEG profiles in declared RGB16 spaces.
 - **[preview_pixels.rs](./preview_pixels.rs)** Resizes bounded preview samples in linear light while retaining their declared RGB primaries.

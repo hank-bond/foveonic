@@ -29,7 +29,9 @@ struct Photo {
 pub struct Runtime {
     editing_paths: Vec<PathBuf>,
     render_paths: Vec<PathBuf>,
-    photos: BTreeMap<PathBuf, Photo>,
+    // Several settings and frame snapshots make each photo large. Keep map
+    // insertion and balancing from moving those records through the stack.
+    photos: BTreeMap<PathBuf, Box<Photo>>,
     recent: Vec<PathBuf>,
     retention_changed: bool,
     viewed: Option<Viewed>,
@@ -41,7 +43,9 @@ struct Viewed {
 }
 impl Runtime {
     fn targets(&self) -> impl Iterator<Item = &Photo> {
-        self.editing_paths.iter().map(|path| &self.photos[path])
+        self.editing_paths
+            .iter()
+            .map(|path| self.photos[path].as_ref())
     }
     pub fn selected(&mut self, path: &Path) {
         if self.photos.contains_key(path) {
@@ -1046,12 +1050,12 @@ mod tests {
             });
             runtime.photos.insert(
                 path,
-                Photo {
+                Box::new(Photo {
                     defaults_basis: Some(settings.clone()),
                     settings: Some(settings),
                     numeric_settings: Some(numeric),
                     ..Default::default()
-                },
+                }),
             );
         }
         runtime
@@ -1167,11 +1171,11 @@ mod tests {
         let inactive = PathBuf::from("inactive.x3f");
         runtime.photos.insert(
             inactive.clone(),
-            Photo {
+            Box::new(Photo {
                 dirty: true,
                 error: Some("old load failed".into()),
                 ..Default::default()
-            },
+            }),
         );
         assert!(runtime.editable_ready());
         assert_eq!(runtime.snapshots().len(), 2);

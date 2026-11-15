@@ -30,7 +30,7 @@ use std::{
 };
 
 // Bump when decoder semantics or the stored source representation change.
-const FORMAT_VERSION: u32 = 2;
+const FORMAT_VERSION: u32 = 3;
 const NAMESPACE: &str = "foveonic-decoded-v1";
 pub const DEFAULT_BUDGET: u64 = 10_000_000_000;
 const DEFAULT_PREFETCH_BEHIND: usize = 3;
@@ -143,6 +143,7 @@ struct Control {
     generation: u64,
     preview: Option<previews::PendingPreview>,
     identities: HashMap<PathBuf, Identity>,
+    capture_metadata: HashMap<PathBuf, (Identity, BTreeMap<String, String>)>,
     rejected: HashSet<Identity>,
     recipes: HashMap<PathBuf, crate::render::Settings>,
     recipe_updates: BTreeMap<PathBuf, crate::render::Settings>,
@@ -211,6 +212,7 @@ impl Cache {
             generation: 0,
             preview: None,
             identities: HashMap::new(),
+            capture_metadata: HashMap::new(),
             rejected: HashSet::new(),
             recipes: HashMap::new(),
             recipe_updates: BTreeMap::new(),
@@ -284,6 +286,10 @@ impl Cache {
         }
         let order_changed = state.watched != paths;
         state.watched = paths;
+        let watched: HashSet<_> = state.watched.iter().cloned().collect();
+        state
+            .capture_metadata
+            .retain(|path, _| watched.contains(path));
         state.selected = selected;
         state.restart_prefetch();
         self.gate.interrupt_prefetch();
@@ -378,23 +384,87 @@ impl Cache {
     /// Reuse verified header metadata before loading the much larger pixel payload.
     /// Selection and editing defaults must not seek through the card again on a cache hit.
     pub fn capture_properties(&self, path: &Path) -> Result<BTreeMap<String, String>> {
-        if let Some(selection) = self.selection(path) {
-            return Ok(selection.properties);
+        let identity = self
+            .control
+            .lock()
+            .unwrap()
+            .identities
+            .get(path)
+            .cloned()
+            .or_else(|| Identity::read(path).ok());
+        if let Some(identity) = identity.as_ref() {
+            if let Some(cached) = self.memoized_capture(path, identity) {
+                return Ok(cached);
+            }
         }
         let settings = self.control.lock().unwrap().settings.clone();
-        let cached = (|| -> Result<BTreeMap<String, String>> {
-            if !settings.enabled {
-                return Err("decoded cache disabled".into());
-            }
-            let identity = Identity::read(path)?;
-            let mut file = File::open(self.root.join(identity.name()))?;
-            let header = read_header(&mut file, &identity, &settings)?;
-            if Identity::read(path)? != identity {
-                return Err("source changed while reading cached capture metadata".into());
-            }
-            Ok(header.properties)
-        })();
-        cached.or_else(|_| crate::source::read_capture_properties(path))
+        let cached = self.selection(path).map(|s| s.properties).or_else(|| {
+            let identity = identity.as_ref()?;
+            let mut file = File::open(self.root.join(identity.name())).ok()?;
+            read_header(&mut file, identity, &settings)
+                .ok()
+                .map(|header| header.properties)
+        });
+        let properties = match cached {
+            Some(properties) if properties.contains_key("EXIF_CAPTURE_CHECKED") => properties,
+            Some(properties) => identity
+                .as_ref()
+                .and_then(|id| self.refresh_capture(path, id).ok())
+                .unwrap_or(properties),
+            None => match identity.as_ref() {
+                Some(id) => self.refresh_capture(path, id)?,
+                None => crate::source::read_capture_properties(path)?,
+            },
+        };
+        if let Some(identity) = identity {
+            self.remember_capture(path, identity, &properties);
+        }
+        Ok(properties)
+    }
+
+    fn memoized_capture(
+        &self,
+        path: &Path,
+        identity: &Identity,
+    ) -> Option<BTreeMap<String, String>> {
+        self.control
+            .lock()
+            .unwrap()
+            .capture_metadata
+            .get(path)
+            .filter(|(old, _)| old == identity)
+            .map(|(_, properties)| properties.clone())
+    }
+
+    fn remember_capture(
+        &self,
+        path: &Path,
+        identity: Identity,
+        properties: &BTreeMap<String, String>,
+    ) {
+        if properties.contains_key("EXIF_CAPTURE_CHECKED") {
+            self.control
+                .lock()
+                .unwrap()
+                .capture_metadata
+                .insert(path.to_owned(), (identity, properties.clone()));
+        }
+    }
+
+    fn refresh_capture(
+        &self,
+        path: &Path,
+        identity: &Identity,
+    ) -> Result<BTreeMap<String, String>> {
+        if Identity::read(path)? != *identity {
+            return Err("source changed before reading capture metadata".into());
+        }
+        let properties = crate::source::read_capture_properties(path)?;
+        if Identity::read(path)? != *identity {
+            return Err("source changed while reading capture metadata".into());
+        }
+        self.remember_capture(path, identity.clone(), &properties);
+        Ok(properties)
     }
 
     pub fn open(&self, path: &Path, progress: impl Fn(LoadStage)) -> Result<Arc<Source>> {
@@ -439,8 +509,8 @@ impl Cache {
         Ok(source)
     }
 
-    /// Reuse a verified decode without falling back to reading the original.
-    /// Import can decode its completed local copy when the card cache is missing.
+    /// Reuse a verified decode without decoding the original again.
+    /// Older entries may refresh capture metadata using a small source read.
     pub fn open_cached(&self, path: &Path, progress: impl Fn(LoadStage)) -> Option<Arc<Source>> {
         let _scope = crate::diagnostics::scope_with(
             crate::diagnostics::Category::Cache,
@@ -508,6 +578,24 @@ impl Cache {
                         fields.u64("bytes", source.retained_source_bytes());
                     },
                 );
+                if source
+                    .metadata
+                    .properties
+                    .contains_key("FOVEONIC_LEGACY_CAPTURE_METADATA")
+                {
+                    let properties = self
+                        .memoized_capture(path, &identity)
+                        .or_else(|| self.refresh_capture(path, &identity).ok());
+                    let target = &mut Arc::make_mut(&mut source.metadata).properties;
+                    target.remove("FOVEONIC_LEGACY_CAPTURE_METADATA");
+                    if let Some(properties) = properties {
+                        target.extend(
+                            properties
+                                .into_iter()
+                                .filter(|(name, _)| name.starts_with("EXIF_")),
+                        );
+                    }
+                }
                 self.control.lock().unwrap().rejected.remove(&identity);
                 source.timings.insert(0, lookup);
                 self.status.lock().unwrap().hits += 1;
@@ -689,6 +777,10 @@ fn load(
         let _scope = scope(Category::Cache, "cache.decoded.camf.parse");
         crate::x3f::cached_camera_metadata(&camf)?
     };
+    let mut properties = header.properties;
+    if header.version == 2 {
+        properties.insert("FOVEONIC_LEGACY_CAPTURE_METADATA".into(), "1".into());
+    }
     let source = Source {
         origin: SourceOrigin::File(identity.clone()),
         metadata: Arc::new(Metadata {
@@ -696,7 +788,7 @@ fn load(
             height: header.height,
             rotation: header.rotation,
             processing_version: header.processing_version,
-            properties: header.properties,
+            properties,
             matrices,
             lists,
         }),
@@ -750,7 +842,7 @@ fn read_header(file: &mut File, identity: &Identity, settings: &Settings) -> Res
         return Err("decoded cache metadata checksum mismatch".into());
     }
     let header: Header = serde_json::from_slice(&json)?;
-    if header.version != FORMAT_VERSION
+    if !matches!(header.version, 2 | FORMAT_VERSION)
         || &header.identity != identity
         || header.little_endian != cfg!(target_endian = "little")
     {
@@ -956,4 +1048,4 @@ fn boot_key() -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

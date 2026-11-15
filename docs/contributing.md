@@ -59,7 +59,7 @@ The Rust tool generates index blocks between `<!-- INDEX:START -->` and `<!-- IN
 
 ## Run checks
 
-Run from the repository root:
+Run from the repository root. Check tools and prepare photographic inputs using [test environment setup](./testing-coverage.md#test-environment-setup).
 
 ```sh
 cargo test --offline --workspace
@@ -69,6 +69,7 @@ cargo run --offline -p docs-index -- --root "$PWD"
 cargo run --offline -p docs-index -- --root "$PWD" --check
 python3 -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
 python3 -m unittest discover -s scripts/profiling -p 'test_*.py'
+python3 -m unittest discover -s scripts -p 'test_setup_tests.py'
 ```
 
 Documentation checks cover metadata, titles, relative file links and stale indexes. Review prose and requirement meaning separately. Artwork tests need Python. Ordinary app builds do not.

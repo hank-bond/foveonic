@@ -596,3 +596,32 @@ fn rgb_to_hsv(rgb: [f64; 3]) -> [f64; 3] {
 #[cfg(test)]
 #[path = "appearance_test.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(super) fn synthetic_writer_appearance() -> (Prepared, ProfileData) {
+    let identity = Matrix::diagonal([1.; 3]);
+    (
+        Prepared {
+            mapping: identity,
+            neutral: [1.; 3],
+            forward: identity,
+            color: identity,
+            camera_to_romm: identity,
+            camera_to_native: identity,
+            after_tone: identity,
+            saturation: Default::default(),
+            tone: vec![0., 1.],
+            calibration_exposure: 0.,
+            baked_color_mode: false,
+            sample_notes: None,
+            exposure: 0.,
+            response: None,
+            range_compensation: RangeCompensation::BaselineExposure,
+        },
+        ProfileData {
+            curve: vec![0., 0., 1., 1.],
+            look: vec![0.; DIMS.into_iter().product::<u32>() as usize * 3],
+            baseline: 0.,
+        },
+    )
+}

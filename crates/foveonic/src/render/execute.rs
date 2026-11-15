@@ -2251,6 +2251,7 @@ impl Engine {
                         *space,
                         *format,
                         *options,
+                        context.metadata(),
                         profile,
                     )?;
                     None
