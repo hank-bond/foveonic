@@ -504,12 +504,12 @@ fn original_merrill_resolutions_render_color_and_monochrome() {
                 crate::render::MerrillNoiseMethod::Reference,
             ),
         ] {
-            for quality in [
+            for working_scale in [
                 crate::render::Scale::NATIVE,
                 crate::render::Scale::new(2).unwrap(),
             ] {
                 let mut settings = crate::render::Settings::new("Auto", "Standard");
-                settings.working_scale = quality;
+                settings.working_scale = working_scale;
                 settings.rendering = rendering;
                 settings.merrill_noise_method = method;
                 settings.reconstruction = Some(crate::noise::Controls::default());
@@ -534,17 +534,14 @@ fn original_merrill_resolutions_render_color_and_monochrome() {
                 let crate::inspection::Content::Image(image) = &artifacts[0].content else {
                     panic!("expected photograph");
                 };
-                let scale = if quality == crate::render::Scale::NATIVE
-                    || rendering == crate::render::Rendering::Monochrome
-                {
-                    1
-                } else {
-                    2
-                };
-                assert_eq!(image.view().extent, presentation.map(|v| v / scale));
+                assert_eq!(
+                    image.view().extent,
+                    working_scale.extent(presentation),
+                    "{file}: {rendering:?}, {method:?}, {working_scale:?}"
+                );
                 let bytes = engine.readback_image(image).unwrap();
                 if extent == [4928, 1632]
-                    && quality == crate::render::Scale::NATIVE
+                    && working_scale == crate::render::Scale::NATIVE
                     && rendering == crate::render::Rendering::Color
                     && method == crate::render::MerrillNoiseMethod::Reference
                 {
