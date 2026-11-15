@@ -170,13 +170,9 @@ fn dp2_channel_correction_attenuates_above_combined_gain_thresholds() {
             } else {
                 1.
             };
-            for channel in 0..3 {
+            for (channel, noise) in c.channel_noise.iter().enumerate() {
                 let baseline = 1.3 * input(iso as f32).final_gain[channel] * (channel + 1) as f64;
-                assert_eq!(
-                    c.channel_noise[channel],
-                    baseline * attenuation,
-                    "{camera} ISO{iso}"
-                );
+                assert_eq!(*noise, baseline * attenuation, "{camera} ISO{iso}");
             }
         }
     }

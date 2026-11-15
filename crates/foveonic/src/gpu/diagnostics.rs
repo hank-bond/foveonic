@@ -42,6 +42,8 @@ impl DeviceDiagnostics {
             0
         }
     }
+    // fetch_update remains available on the workspace minimum Rust version.
+    #[allow(deprecated)]
     pub fn capture(self: &Arc<Self>, passes: u32, supported: bool) -> Option<Arc<CaptureTrace>> {
         if !diag::active_mode().gpu() || passes == 0 {
             return None;
