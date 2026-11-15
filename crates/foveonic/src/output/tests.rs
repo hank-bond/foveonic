@@ -160,6 +160,126 @@ fn png_depth_and_profiles_preserve_the_selected_samples() {
 }
 
 #[test]
+fn png_rgb16_stream_preserves_rows_and_propagates_writer_errors() {
+    use image::ImageDecoder;
+    use std::io::{Seek, SeekFrom, Write};
+    let [width, height] = [257, 33];
+    let rgb: Vec<u16> = (0..width * height * 3)
+        .map(|i| (i * 37 + i / 73) as u16)
+        .collect();
+    let packed: Vec<u8> = rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|p| {
+            [p[0], p[1], p[2], 65535]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+        })
+        .collect();
+    let params = EncodeParams {
+        mapping: [[0.; 4]; 2],
+        source: [width, height, 0, 0],
+        crop: [0, 0, width, height],
+        output: [width, height, 0, 0],
+    };
+    let mut output = Cursor::new(Vec::new());
+    write(
+        &mut output,
+        &packed,
+        &params,
+        TiffColorSpace::AdobeRgb,
+        Format::Png,
+        Default::default(),
+        &mut Default::default(),
+    )
+    .unwrap();
+    let data = output.into_inner();
+    let mut decoder = image::codecs::png::PngDecoder::new(Cursor::new(&data)).unwrap();
+    assert_eq!(
+        decoder.icc_profile().unwrap().unwrap(),
+        TiffColorSpace::AdobeRgb.profile()
+    );
+    assert_eq!(
+        image::load_from_memory(&data)
+            .unwrap()
+            .into_rgb16()
+            .as_raw(),
+        &rgb
+    );
+
+    struct FailingWriter {
+        inner: Cursor<Vec<u8>>,
+        remaining: usize,
+        fail_flush: bool,
+    }
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::Error::other("injected failure"));
+            }
+            let n = bytes.len().min(self.remaining);
+            self.remaining -= n;
+            self.inner.write(&bytes[..n])
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_flush {
+                Err(std::io::Error::other("injected flush failure"))
+            } else {
+                self.inner.flush()
+            }
+        }
+    }
+    impl Seek for FailingWriter {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+    let mut pos = 8;
+    let idat_middle = loop {
+        let len = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+        if &data[pos + 4..pos + 8] == b"IDAT" {
+            break pos + 8 + len / 2;
+        }
+        pos += len + 12;
+    };
+    for remaining in [16, idat_middle, data.len() - 4] {
+        let mut writer = FailingWriter {
+            inner: Cursor::new(Vec::new()),
+            remaining,
+            fail_flush: false,
+        };
+        let error = write(
+            &mut writer,
+            &packed,
+            &params,
+            TiffColorSpace::AdobeRgb,
+            Format::Png,
+            Default::default(),
+            &mut Default::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("injected failure"));
+    }
+    let mut writer = FailingWriter {
+        inner: Cursor::new(Vec::new()),
+        remaining: usize::MAX,
+        fail_flush: true,
+    };
+    let error = write(
+        &mut writer,
+        &packed,
+        &params,
+        TiffColorSpace::AdobeRgb,
+        Format::Png,
+        Default::default(),
+        &mut Default::default(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("injected flush failure"));
+}
+
+#[test]
 fn png_rgb8_quantizes_every_u16_value() {
     let params = EncodeParams {
         mapping: [[0.; 4]; 2],

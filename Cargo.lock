@@ -1255,6 +1255,7 @@ dependencies = [
  "jxl-sys",
  "moxcms",
  "perfetto-sdk",
+ "png",
  "pollster",
  "rayon",
  "serde",

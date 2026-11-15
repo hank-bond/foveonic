@@ -173,6 +173,7 @@ pub fn write<W: Write + Seek>(
         format == Format::Jpeg || (format == Format::Png && options.png_depth == BitDepth::Eight);
     let streaming_tiff =
         format == Format::Tiff && options.tiff_compression == TiffCompression::None;
+    let streaming_png = format == Format::Png && options.png_depth == BitDepth::Sixteen;
     let (pixels, rgb8): (Vec<u16>, Vec<u8>) = if eight_bit {
         (
             Vec::new(),
@@ -180,12 +181,12 @@ pub fn write<W: Write + Seek>(
                 .map(|v| ((u32::from(v) + 128) / 257) as u8)
                 .collect(),
         )
-    } else if streaming_tiff {
+    } else if streaming_tiff || streaming_png {
         (Vec::new(), Vec::new())
     } else {
         (samples.collect(), Vec::new())
     };
-    if !streaming_tiff {
+    if !streaming_tiff && !streaming_png {
         profile.record(
             if eight_bit {
                 "export RGB8 repack"
@@ -255,23 +256,37 @@ pub fn write<W: Write + Seek>(
             encoder.encode(&rgb8, width, height, image::ExtendedColorType::Rgb8)?;
         }
         Format::Png => {
-            use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-            let mut encoder = PngEncoder::new_with_quality(
-                &mut writer,
-                CompressionType::Best,
-                FilterType::Adaptive,
-            );
-            encoder.set_icc_profile(space.profile().to_vec())?;
-            match options.png_depth {
-                BitDepth::Eight => {
-                    encoder.write_image(&rgb8, width, height, image::ExtendedColorType::Rgb8)?
+            if streaming_png {
+                let mut info = png::Info::with_size(width, height);
+                info.icc_profile = Some(std::borrow::Cow::Borrowed(space.profile()));
+                let mut encoder = png::Encoder::with_info(&mut writer, info)?;
+                encoder.set_color(png::ColorType::Rgb);
+                encoder.set_depth(png::BitDepth::Sixteen);
+                encoder.set_compression(png::Compression::High);
+                encoder.set_filter(png::Filter::Adaptive);
+                let mut png_writer = encoder.write_header()?;
+                {
+                    let mut stream = png_writer.stream_writer()?;
+                    let mut row = Vec::with_capacity(width as usize * 6);
+                    for packed in bytes.chunks_exact(width as usize * 8) {
+                        row.clear();
+                        row.extend(packed.as_chunks::<8>().0.iter().flat_map(|pixel| {
+                            [pixel[1], pixel[0], pixel[3], pixel[2], pixel[5], pixel[4]]
+                        }));
+                        stream.write_all(&row)?;
+                    }
+                    stream.finish()?;
                 }
-                BitDepth::Sixteen => encoder.write_image(
-                    bytemuck::cast_slice(&pixels),
-                    width,
-                    height,
-                    image::ExtendedColorType::Rgb16,
-                )?,
+                png_writer.finish()?;
+            } else {
+                use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+                let mut encoder = PngEncoder::new_with_quality(
+                    &mut writer,
+                    CompressionType::Best,
+                    FilterType::Adaptive,
+                );
+                encoder.set_icc_profile(space.profile().to_vec())?;
+                encoder.write_image(&rgb8, width, height, image::ExtendedColorType::Rgb8)?;
             }
         }
         Format::Jxl => jxl::encode(&mut writer, &pixels, width, height, space, options)?,
