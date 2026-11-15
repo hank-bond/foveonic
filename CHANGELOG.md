@@ -7,13 +7,19 @@ kind: reference
 
 ## 0.8.0
 
-White balance picking, rotation and support for smaller RAW files.
+White balance picking, rotation, streamlined previews and an initial Windows build.
 
 ### Changes
 
+- Add an initial Windows x64 build using DirectX 12. The Windows app uses an sRGB display fallback; monitor-profile-aware wide-gamut presentation remains available on macOS.
+- Replace the previous preview choices with Quality and Speed. Both choose image resolution automatically as you zoom, while Quality retains denser scene estimates and Speed can use faster approximations. Photographic and DNG exports always use Quality.
+- Edit several selected photographs together using relative sliders, explicit numeric values and mixed-value dropdowns. Crop, rotation and picking remain focused on the active photograph.
+- Add a native-detail loupe and refine viewport rendering so zoomed regions can show detail while the overview remains visible. Pointer mode combines photograph selection and panning, and comparison layouts fit the photographs' aspect ratios.
+- Improve editing responsiveness through reduced-resolution sensor processing, retained intermediate work and asynchronous render coordination. Optimize Adaptive Tone and automatic Dehaze estimation for the selected processing policy.
+- Add optional performance capture for investigating processing and presentation delays.
 - Pick a neutral area directly in the photograph to set Custom white balance. The eyedropper sits beside White Balance Mode and works across supported camera families, with independent Warmth and Tint adjustments and saved settings for previews and exports.
 - Add Straighten, Rotate Freehand and relative 90-degree Rotate Left/Right tools. Use R for the selected rotation tool and Shift+R to cycle tools. Straighten accepts either a dragged line or two clicks and aligns the line to the nearest horizontal or vertical axis.
-- Crop and rotation share one editing view, with automatic interior framing to avoid black corners. Saved rotation, crops and output dimensions stay consistent across Full, Fast and Smart previews, photographic exports and editable DNGs.
+- Crop and rotation share one editing view, with automatic interior framing to avoid black corners. Saved rotation, crops and output dimensions stay consistent across previews, photographic exports and editable DNGs.
 - Refine the photograph toolbar with distinct rotation icons, compact split buttons and menus aligned to their buttons. Show recent tool messages beside Log, and clear that status when Log is opened.
 - Support Merrill MED and LOW RAW files, including SD1 Merrill LOW. Preserve the photograph's aspect ratio when stored sensor samples have different horizontal and vertical spacing, including crop, rotation and export geometry. Rows + Columns noise cleanup remains unavailable for LOW Merrill files.
 - Add reduced RAW processing for Classic SLR MED/LOW and Quattro LOW through their existing camera recipes. These paths have reference-derived and synthetic rendering/export checks. Independent reduced Classic and Quattro originals remain unverified.
