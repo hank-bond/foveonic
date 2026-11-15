@@ -15,5 +15,6 @@ The owner requested an autonomous sweep, prioritizing peak memory and simpler de
 - [x] Reuse color texture pyramid planes after queued reads. The spatial path requests three scalar planes instead of nine, avoiding 24 bytes per atlas pixel of allocation traffic. Existing GPU band and size tests pass. Actual peak and byte-for-byte comparisons against the earlier allocation path remain to be measured.
 - [x] Reuse monochrome texture planes, reducing scalar allocation requests from ten to four per active invocation. The portable monochrome tests and a full-photo cached/fresh and DNG boundary check pass. Process peak and comparison to the earlier allocation path remain unmeasured.
 - [x] Release GUI preview source samples after linearization and unrotated floats after rotation. This shortens overlap by 6 bytes per input pixel, plus 12 for rotated previews. GUI rotation and resize tests pass.
+- [x] Widen ICC preview input in bounded chunks instead of a full RGB16 copy, avoiding 6 bytes per preview pixel. Preview tests and an exact multi-chunk comparison pass.
 - [ ] Investigate decoded-source storage and other GPU transient allocations. Measure representative workloads before claiming process-level savings or accepting complexity.
 - [ ] Run applicable checks and independent review for each change. Record limits and remaining opportunities.
