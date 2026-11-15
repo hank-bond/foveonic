@@ -21,15 +21,20 @@ impl PreparedPreview {
         preview: foveonic::preview::Preview,
         large: bool,
     ) -> foveonic::source::Result<Self> {
-        let image = preview.linear_image()?;
-        let image = match preview.rotation {
-            90 => image::imageops::rotate90(&image),
-            180 => image::imageops::rotate180(&image),
-            270 => image::imageops::rotate270(&image),
-            _ => image,
-        };
+        let rotation = preview.rotation;
+        let color_space = preview.color_space;
         let mut native_extent = preview.native_extent;
-        if matches!(preview.rotation, 90 | 270) {
+        let image = {
+            let image = preview.linear_image()?;
+            drop(preview);
+            match rotation {
+                90 => image::imageops::rotate90(&image),
+                180 => image::imageops::rotate180(&image),
+                270 => image::imageops::rotate270(&image),
+                _ => image,
+            }
+        };
+        if matches!(rotation, 90 | 270) {
             native_extent.swap(0, 1);
         }
         let scale = (THUMBNAIL_SIDE as f64 / f64::from(image.width().max(image.height()))).min(1.);
@@ -41,10 +46,10 @@ impl PreparedPreview {
             ],
         );
         let thumbnail = DecodedThumbnail {
-            image: Pixels::from_linear(&small, preview.color_space.into()),
+            image: Pixels::from_linear(&small, color_space.into()),
             native_extent,
         };
-        let preview = large.then(|| Pixels::from_linear(&image, preview.color_space.into()));
+        let preview = large.then(|| Pixels::from_linear(&image, color_space.into()));
         Ok(Self { thumbnail, preview })
     }
 }
