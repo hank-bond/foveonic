@@ -48,7 +48,7 @@ impl SourceLoading {
                 self.model.select(vec![1]);
                 app.smoke_multi_click(ctx, smoke, 1, egui::Modifiers::NONE);
                 smoke.direct_events.push_back(vec![]);
-                crate::automation::reveal(Some("/exposure"));
+                crate::automation::reveal(Some("Exposure"));
             }
             1 => {
                 if app.worker.busy() {
@@ -58,6 +58,20 @@ impl SourceLoading {
                     || app.edit_selection.paths() != &paths[1..2]
                 {
                     return Err("ready photo was not selected".into());
+                }
+                let Some(control) = crate::automation::snapshot().and_then(|snapshot| {
+                    snapshot.controls.into_iter().find(|control| {
+                        control.pointer.as_deref() == Some("/exposure")
+                            || control.label == "Exposure"
+                    })
+                }) else {
+                    return Ok(false);
+                };
+                if !control.visible {
+                    return Ok(false);
+                }
+                if !control.enabled {
+                    return Err("ready photo's Exposure control is disabled before loading".into());
                 }
                 self.hold = Some(app.worker.hold_source(paths[0].clone()));
                 app.revision += 1;

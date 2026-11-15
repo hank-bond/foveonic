@@ -402,6 +402,27 @@ class TraceAnalysisTests(unittest.TestCase):
 
 
 class PrefetchCancellationTests(unittest.TestCase):
+    def test_preparation_counts_decoded_io_and_checks_original_and_damage(self):
+        read = {'id':'read', 'parent_id':None, 'name':'source.read.complete',
+                'args':{'task':7,'photo':1,'purpose':'current','storage':'decoded-cache',
+                        'read_operations':1,'bytes':64,'read_errors':0,'complete':True}}
+        setup = {'expect_original_reads':0}
+        warm = {'expect_original_reads':0,'expect_local_reads':0}
+        work, issues = expected_work([read], setup, {1})
+        self.assertEqual(issues, [])
+        self.assertEqual(work['target_payload_read_counts'], {'decoded-cache':1})
+        self.assertEqual(work['payload_read_bytes'], 64)
+        self.assertTrue(expected_work([read], warm, {1})[1])
+        original = {**read, 'args':{**read['args'], 'storage':'original'}}
+        self.assertTrue(expected_work([original], setup, {1})[1])
+        disk_disabled, issues = expected_work([original], {}, {1})
+        self.assertEqual(issues, [])
+        self.assertEqual(disk_disabled['target_payload_read_counts'], {'original':1})
+        self.assertTrue(expected_work([original], warm, {1})[1])
+        damaged = {**read, 'args':{**read['args'], 'complete':False}}
+        self.assertTrue(expected_work([damaged], setup, {1})[1])
+        self.assertTrue(expected_work([{**original, 'args':{**original['args'], 'complete':False}}], {}, {1})[1])
+
     def events(self):
         return [
             {'id': '1', 'parent_id': None, 'name': 'cache.processing.prefetch', 'args': {'source': 'A.x3f'}},

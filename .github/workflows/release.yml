@@ -45,7 +45,10 @@ jobs:
           RUST_MIN_STACK: '8388608'
         run: |
           cargo test --locked --workspace
-          python3 -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
+          python3 scripts/setup_tests.py --install
+          .local/test-python/bin/python -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
+          .local/test-python/bin/python -m unittest discover -s scripts/profiling -p 'test_*.py'
+          .local/test-python/bin/python -m unittest discover -s scripts -p 'test_*.py'
 
       - name: Check Clippy and documentation
         run: |
@@ -207,7 +210,7 @@ jobs:
           gh release upload "$RELEASE_TAG" "$windows" SHA256SUMS --clobber
 
   sequoia:
-    name: Signed app startup on macOS 15
+    name: Signed app binary loading on macOS 15
     needs: windows_draft
     runs-on: macos-15
     timeout-minutes: 10
@@ -222,7 +225,7 @@ jobs:
           gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/foveonic-sequoia" \
             --pattern "Foveonic-${RELEASE_TAG}-macos-arm64.zip" --pattern SHA256SUMS
 
-      - name: Verify and start the executable on Sequoia
+      - name: Verify signed executable loading on Sequoia
         working-directory: ${{ runner.temp }}/foveonic-sequoia
         run: |
           sw_vers

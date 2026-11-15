@@ -41,7 +41,7 @@ All seven maintained `importing::tests` pass on Windows with the corrected helpe
 
 The Mac workspace passes 1,195 ordinary Rust tests and strict all-target Clippy. The existing GPU copied-original test and frozen multi-format batch/export test pass separately. Formatting, all three Python test groups and documentation checks pass. Independent code and documentation reviews found no blocking issues.
 
-A Windows release executable builds offline and passes its packaged `--help` check with exit code zero. An isolated ZIP includes the executable, unchanged release DXC files and license notices. Its SHA-256 matches after transfer back to the Mac workspace. The archive was prepared before release approval and is available for owner testing. Interactive Windows GUI validation remains pending. The owner subsequently approved shipping the correction as patch release 0.8.2.
+The initial export-only Windows executable built offline and passed its packaged `--help` check with exit code zero. Its isolated ZIP retained the release DXC files and license notices, and its SHA-256 matched after transfer. That preliminary archive was superseded by the startup correction below and must not be used as the final 0.8.2 candidate. The owner approved shipping both corrections as patch release 0.8.2.
 
 ## Reported 0.8.1 startup regression
 
@@ -49,6 +49,14 @@ The same reporter could start 0.8.0 on Windows 10 but reported that 0.8.1 would 
 
 The published Windows executables import the same DLLs and functions, retain identical PE operating-system and subsystem version fields, and reserve the same 1 MiB main-thread stack. Their packaged `dxcompiler.dll` and `dxil.dll` are byte-for-byte identical. The tag diff does not upgrade wgpu, eframe or their transitive dependencies, change the Windows build workflow, or change DX12/DXC selection. This comparison found no newly imported Windows API or compiler package establishing a Windows 11 requirement.
 
-The principal startup change is the [loading-window handoff](./archived/startup-progress.md). Photographic preparation now waits for the first root presentation, then compiles pipelines on a worker while the UI continues using the shared GPU device. These are plausible presentation/driver-sensitive failure points, not a confirmed Windows 10 diagnosis. The presentation callback is installed even with diagnostics disabled. Ordinary preparation failures appear in the loading window. There is no evidence yet supporting a startup code correction.
+Initial patch inspection identified the [loading-window handoff](./archived/startup-progress.md) as the principal startup change. Photographic preparation waits for the first root presentation, then compiles pipelines on a worker while the UI continues using the shared GPU device. Driver-sensitive behavior was an unconfirmed early hypothesis. The presentation callback is installed even with diagnostics disabled. Ordinary preparation failures appear in the loading window. The later interactive comparison below established the stack-overflow cause and a verified correction.
 
 Both published versions fail with the same `Surface::configure: Invalid surface` error when launched through the noninteractive SSH session on the Windows 11 test host. This launch path cannot distinguish the reported regression and is not evidence that 0.8.1 fails on an interactive Windows desktop.
+
+### Interactive reproduction and correction
+
+Running the exact published archives through the logged-on user's interactive desktop distinguishes the regression. Version 0.8.0 completes all ten workspace smoke captures with exit code zero. Version 0.8.1 produces no captures and exits with `0xC00000FD` and a main-thread stack-overflow message. This reproduces on Windows 11 and does not establish a Windows 10-specific compatibility change.
+
+The startup channel previously transported `Result<App, String>` by value and boxed the completed application only after the UI received it. The corrected worker boxes the application before sending `Result<Box<App>, String>`. The UI now receives heap-owned application state without large by-value handoff temporaries on its default stack. A clean Windows release build with this three-line ownership change completes all ten native captures with exit code zero. Independent review found no blocking design or Rust issues.
+
+The release workflow already ran GUI unit tests, but packaged `--help` checks returned before graphics and the handoff. The owner approved including both export and startup corrections in 0.8.2, updating the unpublished tag, and strengthening pre-release instructions. The maintained packaged-GUI verifier now requires process success and every native smoke checkpoint. Full acceptance and missing-input reports remain separate gates. A small Windows 11 desktop with integrated graphics is suitable for future correctness smoke checks without being a performance test host.

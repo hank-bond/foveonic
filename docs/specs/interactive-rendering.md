@@ -39,6 +39,8 @@ Use existing Rust worker/channel primitives. Test the observed completion-order,
 
 The application must present a loading window before preparing the photographic engine. Engine pipeline preparation, calibration loading and processing-worker initialization must run off the UI thread. Native window/display configuration stays on the UI thread. The loading window must remain responsive and show actual completed graphics-program counts when available, followed by finishing setup. Counts indicate completed pipeline creation calls, not a time estimate or driver-internal compilation percentage.
 
+Completed application preparation must cross to the UI through heap-owned storage. Receiving the result must not materialize the complete application state on Windows' default main-thread stack.
+
 The initial loading window should be compact and centered horizontally and vertically on the screen where native placement is available, with a large Foveonic icon on the left and application name, status and progress on the right. Its light or dark artwork must match the effective system appearance. When preparation completes, restore the workspace's remembered size and maximized/fullscreen state and its remembered native position. Without a remembered position, the workspace should expand around the loading window's center. The workspace must remain usable if the window manager ignores a resize request.
 
 Closing during preparation must not join the preparation worker or replace saved preferences or workspace geometry with loading-window defaults. Preparation failures must show a readable error and allow closing the window. The native framework still prepares its graphics device and basic UI renderer before application drawing becomes possible.

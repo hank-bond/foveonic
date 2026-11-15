@@ -48,7 +48,9 @@ The catalog explicitly leaves native file-dialog selection missing and preferenc
 
 ## Test environment setup
 
-Run the [test setup command](../scripts/setup_tests.py) from the repository root. Python 3 and Rust 1.88+ with Cargo are bootstrap prerequisites. Native builds also need a C/C++ compiler. On macOS, install/select Xcode command-line tools first. Building the native app bundle still requires Xcode 26+ as described in [release guidance](./releases.md).
+Pillow is a declared dependency in the pinned [test requirements](../scripts/test-requirements.txt). The common setup command prepares one reusable `.local/test-python` environment for all Python suites. Individual tests do not install dependencies or create environments. Use `.local/test-python/bin/python` for the Python check groups (`.local/test-python/Scripts/python.exe` on Windows).
+
+Run the [test setup command](../scripts/setup_tests.py) from the repository root. Python 3.11+ and Rust 1.88+ with Cargo are bootstrap prerequisites. Native builds also need a C/C++ compiler. On macOS, install/select Xcode command-line tools first. Building the native app bundle still requires Xcode 26+ as described in [release guidance](./releases.md).
 
 ```sh
 # Check installed tools without installing or downloading anything:
@@ -59,7 +61,7 @@ python3 scripts/setup_tests.py --install --images
 python3 scripts/setup_tests.py --images --offline
 ```
 
-The command checks Rust, Cargo, rustfmt, Clippy, a C/C++ compiler, CMake and ExifTool. Online image preparation also requires GitHub CLI and an authenticated GitHub session for the example release. The tool list and install mappings live in the setup script. Missing prerequisites and failed installations return a failing exit status. `--install` installs only missing Homebrew packages on macOS and missing Rust components through rustup. Homebrew, Rust and Xcode must already be installed. On other systems, install the reported tools with the system's package manager and rerun the checker. Tests never install tools themselves. `--offline` cannot be combined with `--install`.
+The command checks Rust, Cargo, rustfmt, Clippy, a C/C++ compiler, CMake, ExifTool and the shared Python test dependencies. Online image preparation also requires GitHub CLI and an authenticated GitHub session for the example release. The tool list and install mappings live in the setup script. Missing prerequisites and failed installations return a failing exit status. `--install` installs missing Homebrew packages on macOS, missing Rust components through rustup, and prepares the shared Python environment from the pinned requirements. Repeated runs reuse dependencies that already match. Homebrew, Rust and Xcode must already be installed. On other systems, install the reported native tools with the system's package manager and rerun the checker. Tests never install tools themselves. `--offline` cannot be combined with `--install`.
 
 `--images` reuses the existing example sync and external-sample verifier. Repeated runs preserve originals and sidecars. `--source-dir PATH` selects another image cache. For the generated recipes and aliases used by the larger behavioral suite, continue using `prepare_inputs.py` above with a new output directory. GPU availability, graphical sessions, independent pixel baselines and the optional Trace Processor remain requirements of the specific suites that use them.
 

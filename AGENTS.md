@@ -23,6 +23,8 @@ read_when: "Read first when entering the repository."
 - Defer advanced logging and production hardening to a dedicated later phase.
 - Use Rust for core code. Supporting scripts may use Python.
 - Follow the [test-input reproducibility contract](./docs/specs/performance-diagnostics.md#reproducible-test-inputs) when adding or changing maintained tests.
+- Before a release, run all maintained correctness tests, including GPU/original-file checks and native GUI acceptance suites, using the [test inventory](./docs/testing-coverage.md). Workspace unit tests alone are insufficient. Record skipped, unavailable and failed checks explicitly and discuss unresolved release blockers with the owner.
+- Test the actual packaged release app on macOS and an interactive Windows desktop through startup, photographic rendering and the native GUI smoke checks. `--help` exits before graphics initialization and does not establish GUI coverage. Do not increase the tested application's stack to hide a failure.
 - Preserve attribution when importing code.
 - When replacing a choice, migrate existing callers and documents to the selected approach. Add compatibility paths only when requested.
 

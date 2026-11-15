@@ -64,6 +64,16 @@ The Windows archive is unsigned and must be tested on Windows before publication
 
 ## Publish manually
 
+Run all maintained correctness checks in the [test inventory](testing-coverage.md), including native GUI acceptance on available supported platforms. List unavailable inputs and unperformed checks for owner review. The hosted workflow's workspace tests include GUI unit tests, while its packaged `--help` checks only load the executable. The 0.8.1 Windows main-thread stack overflow escaped those checks because `--help` returns before graphics and the application handoff. Native smoke on an interactive Windows desktop reproduces the failure in the original archive and passes after heap-owning the prepared application.
+
+Before publishing, download and extract the exact draft archives, verify `SHA256SUMS`, and run the [packaged GUI verifier](../scripts/verify_gui_release.py) on both macOS and an interactive Windows desktop:
+
+```sh
+python3 scripts/verify_gui_release.py --binary path/to/Foveonic.app/Contents/MacOS/foveonic-gui --directory .local/release-smoke-macos
+```
+
+On Windows, use `--binary path/to/foveonic-gui.exe` from a desktop terminal or a task running with the logged-on user's interactive token. A noninteractive SSH session may fail surface creation even for working releases. Supply `--source path/to/blue-parking-sign.x3f` if the pinned [example photograph](testing-coverage.md) is elsewhere. The verifier copies it into an owned folder, isolates smoke settings, requires successful exit and all ten workspace checkpoints, and saves stdout, stderr, captures and `result.json`. It rejects an existing output directory. Confirm the report's executable hash matches the extracted release executable. Do not enlarge the application's stack for this check. This startup/rendering smoke supplements the complete acceptance suites and does not establish native file-dialog or every editing workflow's coverage.
+
 Review the draft notes and download the archive through a browser so macOS applies its normal download checks. Releases target macOS 15 Sequoia or later. Sequoia runtime testing remains pending user feedback. Verify the executable and bundle both target 15.0, and test the app on available supported systems before publishing. Downloads are Developer ID signed but not notarized, so Gatekeeper may block the first launch.
 
 For a build you trust, attempt to open the app, then use **System Settings → Privacy & Security → Open Anyway** for that app and confirm the prompt. Subsequent launches normally retain that approval. A newly downloaded version may be checked again. Do not disable Gatekeeper globally.

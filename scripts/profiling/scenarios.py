@@ -122,6 +122,66 @@ def application_result(native_result, scenario, quality, inputs, binary_sha256=N
                          native_result['passed'] and not missing, failure, environment)
 
 
+def prefetched_assertions(native_result, inputs, repeats):
+    """Check every prepared and warm result against declared exposure recipes."""
+    steps = native_result.get('steps', [])
+    expected_actions = ['initial-selection', 'prepare-demand-grid'] + ['warm-edit'] * repeats
+    actual_actions = [step.get('action') for step in steps]
+    valid = actual_actions == expected_actions
+    expected = {item['staged_source']: struct.unpack('f', struct.pack('f', item['settings']['exposure']))[0]
+                for item in inputs}
+    for index, step in enumerate(steps):
+        if index >= len(expected_actions):
+            valid = False
+            break
+        if step.get('step') != index + 1:
+            valid = False
+        delta = 0.125 if index == 1 else (0.25 if index % 2 == 0 else -0.25) if index >= 2 else 0.
+        if index == 1 and step.get('exposure_delta') != delta:
+            valid = False
+        expected = {path: struct.unpack('f', struct.pack('f', max(-4., min(4., value + delta))))[0]
+                    for path, value in expected.items()}
+        photos = {photo['source']: photo for photo in step.get('photos', [])}
+        if len(step.get('photos', [])) != len(expected) or set(photos) != set(expected):
+            valid = False
+            continue
+        for path, value in expected.items():
+            settings = photos[path].get('settings', {})
+            if settings.get('exposure_auto') is not False or not same_numeric(settings.get('exposure'), value):
+                valid = False
+    return [{'name':'prefetched_edits', 'outcome':'passed' if valid else 'failed',
+             'expected':expected_actions, 'actual':actual_actions,
+             'failure':None if valid else 'prepared or warm steps differ from declared exposure edits'}]
+
+
+def selection_setup_assertions(native_result, inputs, scenario):
+    """Verify preparation against the declared inputs and the complete journey sequence."""
+    actions = ['initial-selection', 'prepare-demand-grid', 'selection-journey', 'cached-switch']
+    actions += (['cached-switch'] if scenario == 'selection-journey'
+                else ['cache-eviction', 'evicted-edit'])
+    actions += ['restore-selection']
+    steps = native_result.get('steps', [])
+    actual = [step.get('action') for step in steps]
+    valid = actual == actions and all(step.get('step') == index + 1 for index, step in enumerate(steps))
+    declared = {item['staged_source']: item['settings']['exposure'] for item in inputs}
+    for index, step in enumerate(steps[:2]):
+        photos = {photo['source']:photo for photo in step.get('photos', [])}
+        if len(step.get('photos', [])) != len(declared) or set(photos) != set(declared):
+            valid = False
+            continue
+        if index == 1 and step.get('exposure_delta') != 0.125:
+            valid = False
+        for path, value in declared.items():
+            original = struct.unpack('f', struct.pack('f', value))[0]
+            expected = struct.unpack('f', struct.pack('f', min(4., original + (0.125 if index else 0.))))[0]
+            settings = photos[path].get('settings', {})
+            if settings.get('exposure_auto') is not False or not same_numeric(settings.get('exposure'), expected):
+                valid = False
+    return [{'name':'selection_grid_preparation', 'outcome':'passed' if valid else 'failed',
+             'expected':actions, 'actual':actual,
+             'failure':None if valid else 'selection preparation or action sequence differs from declared inputs'}]
+
+
 def check_export(image, expected_extent, decoded):
     """Decode an actual exported image with macOS's image reader after the app exits."""
     assertion = {'name':'export_decode', 'expected':expected_extent, 'actual':None, 'outcome':'failed'}
@@ -306,6 +366,10 @@ def run_trial(args, selected, directory, source_hash):
     native_result=json.loads(Path(result['result']).read_text())
     test_result = application_result(native_result, args.scenario, args.quality, inputs, manifest['binary_sha256'])
     include_assertions(test_result, result.pop('trace_assertions', []))
+    if args.scenario == 'prefetched-selection':
+        include_assertions(test_result, prefetched_assertions(native_result, inputs, args.repeats))
+    if args.scenario in ('selection-journey', 'selection-pressure'):
+        include_assertions(test_result, selection_setup_assertions(native_result, inputs, args.scenario))
     if manifest['scenario']['save_on_exit']:
         saved_manifest = json.loads((capture_directory/'manifest.json').read_text())
         actions = saved_manifest.get('application', {}).get('capture_actions', [])
@@ -406,6 +470,12 @@ def run(args):
         raise ValueError('disk cache budget must be nonnegative and the requested cache scenario requires an enabled disk cache')
     if args.scenario == 'prefetched-selection' and (args.count < 2):
         raise ValueError('prefetched-selection requires at least two photographs')
+    if args.scenario == 'prefetched-selection' and any(
+            not isinstance(case.get('settings'), dict)
+            or case['settings'].get('exposure_auto') is not False
+            or type(case['settings'].get('exposure')) not in (int, float)
+            or not -4 <= case['settings']['exposure'] <= 3.625 for case in selected):
+        raise ValueError('prefetched-selection needs manual exposures between -4 and 3.625')
     if args.memory_cache_bytes < 1:
         raise ValueError('memory cache budget must be positive')
     if args.scenario == 'slider-drag' and (not args.control_pointer.startswith('/') or args.drag_steps < 3 or not 0 < args.drag_fraction < 0.45):
@@ -426,6 +496,9 @@ def run(args):
                or type(case['settings'].get('exposure')) not in (int, float)
                or case['settings'].get('exposure_auto') is not False for case in selected):
             raise ValueError('image comparison needs an explicit manual exposure recipe for every photo')
+    if args.scenario in ('selection-journey', 'selection-pressure') and any(
+            not -3.625 <= case['settings']['exposure'] <= 3.625 for case in selected):
+        raise ValueError('selection journey requires manual exposures between -3.625 and 3.625')
     if getattr(args, 'compare_images', None):
         for case in selected:
             if type(pointer_value(case['settings'], args.control_pointer)) not in (int, float):

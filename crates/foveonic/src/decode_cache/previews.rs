@@ -13,7 +13,6 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{atomic::Ordering, Mutex},
-    time::SystemTime,
 };
 
 pub const MAX_SIDE: u32 = 2048;
@@ -173,8 +172,7 @@ impl Cache {
         if self.preview_key(path).ok()? != key {
             return None;
         }
-        let _ =
-            File::open(key.location(&self.root)).and_then(|f| f.set_modified(SystemTime::now()));
+        super::mark_used(&key.location(&self.root));
         Some(Preview {
             rgb,
             color_space: header.color_space,

@@ -30,6 +30,11 @@ jobs:
           clang-cl --version
       - name: Build Windows app
         run: cargo build --locked --release -p foveonic-gui
+      - name: Test Windows workspace
+        env:
+          # Test threads need room for nested fixtures. The packaged app keeps its normal stack.
+          RUST_MIN_STACK: '8388608'
+        run: cargo test --locked --release --workspace
       - name: Stage DirectX shader compiler
         shell: pwsh
         run: |
@@ -50,7 +55,7 @@ jobs:
           Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-MS.txt') $stage
           Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENCE-MIT.txt') $stage
           $process = Start-Process (Join-Path $stage 'foveonic-gui.exe') -ArgumentList '--help' -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Windows executable failed startup check: $($process.ExitCode)" }
+          if ($process.ExitCode -ne 0) { throw "Windows help-command check failed: $($process.ExitCode)" }
           Compress-Archive -Path $stage -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64.zip')
       - uses: actions/upload-artifact@v4
         with:

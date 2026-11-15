@@ -7,11 +7,15 @@ kind: reference
 
 ## 0.8.2
 
-Fix processed-photo exports on Windows.
+Fix Windows startup and processed-photo exports.
 
 ### Changes
 
 - Fix an Access denied error when publishing completed exports on Windows.
+- Fix a startup stack overflow introduced in 0.8.1 on Windows.
+- Refresh decoded and preview cache recency correctly on Windows.
+- Keep color-range renaming from scheduling image processing, including multi-photo edits.
+- Keep rapid clicks on different photos from accidentally triggering double-click zoom.
 
 ## 0.8.1
 

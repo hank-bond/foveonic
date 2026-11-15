@@ -40,6 +40,16 @@ enum Case {
     CacheWorkflow,
 }
 impl Case {
+    fn observes_controls(self) -> bool {
+        matches!(
+            self,
+            Self::SliderDrag
+                | Self::LifecycleJourney
+                | Self::ChoiceJourney
+                | Self::BackgroundEdit
+                | Self::SourceLoading
+        )
+    }
     fn selection_journey(self) -> bool {
         matches!(self, Self::SelectionJourney | Self::SelectionPressure)
     }
@@ -152,6 +162,7 @@ fn read_mode<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Mode, D::Erro
 #[derive(Clone, Copy)]
 enum Action {
     Initial,
+    PrepareGrid,
     Edit(f64),
     Switch(usize),
     Remove,
@@ -177,6 +188,7 @@ impl Action {
     fn name(self) -> &'static str {
         match self {
             Self::Initial => "initial-selection",
+            Self::PrepareGrid => "prepare-demand-grid",
             Self::Edit(_) => "warm-edit",
             Self::Switch(_) => "cached-switch",
             Self::Remove => "remove-pending",
@@ -259,6 +271,7 @@ pub(super) struct Scenario {
     screenshot_finished: bool,
     image_captures: Option<Vec<ImageCapture>>,
     journey: Option<super::selection::SelectionJourney>,
+    prefetched_exposure: Option<super::journey::ExposureJourney>,
     background_edit: Option<super::background::BackgroundEdit>,
     transitions: Option<super::transitions::TransitionJourney>,
     choices: Option<super::choices::ChoiceJourney>,
@@ -371,30 +384,49 @@ impl Scenario {
                 || config.name.manual_exposure_journey(),
             "image comparison requires an exposure or selection journey"
         );
-        let exposures = if config.name.manual_exposure_journey() {
-            assert!(
-                config.photo_count >= 2,
-                "selection journeys require at least two photographs"
-            );
-            let exposures = manifest["inputs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|input| {
-                    assert_eq!(input["settings"]["exposure_auto"], false);
-                    input["settings"]["exposure"]
-                        .as_f64()
-                        .expect("declared exposure") as f32
-                })
-                .collect();
-            exposures
-        } else {
-            Vec::new()
-        };
+        let exposures =
+            if config.name.manual_exposure_journey() || config.name == Case::PrefetchedSelection {
+                assert!(
+                    config.photo_count >= 2,
+                    "selection journeys require at least two photographs"
+                );
+                let exposures = manifest["inputs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|input| {
+                        assert_eq!(input["settings"]["exposure_auto"], false);
+                        input["settings"]["exposure"]
+                            .as_f64()
+                            .expect("declared exposure") as f32
+                    })
+                    .collect();
+                exposures
+            } else {
+                Vec::new()
+            };
         let journey = config
             .name
             .selection_journey()
             .then(|| super::selection::SelectionJourney::new(exposures.clone()));
+        let prefetched_exposure = (config.name == Case::PrefetchedSelection)
+            .then(|| super::journey::ExposureJourney::new(exposures.clone()));
+        if config.name == Case::PrefetchedSelection {
+            assert!(
+                exposures
+                    .iter()
+                    .all(|value: &f32| value.is_finite() && (-4. ..=3.625).contains(value)),
+                "prefetched selection exposure offsets must remain in range"
+            );
+        }
+        if config.name.selection_journey() {
+            assert!(
+                exposures
+                    .iter()
+                    .all(|value: &f32| value.is_finite() && (-3.625..=3.625).contains(value)),
+                "selection journey exposure offsets must remain in range"
+            );
+        }
         if config.name == Case::CacheWorkflow {
             assert!(
                 exposures
@@ -446,16 +478,6 @@ impl Scenario {
         let cache_workflow = (config.name == Case::CacheWorkflow).then(|| {
             super::cache_workflow::Driver::new(exposures.clone(), config.native_photo_count)
         });
-        if matches!(
-            config.name,
-            Case::SliderDrag
-                | Case::LifecycleJourney
-                | Case::ChoiceJourney
-                | Case::BackgroundEdit
-                | Case::SourceLoading
-        ) {
-            crate::automation::enable();
-        }
         let feedback = (0..config.photo_count)
             .map(|_| super::journey::ImageFeedback::default())
             .collect();
@@ -486,6 +508,7 @@ impl Scenario {
             screenshot_finished: false,
             image_captures: None,
             journey,
+            prefetched_exposure,
             background_edit,
             transitions,
             choices,
@@ -669,10 +692,14 @@ impl Scenario {
                 self.actions.push_back(Action::Initial);
                 match self.config.name {
                     Case::Initial | Case::WarmDisk => {}
-                    Case::PrefetchedSelection => self.actions.extend(
-                        (0..self.config.repeats)
-                            .map(|index| Action::Edit(if index % 2 == 0 { 0.25 } else { -0.25 })),
-                    ),
+                    Case::PrefetchedSelection => {
+                        self.actions.push_back(Action::PrepareGrid);
+                        self.actions.extend(
+                            (0..self.config.repeats).map(|index| {
+                                Action::Edit(if index % 2 == 0 { 0.25 } else { -0.25 })
+                            }),
+                        );
+                    }
                     Case::WarmEdit => self.actions.extend(
                         (0..self.config.repeats)
                             .map(|index| Action::Edit(if index % 2 == 0 { 0.25 } else { -0.25 })),
@@ -693,12 +720,14 @@ impl Scenario {
                     }
                     Case::SliderDrag => self.actions.push_back(Action::SliderDrag),
                     Case::SelectionJourney => self.actions.extend([
+                        Action::PrepareGrid,
                         Action::SelectionJourney,
                         Action::Switch(0),
                         Action::Switch(self.paths.len() - 1),
                         Action::Restore,
                     ]),
                     Case::SelectionPressure => self.actions.extend([
+                        Action::PrepareGrid,
                         Action::SelectionJourney,
                         Action::Switch(0),
                         Action::Evict,
@@ -1040,6 +1069,16 @@ impl Scenario {
                     return;
                 }
                 if let Some(model) = self.exposure_model() {
+                    if self.prefetched_exposure.is_some()
+                        && self
+                            .paths
+                            .iter()
+                            .any(|path| self.settings(app, path).exposure_auto)
+                    {
+                        self.failed = Some("prefetched selection requires manual exposure".into());
+                        self.finish(app);
+                        return;
+                    }
                     let observed: Vec<_> = self
                         .paths
                         .iter()
@@ -1109,6 +1148,9 @@ impl Scenario {
                         "settings":self.settings(app,path)})
                 }).collect::<Vec<_>>();
                 self.results.push(serde_json::json!({"step":self.step,"action":self.action.unwrap().name(),"coverage":self.action.unwrap().coverage(),"baseline_elapsed_ms":if self.config.mode==Mode::Off && !matches!(self.action,Some(Action::CacheWorkflow)) {Some(self.began.elapsed().as_secs_f64()*1000.)}else{None},"photos":photos,"retained":app.worker.memory_status().resources}));
+                if matches!(self.action, Some(Action::PrepareGrid)) {
+                    self.results.last_mut().unwrap()["exposure_delta"] = 0.125.into();
+                }
                 self.results.last_mut().unwrap()["geometry"] = self.geometry.clone();
                 if self.config.name == Case::BackgroundEdit {
                     let batch = app.import.smoke_batch_progress();
@@ -1304,6 +1346,7 @@ impl Scenario {
         self.journey
             .as_ref()
             .map(|journey| &journey.model)
+            .or(self.prefetched_exposure.as_ref())
             .or_else(|| self.source_loading.as_ref().map(|journey| &journey.model))
             .or_else(|| self.transitions.as_ref().map(|journey| &journey.model))
             .or_else(|| self.cache_workflow.as_ref().map(|journey| &journey.model))
@@ -1320,6 +1363,7 @@ impl Scenario {
             .journey
             .as_ref()
             .map(|journey| &journey.model)
+            .or(self.prefetched_exposure.as_ref())
             .or_else(|| self.source_loading.as_ref().map(|journey| &journey.model))
             .or_else(|| self.transitions.as_ref().map(|journey| &journey.model))
             .or_else(|| self.cache_workflow.as_ref().map(|journey| &journey.model))
@@ -1435,10 +1479,20 @@ impl Scenario {
     }
     fn edit(&mut self, app: &mut App, delta: f64) {
         let changed = app.edit_selection.paths().to_vec();
+        if let Some(model) = &mut self.prefetched_exposure {
+            model.adjust_exposure(delta as f32);
+        }
+        if let Some(journey) = &mut self.journey {
+            journey.model.adjust_exposure(delta as f32);
+        }
         apply_exposure(app, delta);
-        for path in changed {
-            self.expected
-                .insert(path.clone(), self.settings(app, &path).clone());
+        if self.prefetched_exposure.is_some() || self.journey.is_some() {
+            self.update_journey_expectations();
+        } else {
+            for path in changed {
+                self.expected
+                    .insert(path.clone(), self.settings(app, &path).clone());
+            }
         }
     }
     fn next(&mut self, app: &mut App, ctx: &egui::Context, smoke: &mut Smoke) {
@@ -1511,13 +1565,14 @@ impl Scenario {
             && (matches!(action, Action::Switch(_))
                 || (matches!(action, Action::Restore) && !may_rebuild));
         if !matches!(action, Action::Initial)
+            && !(matches!(action, Action::PrepareGrid) && self.config.disk_cache_bytes == 0)
             && !may_rebuild
             && !target_reuse
             && (self.config.name != Case::MemoryPressure || self.config.disk_cache_bytes > 0)
         {
             expectation["expect_original_reads"] = 0.into();
         }
-        if !matches!(action, Action::Initial)
+        if !matches!(action, Action::Initial | Action::PrepareGrid)
             && !may_rebuild
             && !target_reuse
             && (self.config.name != Case::MemoryPressure || self.config.disk_cache_bytes == 0)
@@ -1531,6 +1586,9 @@ impl Scenario {
             if self.config.disk_cache_bytes > 0 {
                 expectation["expect_original_reads"] = 0.into();
             }
+        }
+        if matches!(action, Action::PrepareGrid) {
+            expectation["exposure_delta"] = 0.125.into();
         }
         if matches!(action, Action::SourceLoading) {
             // A deliberately reacquires native input. B's edit must complete
@@ -1575,6 +1633,10 @@ impl Scenario {
                 self.minimum_revision = app.revision + 1;
                 self.edit(app, delta);
             }
+            Action::PrepareGrid => {
+                self.minimum_revision = app.revision + 1;
+                self.edit(app, 0.125);
+            }
             Action::Switch(index) => self.click(app, ctx, smoke, index, egui::Modifiers::NONE),
             Action::Remove => {
                 self.edit(app, 0.125);
@@ -1596,14 +1658,9 @@ impl Scenario {
             | Action::ChoiceJourney
             | Action::CacheWorkflow => {}
             Action::Restore => {
-                self.click(app, ctx, smoke, 0, egui::Modifiers::NONE);
-                self.click(
-                    app,
-                    ctx,
-                    smoke,
-                    self.paths.len() - 1,
-                    egui::Modifiers::SHIFT,
-                );
+                let (first, last) = app.smoke_visual_range(&self.paths);
+                self.click(app, ctx, smoke, first, egui::Modifiers::NONE);
+                self.click(app, ctx, smoke, last, egui::Modifiers::SHIFT);
             }
             Action::Evict => {
                 self.retained_before = app
@@ -1715,6 +1772,23 @@ impl Scenario {
     }
 }
 
+fn enable_automation_for(case: Option<Case>) {
+    if case.is_some_and(Case::observes_controls) {
+        crate::automation::enable();
+    }
+}
+
+impl App {
+    pub(crate) fn enable_scenario_automation(&self) {
+        enable_automation_for(
+            self.smoke
+                .as_ref()
+                .and_then(|smoke| smoke.scenario.as_ref())
+                .map(|scenario| scenario.config.name),
+        );
+    }
+}
+
 pub(super) fn apply_exposure(app: &mut App, delta: f64) {
     let edits = [Edit::Number {
         pointer: "/exposure".into(),
@@ -1742,4 +1816,64 @@ pub(super) fn apply_exposure(app: &mut App, delta: f64) {
         }
     }
     app.submit(None);
+}
+
+#[cfg(test)]
+mod automation_tests {
+    use super::{enable_automation_for, Case};
+
+    #[test]
+    fn scenario_observers_are_enabled_only_on_the_handoff_thread() {
+        let observers = [
+            Case::SliderDrag,
+            Case::LifecycleJourney,
+            Case::ChoiceJourney,
+            Case::BackgroundEdit,
+            Case::SourceLoading,
+        ];
+        let others = [
+            Case::Initial,
+            Case::WarmDisk,
+            Case::PrefetchedSelection,
+            Case::WarmEdit,
+            Case::CachedSwitch,
+            Case::RapidSupersession,
+            Case::MemoryPressure,
+            Case::SelectionJourney,
+            Case::SelectionPressure,
+            Case::TransitionJourney,
+            Case::BrowserJourney,
+            Case::CollectionJourney,
+            Case::CacheWorkflow,
+        ];
+        for case in others {
+            assert!(!case.observes_controls());
+        }
+        for case in observers {
+            std::thread::spawn(move || {
+                assert!(!crate::automation::enabled());
+                let case = std::thread::spawn(move || {
+                    assert!(!crate::automation::enabled());
+                    case
+                })
+                .join()
+                .unwrap();
+                enable_automation_for(Some(case));
+                assert!(crate::automation::snapshot().is_some());
+                assert!(!std::thread::spawn(crate::automation::enabled)
+                    .join()
+                    .unwrap());
+            })
+            .join()
+            .unwrap();
+        }
+        std::thread::spawn(|| {
+            enable_automation_for(None);
+            assert!(!crate::automation::enabled());
+            enable_automation_for(Some(Case::WarmEdit));
+            assert!(!crate::automation::enabled());
+        })
+        .join()
+        .unwrap();
+    }
 }

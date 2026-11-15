@@ -75,6 +75,7 @@ impl BackgroundEdit {
                 if !app.browser.import_mode {
                     return Err("background edit requires import mode".into());
                 }
+                crate::automation::reveal(Some("/exposure"));
                 app.browser.hide_reviewed = false;
                 app.browser
                     .marks
@@ -88,6 +89,22 @@ impl BackgroundEdit {
             }
             Phase::Scan => {
                 if app.import.ready(&app.browser) {
+                    let Some(exposure) = crate::automation::snapshot().and_then(|snapshot| {
+                        snapshot
+                            .controls
+                            .into_iter()
+                            .find(|control| control.pointer.as_deref() == Some("/exposure"))
+                    }) else {
+                        return Ok(false);
+                    };
+                    if !exposure.visible {
+                        return Ok(false);
+                    }
+                    if !exposure.enabled {
+                        return Err(
+                            "Exposure control is disabled before background processing".into()
+                        );
+                    }
                     app.process();
                     let progress = app.import.smoke_batch_progress();
                     if !progress.running || progress.total != 1 || !progress.errors.is_empty() {
@@ -112,9 +129,9 @@ impl BackgroundEdit {
                         .iter()
                         .find(|control| control.pointer.as_deref() == Some("/exposure"))
                         .ok_or("Exposure control is missing during background processing")?;
-                    if !exposure.enabled {
+                    if !exposure.enabled || !exposure.visible {
                         return Err(
-                            "Exposure control is disabled during background processing".into()
+                            "Exposure control is unavailable during background processing".into(),
                         );
                     }
                     self.at_edit = Some(json!({
@@ -139,6 +156,7 @@ impl BackgroundEdit {
                         },
                     );
                     super::scenarios::apply_exposure(app, 0.25);
+                    crate::automation::reveal(None);
                     self.phase = Phase::Done;
                     return Ok(true);
                 }

@@ -833,6 +833,31 @@ fn corrupt_truncated_and_oversized_entries_are_rejected() {
 }
 
 #[test]
+fn read_only_decoded_entry_remains_usable() {
+    let fixture = Fixture::new();
+    let root = fixture.root.join("cache");
+    let identity = Identity::read(&fixture.source).unwrap();
+    store(
+        &root,
+        &fixture.source,
+        identity.clone(),
+        &fixture.image(),
+        DEFAULT_BUDGET,
+    )
+    .unwrap();
+    let path = root.join(identity.name());
+    let original = fs::read(&path).unwrap();
+    let permissions = fs::metadata(&path).unwrap().permissions();
+    let mut read_only = permissions.clone();
+    read_only.set_readonly(true);
+    fs::set_permissions(&path, read_only).unwrap();
+    let loaded = load(&path, &identity, &Settings::default(), &|_| {});
+    fs::set_permissions(&path, permissions).unwrap();
+    assert!(loaded.is_ok());
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
 fn successful_reuse_updates_lru_before_eviction() {
     let fixture = Fixture::new();
     let root = fixture.root.join("cache");
@@ -849,11 +874,15 @@ fn successful_reuse_updates_lru_before_eviction() {
     let other = root.join("other.decode");
     fs::copy(&oldest, &other).unwrap();
     let size = fs::metadata(&oldest).unwrap().len();
-    File::open(&oldest)
+    File::options()
+        .write(true)
+        .open(&oldest)
         .unwrap()
         .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1))
         .unwrap();
-    File::open(&other)
+    File::options()
+        .write(true)
+        .open(&other)
         .unwrap()
         .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2))
         .unwrap();

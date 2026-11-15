@@ -4,6 +4,7 @@ from contextlib import redirect_stdout
 import io
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +12,43 @@ import setup_tests as setup
 
 
 class SetupTests(unittest.TestCase):
+    def test_shared_python_check_is_read_only_when_environment_is_missing(self):
+        with tempfile.TemporaryDirectory() as temporary, patch('setup_tests.subprocess.run') as run:
+            with self.assertRaisesRegex(ValueError, 'shared Python test environment'):
+                setup.prepare_python(directory=Path(temporary) / 'missing')
+            run.assert_not_called()
+
+    def test_shared_python_dependencies_are_reused_when_ready(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            python = root / ('Scripts/python.exe' if setup.sys.platform == 'win32' else 'bin/python')
+            python.parent.mkdir()
+            python.touch()
+            with patch('setup_tests.subprocess.run', return_value=subprocess.CompletedProcess([], 0)) as run, \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(setup.prepare_python(True, root), python)
+                setup.prepare_python(True, root)
+            self.assertEqual(run.call_count, 2)
+            self.assertTrue(all(call.args[0][1] == '-c' for call in run.call_args_list))
+
+    def test_missing_python_dependency_requires_explicit_install_and_is_rechecked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            python = root / ('Scripts/python.exe' if setup.sys.platform == 'win32' else 'bin/python')
+            python.parent.mkdir()
+            python.touch()
+            with patch('setup_tests.subprocess.run', return_value=subprocess.CompletedProcess([], 1)) as run:
+                with self.assertRaisesRegex(ValueError, 'Pillow'):
+                    setup.prepare_python(directory=root)
+                self.assertEqual(run.call_count, 1)
+            with patch('setup_tests.subprocess.run', side_effect=[subprocess.CompletedProcess([], 1),
+                       subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0)]) as run, \
+                    redirect_stdout(io.StringIO()):
+                setup.prepare_python(True, root)
+            self.assertEqual(run.call_args_list[1].args[0],
+                             [str(python), '-m', 'pip', 'install', '-r', str(setup.PYTHON_REQUIREMENTS)])
+            self.assertEqual(run.call_count, 3)
+
     def run_check(self, versions, **options):
         with patch('setup_tests.version', side_effect=lambda tool: versions.get(tool.name)), \
                 patch('setup_tests.subprocess.run') as run, redirect_stdout(io.StringIO()):

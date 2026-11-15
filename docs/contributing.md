@@ -67,9 +67,9 @@ cargo clippy --offline --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo run --offline -p docs-index -- --root "$PWD"
 cargo run --offline -p docs-index -- --root "$PWD" --check
-python3 -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
-python3 -m unittest discover -s scripts/profiling -p 'test_*.py'
-python3 -m unittest discover -s scripts -p 'test_setup_tests.py'
+.local/test-python/bin/python -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
+.local/test-python/bin/python -m unittest discover -s scripts/profiling -p 'test_*.py'
+.local/test-python/bin/python -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 Documentation checks cover metadata, titles, relative file links and stale indexes. Review prose and requirement meaning separately. Artwork tests need Python. Ordinary app builds do not.

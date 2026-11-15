@@ -1,6 +1,7 @@
-"""Check test tools, explicitly install missing macOS dependencies, and prepare example images."""
+"""Prepare shared test tools, Python dependencies and reproducible example images."""
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 import platform
@@ -10,6 +11,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+PYTHON_ENV = ROOT / '.local/test-python'
+PYTHON_REQUIREMENTS = ROOT / 'scripts/test-requirements.txt'
 
 
 @dataclass(frozen=True)
@@ -89,17 +92,48 @@ def prepare_images(source_dir, offline):
                     '--directory', str(source_dir), *flags], cwd=ROOT, check=True)
 
 
+def prepare_python(install=False, directory=PYTHON_ENV):
+    """Reuse one repository environment for every Python test suite."""
+    python = directory / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+    if not python.is_file():
+        if not install:
+            raise ValueError('Missing shared Python test environment. Run scripts/setup_tests.py --install')
+        subprocess.run([sys.executable, '-m', 'venv', str(directory)], cwd=ROOT, check=True)
+    required = dict(line.strip().split('==', 1) for line in PYTHON_REQUIREMENTS.read_text().splitlines()
+                    if line.strip() and not line.lstrip().startswith('#'))
+    command = [str(python), '-c',
+               'import json, sys; from importlib.metadata import version; '
+               'sys.exit(not all(version(k) == v for k, v in json.loads(sys.argv[1]).items()))',
+               json.dumps(required)]
+    def ready():
+        return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False).returncode == 0
+    if not ready():
+        if not install:
+            raise ValueError('Missing or incompatible Python test dependencies: '
+                             + ', '.join(required) + '. Run scripts/setup_tests.py --install')
+        subprocess.run([str(python), '-m', 'pip', 'install', '-r', str(PYTHON_REQUIREMENTS)],
+                       cwd=ROOT, check=True)
+        if not ready():
+            raise ValueError('Python test dependencies remain unavailable after installation')
+    print('Shared Python test interpreter: ' + str(python))
+    print('Python test dependencies: ' + ', '.join(f'{name}=={value}' for name, value in required.items()))
+    return python
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--install', action='store_true', help='install only missing supported tools')
+    parser.add_argument('--install', action='store_true', help='prepare missing tools and shared Python test dependencies')
     parser.add_argument('--images', action='store_true', help='sync examples and verify pinned external samples')
     parser.add_argument('--offline', action='store_true', help='verify cached images without downloads')
     parser.add_argument('--source-dir', type=Path, default=ROOT / '.local/example-photographs')
     args = parser.parse_args()
     if args.install and args.offline:
         parser.error('--install cannot be combined with --offline')
+    if sys.version_info < (3, 11):
+        parser.error('Python 3.11 or later is required by the shared test dependencies')
     try:
         check_tools(args.install, args.images, args.offline)
+        prepare_python(args.install)
         if args.images:
             prepare_images(args.source_dir.resolve(), args.offline)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

@@ -43,6 +43,14 @@ const MAX_CAMF: u64 = 64 * 1024 * 1024;
 const SAMPLES_PER_CHUNK: usize = crate::background::IO_CHUNK_BYTES / size_of::<u16>();
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Recency is best effort. A readable cache entry remains useful if it cannot be updated.
+fn mark_used(path: &Path) {
+    let _ = File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(SystemTime::now()));
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -843,7 +851,7 @@ fn load(
     }
     {
         let _scope = scope(Category::Cache, "cache.decoded.recency");
-        let _ = file.get_ref().set_modified(SystemTime::now());
+        mark_used(path);
     }
     progress(LoadStage::Decoded);
     Ok(source)

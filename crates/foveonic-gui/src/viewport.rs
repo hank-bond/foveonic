@@ -645,6 +645,103 @@ pub struct Viewport {
     /// Image-relative center carried until the next photograph's geometry arrives.
     pending_center: Option<egui::Vec2>,
     navigator_offset: egui::Vec2,
+    main_click: PhotoDoubleClick,
+    navigator_click: PhotoDoubleClick,
+}
+
+/// Egui counts clicks globally, so verify that the preceding click belonged to
+/// this surface before interpreting the next click as a double click.
+#[derive(Default)]
+struct PhotoDoubleClick {
+    last: Option<(f64, egui::Pos2)>,
+    paired_press: bool,
+}
+
+#[derive(Clone, Default)]
+struct ObservedClicks {
+    pass: Option<u64>,
+    last: Option<f64>,
+    previous: Option<f64>,
+}
+
+impl PhotoDoubleClick {
+    fn clicked(
+        &mut self,
+        response: &egui::Response,
+        selection_modifiers: bool,
+        enabled: bool,
+    ) -> bool {
+        let options = response.ctx.options(|options| options.input_options);
+        let (pressed, any_click, time, since_click, position, modified) =
+            response.ctx.input(|input| {
+                (
+                    input.pointer.primary_pressed(),
+                    input.pointer.any_click(),
+                    input.time,
+                    input.pointer.time_since_last_click(),
+                    input.pointer.interact_pos(),
+                    selection_modifiers
+                        && (input.modifiers.alt
+                            || input.modifiers.shift
+                            || input.modifiers.ctrl
+                            || input.modifiers.mac_cmd
+                            || input.modifiers.command),
+                )
+            });
+        let pass = response.ctx.cumulative_pass_nr();
+        let prior_global = response.ctx.data_mut(|data| {
+            let id = egui::Id::new("photograph double click observation");
+            let mut observed = data.get_temp::<ObservedClicks>(id).unwrap_or_default();
+            if any_click && observed.pass != Some(pass) {
+                observed.pass = Some(pass);
+                observed.previous = observed.last;
+                observed.last = Some(time);
+            }
+            let prior = if any_click {
+                observed.previous
+            } else {
+                observed.last
+            };
+            data.insert_temp(id, observed);
+            prior
+        });
+        if !enabled {
+            self.last = None;
+            self.paired_press = false;
+            return false;
+        }
+        if pressed && (response.is_pointer_button_down_on() || response.clicked()) {
+            self.paired_press =
+                self.last
+                    .zip(position)
+                    .is_some_and(|((last_time, last_pos), pos)| {
+                        let elapsed = time - last_time;
+                        // Matching the observed global click rejects an intervening
+                        // click on another widget, including coalesced input.
+                        !modified
+                            && elapsed >= 0.
+                            && elapsed < options.max_double_click_delay
+                            && prior_global == Some(last_time)
+                            && (any_click || elapsed as f32 == since_click)
+                            && last_pos.distance(pos) <= options.max_click_dist
+                    });
+        }
+        if response.clicked() {
+            let paired = std::mem::take(&mut self.paired_press)
+                && !modified
+                && self.last.is_some_and(|(last, _)| {
+                    time >= last && time - last < options.max_double_click_delay
+                });
+            self.last = if paired || modified {
+                None
+            } else {
+                position.map(|pos| (time, pos))
+            };
+            paired
+        } else {
+            false
+        }
+    }
 }
 impl Default for Viewport {
     fn default() -> Self {
@@ -662,6 +759,8 @@ impl Default for Viewport {
             last_image: None,
             pending_center: None,
             navigator_offset: egui::Vec2::ZERO,
+            main_click: PhotoDoubleClick::default(),
+            navigator_click: PhotoDoubleClick::default(),
         }
     }
 }
@@ -884,7 +983,10 @@ impl Viewport {
             self.pan += ui.input(|i| i.pointer.delta());
         }
         let viewing = !crate::loupe_tool::active(ui.ctx()) || temporary_pan;
-        if response.double_clicked() && (!self.editing || temporary_pan) && viewing {
+        if self
+            .main_click
+            .clicked(&response, true, (!self.editing || temporary_pan) && viewing)
+        {
             let anchor = response
                 .interact_pointer_pos()
                 .map(|mouse| mouse - rect.center())
@@ -1163,7 +1265,7 @@ impl Viewport {
                 };
             }
         }
-        if response.double_clicked() {
+        if self.navigator_click.clicked(&response, false, true) {
             let fitted = self.scale.is_none() && !self.one_to_one;
             self.toggle_fit_snap(ui.ctx().pixels_per_point(), egui::Vec2::ZERO);
             if fitted {

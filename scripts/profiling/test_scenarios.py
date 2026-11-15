@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from scenarios import application_result, check_export, finish_trial, run, run_trial, scenario_environment, selected_cases, shutdown_assertions, validate_shutdown
+from scenarios import application_result, check_export, finish_trial, prefetched_assertions, run, run_trial, scenario_environment, selected_cases, selection_setup_assertions, shutdown_assertions, validate_shutdown
 from results import include_assertions
 
 
@@ -18,6 +18,50 @@ class ScenarioTests(unittest.TestCase):
     def setUp(self):
         quiet=patch('scenarios.require_quiet',return_value={'monotonic_ns':1,'potential_workloads':[]})
         self.quiet=quiet.start();self.addCleanup(quiet.stop)
+
+    def test_prefetched_setup_and_all_warm_edits_match_declared_recipes(self):
+        inputs = [{'staged_source': path, 'settings': {'exposure': value}}
+                  for path, value in [('a', 0.), ('b', 0.5)]]
+        def step(index, action, values):
+            result = {'step':index, 'action':action, 'photos':[
+                {'source':path, 'settings':{'exposure':value, 'exposure_auto':False}}
+                for path, value in zip(('a', 'b'), values)]}
+            if action == 'prepare-demand-grid': result['exposure_delta'] = 0.125
+            return result
+        steps = [step(1,'initial-selection',(0.,0.5)), step(2,'prepare-demand-grid',(0.125,0.625)),
+                 step(3,'warm-edit',(0.375,0.875)), step(4,'warm-edit',(0.125,0.625))]
+        def outcome(rows):
+            return prefetched_assertions({'steps':rows}, inputs, 2)[0]['outcome']
+        self.assertEqual(outcome(steps), 'passed')
+        self.assertEqual(outcome(steps[:1] + steps[2:]), 'failed')
+        self.assertEqual(outcome(steps[:-1]), 'failed')
+        altered = json.loads(json.dumps(steps))
+        altered[1]['photos'][1]['settings']['exposure'] = 0.5
+        self.assertEqual(outcome(altered), 'failed')
+
+    def test_selection_grid_setup_checks_recipes_and_complete_action_sequence(self):
+        inputs = [{'staged_source':path,'settings':{'exposure':value}}
+                  for path,value in [('a',0.),('b',0.5)]]
+        actions = ['initial-selection','prepare-demand-grid','selection-journey','cached-switch',
+                   'cache-eviction','evicted-edit','restore-selection']
+        def photos(values):
+            return [{'source':path,'settings':{'exposure':value,'exposure_auto':False}}
+                    for path,value in zip(('a','b'),values)]
+        steps = [{'step':i+1,'action':action,'photos':photos((0.,0.5))}
+                 for i,action in enumerate(actions)]
+        steps[1]['exposure_delta'] = 0.125
+        steps[1]['photos'] = photos((0.125,0.625))
+        def outcome(rows):
+            return selection_setup_assertions({'steps':rows}, inputs, 'selection-pressure')[0]['outcome']
+        self.assertEqual(outcome(steps), 'passed')
+        self.assertEqual(outcome(steps[:1]+steps[2:]), 'failed')
+        self.assertEqual(outcome(steps[:-1]), 'failed')
+        altered = json.loads(json.dumps(steps))
+        altered[1]['photos'][1]['settings']['exposure'] = 0.5
+        self.assertEqual(outcome(altered), 'failed')
+        altered = json.loads(json.dumps(steps))
+        altered[1]['exposure_delta'] = 0.25
+        self.assertEqual(outcome(altered), 'failed')
 
     def test_pending_shutdown_options_and_manual_recipe_validation(self):
         args=SimpleNamespace(scenario='initial', folder_mode='browse', save_on_exit=True,
@@ -101,12 +145,14 @@ class ScenarioTests(unittest.TestCase):
             root=Path(temporary);(root/'evidence').mkdir();(root/'capture').mkdir()
             native={'passed':True,'steps':[
                 {'step':1,'action':'initial-selection','photos':[{'source':'staged.x3f'}]},
-                {'step':2,'action':'warm-edit','photos':[{'source':'staged.x3f'}]}]}
+                {'step':2,'action':'prepare-demand-grid','photos':[{'source':'staged.x3f'}]},
+                {'step':3,'action':'warm-edit','photos':[{'source':'staged.x3f'}]}]}
             (root/'evidence/scenario-result.json').write_text(json.dumps(native))
             steps=[{'step':step['step'],'action':step['action'],'photo_count':1} for step in native['steps']]
             for traced,expected in ((steps,True),(steps[:1],False),(steps[::-1],False),
-                                    ([steps[0],{**steps[1],'photo_count':2}],False),
-                                    ([steps[0],{**steps[1],'action':'cached-switch'}],False)):
+                                    ([steps[0],steps[2]],False),
+                                    ([steps[0],{**steps[1],'photo_count':2},steps[2]],False),
+                                    ([steps[0],{**steps[1],'action':'cached-switch'},steps[2]],False)):
                 (root/'capture/summary.json').write_text('{}')
                 (root/'capture/manifest.json').write_text('{"application":{}}')
                 analysis={'validity':{'valid':True},'behavior_valid':True,'steps':traced,'behavior_failures':[]}

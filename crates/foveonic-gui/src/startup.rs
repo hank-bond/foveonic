@@ -300,7 +300,7 @@ impl Drop for Capture {
 }
 
 pub(crate) struct Startup {
-    preparation: Preparation<App>,
+    preparation: Preparation<Box<App>>,
     app: Option<Box<App>>,
     error: Option<String>,
     display: display::Host,
@@ -359,7 +359,8 @@ impl Startup {
                 *progress.lock().unwrap() = Progress { completed, total };
             });
             observed.record("startup.prepare_workspace", began, Instant::now());
-            app
+            // Keep App behind a pointer on Windows' smaller main-thread stack.
+            app.map(Box::new)
         });
         Ok(Self {
             preparation,
@@ -432,10 +433,12 @@ impl eframe::App for Startup {
             if let Some(result) = self.preparation.receive() {
                 match result {
                     Ok(mut app) => {
+                        // Control observations are thread-local and must start on the UI thread.
+                        app.enable_scenario_automation();
                         app.diagnostics = self.capture.take();
                         app.startup_ready = Some(Instant::now());
                         self.window.restore(context);
-                        self.app = Some(Box::new(app));
+                        self.app = Some(app);
                         context.request_repaint();
                     }
                     Err(error) => self.error = Some(error),

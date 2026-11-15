@@ -213,6 +213,10 @@ pub(crate) struct ControlInput<'a> {
     pub mixed: bool,
 }
 
+fn reveal_matches(target: Option<&str>, pointer: Option<&str>, label: &str) -> bool {
+    target.is_some_and(|target| Some(target) == pointer || target == label)
+}
+
 pub(crate) fn control(ui: &egui::Ui, input: ControlInput<'_>) {
     if !enabled() {
         return;
@@ -220,7 +224,11 @@ pub(crate) fn control(ui: &egui::Ui, input: ControlInput<'_>) {
     let visible = ui.clip_rect().contains(input.slider.rect.center());
     if !visible
         && REVEAL.with(|target| {
-            target.borrow().as_deref() == input.pointer.as_deref() && input.pointer.is_some()
+            reveal_matches(
+                target.borrow().as_deref(),
+                input.pointer.as_deref(),
+                input.label,
+            )
         })
     {
         ui.scroll_to_rect_animation(
@@ -266,6 +274,22 @@ pub(crate) fn control(ui: &egui::Ui, input: ControlInput<'_>) {
 #[cfg(test)]
 mod choice_tests {
     use super::*;
+    #[test]
+    fn slider_reveal_matches_pointer_or_label_without_matching_missing_targets() {
+        assert!(reveal_matches(
+            Some("/exposure"),
+            Some("/exposure"),
+            "Exposure"
+        ));
+        assert!(reveal_matches(Some("Exposure"), None, "Exposure"));
+        assert!(!reveal_matches(Some("/exposure"), None, "Exposure"));
+        assert!(!reveal_matches(None, None, "Exposure"));
+        assert!(!reveal_matches(
+            Some("Contrast"),
+            Some("/exposure"),
+            "Exposure"
+        ));
+    }
     #[test]
     fn records_checkbox_paint_and_state() {
         let ctx = egui::Context::default();
