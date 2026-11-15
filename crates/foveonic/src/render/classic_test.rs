@@ -519,7 +519,7 @@ fn synthetic_classic_reduced_grids_preserve_declared_photograph_shape() {
         }
         let source = crate::source::Source {
             metadata: std::sync::Arc::new(metadata),
-            pixels,
+            pixels: pixels.into(),
             storage: crate::source::SourceStorage::InterleavedRgb,
             camf: original.camf.clone(),
             timings: vec![],

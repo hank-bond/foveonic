@@ -48,7 +48,7 @@ fn decoded_source_reservations_deduplicate_by_allocation_not_origin() {
         Arc::new(Source {
             origin: Default::default(),
             metadata: metadata.clone(),
-            pixels: vec![1., 2., 3.],
+            pixels: vec![1., 2., 3.].into(),
             storage: crate::source::SourceStorage::InterleavedRgb,
             camf: vec![],
             timings: vec![],

@@ -211,6 +211,62 @@ impl Gpu {
         ))
     }
 
+    pub(crate) fn upload_sensor(
+        &self,
+        label: &str,
+        values: &crate::source::SensorSamples,
+    ) -> Result<ReadGuard> {
+        use crate::source::SensorSamples;
+        match values {
+            SensorSamples::Float(values) => self.upload(label, values),
+            SensorSamples::Unsigned(values) => {
+                let bytes = values
+                    .len()
+                    .checked_mul(std::mem::size_of::<f32>())
+                    .ok_or("sensor upload size overflow")? as u64;
+                let _scope = crate::diagnostics::scope_with(
+                    crate::diagnostics::Category::Gpu,
+                    "gpu.upload",
+                    |fields| {
+                        fields.str("label", label).u64("bytes", bytes);
+                    },
+                );
+                crate::background::checkpoint_or_cancel()?;
+                self.check_size(bytes)?;
+                {
+                    let mut activity = self.activity.lock().expect("GPU activity counter");
+                    activity.upload_bytes += bytes;
+                    activity.allocations += 1;
+                }
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: true,
+                });
+                let result = (|| -> Result<()> {
+                    let mut mapped = buffer.slice(..).get_mapped_range_mut();
+                    let values_per_chunk = crate::background::IO_CHUNK_BYTES / 4;
+                    for (output, input) in mapped
+                        .chunks_mut(values_per_chunk * 4)
+                        .zip(values.chunks(values_per_chunk))
+                    {
+                        crate::background::checkpoint_or_cancel()?;
+                        for (out, &value) in output.as_chunks_mut::<4>().0.iter_mut().zip(input) {
+                            out.copy_from_slice(&f32::from(value).to_ne_bytes());
+                        }
+                    }
+                    Ok(())
+                })();
+                buffer.unmap();
+                result?;
+                Ok(ReadGuard::new(buffer, label))
+            }
+        }
+    }
+
     pub fn uniform<T: bytemuck::Pod>(&self, value: &T) -> ReadGuard {
         let _scope = crate::diagnostics::scope_with(
             crate::diagnostics::Category::Gpu,
@@ -730,6 +786,42 @@ mod scheduling_tests {
         sync::{mpsc, Arc},
         time::Duration,
     };
+
+    #[test]
+    #[ignore = "requires a working GPU adapter"]
+    fn compact_sensor_upload_preserves_every_unsigned_code() {
+        let gpu = Gpu::new().unwrap();
+        let count = crate::background::IO_CHUNK_BYTES / 4 + 17;
+        let codes: Vec<u16> = (0..count).map(|v| v as u16).collect();
+        let expected: Vec<f32> = codes.iter().map(|&v| f32::from(v)).collect();
+        let actual = gpu
+            .upload_sensor(
+                "Compact sensor fixture",
+                &crate::source::SensorSamples::Unsigned(codes),
+            )
+            .unwrap();
+        assert_eq!(
+            gpu.readback(&actual).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&expected)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a working GPU adapter"]
+    fn cancelled_compact_upload_does_not_allocate() {
+        let gpu = Gpu::new().unwrap();
+        let gate = Arc::new(crate::background::Gate::default());
+        let before = gpu.activity();
+        crate::background::interruptible(gate.clone(), || {
+            gate.interrupt_prefetch();
+            let result = gpu.upload_sensor(
+                "Cancelled compact sensor",
+                &crate::source::SensorSamples::Unsigned(vec![1; 16]),
+            );
+            assert!(result.unwrap_err().is::<crate::background::Interrupted>());
+        });
+        assert_eq!(gpu.activity().since(before).allocations, 0);
+    }
 
     #[test]
     #[ignore = "requires a working GPU adapter"]

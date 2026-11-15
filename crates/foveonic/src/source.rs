@@ -569,11 +569,43 @@ impl SourceOrigin {
     }
 }
 
+/// Immutable source samples in their exact decoded representation.
+#[derive(Debug)]
+pub(crate) enum SensorSamples {
+    Float(Vec<f32>),
+    Unsigned(Vec<u16>),
+}
+impl SensorSamples {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Float(v) => v.len(),
+            Self::Unsigned(v) => v.len(),
+        }
+    }
+    fn allocated_bytes(&self) -> usize {
+        match self {
+            Self::Float(v) => v.capacity() * std::mem::size_of::<f32>(),
+            Self::Unsigned(v) => v.capacity() * std::mem::size_of::<u16>(),
+        }
+    }
+    fn as_float(&self) -> std::borrow::Cow<'_, [f32]> {
+        match self {
+            Self::Float(v) => std::borrow::Cow::Borrowed(v),
+            Self::Unsigned(v) => std::borrow::Cow::Owned(v.iter().map(|&x| f32::from(x)).collect()),
+        }
+    }
+}
+impl From<Vec<f32>> for SensorSamples {
+    fn from(value: Vec<f32>) -> Self {
+        Self::Float(value)
+    }
+}
+
 pub struct Source {
     pub(crate) origin: SourceOrigin,
     pub metadata: std::sync::Arc<Metadata>,
     /// Immutable samples in original camera code units, ordered by `storage`.
-    pub(crate) pixels: Vec<f32>,
+    pub(crate) pixels: SensorSamples,
     pub(crate) storage: SourceStorage,
     pub camf: Vec<u8>,
     pub(crate) timings: Vec<crate::profile::Timing>,
@@ -584,7 +616,7 @@ impl Source {
     /// other shared owners and is inventoried independently.
     pub fn retained_source_bytes(&self) -> u64 {
         (std::mem::size_of::<Self>()
-            + self.pixels.capacity() * std::mem::size_of::<f32>()
+            + self.pixels.allocated_bytes()
             + self.camf.capacity()
             + self.timings.capacity() * std::mem::size_of::<crate::profile::Timing>()
             + self.origin.allocated_bytes()) as u64
@@ -610,9 +642,10 @@ impl Source {
         ]
     }
 
-    /// Original camera codes ordered according to `storage()`. Samples remain immutable.
-    pub fn samples(&self) -> &[f32] {
-        &self.pixels
+    /// Original camera codes ordered according to `storage()`. Compact sources
+    /// are widened into an owned buffer when floating samples are requested.
+    pub fn samples(&self) -> std::borrow::Cow<'_, [f32]> {
+        self.pixels.as_float()
     }
 
     /// Keep reading separate from decoding so cached-file speed is not mistaken
@@ -792,3 +825,16 @@ fn is_merrill(model: Option<&str>) -> bool {
 #[cfg(test)]
 #[path = "source_test.rs"]
 mod tests;
+
+#[cfg(test)]
+impl Source {
+    pub(crate) fn samples_mut(&mut self) -> &mut Vec<f32> {
+        if let SensorSamples::Unsigned(_) = &self.pixels {
+            self.pixels = SensorSamples::Float(self.samples().into_owned());
+        }
+        let SensorSamples::Float(samples) = &mut self.pixels else {
+            unreachable!("test samples were widened")
+        };
+        samples
+    }
+}

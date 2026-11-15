@@ -13,7 +13,7 @@ mod huffman;
 
 use crate::input_error::damaged;
 use crate::profile::Timing;
-use crate::source::{Metadata, Result, Source, SourceStorage};
+use crate::source::{Metadata, Result, SensorSamples, Source, SourceStorage};
 use crate::{diagnostics, diagnostics::Category};
 use bytes::{product, Bytes};
 use huffman::Table;
@@ -392,7 +392,7 @@ fn read_properties(section: &[u8]) -> Result<BTreeMap<String, String>> {
     Ok(properties)
 }
 
-type SensorRead = (usize, usize, SourceStorage, Vec<f32>, Vec<Timing>);
+type SensorRead = (usize, usize, SourceStorage, SensorSamples, Vec<Timing>);
 
 fn sensor_plane_scope(
     layer_index: usize,
@@ -454,7 +454,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
             width,
             height,
             decoded.storage,
-            decoded.pixels,
+            decoded.pixels.into(),
             vec![Timing::elapsed("sensor compressed planes", start)],
         ));
     }
@@ -465,7 +465,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
             width,
             height,
             SourceStorage::InterleavedRgb,
-            pixels,
+            pixels.into(),
             vec![Timing::elapsed("sensor interleaved Huffman", start)],
         ));
     }
@@ -529,12 +529,12 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     let assembly_scope = diagnostics::scope(Category::Cpu, "decode.sensor.assemble");
     let mut pixels = {
         let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.output.allocate");
-        vec![0.; product(count, 3)?]
+        vec![0_u16; product(count, 3)?]
     };
     // Disjoint contiguous triplets let the compiler vectorize this pass
     // without changing the channel-interleaving order.
     // Keep the existing contiguous triplets while bounding speculative CPU work.
-    let samples_per_chunk = crate::background::IO_CHUNK_BYTES / std::mem::size_of::<f32>() / 3;
+    let samples_per_chunk = crate::background::IO_CHUNK_BYTES / std::mem::size_of::<u16>() / 3;
     for (((chunk, red), green), blue) in pixels
         .chunks_mut(samples_per_chunk * 3)
         .zip(planes[0].0.chunks(samples_per_chunk))
@@ -550,7 +550,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
             .zip(green)
             .zip(blue)
         {
-            *pixel = [*red as f32, *green as f32, *blue as f32];
+            *pixel = [*red, *green, *blue];
         }
     }
     drop(assembly_scope);
@@ -559,7 +559,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
         width,
         height,
         SourceStorage::InterleavedRgb,
-        pixels,
+        SensorSamples::Unsigned(pixels),
         timings,
     ))
 }

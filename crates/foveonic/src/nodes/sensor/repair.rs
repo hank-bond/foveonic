@@ -257,6 +257,7 @@ mod tests {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../../tests/data/repair-reference.json"))
                 .unwrap();
+        let samples = source.samples();
         for cutoff in 0..=3 {
             let selected = prepare(&source.metadata, cutoff).unwrap();
             for point in fixture["points"].as_array().unwrap() {
@@ -266,7 +267,7 @@ mod tests {
                 assert!(!selected.records.iter().any(|r| r[0] == pixel as u32));
                 for c in 0..3 {
                     assert_eq!(
-                        source.pixels[pixel * 3 + c],
+                        samples[pixel * 3 + c],
                         point["original_layers"][c].as_f64().unwrap() as f32
                     );
                 }

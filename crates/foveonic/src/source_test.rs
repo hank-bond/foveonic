@@ -201,7 +201,7 @@ fn decode_original_merrill_files() {
         );
         assert_eq!(source.pixels.len(), SENSOR_WIDTH * SENSOR_HEIGHT * 3);
         assert!(source
-            .pixels
+            .samples()
             .iter()
             .all(|value| value.is_finite() && (0.0..=4095.0).contains(value)));
         assert!(!source.camf.is_empty());

@@ -167,10 +167,10 @@ fn learned_repairs_follow_serial_switches_bypasses_and_cached_rendering() {
     for dy in -2i32..=2 {
         for dx in -2i32..=2 {
             let point = (y as i32 + dy) as usize * width + (x as i32 + dx) as usize;
-            source.pixels[point * 3..point * 3 + 3].copy_from_slice(&[100.; 3]);
+            source.samples_mut()[point * 3..point * 3 + 3].copy_from_slice(&[100.; 3]);
         }
     }
-    source.pixels[pixel * 3] = 4095.;
+    source.samples_mut()[pixel * 3] = 4095.;
     Arc::make_mut(&mut source.metadata)
         .properties
         .insert("CAMSERIAL".into(), "fixture-body".into());
@@ -239,7 +239,7 @@ fn learned_repairs_follow_serial_switches_bypasses_and_cached_rendering() {
             .join("blue-parking-sign.x3f"),
     )
     .unwrap();
-    other.pixels.clone_from(&source.pixels);
+    other.pixels = source.samples().into_owned().into();
     for serial in [Some("different-body"), None] {
         let properties = &mut Arc::make_mut(&mut other.metadata).properties;
         if let Some(serial) = serial {

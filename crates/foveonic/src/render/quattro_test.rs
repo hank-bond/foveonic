@@ -36,7 +36,8 @@ fn source() -> Source {
         }),
         pixels: (0..6)
             .flat_map(|i| [2100. + i as f32, 2200., 2300., 2400., 2500., 2600.])
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         camf: vec![],
         timings: vec![],
     }

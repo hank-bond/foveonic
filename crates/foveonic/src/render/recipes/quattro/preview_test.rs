@@ -21,14 +21,14 @@ fn preview_divisors(default: &[u32]) -> Vec<u32> {
 fn synthetic_low_grid_renders_without_high_blue_storage() {
     let mut source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     assert_eq!(source.storage(), SourceStorage::PackedRgbBluePhases);
-    let pixels = source
+    let pixels: Vec<f32> = source
         .samples()
         .as_chunks::<6>()
         .0
         .iter()
         .flat_map(|v| [v[0], v[1], ((v[2] + v[3]) + v[4] + v[5]) * 0.25])
         .collect();
-    source.pixels = pixels;
+    source.pixels = pixels.into();
     source.origin = Default::default();
     source.storage = SourceStorage::InterleavedRgb;
     let metadata = std::sync::Arc::make_mut(&mut source.metadata);

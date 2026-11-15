@@ -155,15 +155,16 @@ fn gpu_color_field_reliability_quantization_matches_original_sensor_codes() {
             }
         }
     }
+    let samples = source.samples();
     let pixel = 2170 * source.metadata.width + 3127;
     eprintln!(
         "0170 worst pixel original {:?}, black {:?}, GPU mask {:?}",
-        &source.pixels[pixel * 3..pixel * 3 + 3],
+        &samples[pixel * 3..pixel * 3 + 3],
         black,
         masks(
             &gpu,
             &prepared.params,
-            &source.pixels[pixel * 3..pixel * 3 + 3],
+            &samples[pixel * 3..pixel * 3 + 3],
             black
         )
     );

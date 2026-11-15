@@ -11,8 +11,8 @@ mod selection;
 pub use selection::Selection;
 mod worker;
 use crate::source::{
-    FileIdentity as Identity, LoadStage, Metadata, ProcessingFamily, Result, Source, SourceOrigin,
-    SourceStorage,
+    FileIdentity as Identity, LoadStage, Metadata, ProcessingFamily, Result, SensorSamples, Source,
+    SourceOrigin, SourceStorage,
 };
 pub use previews::MAX_SIDE as PREVIEW_MAX_SIDE;
 use serde::{Deserialize, Serialize};
@@ -625,38 +625,64 @@ fn load(
                 .u64("camf_bytes", header.camf_bytes)
                 .u64("chunk_bytes", crate::background::IO_CHUNK_BYTES as u64);
         });
-        let (mut pixels, mut camf, mut codes) = {
+        let compact = matches!(header.sample_encoding, samples::Encoding::Unsigned16)
+            && header
+                .properties
+                .get("CAMMODEL")
+                .and_then(|name| ProcessingFamily::from_camera_model(name))
+                == Some(ProcessingFamily::Merrill);
+        let (mut pixels, mut camf) = {
             let _scope = scope(Category::Cache, "cache.decoded.payload.allocate");
+            let len = usize::try_from(header.samples)?;
             let pixels = {
                 let _scope = scope(Category::Cache, "cache.decoded.samples.allocate");
-                vec![0_f32; usize::try_from(header.samples)?]
+                if compact {
+                    SensorSamples::Unsigned(vec![0; len])
+                } else {
+                    SensorSamples::Float(vec![0.; len])
+                }
             };
             let camf = {
                 let _scope = scope(Category::Cache, "cache.decoded.camf.allocate");
                 vec![0; usize::try_from(header.camf_bytes)?]
             };
-            let codes = {
-                let _scope = scope(Category::Cache, "cache.decoded.scratch.allocate");
-                vec![0_u16; SAMPLES_PER_CHUNK.min(pixels.len())]
-            };
-            (pixels, camf, codes)
+            (pixels, camf)
         };
         let mut checksum = crc32fast::Hasher::new();
-        for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
-            crate::background::checkpoint_or_cancel()?;
-            let codes = &mut codes[..output.len()];
-            let bytes = bytemuck::cast_slice_mut::<u16, u8>(codes);
-            {
-                let _scope = scope(Category::Cache, "cache.decoded.samples.read");
-                file.read_exact(bytes)?;
+        match &mut pixels {
+            SensorSamples::Unsigned(pixels) => {
+                for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
+                    crate::background::checkpoint_or_cancel()?;
+                    let bytes = bytemuck::cast_slice_mut::<u16, u8>(output);
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.read");
+                        file.read_exact(bytes)?;
+                    }
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.checksum");
+                        checksum.update(bytes);
+                    }
+                }
             }
-            {
-                let _scope = scope(Category::Cache, "cache.decoded.samples.checksum");
-                checksum.update(bytes);
-            }
-            {
-                let _scope = scope(Category::Cache, "cache.decoded.samples.convert");
-                header.sample_encoding.decode(codes, output);
+            SensorSamples::Float(pixels) => {
+                let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(pixels.len())];
+                for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
+                    crate::background::checkpoint_or_cancel()?;
+                    let codes = &mut codes[..output.len()];
+                    let bytes = bytemuck::cast_slice_mut::<u16, u8>(codes);
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.read");
+                        file.read_exact(bytes)?;
+                    }
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.checksum");
+                        checksum.update(bytes);
+                    }
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.convert");
+                        header.sample_encoding.decode(codes, output);
+                    }
+                }
             }
         }
         for chunk in camf.chunks_mut(crate::background::IO_CHUNK_BYTES) {
@@ -680,7 +706,11 @@ fn load(
     };
     file.complete();
     let payload_timing = crate::profile::Timing::elapsed(
-        "decoded cache payload read, checksum and conversion",
+        if matches!(pixels, SensorSamples::Unsigned(_)) {
+            "decoded cache payload read and checksum"
+        } else {
+            "decoded cache payload read, checksum and conversion"
+        },
         payload_started,
     );
     progress(LoadStage::FileRead);
@@ -832,17 +862,42 @@ struct PreparedDecoded {
     bytes: u64,
 }
 
+fn for_code_chunks(
+    values: &SensorSamples,
+    encoding: samples::Encoding,
+    mut consume: impl FnMut(&[u16]) -> Result<()>,
+) -> Result<()> {
+    match values {
+        SensorSamples::Unsigned(values) => {
+            for chunk in values.chunks(SAMPLES_PER_CHUNK) {
+                crate::background::checkpoint_or_cancel()?;
+                consume(chunk)?;
+            }
+        }
+        SensorSamples::Float(values) => {
+            let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(values.len())];
+            for chunk in values.chunks(SAMPLES_PER_CHUNK) {
+                crate::background::checkpoint_or_cancel()?;
+                let codes = &mut codes[..chunk.len()];
+                encoding.encode(chunk, codes)?;
+                consume(codes)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Check compact sample encoding without allocating another full sensor buffer.
 fn prepare_decoded(identity: Identity, source: &Source) -> Result<PreparedDecoded> {
-    let sample_encoding = samples::Encoding::for_samples(&source.pixels);
+    let sample_encoding = match &source.pixels {
+        SensorSamples::Unsigned(_) => samples::Encoding::Unsigned16,
+        SensorSamples::Float(values) => samples::Encoding::for_samples(values),
+    };
     let mut checksum = crc32fast::Hasher::new();
-    let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(source.pixels.len())];
-    for chunk in source.pixels.chunks(SAMPLES_PER_CHUNK) {
-        crate::background::checkpoint_or_cancel()?;
-        let codes = &mut codes[..chunk.len()];
-        sample_encoding.encode(chunk, codes)?;
+    for_code_chunks(&source.pixels, sample_encoding, |codes| {
         checksum.update(bytemuck::cast_slice::<u16, u8>(codes));
-    }
+        Ok(())
+    })?;
     checksum.update(&source.camf);
     let header = Header {
         version: FORMAT_VERSION,
@@ -916,13 +971,10 @@ fn publish_decoded(
         file.write_all(&(json.len() as u64).to_le_bytes())?;
         file.write_all(&header_checksum.to_le_bytes())?;
         file.write_all(&json)?;
-        let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(source.pixels.len())];
-        for chunk in source.pixels.chunks(SAMPLES_PER_CHUNK) {
-            crate::background::checkpoint_or_cancel()?;
-            let codes = &mut codes[..chunk.len()];
-            sample_encoding.encode(chunk, codes)?;
+        for_code_chunks(&source.pixels, sample_encoding, |codes| {
             file.write_all(bytemuck::cast_slice::<u16, u8>(codes))?;
-        }
+            Ok(())
+        })?;
         file.write_all(&source.camf)?;
         file.flush()?;
         drop(file);

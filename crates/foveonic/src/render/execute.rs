@@ -652,7 +652,7 @@ impl Engine {
                     if source.storage() != expected {
                         return Err("source storage does not match graph input".into());
                     }
-                    Some(gpu.upload("Original sensor layers", &source.pixels)?)
+                    Some(gpu.upload_sensor("Original sensor layers", &source.pixels)?)
                 }
                 Operation::BlueRefresh(prepared) => {
                     if inherited != prepared.extent()
