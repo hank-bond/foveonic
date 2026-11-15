@@ -43,7 +43,7 @@ pub(super) fn menu(
     let mut action = None;
     if widgets::menu_row(ui, "Reset crop", false).clicked() {
         action = Some(Action::Reset);
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if ui
         .add_enabled_ui(crop.aspect != Aspect::Unconstrained, |ui| {
@@ -53,7 +53,7 @@ pub(super) fn menu(
         .clicked()
     {
         action = Some(Action::Flip);
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     ui.separator();
     let mut selected = crop.aspect;
@@ -63,7 +63,7 @@ pub(super) fn menu(
     ] {
         if widgets::menu_value(ui, &mut selected, aspect, label).changed() {
             action = Some(Action::Aspect(aspect));
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
     }
     ui.separator();
@@ -82,7 +82,7 @@ pub(super) fn menu(
         let aspect = Aspect::Ratio([w, h]);
         if widgets::menu_value(ui, &mut selected, aspect, label).changed() {
             action = Some(Action::Aspect(aspect));
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
     }
     if !custom.is_empty() {
@@ -91,7 +91,7 @@ pub(super) fn menu(
             let aspect = Aspect::Ratio(ratio.dimensions);
             if widgets::menu_value(ui, &mut selected, aspect, &ratio.name).changed() {
                 action = Some(Action::Aspect(aspect));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         }
     }
@@ -101,7 +101,7 @@ pub(super) fn menu(
             name: String::new(),
             dimensions: [1., 1.],
         }));
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if ui
         .add_enabled_ui(!custom.is_empty(), |ui| {
@@ -111,7 +111,7 @@ pub(super) fn menu(
         .clicked()
     {
         *dialog = Some(Dialog::Remove(vec![false; custom.len()]));
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     action
 }

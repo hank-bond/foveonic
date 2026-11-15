@@ -24,7 +24,7 @@ pub(super) fn wait<T>(
 ) -> Result<T> {
     loop {
         check()?;
-        device.poll(wgpu::Maintain::Poll);
+        device.poll(wgpu::PollType::Poll)?;
         match receiver.recv_timeout(POLL_INTERVAL) {
             Ok(value) => return Ok(value),
             Err(mpsc::RecvTimeoutError::Timeout) => {}

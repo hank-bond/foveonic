@@ -325,7 +325,10 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
     let changed = engine
         .render(session.source(), &requested, &mut Profile::default())
         .unwrap();
-    engine.device().poll(eframe::wgpu::Maintain::Wait);
+    engine
+        .device()
+        .poll(eframe::wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     drop(changed);
     assert_eq!(worker.progress().completed, 0);
     assert!(worker.progress().running);

@@ -204,7 +204,9 @@ fn main() -> Result<()> {
                 )?);
             }
         }
-        warm.device().poll(wgpu::Maintain::Wait);
+        warm.device()
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         warm.clear_preparation();
         let source_identity = match source.origin() {
             foveonic::source::SourceOrigin::File(identity) => Some(identity),
@@ -233,7 +235,10 @@ fn main() -> Result<()> {
                     let started = Instant::now();
                     let image = render(&engine, &mut session, settings, &mut profile)?;
                     let render_call_ms = started.elapsed().as_secs_f64() * 1000.;
-                    engine.device().poll(wgpu::Maintain::Wait);
+                    engine
+                        .device()
+                        .poll(wgpu::PollType::Wait)
+                        .expect("GPU polling failed");
                     let completed_ms = started.elapsed().as_secs_f64() * 1000.;
                     let activity = engine.gpu_activity().since(before);
                     let geometry = image_data(&image);
@@ -252,7 +257,10 @@ fn main() -> Result<()> {
                             settings,
                             &mut Profile::default(),
                         )?;
-                        fresh.device().poll(wgpu::Maintain::Wait);
+                        fresh
+                            .device()
+                            .poll(wgpu::PollType::Wait)
+                            .expect("GPU polling failed");
                         let equal = geometry == image_data(&expected)
                             && engine.readback_image(&image)? == fresh.readback_image(&expected)?;
                         emit(

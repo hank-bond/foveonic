@@ -37,7 +37,9 @@ fn pixels(rs: &egui_wgpu::RenderState, texture: &wgpu::Texture) -> Vec<u8> {
         .map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-    rs.device.poll(wgpu::Maintain::Wait);
+    rs.device
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     rx.recv().unwrap().unwrap();
     let bytes = buffer.slice(..).get_mapped_range().to_vec();
     buffer.unmap();
@@ -276,7 +278,9 @@ fn ordinary_navigator_drawing_cost() {
         None,
         None,
     );
-    rs.device.poll(wgpu::Maintain::Wait);
+    rs.device
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     let id = rs.renderer.write().register_native_texture(
         &rs.device,
         &tile.create_view(&Default::default()),
@@ -361,7 +365,9 @@ fn ordinary_navigator_drawing_cost() {
             }
             // Wait once for the batch so per-draw waits do not distort the cost of
             // ordinary drawing.
-            rs.device.poll(wgpu::Maintain::Wait);
+            rs.device
+                .poll(wgpu::PollType::Wait)
+                .expect("GPU polling failed");
             let elapsed = started.elapsed().as_secs_f64() * 1000. / 25.;
             if ordinary {
                 new_ms.push(elapsed);

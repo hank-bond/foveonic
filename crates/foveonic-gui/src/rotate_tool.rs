@@ -201,13 +201,13 @@ pub fn button(ui: &mut egui::Ui, rotation: &mut Rotation, crop: &mut Crop) {
                 .clicked()
                 {
                     chosen = Some(mode);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             }
             ui.separator();
             if widgets::menu_row(ui, "Reset rotation", false).clicked() {
                 rotation.reset(crop);
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
     s.mode.icon(

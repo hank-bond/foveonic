@@ -9,15 +9,13 @@ pub(crate) fn state_for(format: wgpu::TextureFormat) -> egui_wgpu::RenderState {
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .unwrap();
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("Navigator test"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            memory_hints: Default::default(),
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("Navigator test"),
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::default(),
+        memory_hints: Default::default(),
+        trace: wgpu::Trace::Off,
+    }))
     .unwrap();
     let renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
     let rs = egui_wgpu::RenderState {
@@ -147,7 +145,9 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
             .map_async(wgpu::MapMode::Read, move |result| {
                 tx.send(result).unwrap();
             });
-        rs.device.poll(wgpu::Maintain::Wait);
+        rs.device
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         rx.recv().unwrap().unwrap();
         let bytes = buffer.slice(..).get_mapped_range();
         for c in 0..3 {
@@ -181,7 +181,9 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
         None,
         None,
     );
-    rs.device.poll(wgpu::Maintain::Wait);
+    rs.device
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     let start = Instant::now();
     for _ in 0..25 {
         viewport::prepare_preview(
@@ -193,7 +195,9 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
             None,
             None,
         );
-        rs.device.poll(wgpu::Maintain::Wait);
+        rs.device
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
     }
     eprintln!(
         "NAVIGATOR-PREP completed_average_ms={:.3}",

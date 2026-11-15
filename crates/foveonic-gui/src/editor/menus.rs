@@ -133,7 +133,7 @@ impl Menus<'_> {
                 self.state
                     .actions
                     .push(Action::PreventSaturationClipping(protect));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             ui.separator();
         }
@@ -144,7 +144,7 @@ impl Menus<'_> {
         if tone {
             if ui.button("Adaptive limits…").clicked() {
                 self.state.actions.push(Action::AdaptiveLimits);
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             ui.separator();
         }
@@ -164,7 +164,7 @@ impl Menus<'_> {
         }
         if calibration && ui.button("Calibrate noise…").clicked() {
             self.state.actions.push(Action::NoiseCalibration);
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if (tone || calibration) && has_presets {
             ui.separator();
@@ -175,7 +175,7 @@ impl Menus<'_> {
                     self.state
                         .actions
                         .push(Action::Apply(scope, Box::new(preset.settings.clone())));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui
                     .small_button("×")
@@ -183,7 +183,7 @@ impl Menus<'_> {
                     .clicked()
                 {
                     self.state.actions.push(Action::Delete(index));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
         }
@@ -202,7 +202,7 @@ impl Menus<'_> {
         ] {
             if ui.button(title).clicked() {
                 self.state.actions.push(action);
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         }
         if scope == Scope::All
@@ -212,7 +212,7 @@ impl Menus<'_> {
                 .clicked()
         {
             self.state.actions.push(Action::ClearDefaults);
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
     }
 }

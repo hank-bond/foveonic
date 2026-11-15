@@ -1,0 +1,58 @@
+name: Build Windows test app
+
+on:
+  push:
+    branches: ['release/0.8.0']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64 test archive
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CC: clang-cl
+      CXX: clang-cl
+      CXXFLAGS: -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up native build tools
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+          cmake --version
+          clang-cl --version
+      - name: Build Windows app
+        run: cargo build --locked --release -p foveonic-gui
+      - name: Stage DirectX shader compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'dxc.zip'
+          $uri = 'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip'
+          Invoke-WebRequest $uri -OutFile $zip
+          $expected = 'AD31B1FC8443175D204F77A611FDB3EF2EC42759BDC2F1167368DE24A4A7E7F1'
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expected) { throw 'DXC archive checksum mismatch' }
+          Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'dxc')
+          $stage = Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64'
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item target/release/foveonic-gui.exe $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/bin/x64/dxcompiler.dll') $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/bin/x64/dxil.dll') $stage
+          Copy-Item LICENSE $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-LLVM.txt') $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-MS.txt') $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENCE-MIT.txt') $stage
+          & (Join-Path $stage 'foveonic-gui.exe') --help
+          if ($LASTEXITCODE -ne 0) { throw 'Windows executable failed startup check' }
+          Compress-Archive -Path $stage -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64.zip')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Foveonic-windows-x64-${{ github.sha }}
+          path: ${{ runner.temp }}/Foveonic-windows-x64.zip
+          if-no-files-found: error

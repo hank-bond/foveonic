@@ -530,7 +530,10 @@ fn completed_image(
         return Err("image expected".into());
     };
     let texture = engine.view_texture(&image, None, &mut profile)?;
-    engine.device().poll(wgpu::Maintain::Wait);
+    engine
+        .device()
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     let milliseconds = started.elapsed().as_secs_f64() * 1000.;
     // Logical retained/reference bytes, not peak residency. The image may also
     // be a cached checkpoint, so these owners must not simply be added together.

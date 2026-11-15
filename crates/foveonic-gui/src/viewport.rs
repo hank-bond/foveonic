@@ -255,17 +255,17 @@ pub fn install(rs: &egui_wgpu::RenderState) {
                 module: &shader,
                 entry_point: Some("fs"),
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &HashMap::from([
+                    constants: &[
                         (
-                            "EXTENDED_DISPLAY".into(),
+                            "EXTENDED_DISPLAY",
                             if format == wgpu::TextureFormat::Rgba16Float {
                                 1.
                             } else {
                                 0.
                             },
                         ),
-                        ("LINEAR_OUTPUT".into(), f64::from(linear_output)),
-                    ]),
+                        ("LINEAR_OUTPUT", f64::from(linear_output)),
+                    ],
                     ..Default::default()
                 },
                 targets: &[Some(wgpu::ColorTargetState {
@@ -1500,7 +1500,7 @@ mod tests {
             texture: ctx
                 .load_texture(
                     "navigator fixture",
-                    egui::ColorImage::new([2, 2], egui::Color32::WHITE),
+                    egui::ColorImage::filled([2, 2], egui::Color32::WHITE),
                     Default::default(),
                 )
                 .into(),
@@ -2274,7 +2274,7 @@ mod tests {
         let ctx = egui::Context::default();
         let thumb = ctx.load_texture(
             "tiny preview",
-            egui::ColorImage::new([147, 221], egui::Color32::WHITE),
+            egui::ColorImage::filled([147, 221], egui::Color32::WHITE),
             egui::TextureOptions::LINEAR,
         );
         let input = egui::RawInput {

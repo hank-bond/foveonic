@@ -72,7 +72,7 @@ impl Pixels {
     /// Headless browser tests exercise reply ordering without a graphics device.
     #[cfg(test)]
     pub fn headless(self, context: &egui::Context) -> Texture {
-        let mut image = egui::ColorImage::new(self.size, egui::Color32::BLACK);
+        let mut image = egui::ColorImage::filled(self.size, egui::Color32::BLACK);
         for (out, pixel) in image.pixels.iter_mut().zip(self.rgba) {
             let rgb: [u8; 3] = std::array::from_fn(|c| {
                 (foveonic::preview::encode_sample(

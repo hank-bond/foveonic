@@ -58,7 +58,10 @@ fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
             let texture = engine
                 .view_texture(&image, None, &mut Profile::default())
                 .unwrap();
-            engine.device().poll(wgpu::Maintain::Wait);
+            engine
+                .device()
+                .poll(wgpu::PollType::Wait)
+                .expect("GPU polling failed");
             assert_eq!(texture.description().extent, image.view().extent);
             if exposure == 0.75 && chroma == 0 {
                 if let Some(path) = &output {

@@ -188,7 +188,7 @@ pub fn show(
                         .clicked()
                     {
                         choose(output, channel, image.name, -1);
-                        ui.memory_mut(|memory| memory.close_popup());
+                        egui::Popup::close_all(ui.ctx());
                     }
                 } else {
                     if group_row(ui, image.name, image.name == output) {
@@ -208,7 +208,7 @@ pub fn show(
                                 .clicked()
                             {
                                 choose(output, channel, image.name, component);
-                                ui.memory_mut(|memory| memory.close_popup());
+                                egui::Popup::close_all(ui.ctx());
                             }
                         }
                         });

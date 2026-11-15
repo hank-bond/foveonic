@@ -136,7 +136,9 @@ fn native_previews_preserve_gamut_and_filter_in_linear_light() {
                 buffer
                     .slice(..)
                     .map_async(wgpu::MapMode::Read, move |result| tx.send(result).unwrap());
-                rs.device.poll(wgpu::Maintain::Wait);
+                rs.device
+                    .poll(wgpu::PollType::Wait)
+                    .expect("GPU polling failed");
                 rx.recv().unwrap().unwrap();
                 let bytes = buffer.slice(..).get_mapped_range();
                 for c in 0..3 {
@@ -217,7 +219,9 @@ fn thumbnail_quarter_turns_preserve_direction_and_linear_wide_colors() {
         buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
-        rs.device.poll(wgpu::Maintain::Wait);
+        rs.device
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         rx.recv().unwrap().unwrap();
         let bytes = buffer.slice(..).get_mapped_range();
         for row in 0..2 {

@@ -893,10 +893,14 @@ fn parallel_speckle_originals_match_serial_and_measure_completed_work() {
                     ..Default::default()
                 })
                 .unwrap();
-            gpu.device.poll(wgpu::Maintain::Wait);
+            gpu.device
+                .poll(wgpu::PollType::Wait)
+                .expect("GPU polling failed");
             let start = Instant::now();
             let expected = serial_replay(gpu, &input.buffer, &prepared);
-            gpu.device.poll(wgpu::Maintain::Wait);
+            gpu.device
+                .poll(wgpu::PollType::Wait)
+                .expect("GPU polling failed");
             let serial_ms = start.elapsed().as_secs_f64() * 1000.;
             let start = Instant::now();
             let actual = apply(
@@ -907,7 +911,9 @@ fn parallel_speckle_originals_match_serial_and_measure_completed_work() {
                 &mut Profile::new(crate::profile::Mode::Off),
             )
             .unwrap();
-            gpu.device.poll(wgpu::Maintain::Wait);
+            gpu.device
+                .poll(wgpu::PollType::Wait)
+                .expect("GPU polling failed");
             let parallel_ms = start.elapsed().as_secs_f64() * 1000.;
             assert_eq!(
                 gpu.readback(&actual).unwrap(),

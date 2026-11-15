@@ -42,7 +42,10 @@ fn complete(
     let began = Instant::now();
     let image = render()?;
     let _texture = engine.view_texture(&image, None, &mut Profile::default())?;
-    engine.device().poll(wgpu::Maintain::Wait);
+    engine
+        .device()
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     Ok((image, began.elapsed().as_secs_f64() * 1000.))
 }
 

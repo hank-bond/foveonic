@@ -144,7 +144,10 @@ fn main() -> Result<()> {
                     }
                 };
                 let submitted_ms = start.elapsed().as_secs_f64() * 1000.;
-                engine.device().poll(wgpu::Maintain::Wait);
+                engine
+                    .device()
+                    .poll(wgpu::PollType::Wait)
+                    .expect("GPU polling failed");
                 let completed_ms = start.elapsed().as_secs_f64() * 1000.;
                 let record = serde_json::json!({"event":"render","scene":stem,"variant":name,"sidecar_used":sidecar_used,"iteration":iteration,"first":iteration==0,"mode":if gpu{"gpu"}else{"wall"},"submitted_ms":submitted_ms,"completed_ms":completed_ms,"settings":settings,"profile":profile,"activity":engine.gpu_activity().since(before)});
                 writeln!(log, "{record}")?;

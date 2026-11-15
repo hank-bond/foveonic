@@ -486,7 +486,9 @@ fn compare_local_color() -> Result<()> {
                     },
                     p.atlas_extent(),
                 )?;
-                gpu.device.poll(wgpu::Maintain::Wait);
+                gpu.device
+                    .poll(wgpu::PollType::Wait)
+                    .expect("GPU polling failed");
                 elapsed.push(began.elapsed().as_secs_f64() * 1000.);
                 result = Some(pair);
             }
@@ -568,7 +570,9 @@ fn compare_local_color() -> Result<()> {
                                 .layers
                                 .ok_or("timed texture")?
                             };
-                            gpu.device.poll(wgpu::Maintain::Wait);
+                            gpu.device
+                                .poll(wgpu::PollType::Wait)
+                                .expect("GPU polling failed");
                             let ms = began.elapsed().as_secs_f64() * 1000.;
                             drop(output);
                             if round >= 3 {

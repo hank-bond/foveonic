@@ -613,7 +613,10 @@ fn exposure_edits_reuse_both_smart_grids_and_match_fresh() {
         let crate::inspection::Content::Image(cached) = &results[0].content else {
             panic!("expected image")
         };
-        engine.device().poll(wgpu::Maintain::Wait);
+        engine
+            .device()
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         assert_eq!(
             profile.gpu.len(),
             1,
@@ -717,7 +720,10 @@ fn texture_edits_reuse_filtering_and_match_fresh_images() {
         let crate::inspection::Content::Image(cached) = result.pop().unwrap().content else {
             panic!("expected image")
         };
-        engine.device().poll(wgpu::Maintain::Wait);
+        engine
+            .device()
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         assert!(!profile.host.iter().any(|p| matches!(
             p.stage,
             "submit reference noise base"

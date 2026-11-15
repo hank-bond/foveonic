@@ -392,7 +392,10 @@ mod tests {
             .map_async(wgpu::MapMode::Read, move |result| {
                 sender.send(result).unwrap()
             });
-        engine.device().poll(wgpu::Maintain::Wait);
+        engine
+            .device()
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         receiver.recv().unwrap().unwrap();
         let data = buffer.slice(..).get_mapped_range();
         let result = data

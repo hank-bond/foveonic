@@ -1124,15 +1124,15 @@ fn open_menus_keep_their_keys_and_workspace_shortcuts_resume_when_closed() {
     let mut fixture = Fixture::new(Organizer::Icons);
     fixture.browser.import_mode = true;
     fixture.select_first();
-    fixture
-        .ctx
-        .memory_mut(|memory| memory.open_popup(egui::Id::new("test menu")));
+    egui::Popup::open_id(&fixture.ctx, egui::Id::new("test menu"));
     fixture.key(egui::Key::Space, false);
+    egui::Popup::open_id(&fixture.ctx, egui::Id::new("test menu"));
     fixture.key(egui::Key::ArrowRight, false);
+    egui::Popup::open_id(&fixture.ctx, egui::Id::new("test menu"));
     fixture.key(egui::Key::Delete, false);
     assert_eq!(fixture.index(), Some(0));
     assert_eq!(fixture.browser.review_counts(), (0, 0));
-    fixture.ctx.memory_mut(|memory| memory.close_popup());
+    egui::Popup::close_all(&fixture.ctx);
     fixture.key(egui::Key::Space, false);
     assert_eq!(fixture.browser.review_counts(), (1, 0));
 }

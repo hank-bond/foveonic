@@ -1598,8 +1598,7 @@ impl Gpu {
         ];
         #[cfg(test)]
         let mut shader_writes = Vec::new();
-        let same_grid_constants =
-            std::collections::HashMap::from([("SAME_GRID_APPLICATION".into(), 1.)]);
+        let same_grid_constants = [("SAME_GRID_APPLICATION", 1.)];
         let pipelines = kernels
             .iter()
             .enumerate()

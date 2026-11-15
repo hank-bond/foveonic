@@ -261,7 +261,7 @@ pub fn button(ui: &mut egui::Ui, options: &mut Options) {
             for size in Size::ALL {
                 if widgets::menu_row(ui, size.label(), options.size == size).clicked() {
                     options.size = size;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             }
             ui.separator();
@@ -269,13 +269,13 @@ pub fn button(ui: &mut egui::Ui, options: &mut Options) {
             for zoom in Zoom::ALL {
                 if widgets::menu_row(ui, zoom.label(), options.zoom == zoom).clicked() {
                     options.zoom = zoom;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             }
             ui.separator();
             if widgets::menu_row(ui, "Use centered loupe", options.centered).clicked() {
                 options.centered = !options.centered;
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
     let rect = widgets::icon_rect(ui, &button);

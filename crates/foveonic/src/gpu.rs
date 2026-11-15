@@ -96,17 +96,15 @@ impl Gpu {
             compatible_surface: None,
             force_fallback_adapter: false,
         }))
-        .ok_or("no compatible GPU adapter")?;
+        .map_err(|error| format!("no compatible GPU adapter: {error}"))?;
         let adapter_name = adapter.get_info().name;
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Foveonic image engine"),
                 required_limits: adapter.limits(),
                 required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                 ..Default::default()
-            },
-            None,
-        ))?;
+            }))?;
         Self::from_device(device, queue, adapter_name)
     }
 
@@ -813,7 +811,10 @@ mod scheduling_tests {
                 .device
                 .create_command_encoder(&Default::default()),
         );
-        foreground.device.poll(wgpu::Maintain::Wait);
+        foreground
+            .device
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         assert_eq!(foreground.activity().submissions, 1);
         drop(active);
         assert_eq!(

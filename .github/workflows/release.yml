@@ -40,6 +40,9 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Test workspace and artwork
+        env:
+          # Debug-mode GUI fixtures have large nested stack frames.
+          RUST_MIN_STACK: '8388608'
         run: |
           cargo test --locked --workspace
           python3 -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'

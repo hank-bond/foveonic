@@ -421,7 +421,7 @@ pub fn button_padding(ui: &egui::Ui) -> egui::Vec2 {
         },
         |font| font.size,
     );
-    egui::vec2(0.5 * em, 0.25 * em)
+    egui::vec2((0.5 * em).round(), (0.25 * em).round())
 }
 
 /// Prefer the full label when its padded button fits the remaining row width.
@@ -660,6 +660,7 @@ fn menu_response<R>(
     let anchor = response.rect;
     menu_response_at(ui, response, anchor, contents)
 }
+#[allow(deprecated)] // Keep the existing custom menu state until the egui popup migration.
 fn menu_response_at<R>(
     ui: &mut egui::Ui,
     response: egui::Response,
@@ -674,6 +675,7 @@ fn menu_response_at<R>(
         ui.data_mut(|d| d.remove::<egui::menu::MenuRoot>(id));
         return egui::InnerResponse::new(None, response);
     }
+    ui.memory_mut(|memory| memory.keep_popup_open(id));
     let root = ui
         .data_mut(|d| d.get_temp::<egui::menu::MenuRoot>(id))
         .unwrap_or_else(|| egui::menu::MenuRoot::new(anchor.left_bottom(), response.id));
@@ -690,7 +692,7 @@ fn menu_response_at<R>(
             })
     });
     if close.is_close() || outside {
-        ui.memory_mut(|m| m.close_popup());
+        ui.memory_mut(|m| m.close_popup(id));
         ui.data_mut(|d| d.remove::<egui::menu::MenuRoot>(id));
     } else {
         ui.data_mut(|d| d.insert_temp(id, root));
@@ -714,7 +716,7 @@ pub fn menu_choices<T: Copy + PartialEq>(
                 let response = menu_value(ui, selected, value, label);
                 changed |= response.changed();
                 if response.clicked() {
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             }
             changed
@@ -1253,7 +1255,7 @@ mod tests {
                     eprintln!(
                         "frame {time} open {} marker {}",
                         open.is_some(),
-                        ctx.memory(|m| m.any_popup_open())
+                        egui::Popup::is_any_open(&ctx)
                     );
                     (output, open)
                 };
@@ -1305,10 +1307,10 @@ mod tests {
                     );
                 }
                 assert!(
-                    (dial.top() - bracket.bottom() - em * 0.5).abs() < 1.,
+                    (dial.top() - bracket.bottom() - 2. * (em * 0.25).round()).abs() < 1.,
                     "choices must keep shared row spacing"
                 );
-                assert!((both.top() - dial.bottom() - em * 0.5).abs() < 1.);
+                assert!((both.top() - dial.bottom() - 2. * (em * 0.25).round()).abs() < 1.);
                 draw(
                     2.,
                     vec![
@@ -1321,7 +1323,7 @@ mod tests {
                     draw(2.1, vec![]).1.is_some(),
                     "the heading must not select or dismiss"
                 );
-                assert!(ctx.memory(|m| m.any_popup_open()));
+                assert!(egui::Popup::is_any_open(&ctx));
                 draw(
                     3.,
                     vec![
@@ -1334,7 +1336,7 @@ mod tests {
                     draw(3.1, vec![]).1.is_none(),
                     "choice must dismiss the menu"
                 );
-                assert!(!ctx.memory(|m| m.any_popup_open()));
+                assert!(!egui::Popup::is_any_open(&ctx));
                 draw(
                     4.,
                     vec![egui::Event::PointerMoved(button), click(button, true)],
@@ -1574,14 +1576,14 @@ mod tests {
                 })
                 .unwrap();
             let size = text.galley.size();
-            assert!((rect.width() - size.x - em).abs() < 1.);
-            assert!((rect.height() - size.y - 0.5 * em).abs() < 1.);
+            assert!((rect.width() - size.x - 2. * (0.5 * em).round()).abs() < 1.);
+            assert!((rect.height() - size.y - 2. * (0.25 * em).round()).abs() < 1.);
             let bounds = egui::Rect::from_min_size(text.pos, size);
             for gap in [bounds.left() - rect.left(), rect.right() - bounds.right()] {
-                assert!((gap - 0.5 * em).abs() < 1.);
+                assert!((gap - (0.5 * em).round()).abs() < 1.);
             }
             for gap in [bounds.top() - rect.top(), rect.bottom() - bounds.bottom()] {
-                assert!((gap - 0.25 * em).abs() < 1.);
+                assert!((gap - (0.25 * em).round()).abs() < 1.);
             }
         }
     }
@@ -1640,7 +1642,7 @@ mod tests {
                 let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
                 assert!((bounds.left() - rect.left() - 0.5 * em).abs() < 1.);
                 for gap in [bounds.top() - rect.top(), rect.bottom() - bounds.bottom()] {
-                    assert!((gap - 0.25 * em).abs() < 1.);
+                    assert!((gap - (0.25 * em).round()).abs() < 1.);
                 }
             }
         }
@@ -1690,7 +1692,7 @@ mod tests {
                 (response.unwrap(), output.shapes)
             };
             let (closed, _) = draw(0.);
-            ctx.memory_mut(|memory| memory.open_popup(closed.response.id.with("popup")));
+            egui::Popup::open_id(&ctx, closed.response.id.with("popup"));
             draw(0.02);
             let (open, shapes) = draw(0.04);
             let rect = open.inner.unwrap();
@@ -1709,7 +1711,7 @@ mod tests {
                 text.galley.job.sections[0].format.font_id,
             );
             for gap in [bounds.top() - rect.top(), rect.bottom() - bounds.bottom()] {
-                assert!((gap - 0.25 * em).abs() < 1.);
+                assert!((gap - (0.25 * em).round()).abs() < 1.);
             }
         }
     }

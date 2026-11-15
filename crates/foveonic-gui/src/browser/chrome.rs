@@ -66,7 +66,7 @@ impl Browser {
                         if view_button(ui, mode, *organizer == mode).clicked() {
                             *organizer = mode;
                             self.reveal_selection();
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                 });
@@ -85,7 +85,7 @@ impl Browser {
                         .clicked()
                     {
                         self.query_dirty = true;
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 }
             })
@@ -191,7 +191,7 @@ impl Browser {
             }
             if changed {
                 self.query_dirty = true;
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         })
         .response;

@@ -97,7 +97,9 @@ fn manual_capture_resolves_on_normal_poll_without_a_foreground_gate_wait() {
     );
     // This represents the application's existing completion/presentation polling;
     // finish_capture_trace itself must never poll or wait for its readback.
-    gpu.device.poll(wgpu::Maintain::Wait);
+    gpu.device
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     assert!(trace
         .capture
         .as_ref()

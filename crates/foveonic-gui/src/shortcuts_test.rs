@@ -207,10 +207,10 @@ fn text_editors_menus_and_modals_keep_clipboard_commands() {
         if let Some(id) = memory.focused() {
             memory.surrender_focus(id);
         }
-        memory.open_popup(egui::Id::new("menu"));
     });
+    egui::Popup::open_id(&ctx, egui::Id::new("menu"));
     assert!(capture(&ctx, &mut input, available()).is_empty());
-    ctx.memory_mut(|memory| memory.close_popup());
+    egui::Popup::close_all(&ctx);
     let _ = ctx.run(Default::default(), |ctx| {
         egui::Modal::new(egui::Id::new("modal")).show(ctx, |ui| {
             ui.label("Modal");

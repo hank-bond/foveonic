@@ -159,7 +159,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             engine.render(&source, &settings, &mut profile)?
         };
         let render_call = milliseconds(start);
-        engine.device().poll(wgpu::Maintain::Wait);
+        engine
+            .device()
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         let completed = milliseconds(start);
         let activity = engine.gpu_activity().since(before);
         println!(
@@ -178,7 +181,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let start = Instant::now();
             let destination = output.join(format!("{stem}-{iteration}.tiff"));
             engine.write_tiff(&image, &destination, &mut profile)?;
-            engine.device().poll(wgpu::Maintain::Wait);
+            engine
+                .device()
+                .poll(wgpu::PollType::Wait)
+                .expect("GPU polling failed");
             println!(
                 "{}",
                 profile::report(

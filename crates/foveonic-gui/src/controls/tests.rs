@@ -1982,7 +1982,11 @@ fn exposure_help_opens_on_label_slider_and_value_without_changing_settings() {
                         egui::vec2(600., 400.),
                     )),
                     time: Some(time),
-                    events: vec![egui::Event::PointerMoved(point)],
+                    events: if time == 0. {
+                        vec![egui::Event::PointerMoved(point)]
+                    } else {
+                        vec![]
+                    },
                     ..Default::default()
                 },
                 |ctx| {
@@ -2047,9 +2051,10 @@ fn highlight_popover_opens_on_all_row_parts_and_switches_without_editing() {
                         },
                     )
                 };
-                let mut output = frame(vec![]);
+                frame(vec![]);
+                let mut output = frame(vec![egui::Event::PointerMoved(point)]);
                 for _ in 0..4 {
-                    output = frame(vec![egui::Event::PointerMoved(point)]);
+                    output = frame(vec![]);
                 }
                 let button = output.shapes.iter().find_map(|shape| match &shape.shape {
                     egui::Shape::Text(text) if text.galley.text() == "+0.8" =>
@@ -2142,8 +2147,9 @@ fn correction_comparisons_open_and_switch_without_editing_even_on_disabled_contr
                     output = frame(vec![egui::Event::PointerMoved(egui::Pos2::ZERO)], true);
                 }
                 let point = text_centers(&output, label)[0];
+                output = frame(vec![egui::Event::PointerMoved(point)], interactive);
                 for _ in 0..32 {
-                    output = frame(vec![egui::Event::PointerMoved(point)], interactive);
+                    output = frame(vec![], interactive);
                 }
                 let button = *text_centers(&output, "On").first().unwrap_or_else(|| {
                     panic!("No {label} comparison, enabled {initially_enabled}, interactive {interactive}")

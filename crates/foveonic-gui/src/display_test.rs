@@ -7,7 +7,7 @@ use wgpu::util::DeviceExt;
 fn device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
-    pollster::block_on(adapter.request_device(&Default::default(), None)).unwrap()
+    pollster::block_on(adapter.request_device(&Default::default())).unwrap()
 }
 fn target(device: &wgpu::Device) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
@@ -50,7 +50,9 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> 
     buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
         sender.send(r).unwrap();
     });
-    device.poll(wgpu::Maintain::Wait);
+    device
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     receiver.recv().unwrap().unwrap();
     let data = buffer.slice(..).get_mapped_range();
     std::array::from_fn(|i| {
@@ -133,8 +135,7 @@ fn photographic_shader_preserves_extended_colors_and_retains_the_srgb_fallback()
             contents: &bytes,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let constants =
-            std::collections::HashMap::from([("EXTENDED_DISPLAY".into(), f64::from(extended))]);
+        let constants = [("EXTENDED_DISPLAY", f64::from(extended))];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: None,
@@ -233,7 +234,7 @@ fn floating_egui_keeps_white_transparency_white() {
         &queue,
         texture_id,
         &egui::epaint::ImageDelta::full(
-            egui::ColorImage::new(
+            egui::ColorImage::filled(
                 [1, 1],
                 egui::Color32::from_rgba_premultiplied(128, 128, 128, 128),
             ),

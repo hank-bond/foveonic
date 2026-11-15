@@ -9,7 +9,7 @@ publish = false
 arrayvec = { version = "0.7", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
-wgpu = "24"
+wgpu = "25"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"

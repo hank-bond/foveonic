@@ -102,7 +102,7 @@ fn vs_main(
 
 @fragment
 fn fs_main_linear_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
-    // We always have an sRGB aware texture at the moment.
+    // Managed sRGB textures decode on sampling; native float textures are already linear.
     let tex_linear = textureSample(r_tex_color, r_tex_sampler, in.tex_coord);
     let tex_gamma = gamma_from_linear_rgba(vec4(map_display_color(tex_linear.rgb, r_locals.color_transform), tex_linear.a));
     var out_color_gamma = in.color * tex_gamma;
@@ -120,7 +120,7 @@ fn fs_main_linear_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_main_gamma_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
-    // We always have an sRGB aware texture at the moment.
+    // Managed sRGB textures decode on sampling; native float textures are already linear.
     let tex_linear = textureSample(r_tex_color, r_tex_sampler, in.tex_coord);
     let tex_gamma = gamma_from_linear_rgba(vec4(map_display_color(tex_linear.rgb, r_locals.color_transform), tex_linear.a));
     var out_color_gamma = in.color * tex_gamma;

@@ -199,16 +199,12 @@ pub fn capture(
     if !available.enabled || !input.focused {
         return actions;
     }
-    let (focused, modal) = ctx.memory(|memory| {
-        (
-            memory.focused(),
-            memory.any_popup_open() || memory.top_modal_layer().is_some(),
-        )
-    });
+    let (focused, modal) =
+        ctx.memory(|memory| (memory.focused(), memory.top_modal_layer().is_some()));
     // Load widget state after releasing egui's context lock. DragValue edits
     // use TextEdit with the same focused ID.
     let typing = focused.is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
-    if typing || modal {
+    if typing || modal || egui::Popup::is_any_open(ctx) {
         return actions;
     }
     input.events.retain(|event| {

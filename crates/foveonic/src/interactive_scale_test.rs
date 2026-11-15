@@ -63,7 +63,10 @@ fn session_scale_switch_diagnostic() {
             let texture = engine
                 .view_texture(&image, None, &mut Profile::default())
                 .unwrap();
-            engine.device().poll(wgpu::Maintain::Wait);
+            engine
+                .device()
+                .poll(wgpu::PollType::Wait)
+                .expect("GPU polling failed");
             let completed_ms = started.elapsed().as_secs_f64() * 1000.;
             let activity = engine.gpu_activity().since(before);
             if step > 0 && ![3, 6].contains(&step) {

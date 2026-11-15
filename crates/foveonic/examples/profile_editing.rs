@@ -371,7 +371,11 @@ fn render(
     // This is the harness's completed-image boundary, also present in Off mode.
     // Concurrent device-wide waits can include another executor's queued work.
     profile.measure("complete display texture", || {
-        photo.engine.device().poll(wgpu::Maintain::Wait)
+        photo
+            .engine
+            .device()
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed")
     });
     let completed_ms = began.elapsed().as_secs_f64() * 1000.;
     let finished_ms = group.elapsed().as_secs_f64() * 1000.;

@@ -10,10 +10,10 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2021"
-rust-version = "1.81"
+edition = "2024"
+rust-version = "1.85"
 name = "egui-wgpu"
-version = "0.31.1"
+version = "0.32.3"
 authors = [
     "Nils Hasenbanck <nils@hasenbanck.de>",
     "embotech <opensource@embotech.com>",
@@ -27,12 +27,13 @@ include = [
     "**/*.wgsl",
     "Cargo.toml",
 ]
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
 description = "Bindings for using egui natively using the wgpu library"
-homepage = "https://github.com/emilk/egui/tree/master/crates/egui-wgpu"
+homepage = "https://github.com/emilk/egui/tree/main/crates/egui-wgpu"
 readme = "README.md"
 keywords = [
     "wgpu",
@@ -45,11 +46,25 @@ categories = [
     "game-development",
 ]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/emilk/egui/tree/master/crates/egui-wgpu"
+repository = "https://github.com/emilk/egui/tree/main/crates/egui-wgpu"
+resolver = "2"
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--generate-link-to-definition"]
+
+[features]
+default = [
+    "fragile-send-sync-non-atomic-wasm",
+    "wgpu/default",
+]
+fragile-send-sync-non-atomic-wasm = ["wgpu/fragile-send-sync-non-atomic-wasm"]
+wayland = ["winit?/wayland"]
+winit = [
+    "dep:winit",
+    "winit/rwh_06",
+]
+x11 = ["winit?/x11"]
 
 [lib]
 name = "egui_wgpu"
@@ -70,20 +85,20 @@ version = "1.7.2"
 version = "0.2.10"
 
 [dependencies.egui]
-version = "0.31.1"
+version = "0.32.3"
 default-features = false
 
 [dependencies.epaint]
-version = "0.31.1"
+version = "0.32.3"
 features = ["bytemuck"]
 default-features = false
+
+[dependencies.half]
+version = "2"
 
 [dependencies.log]
 version = "0.4"
 features = ["std"]
-
-[dependencies.half]
-version = "2"
 
 [dependencies.profiling]
 version = "1.0.16"
@@ -99,26 +114,17 @@ version = "0.5.0"
 version = "1.1.0"
 
 [dependencies.wgpu]
-version = "24.0.0"
+version = "25.0.0"
 features = ["wgsl"]
 default-features = false
 
 [dependencies.winit]
-version = "0.30.7"
+version = "0.30.12"
 optional = true
 default-features = false
 
-[features]
-default = ["fragile-send-sync-non-atomic-wasm"]
-fragile-send-sync-non-atomic-wasm = ["wgpu/fragile-send-sync-non-atomic-wasm"]
-wayland = ["winit?/wayland"]
-winit = [
-    "dep:winit",
-    "winit/rwh_06",
-]
-x11 = ["winit?/x11"]
-
 [lints.clippy]
+allow_attributes = "warn"
 as_ptr_cast_mut = "warn"
 assigning_clones = "allow"
 await_holding_lock = "warn"
@@ -154,7 +160,6 @@ fn_params_excessive_bools = "warn"
 fn_to_numeric_cast_any = "warn"
 from_iter_instead_of_collect = "warn"
 get_unwrap = "warn"
-if_let_mutex = "warn"
 implicit_clone = "warn"
 implied_bounds_in_impls = "warn"
 imprecise_flops = "warn"
@@ -179,11 +184,13 @@ let_underscore_must_use = "allow"
 let_underscore_untyped = "allow"
 let_unit_value = "warn"
 linkedlist = "warn"
+literal_string_with_formatting_args = "warn"
 lossy_float_literal = "warn"
 macro_use_imports = "warn"
 manual_assert = "warn"
 manual_clamp = "warn"
 manual_instant_elapsed = "warn"
+manual_is_power_of_two = "warn"
 manual_is_variant_and = "warn"
 manual_let_else = "warn"
 manual_ok_or = "warn"
@@ -191,7 +198,7 @@ manual_range_contains = "allow"
 manual_string_new = "warn"
 map_err_ignore = "warn"
 map_flatten = "warn"
-map_unwrap_or = "warn"
+map_unwrap_or = "allow"
 match_bool = "warn"
 match_on_vec_items = "warn"
 match_same_arms = "warn"
@@ -199,7 +206,7 @@ match_wild_err_arm = "warn"
 match_wildcard_for_single_variants = "warn"
 mem_forget = "warn"
 mismatching_type_param_order = "warn"
-missing_assert_message = "allow"
+missing_assert_message = "warn"
 missing_enforced_import_renames = "warn"
 missing_errors_doc = "warn"
 missing_safety_doc = "warn"
@@ -212,10 +219,12 @@ needless_for_each = "warn"
 needless_pass_by_ref_mut = "warn"
 needless_pass_by_value = "warn"
 negative_feature_names = "warn"
+non_zero_suggestions = "warn"
 nonstandard_macro_braces = "warn"
 option_as_ref_cloned = "warn"
 option_option = "warn"
 path_buf_push_overwrite = "warn"
+pathbuf_init_then_push = "warn"
 print_stderr = "warn"
 ptr_as_ptr = "warn"
 ptr_cast_constness = "warn"
@@ -231,6 +240,7 @@ rest_pat_in_fully_bound_structs = "warn"
 same_functions_in_if_condition = "warn"
 self_named_module_files = "allow"
 semicolon_if_nothing_returned = "warn"
+set_contains_or_insert = "warn"
 should_panic_without_expect = "allow"
 significant_drop_tightening = "allow"
 single_char_pattern = "warn"
@@ -245,6 +255,7 @@ string_to_string = "warn"
 suspicious_command_arg_space = "warn"
 suspicious_xor_used_as_pow = "warn"
 todo = "warn"
+too_long_first_doc_paragraph = "warn"
 too_many_lines = "allow"
 trailing_empty_array = "warn"
 trait_duplication_in_bounds = "warn"
@@ -255,6 +266,7 @@ unimplemented = "warn"
 uninhabited_references = "warn"
 uninlined_format_args = "warn"
 unnecessary_box_returns = "warn"
+unnecessary_literal_bound = "warn"
 unnecessary_safety_doc = "warn"
 unnecessary_struct_initialization = "warn"
 unnecessary_wraps = "warn"
@@ -262,6 +274,7 @@ unnested_or_patterns = "warn"
 unused_peekable = "warn"
 unused_rounding = "warn"
 unused_self = "warn"
+unused_trait_names = "warn"
 unwrap_used = "allow"
 use_self = "warn"
 useless_transmute = "warn"

@@ -94,7 +94,10 @@ fn main() -> Result<(), Error> {
         let Content::Image(retained) = artifacts.remove(0).content else {
             return Err("expected image output".into());
         };
-        engine.device().poll(wgpu::Maintain::Wait);
+        engine
+            .device()
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.;
         let cached_bytes = session.as_ref().map_or(0, RenderSession::cached_bytes);
         record(
@@ -105,7 +108,10 @@ fn main() -> Result<(), Error> {
         )?;
         std::thread::sleep(hold);
         drop((retained, session));
-        engine.device().poll(wgpu::Maintain::Wait);
+        engine
+            .device()
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         record(
             &mut log,
             "released",
@@ -115,7 +121,10 @@ fn main() -> Result<(), Error> {
         std::thread::sleep(hold);
     }
     drop(sources);
-    engine.device().poll(wgpu::Maintain::Wait);
+    engine
+        .device()
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     record(&mut log, "sources_released", mode, serde_json::json!({}))?;
     std::thread::sleep(hold);
     drop(engine);

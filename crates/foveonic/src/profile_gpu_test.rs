@@ -304,7 +304,10 @@ fn native_checkpoint_capture_preserves_warm_edit_work_and_pixels() {
                 .unwrap()
                 .unwrap();
         }
-        engine.device().poll(wgpu::Maintain::Wait);
+        engine
+            .device()
+            .poll(wgpu::PollType::Wait)
+            .expect("GPU polling failed");
         session
     };
     let mut baseline = warm();
@@ -319,7 +322,10 @@ fn native_checkpoint_capture_preserves_warm_edit_work_and_pixels() {
         )
         .unwrap()
         .unwrap();
-    engine.device().poll(wgpu::Maintain::Wait);
+    engine
+        .device()
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     let expected_activity = engine.gpu_activity().since(before);
     let Content::Image(image) = artifacts.remove(0).content else {
         panic!("expected image")
@@ -353,7 +359,10 @@ fn native_checkpoint_capture_preserves_warm_edit_work_and_pixels() {
         .render_session(&mut session, &detail, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap();
-    engine.device().poll(wgpu::Maintain::Wait);
+    engine
+        .device()
+        .poll(wgpu::PollType::Wait)
+        .expect("GPU polling failed");
     assert_eq!(
         serde_json::to_value(engine.gpu_activity().since(before)).unwrap(),
         serde_json::to_value(expected_activity).unwrap()

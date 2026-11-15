@@ -20,14 +20,14 @@ impl Browser {
                 if ui.button(label).clicked() {
                     self.toggle_mark(path);
                     self.review_clicked = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
             }
             let path = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
             if ui.button("Copy file path").clicked() {
                 ui.ctx().copy_text(path.to_string_lossy().into_owned());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             #[cfg(target_os = "macos")]
             if ui.button("Show in Finder").clicked() {
@@ -43,7 +43,7 @@ impl Browser {
                         }
                     }
                 });
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
     }

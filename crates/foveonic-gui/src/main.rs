@@ -2157,7 +2157,20 @@ fn main() -> eframe::Result {
             }
         }
     }
+    #[cfg(target_os = "windows")]
+    let instance_descriptor = wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::DX12,
+        backend_options: wgpu::BackendOptions {
+            dx12: wgpu::Dx12BackendOptions {
+                shader_compiler: wgpu::Dx12Compiler::default_dynamic_dxc(),
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     let setup = egui_wgpu::WgpuSetupCreateNew {
+        #[cfg(target_os = "windows")]
+        instance_descriptor,
         device_descriptor: Arc::new(|adapter| wgpu::DeviceDescriptor {
             label: Some("Shared GUI/image device"),
             required_features: timing::required_features(adapter.features()),
