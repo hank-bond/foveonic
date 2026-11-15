@@ -10,6 +10,10 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 
 <!-- Generated from source summaries and document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->
 
+### Directories
+
+- **[baselines/](./baselines/AGENTS.md)** Versioned performance observations preserve matched workloads, hardware and accepted output identities.
+
 ### Source files
 
 - **[acceptance.py](./acceptance.py)** Run selected acceptance evidence and report the maintained user-path inventory.
