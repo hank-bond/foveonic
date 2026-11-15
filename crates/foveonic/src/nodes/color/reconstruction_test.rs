@@ -96,7 +96,8 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
         0.08,
         "global bilateral",
     );
-    let global = filter(&gpu, &input, p, true, &mut Profile::default()).unwrap();
+    let filter_input = gpu.upload("Global filter fixture", &source).unwrap();
+    let global = filter(&gpu, filter_input, p, true, &mut Profile::default()).unwrap();
     check(
         floats(&gpu, global.tiles.as_ref().unwrap()),
         array(&f["global"]["filtered"]),
