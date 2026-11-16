@@ -51,7 +51,6 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
 - **[regional-bounds](./regional-bounds.md)** Inventory regional storage, active samples and delivered coverage before a separate geometry consolidation slice.
 - **[regional-preview-completion](./regional-preview-completion.md)** Complete native visible-region rendering for adaptive tone, monochrome and authored rotation, with whole-image comparisons and measured app latency.
-- **[release-0.8.3](./release-0.8.3.md)** Package the reviewed highlight optimization as 0.8.3 and record checks before owner-reviewed publication.
 - **[render-coordination-consistency](./render-coordination-consistency.md)** Inventory coordination, scheduling and cache inconsistencies before choosing small current-architecture cleanup slices.
 - **[render-runtime](./render-runtime.md)** Clarify render ownership and responsibilities through one owner-reviewed concept at a time while preserving serial engine execution.
 - **[sectional-rendering](./sectional-rendering.md)** Reduce native sectional rendering work through explicit input support and measured Whole comparisons.
