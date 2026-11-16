@@ -1,0 +1,91 @@
+name: Build macOS test app
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-test-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: macOS Apple Silicon test archive
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust and verify native tools
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustc --version
+          xcodebuild -version
+          test "$(uname -m)" = arm64
+          xcrun --find actool
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test workspace and supporting tools
+        env:
+          RUST_MIN_STACK: '8388608'
+        run: |
+          cargo test --locked --workspace
+          python3 scripts/setup_tests.py --install
+          .local/test-python/bin/python -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
+          .local/test-python/bin/python -m unittest discover -s scripts/profiling -p 'test_*.py'
+          .local/test-python/bin/python -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Check Clippy and documentation
+        run: |
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo run --locked -p docs-index -- --check
+
+      - name: Build native test bundle
+        run: |
+          cargo xtask bundle
+          codesign --force --deep --sign - target/release/Foveonic.app
+          codesign --verify --deep --strict target/release/Foveonic.app
+
+      - name: Record source and package identity
+        env:
+          TEST_OUTPUT: ${{ runner.temp }}/foveonic-macos-test
+        run: |
+          mkdir "$TEST_OUTPUT"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, plistlib, re, subprocess
+          app = pathlib.Path('target/release/Foveonic.app')
+          binary = app / 'Contents/MacOS/foveonic-gui'
+          info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+          build = subprocess.check_output(['xcrun', 'vtool', '-show-build', str(binary)], text=True)
+          if info.get('LSMinimumSystemVersion') != '15.0' or re.findall(r'^\s*minos\s+(\S+)', build, re.MULTILINE) != ['15.0']:
+              raise SystemExit('Test app must target macOS 15.0')
+          revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          if revision != os.environ['GITHUB_SHA'] or subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip():
+              raise SystemExit('Test app source must match the clean workflow commit')
+          identity = {'source_revision': revision, 'workflow_revision': os.environ['GITHUB_WORKFLOW_SHA'],
+                      'version': info['CFBundleShortVersionString'], 'minimum_system': '15.0',
+                      'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                      'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
+                      'signing': 'ad-hoc test bundle', 'image_os': os.environ.get('ImageOS'),
+                      'image_version': os.environ.get('ImageVersion')}
+          (pathlib.Path(os.environ['TEST_OUTPUT']) / 'build.json').write_text(json.dumps(identity, indent=2) + '\n')
+          PY
+          ditto -c -k --keepParent target/release/Foveonic.app "$TEST_OUTPUT/Foveonic-macos-test.zip"
+          cd "$TEST_OUTPUT"
+          shasum -a 256 Foveonic-macos-test.zip build.json > SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-test-${{ github.sha }}
+          path: ${{ runner.temp }}/foveonic-macos-test
+          if-no-files-found: error
+          retention-days: 14

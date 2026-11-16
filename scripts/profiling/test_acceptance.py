@@ -137,6 +137,14 @@ class AcceptanceTests(unittest.TestCase):
             job=next(j for j in self.catalog['jobs'] if j['id']=='slider-matrix')
             cmd,_,_=acceptance.command(job,args,root/'out')
             self.assertEqual(cmd[cmd.index('--disk-cache-bytes')+1],'0')
+            self.assertNotIn('--reuse-session', cmd)
+            args.reuse_slider_sessions = True
+            grouped,_,_=acceptance.command(job,args,root/'grouped')
+            self.assertIn('--reuse-session', grouped)
+            args.cases = args.trace_processor = root/'input'
+            initial=next(j for j in self.catalog['jobs'] if j['id']=='scenario-initial')
+            separate,_,_=acceptance.command(initial,args,root/'initial')
+            self.assertNotIn('--reuse-session', separate)
 
     def test_smoke_records_its_isolated_launch_and_explicit_cache_budget(self):
         class Args:

@@ -148,7 +148,7 @@ def run_scenario(command, log):
         raise
 
 
-def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, disk_cache_bytes=0, background=True, selection=None, provenance=None, compare_images=None, max_memory_mb=None):
+def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, disk_cache_bytes=0, background=True, selection=None, provenance=None, compare_images=None, max_memory_mb=None, reuse_session=False):
     binary = binary.resolve(strict=True)
     validate(fixtures, cases)
     if not fixtures or not cases:
@@ -161,53 +161,94 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
         raise ValueError('physical-footprint limit must be positive')
     if compare_images is not None:
         compare_images = compare_images.resolve(strict=True)
+    if reuse_session and (mode != 'off' or compare_images is None):
+        raise ValueError('session reuse requires Off correctness mode and a fresh image renderer')
     directory.mkdir(parents=True, exist_ok=False)
     report = {'schema_version':1, 'kind':'slider-behavior-matrix', 'mode':mode,
               'binary':str(binary), 'disk_cache_bytes':disk_cache_bytes, 'background':background,
               'selection':selection, 'provenance':provenance, 'passed':False, 'results':[],
               'limits':['Passed describes the declared selected cases; inspect coverage for untested controls and configurations.']}
+    def prepare_case(fixture, case, theme):
+        recipes = case['recipes']
+        name = fixture['name']+'--'+case['name']+'--'+theme+'--'+case['processing_quality']
+        out = directory/name
+        inputs = directory/(name+'-inputs.json')
+        inputs.write_text(json.dumps([{'source':source,'settings':recipe} for source,recipe in zip(fixture['sources'],recipes)],indent=2)+'\n')
+        cmd = [sys.executable, str(Path(__file__).with_name('scenarios.py')), '--binary',str(binary),
+               '--cases',str(inputs), '--directory',str(out), '--scenario','slider-drag',
+               '--control-pointer',case['pointer'], '--editing-section',case['section'],
+               '--initial-values',case.get('initial_values','mixed'), '--theme',theme,
+               '--drag-pattern',case.get('pattern','forward'),
+               '--quality',case.get('processing_quality', 'quality'), '--mode',mode, '--trials','1', '--disk-cache-bytes',str(disk_cache_bytes)]
+        if compare_images:
+            cmd += ['--compare-images',str(compare_images)]
+        if max_memory_mb is not None:
+            cmd += ['--max-memory-mb',str(max_memory_mb)]
+        if trace_processor:
+            cmd += ['--trace-processor',str(trace_processor)]
+        if background:
+            cmd += ['--background']
+        return name, out, cmd
+
+    def append_result(fixture, case, theme, name, out, returncode):
+        result_path = out/'trial-00/evidence/scenario-result.json'
+        native = json.loads(result_path.read_text()) if result_path.exists() else {}
+        failure = native.get('failure')
+        shared_path = out/'trial-00/evidence/test-result.json'
+        if not failure and shared_path.exists():
+            failure = json.loads(shared_path.read_text()).get('failure')
+        if not native:
+            failure = 'scenario did not produce a result; inspect the log'
+        elif returncode and not failure:
+            failure = 'scenario runner failed; inspect the log'
+        report['results'].append({'fixture':fixture['name'], 'family':fixture['family'],
+            'raw_size':fixture.get('raw_size','unspecified'), 'case':case['name'], 'theme':theme,
+            'pointer':case['pointer'], 'processing_quality':case['processing_quality'], 'directory':str(out), 'passed':returncode==0 and native.get('passed') is True,
+            'failure':failure})
+        row = report['results'][-1]
+        if reuse_session:
+            row['session'] = native.get('session')
+            report['results'].sort(key=lambda r: case_order[(r['fixture'], r['case'], r['theme'], r['processing_quality'])])
+        print(name+': '+('passed' if row['passed'] else 'FAILED'),flush=True)
+        report['coverage'] = report_coverage(fixtures, report['results'])
+        (directory/'behavioral-report.json').write_text(json.dumps(report, indent=2)+'\n')
+
     try:
         _,_,jobs = select(fixtures,cases)
-        for fixture,case,theme in jobs:
-            recipes = case['recipes']
-            name = fixture['name']+'--'+case['name']+'--'+theme+'--'+case['processing_quality']
-            out = directory/name
-            inputs = directory/(name+'-inputs.json')
-            inputs.write_text(json.dumps([{'source':source,'settings':recipe} for source,recipe in zip(fixture['sources'],recipes)],indent=2)+'\n')
-            cmd = [sys.executable, str(Path(__file__).with_name('scenarios.py')), '--binary',str(binary),
-                   '--cases',str(inputs), '--directory',str(out), '--scenario','slider-drag',
-                   '--control-pointer',case['pointer'], '--editing-section',case['section'],
-                   '--initial-values',case.get('initial_values','mixed'), '--theme',theme,
-                   '--drag-pattern',case.get('pattern','forward'),
-                   '--quality',case.get('processing_quality', 'quality'), '--mode',mode, '--trials','1', '--disk-cache-bytes',str(disk_cache_bytes)]
-            if compare_images:
-                cmd += ['--compare-images',str(compare_images)]
-            if max_memory_mb is not None:
-                cmd += ['--max-memory-mb',str(max_memory_mb)]
-            if trace_processor:
-                cmd += ['--trace-processor',str(trace_processor)]
-            if background:
-                cmd += ['--background']
-            with (directory/(name+'.log')).open('w') as log:
-                returncode = run_scenario(cmd, log)
-            result_path = out/'trial-00/evidence/scenario-result.json'
-            native = json.loads(result_path.read_text()) if result_path.exists() else {}
-            failure = native.get('failure')
-            shared_path = out/'trial-00/evidence/test-result.json'
-            if not failure and shared_path.exists():
-                failure = json.loads(shared_path.read_text()).get('failure')
-            if not native:
-                failure = 'scenario did not produce a result; inspect the log'
-            elif returncode and not failure:
-                failure = 'scenario runner failed; inspect the log'
-            report['results'].append({'fixture':fixture['name'], 'family':fixture['family'],
-                'raw_size':fixture.get('raw_size','unspecified'), 'case':case['name'], 'theme':theme,
-                'pointer':case['pointer'], 'processing_quality':case['processing_quality'], 'directory':str(out), 'passed':returncode==0 and native.get('passed') is True,
-                'failure':failure})
-            print(name+': '+('passed' if report['results'][-1]['passed'] else 'FAILED'),flush=True)
-            report['coverage'] = report_coverage(fixtures, report['results'])
-            (directory/'behavioral-report.json').write_text(json.dumps(report, indent=2)+'\n')
-        report['passed'] = bool(report['results']) and all(row['passed'] for row in report['results'])
+        case_order = {(fixture['name'], case['name'], theme, case['processing_quality']): index
+                      for index, (fixture, case, theme) in enumerate(jobs)}
+        if reuse_session:
+            from slider_sessions import group_jobs, run_group
+            from scenarios import argument_parser
+            report.update(session_reuse=True, timing_valid=False, session_groups=[])
+            report['provenance'] = dict(provenance or {})
+            session_runner = Path(__file__).with_name('slider_sessions.py').resolve()
+            report['provenance']['session_runner'] = {'path': str(session_runner), 'sha256': digest(session_runner)}
+            report['limits'].append('Reused application sessions are correctness evidence, not fresh-launch latency baselines.')
+            for group in group_jobs(jobs):
+                prepared = [(fixture, case, theme, *prepare_case(fixture, case, theme))
+                            for fixture, case, theme in group]
+                requests = [{'case_id': name, 'args': argument_parser().parse_args(cmd[2:])}
+                            for _, _, _, name, _, cmd in prepared]
+                fixture, case, theme = group[0]
+                group_directory = directory/'session-groups'/f"{fixture['name']}--{theme}--{case['processing_quality']}"
+                entry = {'directory': str(group_directory), 'cases': len(group), 'passed': False}
+                report['session_groups'].append(entry)
+                session = run_group(requests, group_directory, fixture['name'])
+                entry.update(id=session['id'], passed=session['passed'], status=session['status'], pid=session.get('pid'))
+                for (fixture, case, theme, name, out, _), outcome in zip(prepared, session['cases']):
+                    append_result(fixture, case, theme, name, out, 0 if outcome['passed'] else 1)
+                if not session['passed']:
+                    break
+        else:
+            for fixture, case, theme in jobs:
+                name, out, cmd = prepare_case(fixture, case, theme)
+                with (directory/(name+'.log')).open('w') as log:
+                    returncode = run_scenario(cmd, log)
+                append_result(fixture, case, theme, name, out, returncode)
+        report['passed'] = (bool(report['results']) and len(report['results']) == len(jobs)
+                            and all(row['passed'] for row in report['results'])
+                            and (not reuse_session or all(group['passed'] for group in report['session_groups'])))
     finally:
         report['coverage'] = report_coverage(fixtures, report['results'])
         (directory/'behavioral-report.json').write_text(json.dumps(report, indent=2)+'\n')
@@ -227,6 +268,7 @@ def main():
     parser.add_argument('--theme',action='append',choices=['dark','light'],default=[],help='select a theme; repeat to include both')
     parser.add_argument('--list',action='store_true',help='show the selected runs without opening the app')
     parser.add_argument('--mode',choices=['off','wall'],default='off')
+    parser.add_argument('--reuse-session',action='store_true',help='opt-in slider correctness groups sharing one app per fixture, theme and quality; requires --mode off and --compare-images')
     parser.add_argument('--trace-processor',type=Path)
     parser.add_argument('--compare-images',type=Path,metavar='RENDERER',help='compare settled app frames with fresh renders')
     parser.add_argument('--disk-cache-bytes',type=int,default=0,help='optional owned decoded-cache budget; disabled by default')
@@ -249,8 +291,8 @@ def main():
         selection={'full':args.full, **filters}
         provenance={name:{'path':str(path.resolve()),'sha256':digest(path)} for name,path in
                     (('fixtures',args.fixtures),('cases',args.cases),('runner',Path(__file__)),('scenario_runner',Path(__file__).with_name('scenarios.py')))}
-        result=run(args.binary,fixtures,cases,args.directory,args.mode,args.trace_processor,args.disk_cache_bytes,not args.foreground,selection,provenance,args.compare_images,args.max_memory_mb)
-    except (OSError,ValueError,KeyError,json.JSONDecodeError) as error:
+        result=run(args.binary,fixtures,cases,args.directory,args.mode,args.trace_processor,args.disk_cache_bytes,not args.foreground,selection,provenance,args.compare_images,args.max_memory_mb,args.reuse_session)
+    except (OSError,ValueError,KeyError,RuntimeError,json.JSONDecodeError,subprocess.TimeoutExpired) as error:
         parser.exit(1,str(error)+'\n')
     if not result['passed']:
         raise SystemExit(1)

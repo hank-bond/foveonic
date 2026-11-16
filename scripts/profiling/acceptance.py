@@ -134,6 +134,8 @@ def command(job, args, out):
                '--disk-cache-bytes', str(job.get('disk_cache_bytes', 0))]
         if args.foreground:
             cmd.append('--foreground')
+        if getattr(args, 'reuse_slider_sessions', False):
+            cmd.append('--reuse-session')
         return cmd, None, out / 'behavioral-report.json'
     if driver == 'matrix':
         require('renderer', 'render_cases', 'baseline')
@@ -270,6 +272,7 @@ def main():
     p.add_argument('--seed', type=int, default=1)
     p.add_argument('--action-count', type=int, default=12)
     p.add_argument('--foreground', action='store_true')
+    p.add_argument('--reuse-slider-sessions', action='store_true', help='opt-in session reuse for the slider correctness matrix; other jobs keep their process boundaries')
     p.add_argument('--timeout', type=int, default=600)
     p.add_argument('--max-memory-mb', type=int, help='guard each owned app or renderer physical footprint on macOS')
     args = p.parse_args()

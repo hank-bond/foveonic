@@ -56,6 +56,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[sectional-rendering](./sectional-rendering.md)** Reduce native sectional rendering work through explicit input support and measured Whole comparisons.
 - **[sequoia-compatibility](./sequoia-compatibility.md)** Ship a macOS 15-targeted Apple Silicon build for Sequoia user testing while retaining explicit runtime coverage limits.
 - **[shared-photographic-finishing](./shared-photographic-finishing.md)** Integrate shared photographic tone, monochrome sensitivity, local contrast and sharpening with camera recipes and bounded interactive reuse.
+- **[slider-session-reuse](./slider-session-reuse.md)** Pilot native slider session reuse while retaining declared case isolation and independent photographic comparisons.
 - **[support-logging](./support-logging.md)** Astra and eight Terra audits map missing user-support evidence to shared error reporting and staged logging work.
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
 - **[tonal-ranges](./tonal-ranges.md)** Implement and evaluate coordinated Merrill HDR controls after researching spatial tone mapping.

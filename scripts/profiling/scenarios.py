@@ -278,7 +278,7 @@ def compare_scenario_images(native_result, inputs, binary, directory, control_po
     return replay_images(native_result, inputs, photos, action, binary, directory, max_memory_mb)
 
 
-def run_trial(args, selected, directory, source_hash):
+def prepare_trial(args, selected, directory, source_hash):
     directory.mkdir(parents=True, exist_ok=False)
     home, evidence = directory / 'home', directory / 'evidence'
     home.mkdir(); evidence.mkdir()
@@ -325,6 +325,14 @@ def run_trial(args, selected, directory, source_hash):
                                     drag_fraction=args.drag_fraction, drag_pattern=args.drag_pattern, light_theme=args.theme=='light', mixed_values=args.initial_values=='mixed', editing_section=args.editing_section)
     launch = directory / 'launch.json'
     launch.write_text(json.dumps(manifest, indent=2) + '\n')
+    return {'directory':directory, 'home':home, 'evidence':evidence,
+            'inputs':inputs, 'manifest':manifest, 'launch':launch}
+
+
+def run_trial(args, selected, directory, source_hash):
+    prepared = prepare_trial(args, selected, directory, source_hash)
+    home, evidence = prepared['home'], prepared['evidence']
+    inputs, manifest, launch = prepared['inputs'], prepared['manifest'], prepared['launch']
     env = scenario_environment(home, evidence, launch)
     if manifest['scenario']['save_on_exit']:
         env['FOVEONIC_DIAGNOSTICS_DIR'] = str(directory/'capture')
@@ -356,6 +364,15 @@ def run_trial(args, selected, directory, source_hash):
     timing_valid = contention['checked'] and contention['uncontended']
     manifest.update(contention=contention, timing_valid=timing_valid)
     launch.write_text(json.dumps(manifest, indent=2) + '\n')
+    return collect_trial(args, prepared, contention, timing_valid)
+
+
+def collect_trial(args, prepared, contention, timing_valid, session=None):
+    directory, evidence = prepared['directory'], prepared['evidence']
+    inputs, manifest, launch = prepared['inputs'], prepared['manifest'], prepared['launch']
+    if session is not None:
+        timing_valid = False
+        manifest['session_reuse'] = session
     capture_directory = directory/'capture'
     if manifest['scenario']['save_on_exit']:
         children = list(capture_directory.iterdir()) if capture_directory.is_dir() else []
@@ -365,6 +382,15 @@ def run_trial(args, selected, directory, source_hash):
     result = finish_trial(directory, args.mode, args.trace_processor, capture_directory)
     native_result=json.loads(Path(result['result']).read_text())
     test_result = application_result(native_result, args.scenario, args.quality, inputs, manifest['binary_sha256'])
+    if session is not None:
+        include_assertions(test_result, [
+            {'name':'slider_session_identity', 'expected':session['expected'], 'actual':native_result.get('session'),
+             'outcome':'passed' if native_result.get('session') == session['expected'] else 'failed'},
+            {'name':'slider_session_process_exit', 'expected':0, 'actual':session['process_exit'],
+             'outcome':'passed' if session['process_exit'] == 0 else 'failed'},
+            {'name':'slider_session_scenario', 'expected':manifest['scenario'], 'actual':native_result.get('scenario'),
+             'outcome':'passed' if native_result.get('scenario') == manifest['scenario'] else 'failed'},
+        ])
     include_assertions(test_result, result.pop('trace_assertions', []))
     if args.scenario == 'prefetched-selection':
         include_assertions(test_result, prefetched_assertions(native_result, inputs, args.repeats))
@@ -425,6 +451,9 @@ def run_trial(args, selected, directory, source_hash):
     result['passed'] = result['passed'] and test_result['outcome']=='passed' and workload_key['descriptor']['cache_policy_matches']
     result['test_result'] = test_result
     result['ui_latency'] = ui_latency
+    if session is not None:
+        result['measurement_kind'] = 'reused-session-correctness'
+        result['session_reuse'] = session
     manifest['workload_key']=workload_key
     launch.write_text(json.dumps(manifest,indent=2)+'\n')
     result.update(contention=contention, timing_valid=timing_valid, workload_key=workload_key,
@@ -450,7 +479,7 @@ def run_trial(args, selected, directory, source_hash):
     return result
 
 
-def run(args):
+def validated_inputs(args):
     if getattr(args, 'max_memory_mb', None) is not None and args.max_memory_mb <= 0:
         raise ValueError('physical-footprint limit must be positive')
     args.binary = args.binary.resolve(strict=True)
@@ -515,6 +544,11 @@ def run(args):
         args.trace_processor = args.trace_processor.resolve(strict=True)
     if min(args.trials,args.repeats,args.rapid_edits,args.timeout,args.step_timeout) < 1 or args.pressure_mib < 64:
         raise ValueError('counts and timeouts must be positive; memory pressure must be at least 64 MiB')
+    return selected
+
+
+def run(args):
+    selected = validated_inputs(args)
     directory = args.directory.resolve()
     directory.mkdir(parents=True, exist_ok=False)
     tree = source_tree_hash(Path(__file__).resolve().parents[2])
@@ -525,30 +559,35 @@ def run(args):
             if results[-1]['workload_key'] != results[0]['workload_key']:
                 raise ValueError('trials have different matched workload keys; inspect inputs, resolved settings and hardware')
     finally:
-        metrics = {}
-        for result in results:
-            if not result['timing_valid']:
-                continue
-            for step in result['steps']:
-                key = (result['mode'],step['action'])
-                value = step.get('baseline_elapsed_ms') if result['input_kind']=='baseline' else step['group_settled_ms']
-                if value is not None:
-                    metrics.setdefault(key,[]).append(value)
-        matched=bool(results) and all(result['workload_key']==results[0]['workload_key'] for result in results)
-        report = {'schema_version':1,'trials_requested':args.trials,
-                  'workload_key':results[0]['workload_key'] if matched else None,
-                  'workload_consistent':matched,'scenario':args.scenario,'photo_count':args.count,'quality':args.quality,
-                  'mode':args.mode,'passed':matched and len(results)==args.trials and all(result['passed'] for result in results),
-                  'timing_valid':len(results)==args.trials and all(result['timing_valid'] for result in results),
-                  'trials':results,'group_elapsed_ms':[{'mode':mode,'action':action,**distribution(values)} for (mode,action),values in metrics.items()],
-                  'limits':['Off baseline elapsed values and detailed trace attribution remain separate datasets.',
-                            'Native scenarios do not measure physical screen presentation.',
-                            'Fresh numerical equality is checked only when image comparison is requested.']}
-        (directory/'regression.json').write_text(json.dumps(report, indent=2)+'\n')
+        report = write_trial_report(args, directory, results)
     return report
 
 
-def main():
+def write_trial_report(args, directory, results):
+    metrics = {}
+    for result in results:
+        if not result['timing_valid']:
+            continue
+        for step in result['steps']:
+            key = (result['mode'],step['action'])
+            value = step.get('baseline_elapsed_ms') if result['input_kind']=='baseline' else step['group_settled_ms']
+            if value is not None:
+                metrics.setdefault(key,[]).append(value)
+    matched=bool(results) and all(result['workload_key']==results[0]['workload_key'] for result in results)
+    report = {'schema_version':1,'trials_requested':args.trials,
+              'workload_key':results[0]['workload_key'] if matched else None,
+              'workload_consistent':matched,'scenario':args.scenario,'photo_count':args.count,'quality':args.quality,
+              'mode':args.mode,'passed':matched and len(results)==args.trials and all(result['passed'] for result in results),
+              'timing_valid':len(results)==args.trials and all(result['timing_valid'] for result in results),
+              'trials':results,'group_elapsed_ms':[{'mode':mode,'action':action,**distribution(values)} for (mode,action),values in metrics.items()],
+              'limits':['Off baseline elapsed values and detailed trace attribution remain separate datasets.',
+                        'Native scenarios do not measure physical screen presentation.',
+                        'Fresh numerical equality is checked only when image comparison is requested.']}
+    (directory/'regression.json').write_text(json.dumps(report, indent=2)+'\n')
+    return report
+
+
+def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary',type=Path,required=True)
     inputs=parser.add_mutually_exclusive_group(required=True)
@@ -590,6 +629,11 @@ def main():
                         help='kill the owned app if its sampled macOS physical footprint exceeds this limit')
     parser.add_argument('--no-monitor',action='store_true')
     parser.add_argument('--cache-namespace',help='explicit controlled reuse; default is unique and isolated from the owner cache')
+    return parser
+
+
+def main():
+    parser = argument_parser()
     args=parser.parse_args()
     try:
         result=run(args)

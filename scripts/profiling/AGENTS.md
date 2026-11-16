@@ -37,6 +37,7 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 - **[results.py](./results.py)** Report shared preview-scale assertions and exact image comparisons across test drivers.
 - **[scenario_checks.py](./scenario_checks.py)** Check declared scenario actions and intended edits independently of image replay.
 - **[scenarios.py](./scenarios.py)** Run declared real-app diagnostic scenarios with isolated inputs and shared Perfetto artifacts.
+- **[slider_sessions.py](./slider_sessions.py)** Run finite slider correctness groups in one owned app, then check each case after exit.
 - **[summarize.py](./summarize.py)** Summarize declared aggregate benchmark JSON; native SDK captures use trace_analysis.py.
 - **[trace_analysis.py](./trace_analysis.py)** Query real Perfetto captures for loss, scenario correctness and shared-clock latency.
 - **[watch_workloads.py](./watch_workloads.py)** Check and record actual app, compiler and measurement processes that can contaminate timings.
