@@ -398,34 +398,52 @@ def debugger_preflight(lldb, root, output, deadline):
         normal.write_text("import os\nassert not any(k.upper() in {'GH_TOKEN','GITHUB_TOKEN'} for k in os.environ)\nprint('owned debugger health normal')\n")
         crash = output / 'expected-av.py'
         crash.write_text("import ctypes\nfrom ctypes import wintypes\nk=ctypes.WinDLL('kernel32',use_last_error=True)\nk.SetErrorMode(3)\nk.CreateThread.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_void_p,ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(wintypes.DWORD)]\nk.CreateThread.restype=wintypes.HANDLE\nk.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]\nt=wintypes.DWORD()\nh=k.CreateThread(None,0,None,None,0,ctypes.byref(t))\nassert h\nk.WaitForSingleObject(h,10000)\n")
-        for label, fixture in [('normal', normal), ('expected-av', crash)]:
+        sleeping = output / 'diagnostic-interrupt.py'
+        sleeping.write_text("import time\nprint('owned debugger health sleep',flush=True)\ntime.sleep(30)\n")
+        for label, fixture in [('normal', normal), ('diagnostic-interrupt', sleeping), ('expected-av', crash)]:
             directory = output / label
             directory.mkdir()
             health = run_cell('lldb_health_' + label, [str(fixture)], root, directory, lldb,
                               deadline=deadline, timeout_seconds=25, executable=Path(sys.executable),
-                              use_debugger=True, debugger_paths=result['debugger_path_additions'])
+                              use_debugger=True, debugger_paths=result['debugger_path_additions'],
+                              interrupt_after_seconds=3 if label == 'diagnostic-interrupt' else 10)
             text = (directory / ('lldb_health_' + label + '.stdout.log')).read_text(encoding='utf-8', errors='replace')
             gone = health['test_pid'] is not None and not any(entry.pid == health['test_pid'] for entry in
                         snapshot(2, 0, ProcessEntry, 'Process32FirstW', 'Process32NextW'))
             result[label] = {'target_state': health['target_state'], 'target_exit_code': health['target_exit_code'],
                              'debugger_exit_code': health['debugger_exit_code'], 'inferior_pid': health['test_pid'],
                              'inferior_gone': gone}
+            raw = health.get('debugger_snapshot', {})
+            interrupt = health.get('debugger_interrupt', {})
+            result[label]['interrupt'] = interrupt
             if not gone or health['timed_out']:
                 raise ValueError('LLDB fixture inferior did not exit: ' + label)
+            if not raw.get('timer_cancelled') or raw.get('timer_thread_alive'):
+                raise ValueError('LLDB fixture timer did not cancel: ' + label)
             if label == 'normal':
                 if (health['target_state'] != 'exited' or health['target_exit_code'] != 0
-                        or health['debugger_exit_code'] != 0 or 'owned debugger health normal' not in text):
+                        or health['debugger_exit_code'] != 0 or 'owned debugger health normal' not in text
+                        or interrupt.get('interrupt_requested') or interrupt.get('pid') is not None
+                        or interrupt.get('error')):
                     raise ValueError('LLDB normal fixture failed')
             else:
-                images = text.rsplit('(lldb) image list', 1)[-1]
+                images = text.rsplit('LLDB_SNAPSHOT_COMMAND image list', 1)[-1]
                 image_rows = re.findall(r'^\[\s*\d+\]\s+\S+\s+0x[0-9a-fA-F]+\s+.+', images, re.M)
-                result[label]['post_crash_image_rows'] = len(image_rows)
+                result[label]['post_stop_image_rows'] = len(image_rows)
                 result[label]['backtrace_frames'] = len(re.findall(r'frame #\d+:', text))
-                if (health['target_state'] != 'exception_stopped' or health.get('target_exception_code') != '0xc0000005'
-                        or health['target_exit_code'] is not None or '(lldb) thread backtrace all' not in text
+                captures = raw.get('captures', {})
+                if (health['target_exit_code'] is not None
+                        or not all(captures.get(command, {}).get('succeeded') for command in ('thread backtrace all', 'image list'))
                         or not result[label]['backtrace_frames'] or not image_rows or 'kernel32.dll' not in images.lower()
                         or Path(sys.executable).name.lower() not in images.lower()):
-                    raise ValueError('LLDB expected-AV stack or image capture failed')
+                    raise ValueError('LLDB stopped fixture stack or image capture failed: ' + label)
+                if label == 'expected-av':
+                    if health['target_state'] != 'exception_stopped' or health.get('target_exception_code') != '0xc0000005':
+                        raise ValueError('LLDB expected-AV classification failed')
+                elif (health['target_state'] != 'diagnostic_interrupt_stopped'
+                      or not interrupt.get('interrupt_requested') or not raw.get('stop_event', {}).get('matches_process')
+                      or not raw.get('stop_event', {}).get('interrupted')):
+                    raise ValueError('LLDB diagnostic interrupt classification failed')
         result['status'] = 'passed'
     except (OSError, ValueError, subprocess.TimeoutExpired, struct.error) as error:
         result['error'] = str(error)
@@ -498,30 +516,167 @@ def cleanup_process(process, result):
         receipt['parent_exited'] = process.poll() is not None
 
 
-def debugger_outcome(stdout, result):
+LLDB_SNAPSHOT_SCRIPT = r'''"""Capture one diagnostic interrupt or exception through the existing LLDB CLI."""
+import json
+from pathlib import Path
+import re
+import threading
+import time
+import lldb
+
+_directory = Path(__file__).parent
+_config = json.loads((_directory / 'config.json').read_text())
+_cancel = threading.Event()
+_target = None
+_timer = None
+_finished = False
+_interrupt = {'deadline': _config['deadline_monotonic'], 'pid': None, 'interrupt_requested': False, 'error': None}
+
+def _write(name, value):
+    path = _directory / name
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(value, indent=2) + '\n')
+    temporary.replace(path)
+
+def _request_interrupt():
+    if _cancel.wait(max(0, _interrupt['deadline'] - time.monotonic())):
+        return
+    try:
+        # These three APIs avoid the Target API mutex held by synchronous run.
+        process = _target.GetProcess()
+        pid = process.GetProcessID()
+        _interrupt['pid'] = int(pid)
+        if pid in (0, lldb.LLDB_INVALID_PROCESS_ID):
+            _interrupt['error'] = 'No valid inferior PID at the interrupt deadline'
+        else:
+            process.SendAsyncInterrupt()
+            _interrupt['interrupt_requested'] = True
+    except Exception as error:
+        _interrupt['error'] = str(error)
+    _write('interrupt.json', _interrupt)
+
+def arm(debugger):
+    global _target, _timer
+    _target = debugger.GetSelectedTarget()
+    _write('interrupt.json', _interrupt)
+    _timer = threading.Thread(target=_request_interrupt, daemon=True)
+    _timer.start()
+
+def finish(debugger):
+    global _finished
+    if _finished:
+        return
+    _finished = True
+    _cancel.set()
+    if _timer is not None:
+        _timer.join(timeout=1)
+    snapshot = {'classification': 'unknown', 'pid': None, 'unique_id': None,
+                'state': None, 'stop_reasons': [], 'target_exit_code': None,
+                'timer_cancelled': True, 'timer_thread_alive': _timer is not None and _timer.is_alive(),
+                'stop_event': {'valid': False, 'matches_process': False, 'interrupted': None}, 'captures': {}}
+    try:
+        process = _target.GetProcess()
+        snapshot['pid'] = int(process.GetProcessID())
+        snapshot['unique_id'] = int(process.GetUniqueID())
+        snapshot['state'] = int(process.GetState())
+        stopped = snapshot['state'] in (lldb.eStateStopped, lldb.eStateCrashed)
+        if stopped:
+            for index in range(min(process.GetNumThreads(), 512)):
+                thread = process.GetThreadAtIndex(index)
+                snapshot['stop_reasons'].append({'thread_id': int(thread.GetThreadID()),
+                    'reason': int(thread.GetStopReason()), 'description': thread.GetStopDescription(1024) or ''})
+            event = process.GetStopEventForStopID(process.GetStopID())
+            if event.IsValid():
+                from_event = lldb.SBProcess.GetProcessFromEvent(event)
+                matching = (int(from_event.GetProcessID()) == snapshot['pid']
+                            and int(from_event.GetUniqueID()) == snapshot['unique_id'])
+                snapshot['stop_event'] = {'valid': True, 'matches_process': matching,
+                    'interrupted': bool(lldb.SBProcess.GetInterruptedFromEvent(event)) if matching else None}
+        exceptions = [row for row in snapshot['stop_reasons'] if row['reason'] == lldb.eStopReasonException]
+        av = any(re.search(r'\b0xc0000005\b', row['description'], re.I) for row in exceptions)
+        if av:
+            snapshot.update(classification='exception_stopped', exception_code='0xc0000005')
+        elif snapshot['state'] == lldb.eStateExited:
+            snapshot.update(classification='exited', target_exit_code=int(process.GetExitStatus()))
+        elif (stopped and _interrupt['interrupt_requested']
+              and snapshot['stop_event']['matches_process'] and snapshot['stop_event']['interrupted']):
+            snapshot['classification'] = 'diagnostic_interrupt_stopped'
+        elif exceptions:
+            snapshot['classification'] = 'exception_stopped'
+            codes = re.findall(r'\b0x[0-9a-f]{8}\b', exceptions[0]['description'], re.I)
+            if codes:
+                snapshot['exception_code'] = codes[0].lower()
+        elif stopped:
+            snapshot['classification'] = 'other_stopped'
+        _write('process.json', snapshot)
+        if stopped:
+            for command in ('thread backtrace all', 'image list'):
+                result = lldb.SBCommandReturnObject()
+                debugger.GetCommandInterpreter().HandleCommand(command, result)
+                text, error = result.GetOutput() or '', result.GetError() or ''
+                print('LLDB_SNAPSHOT_COMMAND ' + command, flush=True)
+                print(text, end='', flush=True)
+                if error:
+                    print(error, end='', flush=True)
+                snapshot['captures'][command] = {'succeeded': bool(result.Succeeded()), 'output_lines': len(text.splitlines()),
+                                                 'error': error or None}
+                _write('process.json', snapshot)
+    except Exception as error:
+        snapshot['error'] = str(error)
+    _write('process.json', snapshot)
+'''
+
+
+def snapshot_command(lldb, exe, args, output, interrupt_after):
+    directory = output / 'lldb-snapshot'
+    directory.mkdir(exist_ok=False)
+    module = directory / 'owned_lldb_snapshot.py'
+    module.write_text(LLDB_SNAPSHOT_SCRIPT, encoding='utf-8')
+    write_json(directory / 'config.json', {'deadline_monotonic': time.monotonic() + interrupt_after})
+    finish = 'script owned_lldb_snapshot.finish(lldb.debugger)'
+    return [lldb, '--no-lldbinit', '--batch', '-o', 'command script import "' + module.as_posix() + '"',
+            '-o', 'script owned_lldb_snapshot.arm(lldb.debugger)', '-o', 'run',
+            '-o', finish, '-k', finish, '--', str(exe), *args]
+
+
+def debugger_outcome(stdout, result, output):
+    directory = output / "lldb-snapshot"
+    for name, key in [("interrupt.json", "debugger_interrupt"), ("process.json", "debugger_snapshot")]:
+        if (directory / name).is_file():
+            try:
+                result[key] = json.loads((directory / name).read_text())
+            except (OSError, ValueError) as error:
+                result[key + '_error'] = str(error)
+    snapshot = result.get("debugger_snapshot")
+    if snapshot:
+        result.update(test_pid=snapshot["pid"], target_state=snapshot["classification"],
+                      target_exit_code=snapshot["target_exit_code"])
+        if snapshot.get("exception_code"):
+            result["target_exception_code"] = snapshot["exception_code"]
+        if re.search(r'stop reason = Exception 0xc0000005\b', stdout, re.I):
+            result.update(target_state='exception_stopped', target_exit_code=None, target_exception_code='0xc0000005')
+        return
     exits = re.findall(r'Process (\d+) exited with status = (-?\d+)', stdout)
     stops = re.findall(r'stop reason = Exception (0x[0-9a-fA-F]+)', stdout)
-    if exits:
-        pid, code = exits[-1]
-        result.update(test_pid=int(pid), target_state='exited', target_exit_code=int(code))
-    elif stops:
-        result.update(target_state='exception_stopped', target_exception_code=stops[-1].lower())
+    if stops:
+        code = next((value for value in stops if value.lower() == '0xc0000005'), stops[-1])
+        result.update(target_state='exception_stopped', target_exception_code=code.lower(), target_exit_code=None)
         launched = re.findall(r'Process (\d+) launched:', stdout)
         if launched:
             result['test_pid'] = int(launched[-1])
+    elif exits:
+        pid, code = exits[-1]
+        result.update(test_pid=int(pid), target_state='exited', target_exit_code=int(code))
     else:
         result['target_state'] = 'unknown'
 
 
 def run_cell(name, args, root, output, lldb, *, deadline=None, timeout_seconds=180,
-             executable=None, use_debugger=False, debugger_paths=()):
+             executable=None, use_debugger=False, debugger_paths=(), interrupt_after_seconds=None):
     exe = executable if executable is not None else root / EXE
     command = [str(exe), *args]
     wants_debugger = use_debugger or name == 'full_default_debugger'
     debug = wants_debugger and lldb is not None
-    if debug:
-        command = [lldb, '--no-lldbinit', '--batch', '-o', 'image list', '-o', 'run',
-                   '-k', 'thread backtrace all', '-k', 'image list', '--', str(exe), *args]
     env = debugger_environment(debugger_paths if debug else ())
     env.update(RUST_MIN_STACK='8388608', FOVEONIC_GPU_TEST_TRACE='1')
     result = {'name': name, 'argv': command, 'test_argv': [str(exe), *args],
@@ -540,6 +695,15 @@ def run_cell(name, args, root, output, lldb, *, deadline=None, timeout_seconds=1
         result['end_utc'] = now()
         write_json(output / (name + '.json'), result)
         return result
+    if debug:
+        interrupt_after = (min(150, timeout_seconds - 30) if interrupt_after_seconds is None
+                           else min(interrupt_after_seconds, timeout_seconds - 1))
+        if interrupt_after <= 0:
+            result.update(target_state='not_run_budget', end_utc=now())
+            write_json(output / (name + '.json'), result)
+            return result
+        command = snapshot_command(lldb, exe, args, output, interrupt_after)
+        result['argv'] = command
     process = None
     stdout_path = output / (name + '.stdout.log')
     try:
@@ -564,13 +728,15 @@ def run_cell(name, args, root, output, lldb, *, deadline=None, timeout_seconds=1
         if process is not None:
             if debug:
                 result['debugger_exit_code'] = process.returncode
-                debugger_outcome(stdout_path.read_text(encoding='utf-8', errors='replace'), result)
+                debugger_outcome(stdout_path.read_text(encoding='utf-8', errors='replace'), result, output)
                 result['exit_note'] = 'Debugger status is separate from the inferior exit or exception stop.'
             else:
                 result['target_exit_code'] = process.returncode
                 result['target_state'] = 'exited'
             if result['timed_out'] or 'controller_error' in result:
-                result['target_state'] = 'terminated_by_controller'
+                result['controller_terminated'] = True
+                if result.get('target_exception_code') != '0xc0000005':
+                    result['target_state'] = 'terminated_by_controller'
             if result['test_pid']:
                 result['event_log'] = event_log(result['test_pid'], result['start_utc'], result['end_utc'], env)
         write_json(output / (name + '.json'), result)
