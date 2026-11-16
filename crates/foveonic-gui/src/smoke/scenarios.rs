@@ -1054,7 +1054,14 @@ impl Scenario {
                         self.config.drag_pattern,
                         &mut smoke.direct_events,
                     ) {
-                        Ok(drag) => self.drag = Some(drag),
+                        Ok(drag) => {
+                            if self.session.is_some() {
+                                // Give egui a complete hover frame at the new control before
+                                // pressing, after the preceding case's pointer position.
+                                prepend_session_hover(&mut smoke.direct_events);
+                            }
+                            self.drag = Some(drag);
+                        }
                         Err(error) => {
                             self.failed = Some(error);
                             self.finish(app);
@@ -1377,6 +1384,12 @@ impl Scenario {
                             next.began = Instant::now();
                             smoke.direct_events.clear();
                             smoke.pointer_motion = None;
+                            // The prior gesture is released, but egui retains its last
+                            // pointer position and hover state across cases.
+                            smoke
+                                .direct_events
+                                .push_back(vec![egui::Event::PointerGone]);
+                            ctx.stop_dragging();
                             crate::automation::reveal(None);
                             ctx.data_mut(|data| data.clear());
                             *self = next;
@@ -1406,6 +1419,26 @@ impl Scenario {
             "viewport_points":[viewport.x,viewport.y],"pixels_per_point":ctx.pixels_per_point()});
         let mut sample = serde_json::json!({"elapsed_ms":started.elapsed().as_secs_f64()*1000.,
             "action":self.action.map_or("initial-selection",Action::name),"worker_busy":app.worker.busy()});
+        if self.session.is_some() && matches!(self.action, Some(Action::SliderDrag)) {
+            let (position, down) = ctx.input(|input| {
+                (
+                    input.pointer.latest_pos().map(|pos| [pos.x, pos.y]),
+                    input.pointer.primary_down(),
+                )
+            });
+            let (dragged, hovered) = ctx.interaction_snapshot(|interaction| {
+                (
+                    interaction.dragged.map(|id| id.short_debug_format()),
+                    interaction
+                        .hovered
+                        .iter()
+                        .map(|id| id.short_debug_format())
+                        .collect::<Vec<_>>(),
+                )
+            });
+            sample["pointer"] = serde_json::json!({"position":position,"down":down,
+                "dragged_widget":dragged,"hovered_widgets":hovered});
+        }
         if self.config.name == Case::BackgroundEdit {
             let progress = app.import.smoke_batch_progress();
             sample["background_running"] = (progress.running && progress.decisions_saved).into();
@@ -1846,6 +1879,19 @@ impl Scenario {
     }
 }
 
+fn prepend_session_hover(events: &mut VecDeque<Vec<egui::Event>>) {
+    let start = events
+        .front()
+        .and_then(|events| {
+            events.iter().find_map(|event| match event {
+                egui::Event::PointerMoved(position) => Some(*position),
+                _ => None,
+            })
+        })
+        .expect("slider gesture must begin with a pointer position");
+    events.push_front(vec![egui::Event::PointerMoved(start)]);
+}
+
 // Validate the entire queue before the first case can touch the application.
 fn validate_session(
     session: &serde_json::Value,
@@ -2114,6 +2160,65 @@ mod automation_tests {
             cases[0]["inputs"][0]["settings"],
             cases[1]["inputs"][0]["settings"]
         );
+    }
+
+    #[test]
+    fn session_hover_frame_targets_new_control_before_drag() {
+        use eframe::egui;
+        use std::collections::VecDeque;
+
+        fn frame(ctx: &egui::Context, time: f64, events: Vec<egui::Event>) -> (bool, bool) {
+            let mut result = (false, false);
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 400.),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.interact(
+                        egui::Rect::from_min_max(egui::pos2(40., 40.), egui::pos2(160., 60.)),
+                        egui::Id::new("previous-control"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let response = ui.interact(
+                        egui::Rect::from_min_max(egui::pos2(40., 100.), egui::pos2(160., 120.)),
+                        egui::Id::new("new-control"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    result = (response.hovered(), response.dragged());
+                });
+            });
+            result
+        }
+        let ctx = egui::Context::default();
+        frame(&ctx, 0., vec![]);
+        frame(
+            &ctx,
+            0.1,
+            vec![egui::Event::PointerMoved(egui::pos2(100., 50.))],
+        );
+        frame(&ctx, 0.2, vec![egui::Event::PointerGone]);
+        let start = egui::pos2(100., 110.);
+        let end = egui::pos2(120., 110.);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut events = VecDeque::from([
+            vec![egui::Event::PointerMoved(start), button(true)],
+            vec![egui::Event::PointerMoved(end)],
+        ]);
+        super::prepend_session_hover(&mut events);
+        assert!(frame(&ctx, 0.3, events.pop_front().unwrap()).0);
+        frame(&ctx, 0.4, events.pop_front().unwrap());
+        assert!(frame(&ctx, 0.5, events.pop_front().unwrap()).1);
     }
 
     #[test]
