@@ -79,8 +79,12 @@ def stage(archive, root):
                 raise ValueError('pinned checksum mismatch: ' + name)
             (root / name).write_bytes(data)
     with zipfile.ZipFile(root / 'dxc_2026_09_29.zip') as z:
+        # ZipInfo normalizes native separators differently on Windows and macOS.
+        members = {PureWindowsPath(info.filename).as_posix(): info for info in z.infolist()}
+        if len(members) != len(z.infolist()):
+            raise ValueError('duplicate normalized DXC member')
         for name, expected in DLLS.items():
-            data = z.read(name)
+            data = z.read(members[PureWindowsPath(name).as_posix()])
             if digest(data) != expected:
                 raise ValueError('DXC DLL checksum mismatch: ' + name)
             (root / PureWindowsPath(name).name).write_bytes(data)
