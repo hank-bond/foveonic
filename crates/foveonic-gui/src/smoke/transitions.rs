@@ -128,10 +128,7 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
     result
 }
 
-struct TileView {
-    index: usize,
-    zoom: f32,
-    pan: egui::Vec2,
+struct ViewSnapshot {
     task: (u64, u64),
     texture: std::sync::Weak<foveonic::image::ImageTexture>,
     scale: foveonic::render::Scale,
@@ -141,6 +138,13 @@ struct TileView {
     origin: foveonic::source::SourceOrigin,
     native_extent: [u32; 2],
     detail: Option<((u64, u64), [u32; 4])>,
+}
+
+struct TileView {
+    index: usize,
+    zoom: f32,
+    pan: egui::Vec2,
+    snapshot: ViewSnapshot,
 }
 
 pub(super) struct TransitionJourney {
@@ -161,7 +165,7 @@ pub(super) struct TransitionJourney {
     seed: u64,
     fit_image: Option<egui::Rect>,
     zoom_image: Option<egui::Rect>,
-    view_request: Option<(foveonic::render::Settings, foveonic::render::Scale)>,
+    single_view: Option<ViewSnapshot>,
     inspection_output: Option<String>,
     inspection_task: Option<(u64, u64)>,
     photograph_task: Option<(u64, u64)>,
@@ -192,7 +196,7 @@ impl TransitionJourney {
             composition: None,
             fit_image: None,
             zoom_image: None,
-            view_request: None,
+            single_view: None,
             inspection_output: None,
             inspection_task: None,
             photograph_task: None,
@@ -311,28 +315,65 @@ impl TransitionJourney {
         Ok(())
     }
 
-    fn check_tile_view(
-        &mut self,
+    fn view_snapshot(
         app: &App,
         ctx: &egui::Context,
-        paths: &[PathBuf],
-        step: Step,
-    ) -> Result<(), String> {
-        let expected = self
-            .tile_view
-            .as_mut()
-            .ok_or("missing tile view expectation")?;
-        let path = &paths[expected.index];
-        let view = app.viewports.view(Some(path));
-        let zoom = view
-            .zoom_percent(ctx.pixels_per_point())
-            .ok_or("missing tile zoom")?;
-        let frame = if app.selected.as_ref() == Some(path) {
+        path: &std::path::Path,
+    ) -> Result<ViewSnapshot, String> {
+        let frame = if app.selected.as_deref() == Some(path) {
             app.frame.as_ref()
         } else {
             app.multi_edit.frame(path)
         }
-        .ok_or("missing tile photograph")?;
+        .ok_or("missing photograph")?;
+        let view = app.viewports.view(Some(path));
+        Ok(ViewSnapshot {
+            task: (frame.diagnostic_task.id, frame.diagnostic_task.revision),
+            texture: std::sync::Arc::downgrade(&frame.texture),
+            scale: frame.artifact.settings.working_scale,
+            demanded_scale: super::automatic_scale_bound(
+                frame,
+                view,
+                app.preferences.processing_quality,
+                ctx.pixels_per_point(),
+            )?,
+            settings: frame.requested.clone(),
+            policy: app.preferences.processing_quality,
+            origin: frame.origin.clone(),
+            native_extent: frame.native_display_extent(),
+            detail: app
+                .photo_detail(
+                    path,
+                    Some(frame),
+                    &frame.requested,
+                    crate::editor::Rendition::Current,
+                )
+                .map(|detail| {
+                    (
+                        (detail.diagnostic_task.id, detail.diagnostic_task.revision),
+                        detail
+                            .artifact
+                            .settings
+                            .preview_region
+                            .unwrap_or_else(|| detail.display_window(false)),
+                    )
+                }),
+        })
+    }
+
+    fn check_view(
+        app: &App,
+        ctx: &egui::Context,
+        path: &std::path::Path,
+        expected: &mut ViewSnapshot,
+    ) -> Result<(bool, bool), String> {
+        let view = app.viewports.view(Some(path));
+        let frame = if app.selected.as_deref() == Some(path) {
+            app.frame.as_ref()
+        } else {
+            app.multi_edit.frame(path)
+        }
+        .ok_or("missing photograph")?;
         if frame.path != *path
             || frame.rendition != crate::editor::Rendition::Current
             || !frame.is_photographic()
@@ -346,13 +387,13 @@ impl TransitionJourney {
             )
         {
             return Err(
-                "tile viewing changed photographic edits, policy, source or native geometry".into(),
+                "viewing changed photographic edits, policy, source or native geometry".into(),
             );
         }
         let demanded_scale =
             super::automatic_scale_bound(frame, view, expected.policy, ctx.pixels_per_point())?;
         let demanded = demanded_scale.divisor();
-        let visible = view.visible_pixels().ok_or("missing tile visible pixels")?;
+        let visible = view.visible_pixels().ok_or("missing visible pixels")?;
         let window = frame.display_window(false);
         let visible = [
             visible.top_left[0] + window[0],
@@ -376,7 +417,7 @@ impl TransitionJourney {
                 || detail.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
             {
                 return Err(
-                    "tile detail does not match its photographic policy, source and edits".into(),
+                    "detail does not match its photographic policy, source and edits".into(),
                 );
             }
         }
@@ -395,8 +436,7 @@ impl TransitionJourney {
                 .is_some_and(|(_, coverage)| crate::rendering::smart::contains(coverage, visible))
         {
             return Err(
-                "tile viewing settled without sufficient sampling and visible native coverage"
-                    .into(),
+                "viewing settled without sufficient sampling and visible native coverage".into(),
             );
         }
         let task = (frame.diagnostic_task.id, frame.diagnostic_task.revision);
@@ -412,7 +452,7 @@ impl TransitionJourney {
         // Relaxing demand reuses immutable finer pixels. A prior regional pass may
         // still finish its Whole continuation, and zoom may need finer pixels.
         if !same_pixels && !finer_needed {
-            return Err("tile viewing recomputed existing sufficient Whole pixels".into());
+            return Err("viewing recomputed existing sufficient Whole pixels".into());
         }
         if let (Some((old_task, old_coverage)), Some((new_task, _))) =
             (expected.detail, detail_snapshot)
@@ -422,11 +462,36 @@ impl TransitionJourney {
                 && detail.is_some_and(|detail| detail.artifact.settings.preview_region.is_some())
             {
                 return Err(
-                    "tile viewing recomputed native detail already covering the visible region"
-                        .into(),
+                    "viewing recomputed native detail already covering the visible region".into(),
                 );
             }
         }
+        expected.task = task;
+        expected.texture = std::sync::Arc::downgrade(&frame.texture);
+        expected.scale = frame.artifact.settings.working_scale;
+        expected.demanded_scale = demanded_scale;
+        expected.detail = detail_snapshot;
+        Ok((same_pixels, !same_pixels && finer_needed))
+    }
+
+    fn check_tile_view(
+        &mut self,
+        app: &App,
+        ctx: &egui::Context,
+        paths: &[PathBuf],
+        step: Step,
+    ) -> Result<(), String> {
+        let expected = self
+            .tile_view
+            .as_mut()
+            .ok_or("missing tile view expectation")?;
+        let path = &paths[expected.index];
+        let view = app.viewports.view(Some(path));
+        let zoom = view
+            .zoom_percent(ctx.pixels_per_point())
+            .ok_or("missing tile zoom")?;
+        let (same_pixels, completed_refinement) =
+            Self::check_view(app, ctx, path, &mut expected.snapshot)?;
         match step {
             Step::TileZoom | Step::TilePointerZoom => {
                 self.next_double_click = None;
@@ -456,17 +521,13 @@ impl TransitionJourney {
             }
             _ => unreachable!(),
         }
-        expected.task = task;
-        expected.texture = std::sync::Arc::downgrade(&frame.texture);
-        expected.scale = frame.artifact.settings.working_scale;
-        expected.demanded_scale = demanded_scale;
-        expected.detail = detail_snapshot;
+        let snapshot = &expected.snapshot;
         self.events.push(
             serde_json::json!({"tile_view":path,"zoom":zoom,"pan":[view.pan.x,view.pan.y],
-                "processing_quality":expected.policy,"demanded_scale_divisor":demanded,
-                "overview_scale_divisor":expected.scale.divisor(),"overview_task":expected.task,
-                "reused_overview_pixels":same_pixels,"completed_refinement":!same_pixels && finer_needed,
-                "detail":expected.detail}),
+                "processing_quality":snapshot.policy,"demanded_scale_divisor":snapshot.demanded_scale.divisor(),
+                "overview_scale_divisor":snapshot.scale.divisor(),"overview_task":snapshot.task,
+                "reused_overview_pixels":same_pixels,"completed_refinement":completed_refinement,
+                "detail":snapshot.detail}),
         );
         Ok(())
     }
@@ -687,17 +748,15 @@ impl TransitionJourney {
                     .viewport()
                     .image_rectangles()
                     .ok_or("viewport image was not drawn")?;
-                let frame = app.frame.as_ref().ok_or("missing viewport frame")?;
-                let (request, scale) = self
-                    .view_request
-                    .as_ref()
-                    .ok_or("missing viewport request")?;
-                if frame.rendition != crate::editor::Rendition::Current
-                    || frame.artifact.settings.working_scale != *scale
-                    || !crate::rendering::matching::same_authored_edits(&frame.requested, request)
-                {
-                    return Err("zoom or pan changed the photographic request or scale".into());
+                let index = self.single.ok_or("missing single photo")?;
+                if app.selected.as_ref() != Some(&paths[index]) || app.multi_photo_overview() {
+                    return Err("single viewing changed the active photograph or layout".into());
                 }
+                let snapshot = self
+                    .single_view
+                    .as_mut()
+                    .ok_or("missing viewport snapshot")?;
+                Self::check_view(app, ctx, &paths[index], snapshot)?;
                 let fit = self.fit_image.ok_or("missing Fit geometry")?;
                 match step {
                     Step::Zoom => {
@@ -1034,10 +1093,6 @@ impl TransitionJourney {
                     .ok_or("no active tile")?;
                 let index = (active + 1) % paths.len();
                 let path = &paths[index];
-                let frame = app
-                    .multi_edit
-                    .frame(path)
-                    .ok_or("inactive tile has no frame")?;
                 let view = app.viewports.view(Some(path));
                 self.tile_view = Some(TileView {
                     index,
@@ -1045,36 +1100,7 @@ impl TransitionJourney {
                         .zoom_percent(ctx.pixels_per_point())
                         .ok_or("tile has no geometry")?,
                     pan: view.pan,
-                    task: (frame.diagnostic_task.id, frame.diagnostic_task.revision),
-                    texture: std::sync::Arc::downgrade(&frame.texture),
-                    scale: frame.artifact.settings.working_scale,
-                    demanded_scale: super::automatic_scale_bound(
-                        frame,
-                        view,
-                        app.preferences.processing_quality,
-                        ctx.pixels_per_point(),
-                    )?,
-                    settings: frame.requested.clone(),
-                    policy: app.preferences.processing_quality,
-                    origin: frame.origin.clone(),
-                    native_extent: frame.native_display_extent(),
-                    detail: app
-                        .photo_detail(
-                            path,
-                            Some(frame),
-                            &frame.requested,
-                            crate::editor::Rendition::Current,
-                        )
-                        .map(|detail| {
-                            (
-                                (detail.diagnostic_task.id, detail.diagnostic_task.revision),
-                                detail
-                                    .artifact
-                                    .settings
-                                    .preview_region
-                                    .unwrap_or_else(|| detail.display_window(false)),
-                            )
-                        }),
+                    snapshot: Self::view_snapshot(app, ctx, path)?,
                 });
                 if step == Step::TilePointerZoom {
                     self.model.select(vec![index]);
@@ -1195,11 +1221,11 @@ impl TransitionJourney {
                     .image_rectangles()
                     .ok_or("viewport image was not drawn")?;
                 self.fit_image = Some(image);
-                let frame = app.frame.as_ref().ok_or("missing frame")?;
-                self.view_request = Some((
-                    frame.requested.clone(),
-                    frame.artifact.settings.working_scale,
-                ));
+                let index = self.single.ok_or("missing single photo")?;
+                if app.selected.as_ref() != Some(&paths[index]) || app.multi_photo_overview() {
+                    return Err("single viewing changed the active photograph or layout".into());
+                }
+                self.single_view = Some(Self::view_snapshot(app, ctx, &paths[index])?);
                 app.viewport_mut().zoom_by(4.);
             }
             Step::Pan => app.viewport_mut().pan_to(egui::vec2(0.7, 0.3)),
