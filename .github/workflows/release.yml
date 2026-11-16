@@ -132,7 +132,20 @@ jobs:
           test -s Foveonic.app.dSYM/Contents/Resources/DWARF/foveonic-gui
           symbols="Foveonic-${RELEASE_TAG}-macos-arm64-symbols.zip"
           ditto -c -k --keepParent Foveonic.app.dSYM "$symbols"
-          shasum -a 256 "$archive" "$symbols" > SHA256SUMS
+          shasum -a 256 "$archive" > SHA256SUMS
+          shasum -a 256 "$symbols" > symbols-SHA256SUMS
+
+      - name: Retain matching macOS symbols for developers
+        uses: actions/upload-artifact@v4
+        with:
+          name: Foveonic-macos-arm64-symbols-${{ github.sha }}
+          path: |
+            target/release/Foveonic-${{ github.ref_name }}-macos-arm64-symbols.zip
+            target/release/binary-uuid.txt
+            target/release/symbols-uuid.txt
+            target/release/symbols-SHA256SUMS
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Upload to draft GitHub Release
         env:
@@ -154,7 +167,6 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" \
             "target/release/Foveonic-${RELEASE_TAG}-macos-arm64.zip" \
-            "target/release/Foveonic-${RELEASE_TAG}-macos-arm64-symbols.zip" \
             target/release/SHA256SUMS --clobber
 
       - name: Remove signing credentials and temporary files
@@ -212,14 +224,10 @@ jobs:
           fi
           mac="Foveonic-${RELEASE_TAG}-macos-arm64.zip"
           windows="Foveonic-${RELEASE_TAG}-windows-x64.zip"
-          mac_symbols="Foveonic-${RELEASE_TAG}-macos-arm64-symbols.zip"
-          windows_symbols="Foveonic-${RELEASE_TAG}-windows-x64-symbols.zip"
           gh release download "$RELEASE_TAG" --pattern "$mac"
-          gh release download "$RELEASE_TAG" --pattern "$mac_symbols"
           mv Foveonic-windows-x64.zip "$windows"
-          mv Foveonic-windows-x64-symbols.zip "$windows_symbols"
-          sha256sum "$mac" "$windows" "$mac_symbols" "$windows_symbols" > SHA256SUMS
-          gh release upload "$RELEASE_TAG" "$windows" "$windows_symbols" SHA256SUMS --clobber
+          sha256sum "$mac" "$windows" > SHA256SUMS
+          gh release upload "$RELEASE_TAG" "$windows" SHA256SUMS --clobber
 
   sequoia:
     name: Signed app binary loading on macOS 15

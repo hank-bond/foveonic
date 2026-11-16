@@ -56,12 +56,13 @@ The [release workflow](../.github/workflows/release.yml) runs checks on an Apple
 
 - `Foveonic-v0.3.0-macos-arm64.zip`, containing `Foveonic.app`.
 - `Foveonic-v0.3.0-windows-x64.zip`, containing the unsigned app and its DirectX compiler DLLs and license notices.
-- Matching macOS dSYM and Windows PDB symbol archives for investigating release backtraces.
-- `SHA256SUMS`, containing the application and symbol archive hashes. Verify each archive using its corresponding checksum.
+- `SHA256SUMS`, containing the two application archive hashes. Verify each archive using its corresponding checksum.
 
 Signing or signature-verification failures stop uploads, without an unsigned fallback. There is no notarization submission, ticket stapling or Gatekeeper-acceptance gate.
 
-Keep each symbol archive with the exact application build it describes. The macOS packaging step compares the executable and dSYM UUIDs. The Windows symbol archive records hashes of the executable and PDB, and the application archive also includes that PDB. Verify the symbol artifacts and a useful packaged-build backtrace on both platforms before claiming support-report coverage. An address from a different build cannot be reliably symbolicated with these files.
+Matching dSYM and PDB archives remain developer CI artifacts. Public application downloads exclude these archives and the Windows PDB. Keep each symbol archive with the exact application build it describes, and preserve a developer copy before CI retention expires. The macOS packaging step compares the executable and dSYM UUIDs. The Windows symbol archive records hashes of the executable and PDB. Verify these identities before publication. User support reports retain structured errors and best-effort stacks, but production packages do not guarantee resolved function names or source lines. Native crash investigation may require a crash dump and matching retained symbols.
+
+When replacing an unpublished draft that contains symbol downloads, validate the rebuilt application archives and retain matching developer symbols before deleting the standalone symbol assets. Regenerate the public checksums for the application archives only. Published historical releases remain unchanged.
 
 The Windows archive is unsigned and must be tested on Windows before publication. The Windows build runs independently, and its draft upload waits for the macOS draft. A new draft receives only the tagged changelog section. An existing draft keeps its title and notes, including your prose. Rerunning the workflow replaces its build assets. An already published release rejects uploads. Tags unrelated to application versions, such as `example-photographs`, do not trigger this workflow.
 

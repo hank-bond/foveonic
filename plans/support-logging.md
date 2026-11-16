@@ -4,6 +4,10 @@ summary: "Astra and eight Terra audits map missing user-support evidence to shar
 
 # User-support logging audit and plan
 
+## Production packaging and follow-up
+
+The owner approved rebuilding and publishing 0.8.2 with the current logging implementation. Public downloads exclude PDB/dSYM files, while matching symbols remain developer artifacts. Resolved production stacks are best effort. Richer logging follows after release, with stable event codes, operation correlation and useful failure context as the proposed focus. Do not expand this release with new symbol lookup, crash handlers or logging architecture. The separate release-process reflection remains pending after publication.
+
 Source baseline: commit `5c68c86` (the pushed 0.8.2 export correction). Read-only Astra planning with eight Terra audit agents, including a rendering/scheduling follow-up. Source locations below refer to this baseline. No logging implementation or repository edits were made by the audit team.
 
 ## Decision summary

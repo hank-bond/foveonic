@@ -22,6 +22,7 @@ implementation: incomplete
 - Signing credentials **must** come from GitHub Actions secrets. The Team ID **may** be a repository variable. Certificate exports and imported private keys **must** remain in temporary runner storage and be cleaned up on success, failure or cancellation.
 - Release tags **must** also build an unsigned Windows x64 archive containing the GUI executable, pinned DirectX shader compiler DLLs and their license notices. Its app **must** use DirectX 12 with DXC. CI **must** verify the downloaded compiler archive before packaging.
 - Successful release builds **must** attach both platform archives and their SHA-256 checksums to a draft GitHub Release. Automation **must not** publish releases or change an existing release's prose. Uploads to an already published release **must** fail.
+- Public application archives **must** exclude developer PDB/dSYM files. Matching symbols **must** be retained as developer artifacts with verifiable build identities, separately from public release downloads. Public checksums cover application archives only.
 - The checked-in changelog **must** supply the initial draft notes for the tagged version, with space for the owner to add introductory prose. The owner reviews prose and publishes the release.
 
 ## Release scope

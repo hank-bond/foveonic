@@ -53,6 +53,8 @@ The previous packaged candidate passed native startup, rendering, normal-stack a
 
 Final source `232e2327f03caf5693fb10eb95b43f40ad31cd2c` passed [release CI](https://github.com/hank-bond/foveonic/actions/runs/43879368810), including ordinary workspace, format, Clippy, documentation and macOS 15 binary-loading checks. Its signed Mac package passed all 46 non-matrix native jobs with the detailed image/settings postcheck. The separately identified `ea35235` matrix passed all 1,440 cases in 20 groups and carries through reviewed processing-source equivalence. These proofs cover the 47 declared catalog jobs without relabeling them as one same-binary run. The exact Windows package passed ten native smoke checkpoints, normal-stack startup, matching-symbol early-error reporting and frozen TIFF export on Windows 11 Home 25H2. Windows 10, physical pointer/display behavior and latency are not established by these checks. The draft is ready for owner handoff, with publication still held for review of the unresolved parallel native access-violation risk above.
 
+The owner subsequently approved rebuilding and publishing 0.8.2 as is, with richer logging deferred. The packaging-only rebuild excludes symbols from public downloads and retains them as developer artifacts. The owner explicitly requested carrying forward completed validation rather than repeating the full suites. Production source equivalence, fresh CI and exact-package startup/render smoke checks cover this rebuild. This publication decision accepts the disclosed parallel native-crash risk and does not establish its cause or a fix.
+
 ## Checks
 
 - [x] Reproduce all four failures on the candidate and published baseline.
