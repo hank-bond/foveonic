@@ -33,10 +33,99 @@ jobs:
       - name: Prepare Windows test shader compiler
         run: python -c "import sys; sys.path.insert(0, 'scripts'); from setup_tests import prepare_dxc; prepare_dxc(install=True)"
       - name: Test Windows workspace
+        id: windows_tests
         env:
           # Test threads need room for nested fixtures. The packaged app keeps its normal stack.
           RUST_MIN_STACK: '8388608'
         run: cargo test --locked --release --workspace
+      - name: Diagnose a failed Windows test process
+        if: ${{ failure() && steps.windows_tests.outcome == 'failure' }}
+        shell: pwsh
+        env:
+          RUST_MIN_STACK: '8388608'
+          FOVEONIC_GPU_TEST_TRACE: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $diagnostics = Join-Path $env:RUNNER_TEMP 'foveonic-windows-test-failure'
+          New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+          rustc -vV | Set-Content (Join-Path $diagnostics 'rustc.txt')
+          cargo -vV | Set-Content (Join-Path $diagnostics 'cargo.txt')
+          clang-cl --version | Set-Content (Join-Path $diagnostics 'clang.txt')
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber |
+            ConvertTo-Json | Set-Content (Join-Path $diagnostics 'os.json')
+          $env:PATH = "$(Join-Path $PWD 'target/release/deps');$(Join-Path $PWD 'target/release');$env:PATH"
+          $candidates = @(Get-ChildItem target/release -Recurse -File -Filter 'foveonic-*.exe' |
+            Where-Object { $_.Name -cmatch '^foveonic-[0-9a-f]+\.exe$' })
+          $coreTests = @($candidates | Where-Object {
+            $tests = & $_.FullName --list --format terse
+            $LASTEXITCODE -eq 0 -and ($tests -match '^diagnostics::tests::sdk_ring_buffer_bounds_capture_and_unsupported_configs_are_rejected: test$')
+          })
+          if ($coreTests.Count -ne 1) {
+            $candidates.FullName | Set-Content (Join-Path $diagnostics 'candidate-paths.txt')
+            throw "Expected exactly one built core test executable, found $($coreTests.Count)"
+          }
+          $binary = $coreTests[0]
+          Copy-Item $binary.FullName $diagnostics
+          $pdb = [IO.Path]::ChangeExtension($binary.FullName, '.pdb')
+          $pdbPresent = Test-Path -LiteralPath $pdb -PathType Leaf
+          if ($pdbPresent) { Copy-Item $pdb $diagnostics }
+          else { Write-Warning "Matching core-test PDB is missing: $pdb" }
+          Copy-Item .local/test-dependencies/dxc_2026_09_29.zip $diagnostics
+          Copy-Item LICENSE $diagnostics
+          $identity = [ordered]@{
+            binary = $binary.FullName
+            binary_sha256 = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash
+            pdb = $pdb
+            pdb_present = $pdbPresent
+            pdb_sha256 = $(if ($pdbPresent) { (Get-FileHash $pdb -Algorithm SHA256).Hash } else { $null })
+            rust_min_stack = $env:RUST_MIN_STACK
+            arguments = @('--nocapture')
+            timeout_seconds = 180
+            original_workspace_gate = 'failed'
+          }
+          $modules = @{}
+          $moduleNames = @('dxcompiler.dll','dxil.dll','d3d12.dll','d3d12core.dll','d3d10warp.dll')
+          $process = Start-Process $binary.FullName -ArgumentList '--nocapture' -NoNewWindow -PassThru `
+            -RedirectStandardOutput (Join-Path $diagnostics 'stdout.log') `
+            -RedirectStandardError (Join-Path $diagnostics 'stderr.log')
+          $deadline = [DateTime]::UtcNow.AddSeconds(180)
+          try {
+            while (!$process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+              try {
+                foreach ($module in $process.Modules) {
+                  if ($module.ModuleName.ToLowerInvariant() -in $moduleNames -and !$modules.ContainsKey($module.FileName)) {
+                    $modules[$module.FileName] = [ordered]@{
+                      name = $module.ModuleName
+                      path = $module.FileName
+                      version = $module.FileVersionInfo.FileVersion
+                      sha256 = (Get-FileHash $module.FileName -Algorithm SHA256).Hash
+                    }
+                  }
+                }
+              } catch {
+                $_.Exception.Message | Add-Content (Join-Path $diagnostics 'module-observation-errors.txt')
+              }
+              Start-Sleep -Milliseconds 100
+              $process.Refresh()
+            }
+            $identity['timed_out'] = !$process.HasExited
+          } finally {
+            if (!$process.HasExited) { $process.Kill() }
+            $process.WaitForExit()
+            $identity['exit_code'] = $process.ExitCode
+            $identity | ConvertTo-Json | Set-Content (Join-Path $diagnostics 'identity.json')
+            @($modules.Values) | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $diagnostics 'loaded-graphics-modules.json')
+            Get-ChildItem $diagnostics -File | Get-FileHash -Algorithm SHA256 |
+              Select-Object Path,Hash | ConvertTo-Json | Set-Content (Join-Path $diagnostics 'SHA256SUMS.json')
+          }
+      - name: Retain failed Windows test evidence
+        if: ${{ failure() && steps.windows_tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Foveonic-windows-test-failure-${{ github.sha }}
+          path: ${{ runner.temp }}/foveonic-windows-test-failure
+          if-no-files-found: error
+          retention-days: 14
       - name: Stage DirectX shader compiler
         shell: pwsh
         run: |

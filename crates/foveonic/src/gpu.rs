@@ -117,6 +117,21 @@ pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
     }
 }
 
+// Opt-in test output survives a native crash before libtest reports the result.
+#[cfg(test)]
+fn test_trace(phase: &str, details: std::fmt::Arguments<'_>) {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ENABLED.get_or_init(|| {
+        std::env::var_os("FOVEONIC_GPU_TEST_TRACE").as_deref() == Some(std::ffi::OsStr::new("1"))
+    }) {
+        let thread = std::thread::current();
+        eprintln!(
+            "FOVEONIC_GPU_TEST_TRACE thread={:?} phase={phase} {details}",
+            thread.name().unwrap_or("unnamed")
+        );
+    }
+}
+
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -146,7 +161,14 @@ impl Gpu {
         }
     }
     pub fn new() -> Result<Self> {
+        #[cfg(test)]
+        test_trace(
+            "instance-start",
+            format_args!("descriptor={:?}", instance_descriptor()),
+        );
         let instance = wgpu::Instance::new(&instance_descriptor());
+        #[cfg(test)]
+        test_trace("adapter-start", format_args!(""));
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
@@ -163,6 +185,8 @@ impl Gpu {
             )
         })?;
         let info = adapter.get_info();
+        #[cfg(test)]
+        test_trace("adapter-ready", format_args!("adapter={info:?}"));
         let adapter_name = info.name.clone();
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -174,6 +198,8 @@ impl Gpu {
                 "adapter":info.name,"vendor":info.vendor,"device":info.device,
                 "backend":format!("{:?}",info.backend),"driver":info.driver,"driver_info":info.driver_info,
             })))?;
+        #[cfg(test)]
+        test_trace("device-ready", format_args!(""));
         crate::support::update_context(
             "gpu",
             serde_json::json!({

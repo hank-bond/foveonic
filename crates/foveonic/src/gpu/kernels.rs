@@ -724,6 +724,8 @@ impl Gpu {
         profile: &mut crate::profile::Profile,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Self> {
+        #[cfg(test)]
+        super::test_trace("kernels-start", format_args!("adapter={adapter_name:?}"));
         let began = profile.mode.enabled().then(std::time::Instant::now);
         let _scope =
             crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.pipelines.create");
@@ -1626,6 +1628,11 @@ impl Gpu {
             .iter()
             .enumerate()
             .map(|(index, &(code, entry))| {
+                #[cfg(test)]
+                super::test_trace(
+                    "kernel-start",
+                    format_args!("index={index} entry={entry:?}"),
+                );
                 let _scope = crate::diagnostics::scope_with(
                     crate::diagnostics::Category::Gpu,
                     "gpu.shader.compile",
@@ -1721,6 +1728,11 @@ impl Gpu {
                     label: Some(entry),
                     source: wgpu::ShaderSource::Wgsl(code),
                 });
+                #[cfg(test)]
+                super::test_trace(
+                    "shader-ready",
+                    format_args!("index={index} entry={entry:?}"),
+                );
                 let compilation_options = if index == Kernel::AdaptiveToneGainSameGrid as usize {
                     wgpu::PipelineCompilationOptions {
                         constants: &same_grid_constants,
@@ -1737,6 +1749,11 @@ impl Gpu {
                     compilation_options,
                     cache: None,
                 });
+                #[cfg(test)]
+                super::test_trace(
+                    "kernel-ready",
+                    format_args!("index={index} entry={entry:?}"),
+                );
                 progress(index + 1, kernels.len());
                 pipeline
             })
@@ -1754,6 +1771,8 @@ impl Gpu {
                 }),
             ));
         }
+        #[cfg(test)]
+        super::test_trace("kernels-ready", format_args!("count={}", kernels.len()));
         Ok(Self {
             device,
             queue,
