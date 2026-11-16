@@ -55,6 +55,8 @@ Final source `232e2327f03caf5693fb10eb95b43f40ad31cd2c` passed [release CI](http
 
 The owner subsequently approved rebuilding and publishing 0.8.2 as is, with richer logging deferred. The packaging-only rebuild excludes symbols from public downloads and retains them as developer artifacts. The owner explicitly requested carrying forward completed validation rather than repeating the full suites. Production source equivalence, fresh CI and exact-package startup/render smoke checks cover this rebuild. This publication decision accepts the disclosed parallel native-crash risk and does not establish its cause or a fix.
 
+The packaging rebuild at `4c81ef4b66efa5f09152b383b3d0a0ab383b4f30` passed [release CI](https://github.com/hank-bond/foveonic/actions/runs/43897951448) and ten native startup/render checkpoints on each platform. Its production crates, shaders and Cargo dependencies match the previously validated source. The exact archives passed checksum, signature or normal-stack checks and matching developer-symbol identity checks. Public downloads contain no PDB/dSYM files or standalone symbol archives. [0.8.2](https://github.com/hank-bond/foveonic/releases/tag/v0.8.2) was published as Latest on November 16, 2026. Earlier numerical, export and complete native evidence retain their original build identities. The unresolved parallel native-crash risk remains accepted for this release.
+
 ## Checks
 
 - [x] Reproduce all four failures on the candidate and published baseline.
@@ -66,7 +68,7 @@ The owner subsequently approved rebuilding and publishing 0.8.2 as is, with rich
 - [x] Pass all four targeted native jobs.
 - [x] Pass the complete native GUI smoke suite and workspace checks.
 - [x] Verify exact packaged macOS and Windows binaries through native startup and rendering.
-- [ ] Review final changes independently and publish the approved 0.8.2 patch.
+- [x] Review final changes independently and publish the approved 0.8.2 patch.
 - [ ] After 0.8.2 ships, review how failing ordinary and opt-in correctness tests escaped the release process. Agree enforceable release gates and test ownership with the owner before implementing the follow-up.
 
 Prepare photographs with `python3 scripts/profiling/prepare_inputs.py --offline --directory <new-directory>`. Run all `driver: smoke` jobs from the maintained acceptance catalog using eight sources from generated `scenario-cases.json`, the pinned Quattro H photograph for `--tiger-source`, and Hazy Coast for `--dehaze-source`. Use the packaged GUI executable and a new evidence directory. Capture the suite report and failed-job logs. Baseline comparison uses the published 0.8.1 archive and identical sources/selectors. These runs check behavior and do not establish latency or physical screen presentation.
