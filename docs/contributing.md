@@ -61,8 +61,10 @@ The Rust tool generates index blocks between `<!-- INDEX:START -->` and `<!-- IN
 
 Run from the repository root. Check tools and prepare photographic inputs using [test environment setup](./testing-coverage.md#test-environment-setup).
 
+Use one test harness thread for ordinary workspace checks because GPU fixtures create independent devices and compile their kernels. Tests that exercise concurrency still create their own threads. Dedicated parallel diagnostic controls keep their existing scheduling.
+
 ```sh
-cargo test --offline --workspace
+cargo test --offline --workspace -- --test-threads=1
 cargo clippy --offline --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo run --offline -p docs-index -- --root "$PWD"

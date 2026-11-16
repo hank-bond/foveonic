@@ -38,7 +38,7 @@ jobs:
         env:
           RUST_MIN_STACK: '8388608'
         run: |
-          cargo test --locked --workspace
+          cargo test --locked --workspace -- --test-threads=1
           python3 scripts/setup_tests.py --install
           .local/test-python/bin/python -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
           .local/test-python/bin/python -m unittest discover -s scripts/profiling -p 'test_*.py'

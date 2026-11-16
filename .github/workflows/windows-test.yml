@@ -86,7 +86,7 @@ jobs:
         env:
           # Test threads need room for nested fixtures. The packaged app keeps its normal stack.
           RUST_MIN_STACK: '8388608'
-        run: cargo test --locked --release --workspace
+        run: cargo test --locked --release --workspace -- --test-threads=1
       - name: Diagnose a failed Windows test process
         if: ${{ failure() && steps.windows_tests.outcome == 'failure' }}
         shell: pwsh
@@ -131,13 +131,14 @@ jobs:
             pdb_present = $pdbPresent
             pdb_sha256 = $(if ($pdbPresent) { (Get-FileHash $pdb -Algorithm SHA256).Hash } else { $null })
             rust_min_stack = $env:RUST_MIN_STACK
-            arguments = @('--nocapture')
+            arguments = @('--test-threads=1', '--nocapture')
             timeout_seconds = 180
+            original_gate = 'cargo test --locked --release --workspace -- --test-threads=1'
             original_workspace_gate = 'failed'
           }
           $modules = @{}
           $moduleNames = @('dxcompiler.dll','dxil.dll','d3d12.dll','d3d12core.dll','d3d10warp.dll')
-          $process = Start-Process $binary.FullName -ArgumentList '--nocapture' -NoNewWindow -PassThru `
+          $process = Start-Process $binary.FullName -ArgumentList $identity.arguments -NoNewWindow -PassThru `
             -RedirectStandardOutput (Join-Path $diagnostics 'stdout.log') `
             -RedirectStandardError (Join-Path $diagnostics 'stderr.log')
           $deadline = [DateTime]::UtcNow.AddSeconds(180)
