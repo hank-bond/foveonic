@@ -2,6 +2,12 @@ name: Diagnose retained Windows core test
 
 on:
   workflow_dispatch:
+    inputs:
+      crash_only:
+        description: 'Run only the fixed plain/debugger crash pair after debugger health checks'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -31,7 +37,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed' }
       - name: Run fixed diagnostic matrix
         shell: pwsh
-        run: python scripts/windows_av_diagnosis.py "$env:RUNNER_TEMP\windows-av-input.zip" "$env:RUNNER_TEMP\windows-av-evidence"
+        env:
+          CRASH_ONLY: ${{ inputs.crash_only }}
+        run: |
+          $diagnosticArgs = @('scripts/windows_av_diagnosis.py', "$env:RUNNER_TEMP\windows-av-input.zip", "$env:RUNNER_TEMP\windows-av-evidence")
+          if ($env:CRASH_ONLY -eq 'true') { $diagnosticArgs += '--crash-only' }
+          python @diagnosticArgs
       - name: Retain diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4

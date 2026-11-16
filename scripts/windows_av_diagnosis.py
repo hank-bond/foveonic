@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run a fixed, bounded matrix against the retained Windows core-test executable."""
+import argparse
 import base64
 import ctypes
 from ctypes import wintypes
@@ -11,6 +12,7 @@ from pathlib import Path, PureWindowsPath
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -41,6 +43,10 @@ CELLS = [
     ('white_balance_serial', [PREFIX, '--nocapture', '--test-threads=1']),
     ('diagnostics_default', ['diagnostics::tests::', '--nocapture']),
     ('full_without_four_gpu_tests', ['--nocapture'] + [arg for name in GPU_TESTS for arg in ('--skip', name)]),
+    ('full_default_debugger', ['--nocapture']),
+]
+CRASH_CELLS = [
+    ('full_plain_default', ['--nocapture']),
     ('full_default_debugger', ['--nocapture']),
 ]
 
@@ -148,7 +154,7 @@ def capture_processes(pid, result):
         changed = bool(added)
         descendants.update(added)
     for process in processes:
-        if process.pid in descendants and process.exe.lower() == EXE.lower():
+        if process.pid in descendants and process.exe.lower() == PureWindowsPath(result['test_argv'][0]).name.lower():
             result['test_pid'] = process.pid
             break
     target = result['test_pid']
@@ -175,6 +181,257 @@ def capture_processes(pid, result):
         except OSError:
             identity['sha256'] = None
         result['graphics_modules'].append(identity)
+
+
+def pe_identity(path):
+    """Read bounded PE imports without loading a DLL into this process."""
+    if path.stat().st_size > 256 * 1024 * 1024:
+        raise ValueError('PE file exceeds inventory bound: ' + str(path))
+    data = path.read_bytes()
+    def unpack(fmt, offset):
+        return struct.unpack_from(fmt, data, offset)
+    if data[:2] != b'MZ':
+        raise ValueError('missing DOS header: ' + str(path))
+    pe = unpack('<I', 0x3c)[0]
+    if data[pe:pe + 4] != b'PE\0\0':
+        raise ValueError('missing PE header: ' + str(path))
+    machine, sections = unpack('<HH', pe + 4)
+    optional_size = unpack('<H', pe + 20)[0]
+    optional = pe + 24
+    magic = unpack('<H', optional)[0]
+    if magic not in (0x10b, 0x20b) or sections > 96:
+        raise ValueError('unsupported PE layout: ' + str(path))
+    directories = optional + (112 if magic == 0x20b else 96)
+    directory_count = unpack('<I', directories - 4)[0]
+    image_base = unpack('<Q' if magic == 0x20b else '<I', optional + (24 if magic == 0x20b else 28))[0]
+    header_size = unpack('<I', optional + 60)[0]
+    ranges = [unpack('<IIII', optional + optional_size + index * 40 + 8) for index in range(sections)]
+    def offset(rva):
+        if rva < header_size and rva < len(data):
+            return rva
+        for virtual_size, address, raw_size, raw in ranges:
+            if address <= rva < address + max(virtual_size, raw_size) and rva - address < raw_size:
+                position = raw + rva - address
+                if position < len(data):
+                    return position
+        raise ValueError('unmapped PE RVA: ' + str(path))
+    imports = []
+    for index, width, field in [(1, 20, 12), (13, 32, 4)]:
+        if index >= directory_count:
+            continue
+        rva, size = unpack('<II', directories + index * 8)
+        if not rva:
+            continue
+        position = offset(rva)
+        for count in range(min(size // width, 2048)):
+            entry = position + count * width
+            if data[entry:entry + width] == bytes(width):
+                break
+            name_rva = unpack('<I', entry + field)[0]
+            if index == 13 and not unpack('<I', entry)[0] & 1:
+                name_rva -= image_base
+            start = offset(name_rva)
+            end = data.find(b'\0', start, start + 1024)
+            if end < 0:
+                raise ValueError('unterminated PE import: ' + str(path))
+            name = data[start:end].decode('ascii')
+            if PureWindowsPath(name).name != name:
+                raise ValueError('unexpected PE import path: ' + name)
+            imports.append({'name': name, 'delay_loaded': index == 13})
+        else:
+            raise ValueError('unterminated PE import table: ' + str(path))
+    return {'name': path.name, 'path': str(path), 'sha256': digest(data), 'file_bytes': len(data),
+            'machine': hex(machine), 'architecture': {0x8664: 'x64', 0x14c: 'x86', 0xaa64: 'arm64'}.get(machine, 'unknown'),
+            'imports': imports}
+
+
+def debugger_environment(path_additions=()):
+    env = {key: value for key, value in os.environ.items()
+           if key.upper() not in ('GH_TOKEN', 'GITHUB_TOKEN')}
+    if path_additions:
+        env['PATH'] = os.pathsep.join([*path_additions, env.get('PATH', '')])
+    return env
+
+
+def _dependency_inventory(lldb, root, output, deadline, inventory):
+    llvm = Path(lldb).parent
+    system = Path(os.environ['SystemRoot'])
+    search = [llvm, system / 'System32', system, root]
+    search.extend(Path(value) for value in os.environ.get('PATH', '').split(os.pathsep) if value)
+    search = list(dict.fromkeys(path.resolve() for path in search if path.is_dir()))
+    if len(search) > 80:
+        raise ValueError('DLL search directory bound exceeded')
+    python_roots = []
+    if os.environ.get('RUNNER_TOOL_CACHE'):
+        cached = Path(os.environ['RUNNER_TOOL_CACHE']) / 'Python'
+        if cached.is_dir():
+            python_roots.append(cached)
+    extra = []
+    visited = 0
+    for cached in python_roots:
+        for directory, children, _files in os.walk(cached):
+            if time.monotonic() + 45 >= deadline:
+                raise ValueError('DLL inventory budget exhausted')
+            visited += 1
+            if visited > 256:
+                raise ValueError('Python runtime directory bound exceeded')
+            parent = Path(directory)
+            extra.append(parent)
+            if len(parent.relative_to(cached).parts) >= 2:
+                children.clear()
+    inventory['python_cache_roots'] = [str(path) for path in python_roots]
+    identities = {}
+    pending = [Path(lldb)]
+    def identity(path):
+        key = str(path.resolve()).lower()
+        if key not in identities:
+            if len(identities) >= 128:
+                raise ValueError('PE dependency file bound exceeded')
+            identities[key] = pe_identity(path)
+            inventory['files'].append(identities[key])
+        return identities[key]
+    scanned = set()
+    while pending:
+        if time.monotonic() + 45 >= deadline:
+            raise ValueError('DLL inventory budget exhausted')
+        path = pending.pop(0)
+        key = str(path.resolve()).lower()
+        if key in scanned:
+            continue
+        scanned.add(key)
+        current = identity(path)
+        if current['architecture'] != 'x64':
+            inventory['errors'].append('non-x64 dependency: ' + str(path))
+            continue
+        if path.parent.resolve() == llvm.resolve():
+            readobj = llvm / 'llvm-readobj.exe'
+            if readobj.is_file():
+                try:
+                    probe = subprocess.run([str(readobj), '--coff-imports', '--file-headers', str(path)],
+                                           capture_output=True, timeout=15, env=debugger_environment(), check=False)
+                    current['llvm_readobj_exit_code'] = probe.returncode
+                    (output / (path.name + '.imports.stdout.log')).write_bytes(probe.stdout)
+                    (output / (path.name + '.imports.stderr.log')).write_bytes(probe.stderr)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    current['llvm_readobj_error'] = str(error)
+        for imported in current['imports']:
+            name = imported['name']
+            row = {'importer': str(path), **imported}
+            inventory['resolutions'].append(row)
+            if name.lower().startswith(('api-ms-win-', 'ext-ms-win-')):
+                row['resolution'] = 'Windows API-set contract'
+                continue
+            ordered = [llvm, system / 'System32', system, root,
+                       *(Path(value) for value in inventory['debugger_path_additions']), *search]
+            found = next((directory / name for directory in ordered if (directory / name).is_file()), None)
+            if found is None:
+                candidates = list(dict.fromkeys((directory / name).resolve() for directory in extra
+                                                 if (directory / name).is_file()))
+                row['off_path_candidates'] = [identity(candidate) for candidate in candidates]
+                compatible = [candidate for candidate in candidates if identity(candidate)['architecture'] == 'x64']
+                if len(compatible) != 1:
+                    row['resolution'] = 'unresolved' if not compatible else 'ambiguous'
+                    kind = 'delay-loaded DLL' if imported['delay_loaded'] else 'imported DLL'
+                    inventory['errors'].append(row['resolution'] + ' ' + kind + ': ' + name)
+                    continue
+                found = compatible[0]
+                parent = str(found.parent)
+                if parent not in inventory['debugger_path_additions']:
+                    inventory['debugger_path_additions'].append(parent)
+                row['resolution'] = 'unique compatible existing runtime added to debugger PATH'
+            else:
+                row['resolution'] = 'existing loader search directory'
+            row['resolved_path'] = str(found)
+            resolved = identity(found)
+            if found.parent.resolve() in (system.resolve(), (system / 'System32').resolve()):
+                row['dependency_boundary'] = 'System DLL identity recorded; transitive OS dependencies are managed by Windows'
+                if resolved['architecture'] != 'x64':
+                    inventory['errors'].append('non-x64 system dependency: ' + str(found))
+            else:
+                pending.append(found)
+    final_search = [llvm, system / 'System32', system, root,
+                    *(Path(value) for value in inventory['debugger_path_additions']), *search]
+    for row in inventory['resolutions']:
+        if 'resolved_path' in row:
+            final = next((directory / row['name'] for directory in final_search
+                          if (directory / row['name']).is_file()), None)
+            if final is None or final.resolve() != Path(row['resolved_path']).resolve():
+                inventory['errors'].append('Runtime PATH changed an earlier resolution: ' + row['name'])
+    inventory['status'] = 'passed' if not inventory['errors'] else 'blocked'
+
+
+def dependency_inventory(lldb, root, output, deadline):
+    inventory = {'status': 'inspecting', 'files': [], 'resolutions': [], 'debugger_path_additions': [],
+                 'python_cache_roots': [], 'errors': [],
+                 'delay_import_policy': 'Unresolved delay imports block this conservative preflight; that does not establish that they are needed at startup.'}
+    try:
+        _dependency_inventory(lldb, root, output, deadline, inventory)
+    except (OSError, ValueError, struct.error) as error:
+        inventory['status'] = 'blocked'
+        inventory['errors'].append(str(error))
+    finally:
+        write_json(output / 'dependency-inventory.json', inventory)
+    return inventory
+
+
+def debugger_preflight(lldb, root, output, deadline):
+    output.mkdir(exist_ok=False)
+    result = {'status': 'blocked', 'core_controls_launched': 0, 'lldb': lldb,
+              'debugger_path_additions': [], 'path_inherited_by_inferior': True}
+    try:
+        if not lldb:
+            raise ValueError('LLDB is unavailable')
+        inventory = dependency_inventory(lldb, root, output, deadline)
+        result['debugger_path_additions'] = inventory['debugger_path_additions']
+        if inventory['status'] != 'passed':
+            raise ValueError('LLDB import closure is unresolved or ambiguous')
+        env = debugger_environment(result['debugger_path_additions'])
+        for name, args in [('version', ['--no-lldbinit', '--version']),
+                           ('batch-version', ['--no-lldbinit', '--batch', '-o', 'version'])]:
+            probe = subprocess.run([lldb, *args], cwd=root, env=env, capture_output=True, timeout=20, check=False)
+            (output / (name + '.stdout.log')).write_bytes(probe.stdout)
+            (output / (name + '.stderr.log')).write_bytes(probe.stderr)
+            result[name + '_exit_code'] = probe.returncode
+            if probe.returncode:
+                raise ValueError('LLDB health command failed: ' + name)
+        normal = output / 'normal.py'
+        normal.write_text("import os\nassert not any(k.upper() in {'GH_TOKEN','GITHUB_TOKEN'} for k in os.environ)\nprint('owned debugger health normal')\n")
+        crash = output / 'expected-av.py'
+        crash.write_text("import ctypes\nfrom ctypes import wintypes\nk=ctypes.WinDLL('kernel32',use_last_error=True)\nk.SetErrorMode(3)\nk.CreateThread.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_void_p,ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(wintypes.DWORD)]\nk.CreateThread.restype=wintypes.HANDLE\nk.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]\nt=wintypes.DWORD()\nh=k.CreateThread(None,0,None,None,0,ctypes.byref(t))\nassert h\nk.WaitForSingleObject(h,10000)\n")
+        for label, fixture in [('normal', normal), ('expected-av', crash)]:
+            directory = output / label
+            directory.mkdir()
+            health = run_cell('lldb_health_' + label, [str(fixture)], root, directory, lldb,
+                              deadline=deadline, timeout_seconds=25, executable=Path(sys.executable),
+                              use_debugger=True, debugger_paths=result['debugger_path_additions'])
+            text = (directory / ('lldb_health_' + label + '.stdout.log')).read_text(encoding='utf-8', errors='replace')
+            gone = health['test_pid'] is not None and not any(entry.pid == health['test_pid'] for entry in
+                        snapshot(2, 0, ProcessEntry, 'Process32FirstW', 'Process32NextW'))
+            result[label] = {'target_state': health['target_state'], 'target_exit_code': health['target_exit_code'],
+                             'debugger_exit_code': health['debugger_exit_code'], 'inferior_pid': health['test_pid'],
+                             'inferior_gone': gone}
+            if not gone or health['timed_out']:
+                raise ValueError('LLDB fixture inferior did not exit: ' + label)
+            if label == 'normal':
+                if (health['target_state'] != 'exited' or health['target_exit_code'] != 0
+                        or health['debugger_exit_code'] != 0 or 'owned debugger health normal' not in text):
+                    raise ValueError('LLDB normal fixture failed')
+            else:
+                images = text.rsplit('(lldb) image list', 1)[-1]
+                image_rows = re.findall(r'^\[\s*\d+\]\s+\S+\s+0x[0-9a-fA-F]+\s+.+', images, re.M)
+                result[label]['post_crash_image_rows'] = len(image_rows)
+                result[label]['backtrace_frames'] = len(re.findall(r'frame #\d+:', text))
+                if (health['target_state'] != 'exception_stopped' or health.get('target_exception_code') != '0xc0000005'
+                        or health['target_exit_code'] is not None or '(lldb) thread backtrace all' not in text
+                        or not result[label]['backtrace_frames'] or not image_rows or 'kernel32.dll' not in images.lower()
+                        or Path(sys.executable).name.lower() not in images.lower()):
+                    raise ValueError('LLDB expected-AV stack or image capture failed')
+        result['status'] = 'passed'
+    except (OSError, ValueError, subprocess.TimeoutExpired, struct.error) as error:
+        result['error'] = str(error)
+    finally:
+        write_json(output / 'result.json', result)
+    return result
 
 
 def find_lldb():
@@ -256,15 +513,16 @@ def debugger_outcome(stdout, result):
         result['target_state'] = 'unknown'
 
 
-def run_cell(name, args, root, output, lldb, *, deadline=None, timeout_seconds=180):
-    exe = root / EXE
+def run_cell(name, args, root, output, lldb, *, deadline=None, timeout_seconds=180,
+             executable=None, use_debugger=False, debugger_paths=()):
+    exe = executable if executable is not None else root / EXE
     command = [str(exe), *args]
-    debug = name == 'full_default_debugger' and lldb is not None
+    wants_debugger = use_debugger or name == 'full_default_debugger'
+    debug = wants_debugger and lldb is not None
     if debug:
         command = [lldb, '--no-lldbinit', '--batch', '-o', 'image list', '-o', 'run',
                    '-k', 'thread backtrace all', '-k', 'image list', '--', str(exe), *args]
-    env = {key: value for key, value in os.environ.items()
-           if key.upper() not in ('GH_TOKEN', 'GITHUB_TOKEN')}
+    env = debugger_environment(debugger_paths if debug else ())
     env.update(RUST_MIN_STACK='8388608', FOVEONIC_GPU_TEST_TRACE='1')
     result = {'name': name, 'argv': command, 'test_argv': [str(exe), *args],
               'debugger': lldb if debug else ('unavailable' if name == 'full_default_debugger' else None),
@@ -272,10 +530,12 @@ def run_cell(name, args, root, output, lldb, *, deadline=None, timeout_seconds=1
               'test_pid': None, 'graphics_modules': [], 'target_exit_code': None,
               'debugger_exit_code': None, 'target_state': 'not_launched',
               'event_log': {'status': 'not_queried'}}
+    if debug:
+        result['debugger_environment'] = {'path_additions': list(debugger_paths), 'inherited_by_inferior': True}
     if deadline is not None:
         timeout_seconds = min(timeout_seconds, deadline - time.monotonic() - 45)
         result['timeout_seconds'] = max(0, timeout_seconds)
-    if timeout_seconds <= 0 or (name == 'full_default_debugger' and lldb is None):
+    if timeout_seconds <= 0 or (wants_debugger and lldb is None):
         result['target_state'] = 'not_run_budget' if timeout_seconds <= 0 else 'not_run_debugger_unavailable'
         result['end_utc'] = now()
         write_json(output / (name + '.json'), result)
@@ -318,10 +578,15 @@ def run_cell(name, args, root, output, lldb, *, deadline=None, timeout_seconds=1
 
 
 def main():
-    if len(sys.argv) != 3 or sys.platform != 'win32':
-        raise SystemExit('usage on Windows: windows_av_diagnosis.py INPUT_ZIP EVIDENCE_DIR')
+    if sys.platform != 'win32':
+        raise SystemExit('Windows is required')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('archive', type=Path)
+    parser.add_argument('output', type=Path)
+    parser.add_argument('--crash-only', action='store_true')
+    args = parser.parse_args()
     deadline = time.monotonic() + 900
-    archive, output = (Path(value).resolve() for value in sys.argv[1:])
+    archive, output = args.archive.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     root = output.parent / 'windows-av-stage'
     root.mkdir(exist_ok=False)
@@ -329,6 +594,11 @@ def main():
                 'image_os': os.environ.get('ImageOS'), 'image_version': os.environ.get('ImageVersion'),
                 'artifact_id': 14224215814, 'artifact_sha256': ARTIFACT_SHA,
                 'original_workspace_gate': 'failed', 'release_clearance': False,
+                'matrix': 'crash_only' if args.crash_only else 'isolation',
+                'control_order': [name for name, _ in (CRASH_CELLS if args.crash_only else CELLS)],
+                'workflow_commit': os.environ.get('GITHUB_SHA'),
+                'prior_isolation_run': 43868573097,
+                'cache_order_note': 'Prior isolation ran full_serial before white_balance_default and may have warmed persistent WARP/D3D caches. Crash-only runs full_plain_default as its first GPU control after CPU-only debugger health. Cache state is uncontrolled and unchanged.',
                 'original_image_version': '20261112.366.7',
                 'control_budget_seconds': 900, 'job_timeout_minutes': 20,
                 'release_gate': 'not assessed; diagnostic workflow completion is not a release pass'}
@@ -338,6 +608,19 @@ def main():
     metadata['lldb'] = lldb
     metadata['cdb'] = shutil.which('cdb')
     write_json(output / 'run.json', metadata)
+    debugger_paths = []
+    if args.crash_only:
+        preflight = debugger_preflight(lldb, root, output / 'lldb-preflight', deadline)
+        metadata['debugger_preflight'] = preflight
+        write_json(output / 'run.json', metadata)
+        if preflight['status'] != 'passed':
+            for name, cell_args in CRASH_CELLS:
+                write_json(output / (name + '.json'), {'name': name, 'test_argv': [str(root / EXE), *cell_args],
+                           'target_state': 'not_run_debugger_preflight', 'target_exit_code': None})
+            metadata.update(end_utc=now(), core_controls_launched=0)
+            write_json(output / 'run.json', metadata)
+            raise RuntimeError('LLDB preflight blocked; no core controls launched')
+        debugger_paths = preflight['debugger_path_additions']
     listed = run_cell('test_list', ['--list'], root, output, None, deadline=deadline)
     if listed['target_exit_code'] != 0 or listed['timed_out']:
         raise ValueError('test listing failed')
@@ -356,8 +639,12 @@ def main():
     metadata['sdk_diagnostics_test_names'] = sorted(sdk_tests)
     metadata['diagnostics_test_count'] = sum(test.startswith('diagnostics::tests::') for test in tests)
     write_json(output / 'run.json', metadata)
-    for name, args in CELLS:
-        run_cell(name, args, root, output, lldb, deadline=deadline)
+    cells = CRASH_CELLS if args.crash_only else CELLS
+    metadata['core_controls_launched'] = 0
+    for name, cell_args in cells:
+        result = run_cell(name, cell_args, root, output, lldb, deadline=deadline, debugger_paths=debugger_paths)
+        if result.get('test_pid') is not None:
+            metadata['core_controls_launched'] += 1
     metadata['end_utc'] = now()
     write_json(output / 'run.json', metadata)
 
