@@ -150,3 +150,13 @@ Reuse the same fixture/recipe manifests and behavioral assertions for current ph
 ## Release-workflow baseline follow-up
 
 The finishing unit added a complete portable fresh-processing baseline for 144 maintained recipe/grid/policy cases. The remaining release requirement is to connect comparable retained-edit, native-detail, multi-photo and UI-delivery baselines using the existing scenario/checkpoint reports. Preserve source loading, foreground delivery, background completion and UI-update gaps as separate measurements. This linkage was deferred from the completed finishing optimization unit; fresh-engine results alone do not close it.
+
+The owner now requires latency and memory comparisons before every release. The [release guide](../docs/releases.md#compare-performance-before-publication) and root instructions require the separate latency domain because `acceptance.py --full` excludes it. Ordinary run variance is acceptable. Investigate meaningful repeatable regressions, with reversed-order confirmation for suspicious differences rather than arbitrary percentage failures.
+
+0.8.2 shipped before this comparison was run. Its comparison with the exact published 0.8.1 Mac package is a post-release audit, not retrospective pre-release clearance. Use the existing maintained native scenarios on the same M1 Pro host with pinned eight-photo inputs, strict workload matching and separate Off timing and memory-sampling runs. Include explicit ColorField and HDR recipes and native-detail work. Keep large captures off the primary Mac and retain compact reports. The Windows 0.8.1 GUI cannot start, and the current native workload monitor requires POSIX process enumeration. A native Windows comparison remains unavailable rather than being replaced silently with a modified baseline.
+
+- [x] Review and update the mandatory release-performance guidance.
+- [x] Confirm a three-trial native Off pilot compares the published binaries without compatibility changes.
+- [ ] Complete the existing latency catalog and explicit expensive-feature/native-detail comparisons.
+- [ ] Compare separate sampled physical-footprint peaks and retained processing resources.
+- [ ] Review suspicious changes against run variance and record compact release observations with measurement limits.

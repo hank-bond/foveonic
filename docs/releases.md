@@ -66,6 +66,33 @@ When replacing an unpublished draft that contains symbol downloads, validate the
 
 The Windows archive is unsigned and must be tested on Windows before publication. The Windows build runs independently, and its draft upload waits for the macOS draft. A new draft receives only the tagged changelog section. An existing draft keeps its title and notes, including your prose. Rerunning the workflow replaces its build assets. An already published release rejects uploads. Tags unrelated to application versions, such as `example-photographs`, do not trigger this workflow.
 
+## Compare performance before publication
+
+Every release needs a matched latency and memory comparison against the previous published app before publication, in addition to correctness checks. Use the exact packaged executables on the same quiet test host, with the same pinned photographs, fixed recipes, display geometry, processing policies and cache budgets. Record executable hashes and actual delivered resolution. A workload label such as Full or Fast does not establish the working grid. Keep enabled ColorField, nonneutral HDR, native-detail and representative multi-photo work in the declared coverage, alongside camera defaults.
+
+The correctness command `acceptance.py --full` deliberately excludes latency jobs. Run the existing latency domain separately for both versions:
+
+```sh
+python3 scripts/profiling/acceptance.py --domain latency \
+  --binary PATH_TO_PREVIOUS_APP --cases CASES.json \
+  --directory .local/release-performance-before \
+  --record-latency-baseline --latency-trials 3
+python3 scripts/profiling/acceptance.py --domain latency \
+  --binary PATH_TO_CANDIDATE_APP --cases CASES.json \
+  --directory .local/release-performance-after \
+  --latency-before .local/release-performance-before --latency-trials 3
+```
+
+Use fresh output directories and enough repetitions to assess variability. The existing comparator requires complete behavior, checked uncontended timing and matching workload identities. Review per-action median and p95 changes, first-photo and complete-group delivery, and UI-update gaps. Three trials are a minimum, not evidence of statistical significance. These scenarios begin after the app and one active photograph have loaded. They do not measure cold process startup. Repeated exposure edits may reuse upstream recovery, so they do not establish ColorField or denoiser recomputation costs. Add the maintained [fresh-processing, checkpoint and native-detail measurements](profiling.md) needed by the declared coverage. The latency catalog alone does not cover every enabled feature or native-detail workflow.
+
+Differences consistent with ordinary run-to-run variation are not regressions. Investigate meaningful, repeatable slowdowns or memory growth. Repeat suspicious comparisons in reversed order and inspect the raw trials before attributing them to the release. A small isolated p95 change does not require a fix merely because its percentage is nonzero.
+
+Run memory measurements separately from timing, using the same recipes and workflows. Preserve sampled process footprint and settled usage, the sampling interval, stage boundaries and any separately available GPU-memory observations. On macOS, use physical footprint rather than treating RSS or graph-owned bytes as total application memory. Keep loading peaks, retained multi-photo state and post-edit settlement distinct. The [profiling guide](profiling.md#resource-overlap) describes the existing resource measurements. A memory guard limit is an operational stop threshold, not an approved regression budget.
+
+Use matched Wall/Perfetto captures to explain changes after ordinary Off comparisons. Trace durations, screenshots, image verification and reused correctness sessions must not substitute for uninstrumented latency measurements. Keep compact versioned reports and raw timing/memory records. Bound diagnostic captures and discard disposable successful image captures after their checks complete rather than accumulating every run indefinitely.
+
+Do not publish with missing comparisons or unexplained regressions without an explicit release-specific owner decision. Record unavailable platforms, failed workloads, unmatched settings and known measurement gaps. A prior app that cannot start does not provide a valid native baseline. Do not modify it silently or weaken workload matching to obtain a comparison. Without an approved regression budget, results are observations that require review, not an automatic performance pass.
+
 ## Publish manually
 
 Run all maintained correctness checks in the [test inventory](testing-coverage.md), including native GUI acceptance on available supported platforms. List unavailable inputs and unperformed checks for owner review. The hosted workflow's workspace tests include GUI unit tests, while its packaged `--help` checks only load the executable. The 0.8.1 Windows main-thread stack overflow escaped those checks because `--help` returns before graphics and the application handoff. Native smoke on an interactive Windows desktop reproduces the failure in the original archive and passes after heap-owning the prepared application.

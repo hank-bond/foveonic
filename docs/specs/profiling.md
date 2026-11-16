@@ -43,10 +43,12 @@ Checkpoint investigations should distinguish the first changed edit from later s
 
 ## Release performance baselines
 
-Each release should include a versioned performance baseline covering the maintained test photographs and fixed, reproducible recipes. Include enabled expensive features as well as camera defaults. Mutable local sidecars must not define the workload. Record processing policy and effective working resolution separately.
+Each release must include a versioned performance baseline and a before/after comparison against the previous published release, covering latency and memory with maintained test photographs and fixed, reproducible recipes. Complete and review these comparisons before publication. Include enabled expensive features as well as camera defaults. Mutable local sidecars must not define the workload. Record processing policy and effective working resolution separately.
 
 Baselines must retain repeated Off-mode timing observations, input and recipe identities, build identity, hardware, cache setup and relevant display geometry. Cover decoded-input preparation, retained edits, native detail and representative multi-photo workflows separately. Keep source loading, foreground delivery and background completion distinguishable. Report UI-update gaps independently of engine processing time.
 
 Compare matched workloads per photograph and workflow so aggregate improvements cannot hide individual regressions. Hardware-dependent comparisons require the same host, or new matched runs of the released binary and candidate. Regression budgets require explicit approval. Recording slow behavior does not make it an acceptable target. Keep synchronized GPU attribution and numerical output verification separate from baseline timing, and preserve raw evidence with the release results.
+
+Sample process memory separately from latency runs. Record the metric, sampling interval, measured stages and whether a value is settled usage or an observed peak. Include applicable GPU memory separately where available. Missing measurements and a previous release that cannot complete a workload are unavailable comparisons, not performance passes. Publication with missing comparisons or unresolved regressions requires an explicit release-specific owner decision.
 
 The [finishing optimization plan](../../plans/archived/finishing-optimization.md) records the fresh-processing baseline and comparison-tool extension. Remaining workflow baseline linkage is tracked in the [performance-diagnostics plan](../../plans/performance-diagnostics.md#release-workflow-baseline-follow-up).
