@@ -157,6 +157,23 @@ The owner now requires latency and memory comparisons before every release. The 
 
 - [x] Review and update the mandatory release-performance guidance.
 - [x] Confirm a three-trial native Off pilot compares the published binaries without compatibility changes.
-- [ ] Complete the existing latency catalog and explicit expensive-feature/native-detail comparisons.
-- [ ] Compare separate sampled physical-footprint peaks and retained processing resources.
-- [ ] Review suspicious changes against run variance and record compact release observations with measurement limits.
+- [x] Run the existing latency catalog and explicit expensive-feature/native-detail comparisons, retaining unavailable comparisons.
+- [x] Compare separate sampled physical-footprint peaks and retained processing resources.
+- [x] Review suspicious changes against run variance and record compact release observations with measurement limits.
+
+The [versioned observations](../scripts/profiling/baselines/v0.8.2/apple-m1-pro/native-release-observations.json) preserve exact published executable identities, matched workload keys, individual Off samples, median/p95 changes, separate memory observations and source-report hashes. Most runs use three fresh-launch trials per version. Browse, HDR and native ColorField also have reversed-order attempts with five requested trials. No regression budget was assumed. No processing implementation changed during this audit.
+
+Eight-photo retained edits measured 199.88 ms versus 200.37 ms median. The initial Browse difference of 187.84 versus 202.43 ms did not repeat: reversed-order medians were 199.98 and 200.43 ms. HDR warm-edit medians changed from 51.21 versus 67.06 ms in the first pair to 50.56 versus 52.31 ms reversed. These differences must not be presented as stable percentage regressions. HDR initial selection measured 713.66 versus 717.79 ms first, then 712.00 versus 747.38 ms reversed, motivating separate attribution.
+
+Three GPU diagnostic captures per version were loss-free and passed behavior, with completed foreground query groups. Auxiliary scope queries remained pending in some captures. The Classic Highlights operation had the same half-grid geometry and dispatch count, with median summed GPU pass work of 33.08 versus 50.41 ms. These are instrumented work durations, not application critical-path latency. The HDR blend operation did not show a corresponding increase. Exact donor classification is repeated in the serial correction-table loop despite its already classified stable bin range. Reusing that provenance is a reviewed future optimization candidate. Preserve corrected histogram classification and accumulation order, then require byte-exact comparison with corrected 0.8.2 output before any optimization is accepted.
+
+Separate 100 ms memory samples measured median observed peaks of 3665 versus 3576 MiB for eight-photo editing and 2423 versus 2422 MiB for native-detail ColorField. Matched logical retained inventories remain separately recorded, including about 2 MiB of initial reservation variation in eight-photo editing. The medians of per-run sampled footprint peaks did not increase. Individual maxima varied, including a roughly 44 MiB higher maximum in one single-photo ColorField run. These measurements do not establish settled whole-process footprint, true transient peaks or measured VRAM.
+
+The old cached-switch app panicked at its cached-image assertion, while 0.8.2 passed the separate three-trial check. This workload has no valid before latency baseline. Two-photo faithful ColorField and its native-detail reverse attempt encountered mixed valid initial preview scales, so their affected comparisons remain unavailable. The single-photo faithful and the initial native-detail comparisons retain their own valid identities. Do not normalize away the scale mismatch or select successful trials to manufacture a complete comparison.
+
+Remaining release-performance work:
+
+- [ ] Stabilize initial working-grid preparation for native latency scenarios while preserving the observed cold acquisition phase and strict matching.
+- [ ] Add Windows-native monitoring and establish the next comparison against a working published Windows app.
+- [ ] Complete separately held whole-process settled-memory and applicable GPU-memory coverage.
+- [ ] Review and approve any Classic donor-table optimization as a separate processing change with numerical and performance evidence.
