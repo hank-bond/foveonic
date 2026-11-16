@@ -5,6 +5,14 @@ kind: reference
 
 # Changelog
 
+## 0.8.3
+
+Faster Classic highlight recovery.
+
+### Changes
+
+- Reduce redundant work in Classic highlight recovery while preserving the rendered result.
+
 ## 0.8.2
 
 Fix Windows startup and processed-photo exports, and make support reports easier to share.

@@ -31,7 +31,7 @@ fn at_least_boundary(numerator:f32,denominator:f32,boundary:u32)->bool{
     let ne=i32((n>>23u)&255u)-i32(nl);let de=i32((d>>23u)&255u)-i32(dl);
     return ne>de || (ne==de && (ns<<nl)>=(ds<<dl));
 }
-// Both donor passes use floor(N/D), with N=f32(red*255) and D=f32(red+green).
+// Classify donors with floor(N/D), with N=f32(red*255) and D=f32(red+green).
 fn donor_bucket(rgb:vec3<f32>)->u32{
     let numerator=rgb.x*255.0;let denominator=rgb.x+rgb.y;
     var bucket=min(u32(numerator/denominator),255u);
@@ -138,13 +138,13 @@ fn correction_table(@builtin(local_invocation_index)lane:u32,@builtin(workgroup_
     let range=workgroupUniformLoad(&donor_range);var sum=0.0;var count=0.0;
     // Parallel loads are safe, but changing accumulation order changes rounding.
     // Keep the bin recurrence sequential and do not store separately rounded ratios.
+    // Stable scatter already classified every donor in this range into this bin.
     for(var base=range.x;base<range.y;base+=128u){
         if base+lane<range.y{donor_rgb[lane]=max(color(sorted_donors[base+lane]),vec3(1.0));}
         workgroupBarrier();
         if lane==0u{
             for(var i=0u;i<min(128u,range.y-base);i++){
-                let rgb=donor_rgb[i];let bin=donor_bucket(rgb);
-                if bin==bucket{sum+=rgb.z/rgb.y;count+=1.0;}
+                let rgb=donor_rgb[i];sum+=rgb.z/rgb.y;count+=1.0;
             }
         }
         workgroupBarrier();

@@ -52,7 +52,7 @@ The catalog explicitly leaves native file-dialog selection missing and preferenc
 
 Pillow is a declared dependency in the pinned [test requirements](../scripts/test-requirements.txt). The common setup command prepares one reusable `.local/test-python` environment for all Python suites. Individual tests do not install dependencies or create environments. Use `.local/test-python/bin/python` for the Python check groups (`.local/test-python/Scripts/python.exe` on Windows).
 
-Run the [test setup command](../scripts/setup_tests.py) from the repository root. Python 3.11+ and Rust 1.88+ with Cargo are bootstrap prerequisites. Native builds also need a C/C++ compiler. On macOS, install/select Xcode command-line tools first. Building the native app bundle still requires Xcode 26+ as described in [release guidance](./releases.md).
+Run the [test setup command](../scripts/setup_tests.py) from the repository root. Python 3.11+ and Rust 1.88+ with Cargo are bootstrap prerequisites. Native builds also need a C/C++ compiler and CMake for the JPEG XL dependency. Prepare native build tools once per shared test host and select that toolchain and CMake path for subsequent builds. Individual test cases must not install them. On macOS, install/select Xcode command-line tools first. Building the native app bundle still requires Xcode 26+ as described in [release guidance](./releases.md).
 
 ```sh
 # Check installed tools without installing or downloading anything:

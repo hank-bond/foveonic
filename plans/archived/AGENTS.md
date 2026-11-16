@@ -68,6 +68,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[guarded-rows-working-grid](./guarded-rows-working-grid.md)** _(archived)._ Moves Merrill guarded-row estimation onto resized evidence with shared calibration, projected noise and bounded native rounding differences.
 - **[gui-screenshot](./gui-screenshot.md)** _(archived)._ Share example-photo syncing through Cargo and explicitly refresh a lossless WebP GUI screenshot for the README.
 - **[help-comparisons](./help-comparisons.md)** _(archived)._ Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template.
+- **[highlight-donor-reuse](./highlight-donor-reuse.md)** _(archived)._ Reuse exact donor-bin provenance while preserving corrected 0.8.2 pixels and measuring the highlight recovery cost.
 - **[highlight-retention](./highlight-retention.md)** _(archived)._ The fixed highlight-retention curve was implemented, photographically rejected and superseded by regional adaptive tone.
 - **[highlight-threshold](./highlight-threshold.md)** _(archived)._ Add a camera-relative highlight threshold while preserving default exports.
 - **[icon-background](./icon-background.md)** _(archived)._ A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.

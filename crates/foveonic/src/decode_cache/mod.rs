@@ -1164,7 +1164,8 @@ fn boot_key() -> String {
     #[cfg(target_os = "linux")]
     let boot = fs::read("/proc/sys/kernel/random/boot_id").ok();
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let boot: Option<Vec<u8>> = None;
+    let boot = format!("{}-{:?}", std::process::id(), SystemTime::now()).into_bytes();
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let boot = boot
         .unwrap_or_else(|| format!("{}-{:?}", std::process::id(), SystemTime::now()).into_bytes());
     let mut key = DefaultHasher::new();

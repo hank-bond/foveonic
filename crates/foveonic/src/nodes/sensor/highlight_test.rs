@@ -215,25 +215,45 @@ fn donor_bins_keep_integer_boundaries_and_adjacent_floats_distinct() {
 #[ignore = "requires a working GPU adapter"]
 fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
     let gpu = Gpu::new().unwrap();
-    let rgb: Vec<f32> = (0..600)
-        .flat_map(|i| [((i % 13 + 1) * 10) as f32, 100., (7 + i % 5) as f32])
+    let rgb: Vec<f32> = (0..8192)
+        .flat_map(|i| {
+            let red = if i % 16 != 0 {
+                128.
+            } else {
+                match i / 16 % 5 {
+                    0 => f32::from_bits(64_f32.to_bits() - 1),
+                    1 => 64.,
+                    2 => f32::from_bits(64_f32.to_bits() + 1),
+                    3 => 4.,
+                    _ => 1024.,
+                }
+            };
+            // Exact binary ratios isolate the ordered sum from division accuracy.
+            // Large and small terms make reassociation observably different.
+            [red * 32., 4096., if i % 4 == 0 { 1. } else { 32768. }]
+        })
         .collect();
-    let ids: Vec<u32> = (0..270).map(|i| i * 2).collect();
+    let ids: Vec<u32> = (0..2053).map(|i| i * 3).collect();
     let bucket = |p: u32| {
         let c = &rgb[p as usize * 3..][..3];
-        (c[0] * 255. / (c[0] + c[1])) as u32
+        (f64::from(c[0] * 255.) / f64::from(c[0] + c[1])).floor() as u32
     };
     let mut expected = ids.clone();
     expected.sort_by_key(|p| bucket(*p));
     let input = gpu.upload("Bin RGB", &rgb).unwrap();
     let donors = gpu.upload("Bin donors", &ids).unwrap();
-    let counts = gpu.upload("Bin donor total", &[0_u32, 0, 0, 270]).unwrap();
-    let mut marks = gpu.storage("Reused bin scratch", 600 * 4).unwrap();
-    let mut histogram = gpu.storage("Bin histograms", 3 * 256 * 4).unwrap();
+    let mut totals = [0_u32; 33];
+    totals[32] = ids.len() as u32;
+    let counts = gpu.upload("Bin donor total", &totals).unwrap();
+    let mut marks = gpu.storage("Reused bin scratch", 8192 * 4).unwrap();
+    let mut histogram = gpu.storage("Bin histograms", 32 * 256 * 4).unwrap();
     let mut starts = gpu.storage("Bin offsets", 257 * 4).unwrap();
-    let mut sorted = gpu.storage("Stable bin output", 600 * 4).unwrap();
+    let mut sorted = gpu.storage("Stable bin output", 8192 * 4).unwrap();
+    let mut lookup = gpu
+        .upload("Ordered bin sums and counts", &[123_f32; 512])
+        .unwrap();
     let params = gpu.uniform(&Params {
-        source: [30, 20, 600, 3],
+        source: [128, 64, 8192, 32],
         area: [0; 4],
         value: [0., 1., 0., 0.],
     });
@@ -247,7 +267,7 @@ fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
             (8, Read(&donors)),
             (11, Write(histogram.write())),
         ],
-        [3, 1],
+        [32, 1],
         &mut Default::default(),
     );
     gpu.dispatch(
@@ -272,11 +292,14 @@ fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
             (11, Read(&histogram)),
             (12, Read(&starts)),
         ],
-        [3, 1],
+        [32, 1],
         &mut Default::default(),
     );
     let bytes = gpu.readback(&sorted).unwrap();
-    assert_eq!(&bytemuck::cast_slice::<u8, u32>(&bytes)[..270], expected);
+    assert_eq!(
+        &bytemuck::cast_slice::<u8, u32>(&bytes)[..ids.len()],
+        expected
+    );
     let bytes = gpu.readback(&starts).unwrap();
     for (b, &start) in bytemuck::cast_slice::<u8, u32>(&bytes).iter().enumerate() {
         assert_eq!(
@@ -286,9 +309,30 @@ fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
     }
     let bytes = gpu.readback(&marks).unwrap();
     assert_eq!(
-        &bytemuck::cast_slice::<u8, u32>(&bytes)[..270],
+        &bytemuck::cast_slice::<u8, u32>(&bytes)[..ids.len()],
         ids.iter().map(|p| bucket(*p)).collect::<Vec<_>>()
     );
+    gpu.dispatch(
+        Kernel::HighlightTable,
+        &mut [
+            (5, Read(&input)),
+            (9, Write(lookup.write())),
+            (10, Read(&sorted)),
+            (12, Read(&starts)),
+        ],
+        [256, 1],
+        &mut Default::default(),
+    );
+    let mut expected_table = [0_f32; 512];
+    for &id in &ids {
+        let c = &rgb[id as usize * 3..][..3];
+        let b = bucket(id) as usize;
+        expected_table[b] += c[2] / c[1];
+        expected_table[256 + b] += 1.;
+    }
+    assert!(expected_table[256 + 127] > 128.);
+    let bytes = gpu.readback(&lookup).unwrap();
+    assert_eq!(bytes, bytemuck::cast_slice::<f32, u8>(&expected_table));
 }
 
 #[test]

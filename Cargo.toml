@@ -7,7 +7,7 @@ exclude = ["vendor/egui-wgpu"]
 egui-wgpu = { path = "vendor/egui-wgpu" }
 
 [workspace.package]
-version = "0.8.2"
+version = "0.8.3"
 
 [profile.release.package.foveonic]
 debug = 1
