@@ -4,6 +4,12 @@ on:
   push:
     branches: ['release/0.8.0']
   workflow_dispatch:
+    inputs:
+      test_revision:
+        description: 'Optional trusted repository commit to test (full 40-character SHA)'
+        required: false
+        default: ''
+        type: string
   workflow_call:
 
 permissions:
@@ -19,7 +25,50 @@ jobs:
       CXX: clang-cl
       CXXFLAGS: -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS
     steps:
+      - name: Resolve test revision
+        id: test_revision
+        shell: pwsh
+        env:
+          REQUESTED_TEST_REVISION: ${{ inputs.test_revision || '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $revision = $env:GITHUB_SHA
+          if ($env:REQUESTED_TEST_REVISION) {
+            if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+              throw 'A test revision override requires workflow_dispatch'
+            }
+            if ($env:REQUESTED_TEST_REVISION.Length -ne 40 -or $env:REQUESTED_TEST_REVISION -notmatch '^[0-9a-fA-F]{40}$') {
+              throw 'test_revision must be a full 40-character hexadecimal commit SHA'
+            }
+            $revision = $env:REQUESTED_TEST_REVISION.ToLowerInvariant()
+          }
+          "revision=$revision" | Add-Content $env:GITHUB_OUTPUT
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.test_revision.outputs.revision }}
+      - name: Record checked-out source
+        id: source
+        shell: pwsh
+        env:
+          EXPECTED_TEST_REVISION: ${{ steps.test_revision.outputs.revision }}
+          REQUESTED_TEST_REVISION: ${{ inputs.test_revision || '' }}
+          WORKFLOW_REVISION: ${{ github.workflow_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $revision = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $revision -cne $env:EXPECTED_TEST_REVISION) {
+            throw 'Checked-out source differs from the resolved test revision'
+          }
+          $identity = [ordered]@{
+            source_commit = $revision
+            workflow_commit = $env:WORKFLOW_REVISION
+            run_commit = $env:GITHUB_SHA
+            requested_revision = $env:REQUESTED_TEST_REVISION
+            image_os = $env:ImageOS
+            image_version = $env:ImageVersion
+          }
+          $identity | ConvertTo-Json | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'foveonic-windows-source.json')
+          "revision=$revision" | Add-Content $env:GITHUB_OUTPUT
       - name: Set up native build tools
         shell: pwsh
         run: |
@@ -48,6 +97,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $diagnostics = Join-Path $env:RUNNER_TEMP 'foveonic-windows-test-failure'
           New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+          $sourceIdentity = Join-Path $env:RUNNER_TEMP 'foveonic-windows-source.json'
+          Copy-Item $sourceIdentity $diagnostics
           rustc -vV | Set-Content (Join-Path $diagnostics 'rustc.txt')
           cargo -vV | Set-Content (Join-Path $diagnostics 'cargo.txt')
           clang-cl --version | Set-Content (Join-Path $diagnostics 'clang.txt')
@@ -73,6 +124,7 @@ jobs:
           Copy-Item .local/test-dependencies/dxc_2026_09_29.zip $diagnostics
           Copy-Item LICENSE $diagnostics
           $identity = [ordered]@{
+            source = (Get-Content -Raw $sourceIdentity | ConvertFrom-Json)
             binary = $binary.FullName
             binary_sha256 = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash
             pdb = $pdb
@@ -122,7 +174,7 @@ jobs:
         if: ${{ failure() && steps.windows_tests.outcome == 'failure' }}
         uses: actions/upload-artifact@v4
         with:
-          name: Foveonic-windows-test-failure-${{ github.sha }}
+          name: Foveonic-windows-test-failure-${{ steps.source.outputs.revision }}
           path: ${{ runner.temp }}/foveonic-windows-test-failure
           if-no-files-found: error
           retention-days: 14
@@ -158,7 +210,7 @@ jobs:
           Compress-Archive -Path $stage -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64.zip')
       - uses: actions/upload-artifact@v4
         with:
-          name: Foveonic-windows-x64-${{ github.sha }}
+          name: Foveonic-windows-x64-${{ steps.source.outputs.revision }}
           path: |
             ${{ runner.temp }}/Foveonic-windows-x64.zip
             ${{ runner.temp }}/Foveonic-windows-x64-symbols.zip
