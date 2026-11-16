@@ -145,20 +145,52 @@ fn donor_bins_keep_integer_boundaries_and_adjacent_floats_distinct() {
             f32::from_bits(value.to_bits() + 1),
         ]
     };
-    let rgb: Vec<f32> = around(50.)
+    let mut rgb: Vec<f32> = around(50.)
         .into_iter()
         .chain(around(70.))
         .flat_map(|red| [red, 100., 10.])
         .collect();
+    rgb.extend([
+        297.484_3,
+        12345.6,
+        10.,
+        2_295.820_8,
+        2_387.653_6,
+        10.,
+        2_510.251_7,
+        2_824.033_4,
+        10.,
+        1_885.496_5,
+        2223.919,
+        10.,
+        2_007.869_8,
+        2_294.708_5,
+        10.,
+        2_956.256,
+        2_798.288_8,
+        10.,
+    ]);
+    // Compare the rounded f32 operands as an exact f64 ratio, independent of the GPU guard.
+    let expected: Vec<u32> = rgb
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|c| f64::from(c[0] * 255.) / f64::from(c[0] + c[1]))
+        .map(|ratio| ratio.floor() as u32)
+        .collect();
+    assert_eq!(
+        expected,
+        [84, 85, 85, 104, 105, 105, 5, 124, 119, 116, 118, 130]
+    );
     let input = gpu.upload("Boundary RGB", &rgb).unwrap();
     let donors = gpu
-        .upload("Boundary donors", &[0_u32, 1, 2, 3, 4, 5])
+        .upload("Boundary donors", &(0_u32..12).collect::<Vec<_>>())
         .unwrap();
-    let counts = gpu.upload("Boundary donor total", &[0_u32, 6]).unwrap();
-    let mut marks = gpu.storage("Boundary bins", 6 * 4).unwrap();
+    let counts = gpu.upload("Boundary donor total", &[0_u32, 12]).unwrap();
+    let mut marks = gpu.storage("Boundary bins", 12 * 4).unwrap();
     let mut histogram = gpu.storage("Boundary histogram", 256 * 4).unwrap();
     let params = gpu.uniform(&Params {
-        source: [6, 1, 6, 1],
+        source: [12, 1, 12, 1],
         area: [0; 4],
         value: [0., 1., 0., 0.],
     });
@@ -176,10 +208,7 @@ fn donor_bins_keep_integer_boundaries_and_adjacent_floats_distinct() {
         &mut Default::default(),
     );
     let bytes = gpu.readback(&marks).unwrap();
-    assert_eq!(
-        bytemuck::cast_slice::<u8, u32>(&bytes),
-        &[84, 85, 85, 104, 105, 105]
-    );
+    assert_eq!(bytemuck::cast_slice::<u8, u32>(&bytes), expected.as_slice());
 }
 
 #[test]

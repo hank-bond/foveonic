@@ -33,6 +33,12 @@ The remaining corrections preserve small compensated ColorField updates against 
 
 These corrections must not replace expected behavior with values copied from the candidate. Geometric scale/region expectations come from the accepted display and scope contracts. The before/after cached-image assertion remains an identity invariant.
 
+The final Windows original-file sweep exposed two Quattro failures at divisor `2^31`. An independent real-size probe isolated zero highlight evidence while RGB pooling retained the correct mean. Cells exceeding 65,536 native samples now reduce each row separately and accumulate those rows in their original order. Ordinary cells retain the existing pass. Threshold and partial-edge fixtures compare the two paths byte for byte, including nonzero highlight correction. Real-size fixtures retain exact peaks, classifications, halos and input samples. The new near-zero correction assertion has an explicit eight-ULP budget at its 2000-code mean. Existing numerical tolerances are unchanged. Both complete Quattro scale sequences now pass on Metal and Windows. The combined 252-case synthetic suite passes on Metal, with the final Windows run in progress.
+
+Comparison against pristine released 0.8.1 exposed a second boundary issue in the earlier donor fix. A rounded boundary product could promote a genuinely below-boundary donor. Integer comparisons now implement the documented donor ratio without assuming fused floating arithmetic. Independent boundary fixtures include the synthetic counterexample and affected original donors. Numerical verification retains the original released-code mismatch and can classify an intended change only when the complete output exactly matches pristine 0.8.1 with that donor shader alone. Any remaining difference is a blocker.
+
+The revised draft workflow passed macOS checks and packaging. Its Windows ordinary core test process exited with a native access violation after the diagnostic tests had completed. The cause remains unresolved. Passing targeted GPU tests does not clear this separate release blocker.
+
 ## Checks
 
 - [x] Reproduce all four failures on the candidate and published baseline.

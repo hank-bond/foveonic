@@ -111,6 +111,8 @@ pub enum Kernel {
     ChromaClusters,
     LumaCluster,
     HighlightEvidence,
+    HighlightEvidenceRows,
+    HighlightEvidenceColumns,
     DynamicRangePrepare,
     DynamicRangeCells,
     DynamicRangeFit,
@@ -450,6 +452,8 @@ impl Kernel {
             Self::ChromaClusters => "repair ordered RGB defect clusters",
             Self::LumaCluster => "repair ordered mono defect clusters",
             Self::HighlightEvidence => "pool original highlight recovery controls",
+            Self::HighlightEvidenceRows => "pool original highlight recovery rows",
+            Self::HighlightEvidenceColumns => "combine original highlight recovery rows",
             Self::DynamicRangePrepare => "prepare channel highlight limits",
             Self::DynamicRangeCells => "measure highlight color cells",
             Self::DynamicRangeFit => "fit and propagate highlight colors",
@@ -1165,6 +1169,14 @@ impl Gpu {
             (
                 include_str!("../nodes/sensor/highlight_evidence.wgsl"),
                 "highlight_evidence",
+            ),
+            (
+                include_str!("../nodes/sensor/highlight_evidence.wgsl"),
+                "highlight_evidence_rows",
+            ),
+            (
+                include_str!("../nodes/sensor/highlight_evidence.wgsl"),
+                "highlight_evidence_columns",
             ),
             (
                 include_str!("../nodes/sensor/dynamic_range.wgsl"),

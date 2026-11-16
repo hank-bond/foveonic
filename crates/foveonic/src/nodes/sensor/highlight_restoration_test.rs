@@ -7,6 +7,142 @@ fn singular_source_inverse_is_rejected() {
 
 #[test]
 #[ignore = "requires GPU"]
+fn full_quattro_extreme_evidence_keeps_original_peaks_and_halo() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [2944, 1836];
+    let source: Vec<f32> = (0..extent[1])
+        .flat_map(|y| {
+            let value = if y < extent[1] / 2 { 1000. } else { 3000. };
+            std::iter::repeat_n(value, extent[0] as usize * 3)
+        })
+        .collect();
+    let input = gpu
+        .upload("Extreme highlight evidence source", &source)
+        .unwrap();
+    let prepared = Prepared::new(
+        extent,
+        [1, 1, extent[0] - 1, extent[1] - 1],
+        1.,
+        [1.; 3],
+        [1., 0., 0., 0., 1., 0., 0., 0., 1.],
+    )
+    .unwrap();
+    let grid = crate::nodes::sensor::pool::Prepared::new(
+        extent,
+        1 << 31,
+        crate::nodes::sensor::pool::Signal::Rgb,
+    )
+    .unwrap()
+    .with_extent([136, 136])
+    .unwrap()
+    .with_origin([64, 64]);
+    let output = prepared
+        .evidence(grid)
+        .unwrap()
+        .apply(&gpu, &input, &mut Profile::default())
+        .unwrap();
+    let bytes = gpu.readback(&output).unwrap();
+    let values: &[[f32; 8]] = bytemuck::cast_slice(&bytes);
+    for value in values {
+        assert_eq!(&value[..4], &[3000., 3000., 3000., 0.]);
+        // The independently normalized means cancel to zero within eight
+        // float32 ULPs at the fixture's 2000-code mean.
+        assert!(
+            value[4..7].iter().all(|v| v.abs() <= 0.000_976_562_5),
+            "{value:?}"
+        );
+        assert_eq!(value[7], 0.);
+        assert_eq!(value.map(f32::to_bits), values[0].map(f32::to_bits));
+    }
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&source)
+    );
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn large_evidence_cells_match_ordered_single_pass_with_partial_edges() {
+    use crate::nodes::sensor::pool::{Prepared as Grid, Signal};
+    let gpu = Gpu::new().unwrap();
+    let extent = [517_u32, 519_u32];
+    let mut source = [1000_f32, 2000., 3000.].repeat((extent[0] * extent[1]) as usize);
+    for [x, y] in [[200, 200], [516, 518]] {
+        let index = ((y * extent[0] + x) * 3) as usize;
+        source[index..index + 3].fill(14100.);
+    }
+    let input = gpu.upload("Large evidence partial cells", &source).unwrap();
+    let prepared = Prepared::new(
+        extent,
+        [1, 1, extent[0] - 1, extent[1] - 1],
+        1.,
+        [1., 1., 2.],
+        [2., 0., 0., 0., 2., 0., 0., 0., 2.],
+    )
+    .unwrap();
+    for divisor in [256, 512] {
+        let base = Grid::new(extent, divisor, Signal::Rgb).unwrap();
+        let logical = base.logical_extent();
+        let grid = base
+            .with_extent(logical.map(|side| side + 6))
+            .unwrap()
+            .with_origin([3, 3]);
+        let before = gpu.activity();
+        let actual = prepared
+            .evidence(grid)
+            .unwrap()
+            .apply(&gpu, &input, &mut Profile::default())
+            .unwrap();
+        assert_eq!(
+            gpu.activity().since(before).dispatches,
+            if divisor == 256 { 1 } else { 2 }
+        );
+
+        // Run the original ordered cell shader directly as an independent path
+        // for the same boundary-spanning, partially covered cells.
+        let [w, h] = grid.output_extent();
+        let mut expected = gpu
+            .storage("Single-pass evidence", u64::from(w) * u64::from(h) * 32)
+            .unwrap();
+        let params = gpu.uniform(&prepared.params);
+        let matrix = gpu
+            .upload("Single-pass matrices", &prepared.matrix)
+            .unwrap();
+        let uniform = gpu.uniform(&grid);
+        let mut trace = gpu.trace(false, 1);
+        gpu.dispatch(
+            Kernel::HighlightEvidence,
+            &mut [
+                (0, Read(&input)),
+                (1, Read(&params)),
+                (2, Read(&matrix)),
+                (4, Write(expected.write())),
+                (9, Read(&uniform)),
+            ],
+            [logical[0].div_ceil(8), logical[1].div_ceil(8)],
+            &mut trace,
+        );
+        let actual = gpu.readback(&actual).unwrap();
+        let expected = gpu.readback(&expected).unwrap();
+        assert_eq!(actual, expected, "divisor {divisor}");
+        let values: &[[f32; 8]] = bytemuck::cast_slice(&actual);
+        assert!(
+            values.iter().any(|v| v[3] > 0.),
+            "fixture must include detector coverage"
+        );
+        assert!(
+            values.iter().any(|v| v[4..7].iter().any(|v| *v != 0.)),
+            "fixture must include highlight correction"
+        );
+    }
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&source)
+    );
+}
+
+#[test]
+#[ignore = "requires GPU"]
 fn repaired_speckles_do_not_regain_original_highlight_damage() {
     let gpu = Gpu::new().unwrap();
     let grid = crate::render::WorkingGrid::new([64, 64], crate::render::Scale::new(4).unwrap(), 8)

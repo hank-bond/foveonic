@@ -3,6 +3,7 @@
 struct BlockGrid {shape:vec4<u32>,controls:vec4<u32>,origin:vec4<u32>}
 @group(0) @binding(9) var<uniform> blocks:BlockGrid;
 @group(0) @binding(4) var<storage,read_write> output:array<vec4<f32>>;
+@group(0) @binding(11) var<storage,read> row_evidence:array<vec4<f32>>;
 
 fn evidence_weighted(source:vec3<f32>)->vec3<f32> {
  var value=min(source,vec3(p.thresholds.x))*p.gains.xyz;
@@ -84,6 +85,52 @@ fn highlight_evidence(@builtin(global_invocation_id) id:vec3<u32>) {
    let index=(y*blocks.shape.z+x)*2u;
    output[index]=vec4(peaks,coverage/f32(end.y-first.y));
    output[index+1u]=vec4(total/f32(end.y-first.y)-base,green_mask);
+  }
+ }
+}
+
+// Large cells retain the original ordered row means without assigning an
+// entire native image to one invocation.
+@compute @workgroup_size(8,8)
+fn highlight_evidence_rows(@builtin(global_invocation_id) id:vec3<u32>) {
+ if id.x>=blocks.origin.z||id.y>=blocks.shape.y{return;}
+ let first=id.x*blocks.controls.x;let end=min(blocks.shape.x,first+blocks.controls.x);
+ var peaks=vec3(-3.402823466e38);var row=vec3(0.);var original_row=vec3(0.);
+ var coverage=0.;var green_mask=0.;
+ for(var x=first;x<end;x++) {
+  let source=evidence_source(x,id.y);peaks=max(peaks,source);original_row+=source;
+  let weighted=evidence_weighted(source);
+  let classification=native_classification(x,id.y,source,weighted);
+  coverage+=classification.x;green_mask=max(green_mask,classification.y);
+  let amount=neutralization_weight(weighted);let corrected=color(weighted,INVERSE_CAMERA_MATRIX);
+  row+=vec3(fma(amount,corrected.x,weighted.x*(1.-amount)),fma(amount,corrected.y,weighted.y*(1.-amount)),fma(amount,corrected.z,weighted.z*(1.-amount)));
+ }
+ let width=f32(end-first);let index=(id.y*blocks.origin.z+id.x)*3u;
+ output[index]=vec4(peaks,coverage/width);
+ output[index+1u]=vec4(row/width,green_mask);
+ output[index+2u]=vec4(original_row/width,0.);
+}
+
+@compute @workgroup_size(8,8)
+fn highlight_evidence_columns(@builtin(global_invocation_id) id:vec3<u32>) {
+ if any(id.xy>=blocks.origin.zw){return;}
+ let cell=id.xy;
+ let output_first=select(blocks.origin.xy+cell,vec2<u32>(0),cell==vec2<u32>(0));
+ let output_end=select(blocks.origin.xy+cell+vec2<u32>(1),blocks.shape.zw,cell+vec2<u32>(1)==blocks.origin.zw);
+ let first=cell.y*blocks.controls.x;let end=min(blocks.shape.y,first+blocks.controls.x);
+ var peaks=vec3(-3.402823466e38);var total=vec3(0.);var original_total=vec3(0.);
+ var coverage=0.;var green_mask=0.;
+ for(var y=first;y<end;y++) {
+  let index=(y*blocks.origin.z+cell.x)*3u;
+  let a=row_evidence[index];let b=row_evidence[index+1u];let c=row_evidence[index+2u];
+  peaks=max(peaks,a.xyz);coverage+=a.w;total+=b.xyz;green_mask=max(green_mask,b.w);original_total+=c.xyz;
+ }
+ let height=f32(end-first);let base=evidence_weighted(original_total/height);
+ for(var y=output_first.y;y<output_end.y;y++) {
+  for(var x=output_first.x;x<output_end.x;x++) {
+   let index=(y*blocks.shape.z+x)*2u;
+   output[index]=vec4(peaks,coverage/height);
+   output[index+1u]=vec4(total/height-base,green_mask);
   }
  }
 }

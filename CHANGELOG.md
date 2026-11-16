@@ -21,6 +21,7 @@ Fix Windows startup and processed-photo exports, and make support reports easier
 - Preserve small color corrections in ColorField recovery.
 - Keep HDR adjustments accurate near full strength.
 - Keep highlight grouping and signed scope counts stable at boundary values.
+- Preserve highlight evidence at very coarse processing grids.
 - Preserve sensor calibration rounding across graphics drivers.
 
 ## 0.8.1

@@ -218,6 +218,38 @@ fn full_quattro_extreme_partial_cell_is_replicated_into_halo() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires GPU"]
+fn full_quattro_rgb_extreme_cell_preserves_balanced_mean_and_halo() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [2944, 1836];
+    let source: Vec<f32> = (0..extent[1])
+        .flat_map(|y| {
+            let value = if y < extent[1] / 2 { 1. } else { 3. };
+            std::iter::repeat_n([value, 2. * value, 3. * value], extent[0] as usize).flatten()
+        })
+        .collect();
+    let input = gpu.upload("Extreme RGB pooling source", &source).unwrap();
+    let prepared = Prepared::new(extent, 1 << 31, Signal::Rgb)
+        .unwrap()
+        .with_extent([136, 136])
+        .unwrap()
+        .with_origin([64, 64]);
+    let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+    let bytes = gpu.readback(&output).unwrap();
+    let values: &[[f32; 3]] = bytemuck::cast_slice(&bytes);
+    for value in values {
+        for (actual, expected) in value.iter().zip([2., 4., 6.]) {
+            assert!((actual - expected).abs() < 0.000001, "{value:?}");
+        }
+        assert_eq!(value.map(f32::to_bits), values[0].map(f32::to_bits));
+    }
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&source)
+    );
+}
 #[test]
 fn pooling_maps_each_component_frame_with_its_own_origin() {
     let prepared = Prepared::new([33, 35], 4, Signal::Rgb)

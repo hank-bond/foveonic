@@ -22,12 +22,24 @@ var<workgroup> donor_rgb:array<vec3<f32>,128>;
 fn in_image(xy:vec2<u32>)->bool{return xy.x<params.source.x && xy.y<params.source.y;}
 fn work(xy:vec2<u32>)->bool{return all(xy>=params.area.xy) && all(xy<=params.area.zw);}
 fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u]);}
-// Correct division rounding at integer boundaries before both donor passes use the bin.
+// Compare positive normal f32 values against an integer boundary no greater than 256.
+fn at_least_boundary(numerator:f32,denominator:f32,boundary:u32)->bool{
+    if boundary==0u{return true;}
+    let n=bitcast<u32>(numerator);let d=bitcast<u32>(denominator);
+    let ns=(n&0x7fffffu)|0x800000u;let ds=((d&0x7fffffu)|0x800000u)*boundary;
+    let nl=countLeadingZeros(ns);let dl=countLeadingZeros(ds);
+    let ne=i32((n>>23u)&255u)-i32(nl);let de=i32((d>>23u)&255u)-i32(dl);
+    return ne>de || (ne==de && (ns<<nl)>=(ds<<dl));
+}
+// Both donor passes use floor(N/D), with N=f32(red*255) and D=f32(red+green).
 fn donor_bucket(rgb:vec3<f32>)->u32{
     let numerator=rgb.x*255.0;let denominator=rgb.x+rgb.y;
-    var bucket=u32(numerator/denominator);
-    if bucket>0u && numerator<f32(bucket)*denominator{bucket-=1u;}
-    if numerator>=f32(bucket+1u)*denominator{bucket+=1u;}
+    var bucket=min(u32(numerator/denominator),255u);
+    // Keep the division fallback for nonfinite inputs, outside the donor contract.
+    if (bitcast<u32>(numerator)&0x7f800000u)==0x7f800000u ||
+       (bitcast<u32>(denominator)&0x7f800000u)==0x7f800000u{return bucket;}
+    if bucket>0u && !at_least_boundary(numerator,denominator,bucket){bucket-=1u;}
+    if at_least_boundary(numerator,denominator,bucket+1u){bucket+=1u;}
     return min(bucket,255u);
 }
 fn clipped(p:u32)->u32 { return original[p]; }

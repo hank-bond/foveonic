@@ -96,6 +96,12 @@ impl Prepared {
     pub(crate) fn output_extent(&self) -> [u32; 2] {
         [self.shape[2], self.shape[3]]
     }
+    pub(crate) fn largest_cell_area(&self) -> u64 {
+        self.extent()
+            .into_iter()
+            .map(|side| u64::from(side.min(self.controls[0])))
+            .product()
+    }
     pub(crate) fn valid_output_geometry(&self) -> bool {
         self.origin[..2]
             .iter()
