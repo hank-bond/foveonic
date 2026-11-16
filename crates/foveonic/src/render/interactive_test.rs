@@ -263,14 +263,17 @@ fn session_image(
     session: &mut RenderSession,
     settings: &Settings,
 ) -> RenderedImage {
+    session_image_profiled(engine, session, settings, &mut Profile::default())
+}
+
+fn session_image_profiled(
+    engine: &Engine,
+    session: &mut RenderSession,
+    settings: &Settings,
+    profile: &mut Profile,
+) -> RenderedImage {
     let mut artifacts = engine
-        .render_session(
-            session,
-            settings,
-            &["final"],
-            || false,
-            &mut Profile::default(),
-        )
+        .render_session(session, settings, &["final"], || false, profile)
         .unwrap()
         .unwrap();
     match artifacts.pop().unwrap().content {
@@ -408,12 +411,45 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
             // Detail edits need all of their unchanged inputs ready. Switching edit
             // groups may need one render to prepare a different set of inputs.
             let activity = engine.gpu_activity();
-            let cached = session_image(&engine, &mut session, &settings);
+            let mut profile = Profile::new(crate::profile::Mode::Wall);
+            let cached = session_image_profiled(&engine, &mut session, &settings, &mut profile);
             let delta = engine.gpu_activity().since(activity);
             if step < 5 {
+                let repeated: Vec<_> = profile
+                    .host
+                    .iter()
+                    .filter(|timing| {
+                        matches!(
+                            timing.stage,
+                            "upload sensor"
+                                | "submit black"
+                                | "submit calibration"
+                                | "submit repair"
+                                | "submit despeckle"
+                                | "submit highlight restoration"
+                                | "submit original saturation density"
+                                | "complete color-field highlights"
+                                | "submit row banding correction"
+                                | "prepare reduced whole-image noise context"
+                                | "submit reference noise base"
+                                | "submit reference column conditioning"
+                                | "pack sensor tiles"
+                                | "submit reference luminance ratio"
+                                | "submit reference pattern conditioning"
+                        )
+                    })
+                    .map(|timing| timing.stage)
+                    .collect();
                 assert!(
-                    delta.dispatches <= 12,
-                    "unexpected expensive work {name} {step}: {delta:?}"
+                    repeated.is_empty(),
+                    "Fine edit repeated unchanged inputs {name} {step}: {repeated:?}, {delta:?}"
+                );
+                assert!(
+                    profile
+                        .host
+                        .iter()
+                        .any(|timing| timing.stage == "submit texture restoration"),
+                    "Fine edit must execute texture restoration {name} {step}"
                 );
             }
             let actual = engine.gpu.readback(&cached.buffer).unwrap();

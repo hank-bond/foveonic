@@ -16,7 +16,6 @@ pub(super) struct Request<'a> {
     pub source: super::super::RecipeInput<'a>,
     pub settings: &'a Settings,
     pub names: &'a [&'a str],
-    pub color: crate::nodes::sensor::calibration::ColorParams,
     pub space: crate::color_space::ColorSpace,
     pub preview: Option<&'a preview::Grid>,
     pub region: Option<&'a region::Prepared>,
@@ -27,6 +26,8 @@ pub(super) struct Request<'a> {
 pub(super) struct Reconstructed {
     pub params: Parameters,
     pub tiles: usize,
+    pub color: crate::nodes::sensor::calibration::ColorParams,
+    pub mode: crate::nodes::color::color_mode::Settings,
 }
 
 /// None means construction stopped at the requested inspection output.
@@ -35,6 +36,12 @@ pub(super) fn append(
     graph: &mut Graph,
     calibrated: usize,
     controls: Controls,
+    prepare_color: impl FnOnce(
+        &mut Profile,
+    ) -> Result<(
+        crate::nodes::sensor::calibration::ColorParams,
+        crate::nodes::color::color_mode::Settings,
+    )>,
     profile: &mut Profile,
     execution: &mut Execution<'_>,
 ) -> Result<Option<Reconstructed>> {
@@ -145,23 +152,11 @@ pub(super) fn append(
         )?
     };
     checkpoint!();
-    let mut active =
-        crate::nodes::sensor::calibration::rectangle(request.source.metadata(), "ActiveImageArea")?;
-    if let Some(grid) = request.preview {
-        active = grid.grid.bounds(active);
-    }
-    let color =
-        crate::nodes::color::texture::Color::new(request.color.matrix, request.space, active)?;
-    let prepared = crate::nodes::color::texture::Prepared::new(
-        controls,
-        request.settings.working_scale.factor(),
-        color,
-    )?;
     let inspect_ratio = request
         .names
         .iter()
         .any(|name| matches!(*name, "detail.raw-ratio" | "detail.ratio" | "pattern.mask"));
-    let ratio = if prepared.needs_ratio() || inspect_ratio {
+    let ratio = if effects.strength[2] != 0. || inspect_ratio {
         let ratio = graph.add(Operation::Ratio(params), &[conditioned, base])?;
         checkpoint!();
         let pattern_recipe = profile.measure("prepare pattern recipe", || {
@@ -180,6 +175,19 @@ pub(super) fn append(
     } else {
         None
     };
+    let (color, mode) = prepare_color(profile)?;
+    let mut active =
+        crate::nodes::sensor::calibration::rectangle(request.source.metadata(), "ActiveImageArea")?;
+    if let Some(grid) = request.preview {
+        active = grid.grid.bounds(active);
+    }
+    let texture_color =
+        crate::nodes::color::texture::Color::new(color.matrix, request.space, active)?;
+    let prepared = crate::nodes::color::texture::Prepared::new(
+        controls,
+        request.settings.working_scale.factor(),
+        texture_color,
+    )?;
     let mut texture_inputs = vec![conditioned];
     if prepared.needs_base() {
         texture_inputs.push(base);
@@ -192,6 +200,8 @@ pub(super) fn append(
     Ok(Some(Reconstructed {
         params,
         tiles: restored,
+        color,
+        mode,
     }))
 }
 

@@ -198,27 +198,36 @@ impl Graph {
 
     /// Requiring existing inputs prevents cycles and keeps execution order clear.
     pub fn add(&mut self, operation: Operation, inputs: &[usize]) -> Result<usize> {
-        if matches!(operation, Operation::LinearCodeRgb { white: 0, .. }) {
-            return Err("linear RGB requires a nonzero nominal white".into());
-        }
-        if matches!(operation, Operation::TransferLinearGain { data, .. } | Operation::LinearBasis { data, .. } if !matches!(data, DataType::LinearRgb(_) | DataType::LinearCodeRgb))
-        {
-            return Err("linear edit baking requires a linear sample base".into());
-        }
-        let (expected, output) = operation.types();
-        if inputs.len() != expected.len() {
-            return Err("wrong number of node inputs".into());
-        }
-        for (&input, expected) in inputs.iter().zip(expected) {
-            let output = self.outputs.get(input).ok_or("node input does not exist")?;
-            if output.data != expected {
-                return Err(format!(
-                    "incompatible node input: expected {expected:?}, received {:?}",
-                    output.data
-                )
-                .into());
+        let validation = (|| -> Result<DataType> {
+            if matches!(operation, Operation::LinearCodeRgb { white: 0, .. }) {
+                return Err("linear RGB requires a nonzero nominal white".into());
             }
-        }
+            if matches!(operation, Operation::TransferLinearGain { data, .. } | Operation::LinearBasis { data, .. } if !matches!(data, DataType::LinearRgb(_) | DataType::LinearCodeRgb))
+            {
+                return Err("linear edit baking requires a linear sample base".into());
+            }
+            let (expected, output) = operation.types();
+            if inputs.len() != expected.len() {
+                return Err("wrong number of node inputs".into());
+            }
+            for (&input, expected) in inputs.iter().zip(expected) {
+                let output = self.outputs.get(input).ok_or("node input does not exist")?;
+                if output.data != expected {
+                    return Err(format!(
+                        "incompatible node input: expected {expected:?}, received {:?}",
+                        output.data
+                    )
+                    .into());
+                }
+            }
+            Ok(output)
+        })();
+        let output = validation.map_err(|error| crate::support::reported_error("graph.add", error, crate::support::OperationContext {
+            component: Some("graph".into()), phase: Some("validate-node-inputs".into()),
+            settings: Some(serde_json::json!({"operation":operation.kind(),"label":operation.label(),
+                "inputs":inputs,"input_types":inputs.iter().map(|&id|self.outputs.get(id).map(|output|format!("{:?}",output.data))).collect::<Vec<_>>()})),
+            ..Default::default()
+        }))?;
         let id = self.outputs.len();
         let producer = self.nodes.len();
         self.outputs.push(Output {

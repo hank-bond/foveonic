@@ -183,6 +183,34 @@ pub(crate) struct Value {
     pub(crate) description: Option<Description>,
 }
 
+pub(super) fn report_failure(
+    error: Box<dyn std::error::Error + Send + Sync>,
+    phase: &str,
+    metadata: &Metadata,
+    details: serde_json::Value,
+) -> Box<dyn std::error::Error + Send + Sync> {
+    // These typed results drive scheduling and must remain directly downcastable.
+    if error.is::<SourceRequired>()
+        || error.is::<crate::interactive::Superseded>()
+        || error.is::<crate::background::Interrupted>()
+    {
+        return error;
+    }
+    crate::support::reported_error(
+        "render.core",
+        error,
+        crate::support::OperationContext {
+            component: Some("renderer".into()),
+            phase: Some(phase.into()),
+            settings: Some(
+                serde_json::json!({"camera":metadata.properties.get("CAMMODEL"),
+            "extent":[metadata.width,metadata.height],"operation":details}),
+            ),
+            ..Default::default()
+        },
+    )
+}
+
 impl Engine {
     pub(super) fn execute(
         &self,
@@ -195,6 +223,24 @@ impl Engine {
     }
 
     pub(super) fn execute_controlled(
+        &self,
+        context: Input<'_>,
+        graph: &Graph,
+        targets: &[usize],
+        profile: &mut Profile,
+        execution: &mut Execution<'_>,
+    ) -> Result<Vec<Value>> {
+        let metadata = context.metadata().clone();
+        self.execute_graph(context, graph, targets, profile, execution).map_err(|error| {
+            report_failure(error, "execute-graph", &metadata, serde_json::json!({
+                "target_ids":targets,
+                "target_names":targets.iter().map(|&id|graph.outputs.get(id).map(|output|output.name)).collect::<Vec<_>>(),
+                "node_count":graph.nodes.len(),
+            }))
+        })
+    }
+
+    fn execute_graph(
         &self,
         context: Input<'_>,
         graph: &Graph,
@@ -2396,6 +2442,56 @@ impl Engine {
             },
         );
         Ok(targets.iter().filter_map(|id| values[*id].take()).collect())
+    }
+}
+
+#[cfg(test)]
+mod support_failure_tests {
+    use super::*;
+
+    #[test]
+    fn scheduling_results_stay_typed_and_terminal_errors_keep_camera_context() {
+        let metadata = Metadata {
+            width: 3,
+            height: 2,
+            rotation: 0,
+            processing_version: None,
+            properties: [("CAMMODEL".into(), "test camera".into())].into(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        };
+        for (kind, error) in [
+            Box::new(SourceRequired) as Box<dyn std::error::Error + Send + Sync>,
+            Box::new(crate::interactive::Superseded),
+            Box::new(crate::background::Interrupted),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let returned =
+                report_failure(error, "execute-graph", &metadata, serde_json::Value::Null);
+            assert!(match kind {
+                0 => returned.is::<SourceRequired>(),
+                1 => returned.is::<crate::interactive::Superseded>(),
+                _ => returned.is::<crate::background::Interrupted>(),
+            });
+            assert!(!returned.is::<crate::support::ReportedError>());
+        }
+        let error = report_failure(
+            std::io::Error::from_raw_os_error(5).into(),
+            "execute-graph",
+            &metadata,
+            serde_json::json!({"target_ids":[2]}),
+        );
+        let report = &error
+            .downcast_ref::<crate::support::ReportedError>()
+            .unwrap()
+            .report;
+        assert_eq!(
+            report.operation.settings.as_ref().unwrap()["camera"],
+            "test camera"
+        );
+        assert!(report.causes.iter().any(|cause| cause.os_code == Some(5)));
     }
 }
 

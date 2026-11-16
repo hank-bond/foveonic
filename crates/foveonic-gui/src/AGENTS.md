@@ -36,7 +36,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 ### Source files
 
 - **[actions.rs](./actions.rs)** Applies workspace commands through browser selection and the existing per-photo editing session.
-- **[activity.rs](./activity.rs)** Retains session operations, tool messages and errors with one acknowledged toolbar status.
+- **[activity.rs](./activity.rs)** Presents retained launch logs and copy controls while keeping one acknowledged toolbar status.
 - **[application_settings.rs](./application_settings.rs)** Configures display, editing targets, retained memory and background disk reuse independently of photographic edits.
 - **[automation.rs](./automation.rs)** Observes real controls for opt-in scripted application checks.
 - **[batch.rs](./batch.rs)** Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering.
@@ -79,6 +79,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[shortcuts.rs](./shortcuts.rs)** Defines workspace actions and routes their keys before widgets, preserving text and modal input.
 - **[sidecars.rs](./sidecars.rs)** Keeps each photo's latest edits saved without making rendering wait for disk access.
 - **[startup.rs](./startup.rs)** Presents a responsive loading window while one worker prepares the photographic application.
+- **[support.rs](./support.rs)** Starts support reporting before graphics and forwards dependency warnings into the same history.
 - **[timing.rs](./timing.rs)** Connects GUI tasks, native drawing and existing measurements to the shared Perfetto capture.
 - **[toolbar.rs](./toolbar.rs)** Shares padded processing rows and a responsive right-aligned image-tool region.
 - **[viewport.rs](./viewport.rs)** Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.

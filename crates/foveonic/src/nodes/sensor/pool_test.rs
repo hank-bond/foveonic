@@ -181,6 +181,43 @@ fn partial_cells_and_halos_replicate_completed_means_and_flag_unions() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn full_quattro_extreme_partial_cell_is_replicated_into_halo() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [2944, 1836];
+    for split in [false, true] {
+        let source: Vec<f32> = (0..extent[1])
+            .flat_map(|y| {
+                std::iter::repeat_n(
+                    if split && y >= extent[1] / 2 { 3. } else { 1. },
+                    extent[0] as usize,
+                )
+            })
+            .collect();
+        let input = gpu.upload("Extreme partial-cell source", &source).unwrap();
+        let prepared = Prepared::new(extent, 1 << 31, Signal::Blue).unwrap();
+        let plain = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+        let plain_bytes = gpu.readback(&plain).unwrap();
+        let plain_value = bytemuck::cast_slice::<u8, f32>(&plain_bytes)[0];
+        let expected = if split { 2. } else { 1. };
+        assert!(
+            (plain_value - expected).abs() < 0.000001,
+            "split={split}, mean={plain_value}, expected={expected}"
+        );
+        let padded = prepared.with_extent([3, 3]).unwrap().with_origin([1, 1]);
+        let halo = apply(&gpu, &input, &padded, &mut Profile::default()).unwrap();
+        let halo_bytes = gpu.readback(&halo).unwrap();
+        for &value in bytemuck::cast_slice::<u8, f32>(&halo_bytes) {
+            assert_eq!(value.to_bits(), plain_value.to_bits());
+        }
+        assert_eq!(
+            gpu.readback(&input).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&source)
+        );
+    }
+}
 #[test]
 fn pooling_maps_each_component_frame_with_its_own_origin() {
     let prepared = Prepared::new([33, 35], 4, Signal::Rgb)

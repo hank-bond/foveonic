@@ -40,6 +40,7 @@ fn gpu_pattern_matches_native_extents_seeded_edges_and_global_offset_order() {
     let mut geometry: crate::noise::Parameters = bytemuck::Zeroable::zeroed();
     geometry.source = [80, 72, 2, 1];
     geometry.tile = [80, 72, 0, 11];
+    geometry.window = [0, 0, 2, 1];
     geometry.reduction = [1., 0., 0., 0.];
     geometry.geometry = [8, 8, 21, 0];
     let edge = crate::nodes::color::reconstruction::pattern_seed(

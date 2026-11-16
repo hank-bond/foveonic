@@ -61,7 +61,17 @@ python3 scripts/setup_tests.py --install --images
 python3 scripts/setup_tests.py --images --offline
 ```
 
-The command checks Rust, Cargo, rustfmt, Clippy, a C/C++ compiler, CMake, ExifTool and the shared Python test dependencies. Online image preparation also requires GitHub CLI and an authenticated GitHub session for the example release. The tool list and install mappings live in the setup script. Missing prerequisites and failed installations return a failing exit status. `--install` installs missing Homebrew packages on macOS, missing Rust components through rustup, and prepares the shared Python environment from the pinned requirements. Repeated runs reuse dependencies that already match. Homebrew, Rust and Xcode must already be installed. On other systems, install the reported native tools with the system's package manager and rerun the checker. Tests never install tools themselves. `--offline` cannot be combined with `--install`.
+The command checks Rust, Cargo, rustfmt, Clippy, a C/C++ compiler, CMake, ExifTool and the shared Python test dependencies. Windows requires `clang-cl`, as used by the native build. Online image preparation also requires GitHub CLI and an authenticated GitHub session for the example release. The tool list and install mappings live in the setup script. Missing prerequisites and failed installations return a failing exit status. `--install` installs missing Homebrew packages on macOS, missing Rust components through rustup, and prepares the shared Python environment from the pinned requirements. Repeated runs reuse dependencies that already match. Homebrew, Rust and Xcode must already be installed. On other systems, install the reported native tools with the system's package manager and rerun the checker. Tests never install tools themselves. `--offline` cannot be combined with `--install`.
+
+On Windows x64, setup also checks the pinned DirectX shader compiler archive and its `dxcompiler.dll` and `dxil.dll` files. `--install` downloads and verifies the same archive used by the Windows release workflow, then stages both DLLs beside application and test executables under Cargo's debug and release target directories. Cargo metadata resolves the target root, including a custom `CARGO_TARGET_DIR` or Cargo configuration; its offline lookup requires the workspace dependencies to be available locally. Existing different DLLs are left untouched and reported as conflicts. A later check verifies the cached archive and all staged copies without downloading. These paths cover native Windows builds; an explicit cross-target build may need additional staging beside its executables. The trace processor remains a separately supplied tool for trace-based checks.
+
+For Windows builds, configure the compiler as in CI before running Cargo:
+
+```powershell
+$env:CC = 'clang-cl'
+$env:CXX = 'clang-cl'
+$env:CXXFLAGS = '-DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS'
+```
 
 `--images` reuses the existing example sync and external-sample verifier. Repeated runs preserve originals and sidecars. `--source-dir PATH` selects another image cache. For the generated recipes and aliases used by the larger behavioral suite, continue using `prepare_inputs.py` above with a new output directory. GPU availability, graphical sessions, independent pixel baselines and the optional Trace Processor remain requirements of the specific suites that use them.
 

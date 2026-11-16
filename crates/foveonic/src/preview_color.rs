@@ -10,6 +10,29 @@ const TRANSFORM_PIXELS: usize = 4096;
 const RGB_CHANNELS: usize = 3;
 const RGB8_TO_RGB16: u16 = u16::MAX / u8::MAX as u16;
 
+fn profile_warning(boundary: &str, error: &(dyn std::error::Error + 'static)) {
+    static READ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static PARSE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static TRANSFORM: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let counter = match boundary {
+        "preview_color.profile_read" => &READ,
+        "preview_color.profile_parse" => &PARSE,
+        _ => &TRANSFORM,
+    };
+    let occurrences = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if occurrences.is_power_of_two() {
+        crate::support::warning_error(
+            boundary,
+            error,
+            crate::support::OperationContext {
+                component: Some("embedded preview".into()),
+                settings: Some(serde_json::json!({"occurrences":occurrences})),
+                ..Default::default()
+            },
+        );
+    }
+}
+
 #[derive(Clone)]
 pub(super) enum Encoding {
     Srgb,
@@ -38,8 +61,20 @@ impl Encoding {
         };
         let profile = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(encoded))
             .ok()
-            .and_then(|mut decoder| decoder.icc_profile().ok().flatten())
-            .and_then(|bytes| ColorProfile::new_from_slice(&bytes).ok())
+            .and_then(|mut decoder| match decoder.icc_profile() {
+                Ok(profile) => profile,
+                Err(error) => {
+                    profile_warning("preview_color.profile_read", &error);
+                    None
+                }
+            })
+            .and_then(|bytes| match ColorProfile::new_from_slice(&bytes) {
+                Ok(profile) => Some(profile),
+                Err(error) => {
+                    profile_warning("preview_color.profile_parse", &error);
+                    None
+                }
+            })
             .filter(|p| p.color_space == DataColorSpace::Rgb);
         if let Some(profile) = profile {
             return Self::Profile {
@@ -77,7 +112,10 @@ impl Encoding {
             Ok(transform) => transform,
             // A parsed optional profile can still lack a usable RGB transform.
             // Fall back before changing any samples.
-            Err(_) => return fallback.decode(rgb),
+            Err(error) => {
+                profile_warning("preview_color.profile_transform", &error);
+                return fallback.decode(rgb);
+            }
         };
         let mut input = Vec::with_capacity(TRANSFORM_PIXELS * RGB_CHANNELS);
         let mut converted = vec![0; rgb.len()];

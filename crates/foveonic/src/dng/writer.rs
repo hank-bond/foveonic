@@ -292,8 +292,24 @@ pub(super) fn write<W: Write + Seek>(
     private.extend(serde_json::to_vec(&history)?);
     tag(&mut directory, 50740, private.as_slice())?;
     // Drop hides final write errors, which could make a broken export look successful.
-    directory.finish()?;
-    out.flush()?;
+    let failure_context = |phase: &str| crate::support::OperationContext {
+        component: Some("export".into()),
+        phase: Some(phase.into()),
+        settings: Some(
+            serde_json::json!({"format":"dng","extent":size,"recipe":settings,"sample_scale":scale}),
+        ),
+        ..Default::default()
+    };
+    directory.finish().map_err(|error| {
+        crate::support::reported_error(
+            "dng.writer",
+            error.into(),
+            failure_context("finish-directory"),
+        )
+    })?;
+    out.flush().map_err(|error| {
+        crate::support::reported_error("dng.writer", error.into(), failure_context("flush-output"))
+    })?;
     Ok(())
 }
 

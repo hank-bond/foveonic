@@ -695,6 +695,7 @@ fn relax(
 struct SolverParams {
     size: [u32; 4],
     metric: [f32; 4],
+    // Relative tolerance, prior RHS scale, runtime rounding identity, and padding.
     tolerance: [f32; 4],
 }
 #[derive(Clone, Copy)]
@@ -784,7 +785,7 @@ fn solve(
                     0,
                 ],
                 metric,
-                tolerance: [tolerance, fixed_rhs_max, 0., 0.],
+                tolerance: [tolerance, fixed_rhs_max, 1., 0.],
             }),
         ),
         (1, equations.clone()),

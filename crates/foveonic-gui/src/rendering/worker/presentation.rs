@@ -544,7 +544,6 @@ mod tests {
                     Scale::new(2).unwrap()
                 }
             );
-            let loads = worker.checks.source_loads.load(Ordering::Relaxed);
             if policy == ProcessingQuality::Quality {
                 let mut region = settings.clone();
                 region.preview_region = Some([100, 100, 400, 500]);
@@ -552,6 +551,7 @@ mod tests {
                 let tile = receive(&worker, 2);
                 assert!(tile.artifact.settings.preview_region.is_some());
             }
+            let loads = worker.checks.source_loads.load(Ordering::Relaxed);
             worker.submit(request(&path, 3, Scale::NATIVE, policy, &settings, true));
             let plane = receive(&worker, 3);
             assert_eq!(
@@ -572,7 +572,7 @@ mod tests {
                 "drag/commit keeps the untrimmed texture"
             );
             assert_eq!(dispatches(&worker, 4), 0);
-            worker.submit(request(&path, 5, Scale::NATIVE, policy, &settings, false));
+            worker.submit(request(&path, 5, quality, policy, &settings, false));
             let committed = receive(&worker, 5);
             assert_eq!(committed.artifact.settings.working_scale, quality);
             assert_eq!(dispatches(&worker, 5), 0);
@@ -583,6 +583,7 @@ mod tests {
             let full = receive(&worker, 6);
             assert_eq!(full.artifact.settings.working_scale, Scale::NATIVE);
             assert!(dispatches(&worker, 6) > 0);
+            matches_fresh(&verifier, &full, &path, &settings);
             let full_loads = worker.checks.source_loads.load(Ordering::Relaxed);
             worker.submit(request(&path, 7, Scale::NATIVE, policy, &settings, true));
             let full_plane = receive(&worker, 7);
@@ -706,10 +707,19 @@ mod tests {
             ));
             let changed = receive(&worker, 4);
             assert_eq!(changed.artifact.settings.working_scale, Scale::NATIVE);
-            assert!(
-                dispatches(&worker, 4) > 0,
-                "explicit workspace quality is a pixel request"
-            );
+            let quality_dispatches = dispatches(&worker, 4);
+            if policy == ProcessingQuality::Speed {
+                assert!(
+                    quality_dispatches > 0,
+                    "changing Speed to Quality requires native pixels"
+                );
+            } else {
+                assert_eq!(
+                    quality_dispatches, 0,
+                    "an already-Quality native image is reused"
+                );
+            }
+            matches_fresh(&verifier, &changed, &path, &settings);
         }
     }
     #[test]

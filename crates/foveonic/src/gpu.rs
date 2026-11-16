@@ -4,6 +4,39 @@ use crate::profile::{Profile, Timing};
 use crate::source::Result;
 use wgpu::util::DeviceExt;
 
+#[derive(Debug)]
+struct DiagnosticError {
+    message: String,
+    cause: Box<dyn std::error::Error + Send + Sync>,
+}
+impl std::fmt::Display for DiagnosticError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for DiagnosticError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+fn failure(
+    phase: &str,
+    error: Box<dyn std::error::Error + Send + Sync>,
+    details: serde_json::Value,
+) -> Box<dyn std::error::Error + Send + Sync> {
+    crate::support::reported_error(
+        "gpu",
+        error,
+        crate::support::OperationContext {
+            component: Some("GPU".into()),
+            phase: Some(phase.into()),
+            settings: Some(details),
+            ..Default::default()
+        },
+    )
+}
+
 mod completion;
 mod diagnostics;
 mod field;
@@ -63,11 +96,34 @@ impl GpuTrace {
     }
 }
 
+/// Keep Windows GUI and headless processing on the packaged DX12 compiler.
+pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
+    #[cfg(target_os = "windows")]
+    {
+        wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::DX12,
+            backend_options: wgpu::BackendOptions {
+                dx12: wgpu::Dx12BackendOptions {
+                    shader_compiler: wgpu::Dx12Compiler::default_dynamic_dxc(),
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        wgpu::InstanceDescriptor::default()
+    }
+}
+
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pipelines: Vec<wgpu::ComputePipeline>,
-    field: std::sync::Arc<std::sync::OnceLock<std::result::Result<field::FieldKernels, String>>>,
+    field: std::sync::Arc<
+        std::sync::OnceLock<std::result::Result<field::FieldKernels, field::CompilationFailure>>,
+    >,
     #[cfg(test)]
     shader_writes: Vec<u32>,
     pub adapter_name: String,
@@ -90,21 +146,51 @@ impl Gpu {
         }
     }
     pub fn new() -> Result<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&instance_descriptor());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
         }))
-        .map_err(|error| format!("no compatible GPU adapter: {error}"))?;
-        let adapter_name = adapter.get_info().name;
+        .map_err(|error| {
+            failure(
+                "request-adapter",
+                Box::new(DiagnosticError {
+                    message: format!("no compatible GPU adapter: {error}"),
+                    cause: error.into(),
+                }),
+                serde_json::json!({"backends":format!("{:?}",instance_descriptor().backends)}),
+            )
+        })?;
+        let info = adapter.get_info();
+        let adapter_name = info.name.clone();
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Foveonic image engine"),
                 required_limits: adapter.limits(),
                 required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                 ..Default::default()
-            }))?;
+            })).map_err(|error| failure("request-device", error.into(), serde_json::json!({
+                "adapter":info.name,"vendor":info.vendor,"device":info.device,
+                "backend":format!("{:?}",info.backend),"driver":info.driver,"driver_info":info.driver_info,
+            })))?;
+        crate::support::update_context(
+            "gpu",
+            serde_json::json!({
+                "status":"selected","name":info.name,"vendor":info.vendor,"device":info.device,
+                "device_type":format!("{:?}",info.device_type),"backend":format!("{:?}",info.backend),
+                "driver":info.driver,"driver_info":info.driver_info,
+                "features":format!("{:?}",device.features()),"limits":format!("{:?}",device.limits()),
+                "capacity_source":"See system.gpu_inventory. API allocation limits are separate from physical capacity.",
+            }),
+        );
+        device.set_device_lost_callback(|reason, message| {
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                let _ = failure("device-lost-callback", message.into(), serde_json::json!({
+                    "reason":format!("{reason:?}"),"operation_attribution":"unavailable for asynchronous device loss",
+                }));
+            }
+        });
         Self::from_device(device, queue, adapter_name)
     }
 
@@ -388,10 +474,13 @@ impl Gpu {
             || size > limits.max_buffer_size
             || size > u64::from(limits.max_storage_buffer_binding_size)
         {
-            return Err(format!(
-                "GPU storage buffer requires {size} bytes, above the supported limit"
-            )
-            .into());
+            return Err(failure(
+                "validate-buffer-size",
+                format!("GPU storage buffer requires {size} bytes, above the supported limit")
+                    .into(),
+                serde_json::json!({"requested_bytes":size,"max_buffer_bytes":limits.max_buffer_size,
+                "max_storage_binding_bytes":limits.max_storage_buffer_binding_size}),
+            ));
         }
         Ok(())
     }
@@ -793,9 +882,17 @@ pub fn map_readback(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<()> 
                 .bool("blocking_poll", false);
         });
     let (tx, rx) = std::sync::mpsc::channel();
+    let buffer_bytes = buffer.size();
     buffer
         .slice(..)
         .map_async(wgpu::MapMode::Read, move |result| {
+            let result = result.map_err(|error| {
+                failure(
+                    "map-readback-callback",
+                    error.into(),
+                    serde_json::json!({"buffer_bytes":buffer_bytes}),
+                )
+            });
             let _ = tx.send(result);
         });
     completion::wait(device, rx, || {

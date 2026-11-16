@@ -46,6 +46,19 @@ fn pixels(rs: &egui_wgpu::RenderState, texture: &wgpu::Texture) -> Vec<u8> {
     bytes
 }
 
+fn displayed_pixel(rs: &egui_wgpu::RenderState, texture: &wgpu::Texture) -> [u8; 4] {
+    let bytes = pixels(rs, texture);
+    std::array::from_fn(|channel| {
+        let value = half::f16::from_le_bytes([bytes[channel * 2], bytes[channel * 2 + 1]]).to_f32();
+        if channel == 3 {
+            (value.clamp(0., 1.) * 255.).round() as u8
+        } else {
+            (foveonic::preview::encode_sample(foveonic::color_space::TiffColorSpace::Srgb, value)
+                / 257) as u8
+        }
+    })
+}
+
 #[test]
 #[ignore = "requires a GPU"]
 fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() {
@@ -63,7 +76,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
     let target = texture(
         &rs,
         [1, 1],
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba16Float,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
     );
     let upload = |texture: &wgpu::Texture, value: [f32; 4]| {
@@ -114,7 +127,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
                         Some(&input),
                         None,
                     );
-                    let bytes = pixels(&rs, &target);
+                    let bytes = displayed_pixel(&rs, &target);
                     for value in &bytes[..3] {
                         assert!(
                             value.abs_diff(expected) <= 1,
@@ -138,7 +151,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
         Some(&input),
         None,
     );
-    assert!(pixels(&rs, &target)[0].abs_diff(137) <= 1);
+    assert!(displayed_pixel(&rs, &target)[0].abs_diff(137) <= 1);
     viewport::prepare_preview(
         &rs,
         &input,
@@ -151,7 +164,7 @@ fn signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral() 
         Some(&input),
         None,
     );
-    assert!(pixels(&rs, &target)[0].abs_diff(243) <= 1);
+    assert!(displayed_pixel(&rs, &target)[0].abs_diff(243) <= 1);
 }
 
 #[test]
@@ -169,7 +182,7 @@ fn romm_presentation_converts_and_clips_without_changing_float_source() {
     let target = texture(
         &rs,
         [1, 1],
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba16Float,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
     );
     // At low intensity, ROMM green converts to approximately (-0.073, 0.123, -0.015)
@@ -201,7 +214,7 @@ fn romm_presentation_converts_and_clips_without_changing_float_source() {
             None,
             None,
         );
-        let displayed = pixels(&rs, &target);
+        let displayed = displayed_pixel(&rs, &target);
         assert_eq!(displayed[0], 0);
         assert!(
             displayed[1].abs_diff(expected) <= 1,

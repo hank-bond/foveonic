@@ -136,6 +136,54 @@ fn gpu_threshold_changes_only_brightness_blend_and_keeps_density_and_input() {
 
 #[test]
 #[ignore = "requires a working GPU adapter"]
+fn donor_bins_keep_integer_boundaries_and_adjacent_floats_distinct() {
+    let gpu = Gpu::new().unwrap();
+    let around = |value: f32| {
+        [
+            f32::from_bits(value.to_bits() - 1),
+            value,
+            f32::from_bits(value.to_bits() + 1),
+        ]
+    };
+    let rgb: Vec<f32> = around(50.)
+        .into_iter()
+        .chain(around(70.))
+        .flat_map(|red| [red, 100., 10.])
+        .collect();
+    let input = gpu.upload("Boundary RGB", &rgb).unwrap();
+    let donors = gpu
+        .upload("Boundary donors", &[0_u32, 1, 2, 3, 4, 5])
+        .unwrap();
+    let counts = gpu.upload("Boundary donor total", &[0_u32, 6]).unwrap();
+    let mut marks = gpu.storage("Boundary bins", 6 * 4).unwrap();
+    let mut histogram = gpu.storage("Boundary histogram", 256 * 4).unwrap();
+    let params = gpu.uniform(&Params {
+        source: [6, 1, 6, 1],
+        area: [0; 4],
+        value: [0., 1., 0., 0.],
+    });
+    gpu.dispatch(
+        Kernel::HighlightBinHistogram,
+        &mut [
+            (2, Read(&params)),
+            (5, Read(&input)),
+            (6, Write(marks.write())),
+            (7, Read(&counts)),
+            (8, Read(&donors)),
+            (11, Write(histogram.write())),
+        ],
+        [1, 1],
+        &mut Default::default(),
+    );
+    let bytes = gpu.readback(&marks).unwrap();
+    assert_eq!(
+        bytemuck::cast_slice::<u8, u32>(&bytes),
+        &[84, 85, 85, 104, 105, 105]
+    );
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
 fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
     let gpu = Gpu::new().unwrap();
     let rgb: Vec<f32> = (0..600)

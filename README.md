@@ -32,6 +32,8 @@ Want to try it out? Download a photograph from the [example collection](https://
 
 See the [changelog](CHANGELOG.md) for what's new.
 
+If you need help with a problem, see how to [copy and share support logs](docs/support-logs.md).
+
 ## Command line
 
 From a source checkout with Rust and Cargo installed:

@@ -24,11 +24,19 @@ pub(super) fn wait<T>(
 ) -> Result<T> {
     loop {
         check()?;
-        device.poll(wgpu::PollType::Poll)?;
+        device.poll(wgpu::PollType::Poll).map_err(|error| {
+            super::failure("poll-completion", error.into(), serde_json::Value::Null)
+        })?;
         match receiver.recv_timeout(POLL_INTERVAL) {
             Ok(value) => return Ok(value),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return Err(super::failure(
+                    "completion-channel",
+                    error.into(),
+                    serde_json::Value::Null,
+                ))
+            }
         }
     }
 }

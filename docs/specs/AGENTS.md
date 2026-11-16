@@ -70,6 +70,7 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[sensor-defect-calibration](./sensor-defect-calibration.md)** _(accepted, conforming, reference)._ User cap calibration must distinguish general noise distributions from camera-specific sparse pixel defects.
 - **[small-previews](./small-previews.md)** _(accepted, incomplete, reference)._ Power-of-two working grids reduce corrected sensor layers before the complete camera and photographic pipeline.
 - **[smart-preview](./smart-preview.md)** _(accepted, incomplete, reference)._ Smart preview chooses processing resolution from displayed pixel demand and refines native detail through supported visible regions.
+- **[support-logging](./support-logging.md)** _(accepted, incomplete, reference)._ Persistent support logs preserve launch context, startup progress and actionable failures for user-supplied issue reports.
 - **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.
 - **[tonal-ranges](./tonal-ranges.md)** _(accepted, incomplete, reference)._ Shared HDR controls use a multiscale spatial base before camera tone and bake their brightness response into DNG.
 - **[viewport-workflows](./viewport-workflows.md)** _(accepted, conforming, reference)._ Smart overview sizing, persistent photograph views and a native-detail loupe share explicit viewport requirements.

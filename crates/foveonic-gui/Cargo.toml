@@ -13,9 +13,12 @@ rfd = "0.16"
 bytemuck = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ron = "0.10.1"
 half = "2"
 tempfile = "3"
 crossbeam-channel = "0.5.17"
+tracing = "0.1.44"
+time = { version = "0.3", features = ["formatting", "local-offset"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

@@ -627,6 +627,25 @@ impl Cache {
                 let rejected = result.as_ref().is_err_and(|error| {
                     !error.is::<crate::background::Interrupted>() && !error.is::<PolicyMiss>()
                 });
+                if let Err(error) = &result {
+                    if reportable_lookup_error(error.as_ref()) {
+                        static OCCURRENCES: std::sync::atomic::AtomicUsize =
+                            std::sync::atomic::AtomicUsize::new(0);
+                        let count =
+                            OCCURRENCES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if count.is_power_of_two() {
+                            crate::support::warning_error(
+                                "decode_cache.read",
+                                error.as_ref(),
+                                crate::support::OperationContext {
+                                    source: Some(path.display().to_string()),
+                                    settings: Some(serde_json::json!({"occurrences":count})),
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                    }
+                }
                 if rejected || result.is_ok() {
                     let mut control = self.control.lock().unwrap();
                     if control.settings == settings
@@ -682,6 +701,30 @@ fn diagnostic_root(root: PathBuf, namespace: Option<&std::ffi::OsStr>) -> Result
 
 #[derive(Debug)]
 struct PolicyMiss(&'static str);
+
+fn reportable_lookup_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    !error.is::<crate::background::Interrupted>()
+        && !error.is::<PolicyMiss>()
+        && !error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+}
+
+#[cfg(test)]
+#[test]
+fn cache_warning_excludes_misses_and_cooperative_cancellation() {
+    assert!(!reportable_lookup_error(&crate::background::Interrupted));
+    assert!(!reportable_lookup_error(&PolicyMiss("disabled")));
+    assert!(!reportable_lookup_error(&std::io::Error::from(
+        std::io::ErrorKind::NotFound
+    )));
+    assert!(reportable_lookup_error(&std::io::Error::from(
+        std::io::ErrorKind::PermissionDenied
+    )));
+    assert!(reportable_lookup_error(&std::io::Error::other(
+        "checksum mismatch"
+    )));
+}
 impl std::fmt::Display for PolicyMiss {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.0)

@@ -22,6 +22,15 @@ thread_local! {
 pub(crate) fn install_upload_error_handler(device: &wgpu::Device) {
     device.on_uncaptured_error(Box::new(|error| {
         if let Err(error) = capture_upload_error(error) {
+            foveonic::support::report_error(
+                "gpu.uncaptured_error",
+                &error,
+                foveonic::support::OperationContext {
+                    component: Some("shared GPU".into()),
+                    phase: Some("uncaptured error callback".into()),
+                    ..Default::default()
+                },
+            );
             // Preserve wgpu's fatal behavior outside this narrow recovery path.
             panic!("wgpu error: {error}");
         }
@@ -40,6 +49,15 @@ fn capture_upload_error(error: wgpu::Error) -> Result<(), wgpu::Error> {
         // A failed sampler allocation inside registration can cause follow-on
         // validation errors before that API returns. Keep the original cause.
         if first.is_none() {
+            foveonic::support::warning_error(
+                "display.upload_recovery",
+                &error,
+                foveonic::support::OperationContext {
+                    component: Some("display upload".into()),
+                    phase: Some("recoverable allocation error callback".into()),
+                    ..Default::default()
+                },
+            );
             *first = Some(error);
         }
         Ok(())

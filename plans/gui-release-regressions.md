@@ -1,5 +1,5 @@
 ---
-summary: "Resolve four native GUI acceptance failures and require packaged desktop checks before releasing 0.8.2."
+summary: "Resolve GUI and GPU correctness failures and require packaged desktop checks before releasing 0.8.2."
 ---
 
 # GUI release regressions
@@ -25,6 +25,12 @@ The broader non-latency GUI inventory contains 47 smoke, scenario and slider job
 
 The Windows workspace run also exposed timestamp fixtures that opened files without write access. Correcting those fixtures revealed a production cache-recency failure: successful decoded and preview reuse silently failed to refresh modification times. A shared best-effort timestamp helper now opens a nontruncating write handle separately, preserving successful reads when timestamp updates are unavailable. Existing decoded LRU coverage and new preview/data-integrity/read-only cases validate the behavior.
 
+The additional synthetic GPU inventory initially failed fourteen cases on Windows. Actual adapter observation showed that the headless constructor selected Vulkan while the GUI selected DX12/DXC. Six failures disappeared under the GUI configuration. Core and GUI now share the Windows descriptor. Hosted Windows unit tests independently selected DX12/FXC under the old defaults and failed shader compilation, confirming that default configuration was not an adequate test of the shipped application. Common preparation now stages the pinned DXC pair before Windows CI tests.
+
+Three remaining failures came from synthetic fixtures: a missing two-tile window and two Quattro sources that no longer met supported native geometry/calibration requirements. Those fixtures retain their original numerical and ownership assertions. A residual-LUT test conflated exact index selection with backend-dependent final multiply/add contraction. Three sentinel tables now expose the exact native indices independently through unchanged production kernels.
+
+The remaining corrections preserve small compensated ColorField updates against compiler simplification, use positive interpolation weights for small HDR gains, correct highlight donor division at integer-bin boundaries, and count signed-detail range endpoints before normalized arithmetic. Independent equations, exact tiny updates, true residual/convergence checks, adjacent-float boundaries and density conservation remain the acceptance criteria. The final 249-case synthetic suite passes on Metal and Windows DX12/DXC. All 155 public-original cases have passing Metal evidence, with Windows verification still running. The offscreen GUI inventory passes all 42 cases on both platforms after correcting stale float-target, uniform-layout, duplicate-request and setup-baseline fixtures. The full native matrix and exact release archives remain gates.
+
 These corrections must not replace expected behavior with values copied from the candidate. Geometric scale/region expectations come from the accepted display and scope contracts. The before/after cached-image assertion remains an identity invariant.
 
 ## Checks
@@ -39,5 +45,6 @@ These corrections must not replace expected behavior with values copied from the
 - [ ] Pass the complete native GUI smoke suite and workspace checks.
 - [ ] Verify exact packaged macOS and Windows binaries through native startup and rendering.
 - [ ] Review final changes independently and publish the approved 0.8.2 patch.
+- [ ] After 0.8.2 ships, review how failing ordinary and opt-in correctness tests escaped the release process. Agree enforceable release gates and test ownership with the owner before implementing the follow-up.
 
 Prepare photographs with `python3 scripts/profiling/prepare_inputs.py --offline --directory <new-directory>`. Run all `driver: smoke` jobs from the maintained acceptance catalog using eight sources from generated `scenario-cases.json`, the pinned Quattro H photograph for `--tiger-source`, and Hazy Coast for `--dehaze-source`. Use the packaged GUI executable and a new evidence directory. Capture the suite report and failed-job logs. Baseline comparison uses the published 0.8.1 archive and identical sources/selectors. These runs check behavior and do not establish latency or physical screen presentation.

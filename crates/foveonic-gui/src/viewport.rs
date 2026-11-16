@@ -1,6 +1,6 @@
 //! Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.
 
-use crate::preferences::ZoomPreset;
+use crate::{display::ViewParams as Params, preferences::ZoomPreset};
 use eframe::{
     egui,
     egui_wgpu::{self, CallbackResources, CallbackTrait},
@@ -34,17 +34,6 @@ impl Mapping {
         }
         params
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Params {
-    rotation: [[f32; 4]; 2],
-    rect: [f32; 4],
-    circle: [f32; 4],
-    options: [f32; 4],
-    primaries: [[f32; 4]; 3],
-    color_transform: egui_wgpu::ColorTransform,
 }
 
 impl Params {

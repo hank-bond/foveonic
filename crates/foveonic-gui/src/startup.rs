@@ -164,7 +164,14 @@ impl<T: Send + 'static> Preparation<T> {
                 let _ = sender.send(result);
                 context.request_repaint();
             })
-            .map_err(|error| format!("Cannot start graphics preparation: {error}"))?;
+            .map_err(|error| {
+                foveonic::support::report_error(
+                    "startup.spawn_preparation",
+                    &error,
+                    Default::default(),
+                );
+                format!("Cannot start graphics preparation: {error}")
+            })?;
         self.receiver = Some(receiver);
         Ok(())
     }
@@ -175,6 +182,12 @@ impl<T: Send + 'static> Preparation<T> {
                 Some(result)
             }
             Err(mpsc::TryRecvError::Disconnected) => {
+                foveonic::support::event(
+                    foveonic::support::Level::Error,
+                    "startup.worker_disconnected",
+                    "Graphics preparation stopped unexpectedly",
+                    serde_json::Value::Null,
+                );
                 self.receiver = None;
                 Some(Err(
                     "Graphics engine preparation stopped unexpectedly.".into()
@@ -235,6 +248,12 @@ impl Observations {
             && !self.presented.swap(true, Ordering::AcqRel)
         {
             self.record("startup.entry_to_first_present", self.began, value.finished);
+            foveonic::support::event(
+                foveonic::support::Level::Info,
+                "startup.first_present",
+                "First application window presented",
+                serde_json::Value::Null,
+            );
         }
     }
     fn flush(&self) {
@@ -328,12 +347,20 @@ impl Startup {
             .wgpu_render_state
             .as_ref()
             .ok_or("wgpu renderer unavailable")?;
+        crate::support::selected_gpu(rs);
+        foveonic::support::event(
+            foveonic::support::Level::Info,
+            "startup.graphics_ready",
+            "Native window and GPU device ready",
+            serde_json::Value::Null,
+        );
         timing::check_gpu_features(rs.device.features())?;
         crate::display_image::install_upload_error_handler(&rs.device);
         let display = display::Host::new(cc)?;
         let window = Window::new(workspace, cc.storage);
         let icons = crate::icon::startup_icons(&cc.egui_ctx);
         let preferences = preferences::Preferences::load(cc.storage);
+        foveonic::support::update_context("preferences", preferences.support_context());
         widgets::install_style(&cc.egui_ctx);
         if crate::smoke::screenshot_active() {
             cc.egui_ctx.set_theme(egui::Theme::Dark);
@@ -354,9 +381,26 @@ impl Startup {
         };
         let observed = observations.clone();
         let preparation = Preparation::new(move |progress| {
+            foveonic::support::event(
+                foveonic::support::Level::Info,
+                "startup.prepare",
+                "Preparing photographic workspace",
+                serde_json::Value::Null,
+            );
             let began = Instant::now();
+            let mut reported_quarter = None;
             let app = App::prepare(inputs, |completed, total| {
                 *progress.lock().unwrap() = Progress { completed, total };
+                let quarter = completed.saturating_mul(4) / total.max(1);
+                if reported_quarter != Some(quarter) {
+                    reported_quarter = Some(quarter);
+                    foveonic::support::event(
+                        foveonic::support::Level::Info,
+                        "startup.preparation_progress",
+                        "Preparing graphics programs",
+                        serde_json::json!({"completed":completed,"total":total}),
+                    );
+                }
             });
             observed.record("startup.prepare_workspace", began, Instant::now());
             // Keep App behind a pointer on Windows' smaller main-thread stack.
@@ -416,7 +460,7 @@ impl eframe::App for Startup {
                 }
             }
             app.activity
-                .observe(crate::activity::Origin::Display, display_error);
+                .observe_reported(crate::activity::Origin::Display, display_error);
             app.update(context, frame);
             return;
         }
@@ -428,6 +472,7 @@ impl eframe::App for Startup {
                 !self.capture.controller().starting(),
                 context,
             ) {
+                crate::support::startup_failure(&error);
                 self.error = Some(error);
             }
             if let Some(result) = self.preparation.receive() {
@@ -441,7 +486,10 @@ impl eframe::App for Startup {
                         self.app = Some(app);
                         context.request_repaint();
                     }
-                    Err(error) => self.error = Some(error),
+                    Err(error) => {
+                        crate::support::startup_failure(&error);
+                        self.error = Some(error);
+                    }
                 }
             }
         }
@@ -491,6 +539,20 @@ fn loading_panel(
                             egui::ScrollArea::vertical().max_height(64.).show(ui, |ui| {
                                 ui.label("The graphics engine could not be prepared.");
                                 ui.label(error);
+                                if let Some(log) = foveonic::support::handle() {
+                                    let status = log.status();
+                                    ui.add(
+                                        egui::Label::new(format!(
+                                            "Support logs: {}",
+                                            status.directory.display()
+                                        ))
+                                        .wrap()
+                                        .selectable(true),
+                                    );
+                                    if let Some(error) = status.persistence_error {
+                                        ui.label(format!("Logs could not be fully saved: {error}"));
+                                    }
+                                }
                             });
                             if ui.button("Close").clicked() {
                                 context.send_viewport_cmd(egui::ViewportCommand::Close);

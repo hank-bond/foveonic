@@ -141,7 +141,7 @@ impl Prepared {
     }
 
     pub(crate) fn evidence(&self, grid: crate::nodes::sensor::pool::Prepared) -> Result<Evidence> {
-        if self.extent() != grid.extent() {
+        if self.extent() != grid.extent() || !grid.valid_output_geometry() {
             return Err("highlight evidence grid differs from native source".into());
         }
         Ok(Evidence {
@@ -191,6 +191,7 @@ impl Evidence {
         let params = gpu.uniform(&self.params);
         let grid = gpu.uniform(&self.grid);
         let matrix = gpu.upload("Highlight evidence camera matrices", &self.matrix)?;
+        let [logical_width, logical_height] = self.grid.logical_extent();
         let mut trace = gpu.trace(profile.mode.gpu(), 1);
         gpu.dispatch(
             Kernel::HighlightEvidence,
@@ -201,7 +202,7 @@ impl Evidence {
                 (4, Write(output.write())),
                 (9, Read(&grid)),
             ],
-            [w.div_ceil(8), h.div_ceil(8)],
+            [logical_width.div_ceil(8), logical_height.div_ceil(8)],
             &mut trace,
         );
         gpu.finish_trace(&trace, profile)?;

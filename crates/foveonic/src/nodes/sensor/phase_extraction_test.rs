@@ -262,3 +262,34 @@ fn channel_calibration_preserves_native_rounding_gain_caps_and_source_samples() 
         );
     }
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn channel_calibration_rounds_scaled_values_before_split_gain() {
+    let gpu = Gpu::new().unwrap();
+    let values = [
+        -1000., 424.5, 1964.5, 3620., 5391., 7277.5, 9279.5, 11397., 13630., 15978.5, 18442.5,
+        21022.,
+    ];
+    let input = gpu.upload("Channel rounding fixture", &values).unwrap();
+    let gains = [1.1000000001, 0.7993000149726868, 0.5666800141334534];
+    for scale in [0.25, 0.77] {
+        let params = Params::channel_calibrated(2, 1, 2048, scale, gains).unwrap();
+        let (rgb, blue) = apply(&gpu, &input, &params, &mut Default::default()).unwrap();
+        let rgb = gpu.readback(&rgb).unwrap();
+        let rgb = bytemuck::cast_slice::<u8, f32>(&rgb);
+        let blue = gpu.readback(&blue).unwrap();
+        let blue = bytemuck::cast_slice::<u8, f32>(&blue);
+        // Expected bits use Float32 offset and scale followed by Double gain.
+        if scale == 0.25 {
+            assert_eq!(rgb[3].to_bits(), 1_157_141_811);
+            assert_eq!(blue[0].to_bits(), 3_242_018_152);
+        } else {
+            assert_eq!(rgb[2].to_bits(), 1_149_841_516);
+        }
+    }
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&values)
+    );
+}

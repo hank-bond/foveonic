@@ -620,14 +620,27 @@ fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent()
         assert!(engine.readback_image(&cached).unwrap() == engine.readback_image(&fresh).unwrap());
         drop(cached);
         drop(fresh);
+        let active = engine
+            .render_dng_base(&source, &settings, &mut Profile::default())
+            .unwrap();
+        let active_bytes = engine.readback_image(&active).unwrap();
         settings.tone_enabled = false;
+        let tone_bypass = engine
+            .render_dng_base(&source, &settings, &mut Profile::default())
+            .unwrap();
+        assert!(
+            active_bytes == engine.readback_image(&tone_bypass).unwrap(),
+            "Tone bypass preserves the independent Color Editor"
+        );
+        settings.color_editor_enabled = false;
         let bypass = engine
             .render_dng_base(&source, &settings, &mut Profile::default())
             .unwrap();
         assert!(
             plain_bytes == engine.readback_image(&bypass).unwrap(),
-            "section bypass excludes sensitivity from DNG"
+            "Color Editor bypass excludes sensitivity from DNG"
         );
+        settings.color_editor_enabled = true;
         if rendering == Rendering::Color {
             settings.tone_enabled = true;
             settings.working_scale = Scale::new(2).unwrap();

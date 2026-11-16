@@ -24,6 +24,7 @@ Give each requirement or fact one home and link to it from related documents. Re
 - **[releases](./releases.md)** _(how-to)._ Configure signing, review Windows and macOS archives, and manually publish a draft GitHub Release.
 - **[render-resources](./render-resources.md)** _(reference)._ The render API returns owned full-sensor floating images with separate logical views, GPU texture preparation, and export consumers.
 - **[specs/](./specs/AGENTS.md)** Specifications record agreed application, graph, and output behavior independently of implementation progress.
+- **[support-logs](./support-logs.md)** _(how-to)._ Find, review and copy local support logs when reporting a Foveonic problem.
 - **[testing-coverage](./testing-coverage.md)** _(reference)._ The acceptance inventory connects user paths to available behavioral, smoke and numerical evidence and records gaps.
 - **[visibility-tone-research](./visibility-tone-research.md)** _(reference)._ Visibility-oriented tone research separates useful contrast, spatial compression, noise and color appearance for an isolated Auto HDR experiment.
 

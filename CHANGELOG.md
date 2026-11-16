@@ -7,15 +7,21 @@ kind: reference
 
 ## 0.8.2
 
-Fix Windows startup and processed-photo exports.
+Fix Windows startup and processed-photo exports, and make support reports easier to share.
 
 ### Changes
 
 - Fix an Access denied error when publishing completed exports on Windows.
 - Fix a startup stack overflow introduced in 0.8.1 on Windows.
+- Keep local support logs across launches, with per-run and full-history copying from Log.
 - Refresh decoded and preview cache recency correctly on Windows.
 - Keep color-range renaming from scheduling image processing, including multi-photo edits.
 - Keep rapid clicks on different photos from accidentally triggering double-click zoom.
+- Use the desktop GPU configuration consistently in Windows command-line tools and tests.
+- Preserve small color corrections in ColorField recovery.
+- Keep HDR adjustments accurate near full strength.
+- Keep highlight grouping and signed scope counts stable at boundary values.
+- Preserve sensor calibration rounding across graphics drivers.
 
 ## 0.8.1
 

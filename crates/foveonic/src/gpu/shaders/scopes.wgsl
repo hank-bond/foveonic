@@ -44,10 +44,12 @@ fn spread_density(channel: u32, point: vec2<f32>) {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= params.output_size.xy) { return; }
     var rgb = sample_region(id.xy);
+    // Signed detail is scalar. Retain its sampled code for exact range checks.
+    let signed_detail = rgb.x;
     if params.output_size.z == 1u { rgb /= signal_white.x; }
     if params.output_size.z == 4u { rgb /= 16383.; }
     if params.output_size.z == 5u { rgb /= 65535.; }
-    // Shift before scaling so the signed range's endpoints remain exact.
+    // Map the signed display range to normalized scope coordinates.
     if params.output_size.z == 2u { rgb = (rgb + 1000.) / 2000.; }
     if params.output_size.z == 3u { rgb /= 2.; }
     var weights = select(vec3(0.2126, 0.7152, 0.0722), vec3(0.297344975, 0.627363566, 0.075291459), params.output_size.w == 1u);
@@ -57,8 +59,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var c = 0u; c < 4u; c++) {
         let value = values[c];
         if value != value { atomicAdd(&counts[OUTSIDE + 8u + c], 1u); continue; }
-        if value < 0. { atomicAdd(&counts[OUTSIDE + c], 1u); }
-        if value > 1. { atomicAdd(&counts[OUTSIDE + 4u + c], 1u); }
+        let below = select(value < 0., signed_detail < -1000., params.output_size.z == 2u);
+        let above = select(value > 1., signed_detail > 1000., params.output_size.z == 2u);
+        if below { atomicAdd(&counts[OUTSIDE + c], 1u); }
+        if above { atomicAdd(&counts[OUTSIDE + 4u + c], 1u); }
         let level = u32(round(clamp(value, 0., 1.) * 255.));
         atomicAdd(&counts[c * 256u + level], 1u);
         spread_density(c, vec2(x, (1. - clamp(value, 0., 1.)) * 255.));

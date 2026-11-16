@@ -22,6 +22,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[noise_calibration/](./noise_calibration/AGENTS.md)** Cap calibration separates capture review, GPU reductions, statistical fitting and validated user profile storage.
 - **[output/](./output/AGENTS.md)** Photographic output adapters delegate image compression to encoder dependencies.
 - **[render/](./render/AGENTS.md)** Rendering separates shared settings, authored recipes, graph execution, and owned inspection artifacts.
+- **[support/](./support/AGENTS.md)** Support logging owns bounded persistence, snapshots and structured failure reports.
 - **[x3f/](./x3f/AGENTS.md)** The X3F reader decodes sensor samples and camera metadata from original files.
 
 ### Source files

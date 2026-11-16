@@ -257,48 +257,122 @@ fn convert(
         format,
         encoding,
     } = output;
+    let requested_settings = settings;
     let quality_settings = settings.for_export();
     let settings = &quality_settings;
-    mode.check_gpu_features(engine.device().features())?;
-    if mode.enabled() {
-        eprintln!(
-            "{}",
-            profile::report(
-                "source_load",
-                mode,
-                serde_json::json!({"source":input,"timings":source.load_timings(),"read_cache_state":"uncontrolled"})
-            )
-        );
+    let mut operation = cli_operation(input, Some(destination), "validate-export");
+    operation.settings = Some(
+        serde_json::json!({"requested":requested_settings,"effective":quality_settings,"format":format,"encoding":encoding}),
+    );
+    foveonic::support::event(
+        foveonic::support::Level::Info,
+        "operation.started",
+        "CLI render started",
+        serde_json::json!({"operation":operation}),
+    );
+    let mut phase = "validate-export";
+    let result: Result<[u32; 2]> = (|| {
+        mode.check_gpu_features(engine.device().features())?;
+        if mode.enabled() {
+            eprintln!(
+                "{}",
+                profile::report(
+                    "source_load",
+                    mode,
+                    serde_json::json!({"source":input,"timings":source.load_timings(),"read_cache_state":"uncontrolled"})
+                )
+            );
+        }
+        let mut profile = Profile::new(mode);
+        let before = engine.gpu_activity();
+        let start = std::time::Instant::now();
+        phase = "render-image";
+        let image = engine.render(source, settings, &mut profile)?;
+        if mode.enabled() {
+            eprintln!(
+                "{}",
+                profile::report(
+                    "processing",
+                    mode,
+                    serde_json::json!({"source":input,"settings":settings,"output":"final","execution":"fresh","render_call_ms":start.elapsed().as_secs_f64()*1000.,"profile":profile,"activity":engine.gpu_activity().since(before)})
+                )
+            );
+        }
+        let mut profile = Profile::new(mode);
+        let before = engine.gpu_activity();
+        let start = std::time::Instant::now();
+        phase = "encode-image";
+        let size = engine.write_image(&image, destination, format, encoding, &mut profile)?;
+        if mode.enabled() {
+            eprintln!(
+                "{}",
+                profile::report(
+                    "export",
+                    mode,
+                    serde_json::json!({"source":input,"destination":destination,"settings":settings,"completed_ms":start.elapsed().as_secs_f64()*1000.,"profile":profile,"activity":engine.gpu_activity().since(before)})
+                )
+            );
+        }
+        Ok(size)
+    })();
+    operation.phase = Some(phase.into());
+    match result {
+        Ok(size) => {
+            foveonic::support::event(
+                foveonic::support::Level::Info,
+                "artifact.published",
+                "CLI export saved",
+                serde_json::json!({"operation":operation,"extent":size}),
+            );
+            Ok(size)
+        }
+        Err(error) => Err(foveonic::support::reported_error(
+            "cli.convert",
+            error,
+            operation,
+        )),
     }
-    let mut profile = Profile::new(mode);
-    let before = engine.gpu_activity();
-    let start = std::time::Instant::now();
-    let image = engine.render(source, settings, &mut profile)?;
-    if mode.enabled() {
-        eprintln!(
-            "{}",
-            profile::report(
-                "processing",
-                mode,
-                serde_json::json!({"source":input,"settings":settings,"output":"final","execution":"fresh","render_call_ms":start.elapsed().as_secs_f64()*1000.,"profile":profile,"activity":engine.gpu_activity().since(before)})
-            )
-        );
+}
+
+fn cli_operation(
+    input: &Path,
+    destination: Option<&Path>,
+    phase: &str,
+) -> foveonic::support::OperationContext {
+    foveonic::support::OperationContext {
+        component: Some("CLI".into()),
+        source: Some(input.to_string_lossy().into_owned()),
+        destination: destination.map(|path| path.to_string_lossy().into_owned()),
+        phase: Some(phase.into()),
+        ..Default::default()
     }
-    let mut profile = Profile::new(mode);
-    let before = engine.gpu_activity();
-    let start = std::time::Instant::now();
-    let size = engine.write_image(&image, destination, format, encoding, &mut profile)?;
-    if mode.enabled() {
-        eprintln!(
-            "{}",
-            profile::report(
-                "export",
-                mode,
-                serde_json::json!({"source":input,"destination":destination,"settings":settings,"completed_ms":start.elapsed().as_secs_f64()*1000.,"profile":profile,"activity":engine.gpu_activity().since(before)})
-            )
-        );
+}
+
+fn open_source(input: &Path) -> Result<Source> {
+    let _context = tracing::info_span!("cli_source",source=%input.display()).entered();
+    Source::open(input).map_err(|error| {
+        foveonic::support::reported_error(
+            "cli.source",
+            error,
+            cli_operation(input, None, "open and decode"),
+        )
+    })
+}
+
+#[derive(Debug)]
+struct InputError {
+    input: PathBuf,
+    source: Box<dyn std::error::Error + Send + Sync>,
+}
+impl std::fmt::Display for InputError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.input.display(), self.source)
     }
-    Ok(size)
+}
+impl std::error::Error for InputError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
 }
 
 fn configured_engine() -> Result<Engine> {
@@ -324,7 +398,7 @@ fn run() -> Result<()> {
             if args.next().is_some() {
                 return Err(USAGE.into());
             }
-            let source = Source::open(path)?;
+            let source = open_source(Path::new(&path))?;
             let mut output = std::io::stdout().lock();
             serde_json::to_writer_pretty(&mut output, source.metadata.as_ref())?;
             writeln!(output)?;
@@ -349,9 +423,13 @@ fn run() -> Result<()> {
             if destination.exists() {
                 return Err(format!("output already exists: {}", destination.display()).into());
             }
-            let source = Source::open(&path)?;
+            let source = open_source(Path::new(&path))?;
             let (settings, _, _) =
                 options::parse_settings_for_camera(control_args, &source.metadata)?;
+            foveonic::support::update_context(
+                "command",
+                serde_json::json!({"command":command.to_string_lossy(),"source":Path::new(&path).to_string_lossy(),"destination":destination.to_string_lossy(),"effective_settings":settings,"format":format,"encoding":encoding}),
+            );
             let mut setup = Profile::new(profiling);
             let engine = setup.measure("GPU init", configured_engine)?;
             if profiling.enabled() {
@@ -365,6 +443,17 @@ fn run() -> Result<()> {
                 );
             }
             if command == "export-dng" {
+                let mut operation =
+                    cli_operation(Path::new(&path), Some(&destination), "write-dng");
+                operation.settings = Some(
+                    serde_json::json!({"requested":settings,"effective":settings.for_export()}),
+                );
+                foveonic::support::event(
+                    foveonic::support::Level::Info,
+                    "operation.started",
+                    "CLI DNG export started",
+                    serde_json::json!({"operation":operation}),
+                );
                 let mut profile = Profile::new(profiling);
                 foveonic::dng::write_source(
                     &engine,
@@ -372,7 +461,16 @@ fn run() -> Result<()> {
                     &settings,
                     &destination,
                     &mut profile,
-                )?;
+                )
+                .map_err(|error| {
+                    foveonic::support::reported_error("cli.export_dng", error, operation.clone())
+                })?;
+                foveonic::support::event(
+                    foveonic::support::Level::Info,
+                    "artifact.published",
+                    "CLI DNG export saved",
+                    serde_json::json!({"operation":operation}),
+                );
                 if profiling.enabled() {
                     eprintln!(
                         "{}",
@@ -437,8 +535,12 @@ fn run() -> Result<()> {
             for (index, (input, output)) in jobs.iter().enumerate() {
                 // Drop each photo before opening the next so batch memory use does not
                 // grow with the number of files.
-                let source =
-                    Source::open(input).map_err(|error| format!("{}: {error}", input.display()))?;
+                let source = open_source(input).map_err(|error| {
+                    Box::new(InputError {
+                        input: input.clone(),
+                        source: error,
+                    }) as Box<dyn std::error::Error + Send + Sync>
+                })?;
                 let (settings, _, _) =
                     options::parse_settings_for_camera(control_args.clone(), &source.metadata)?;
                 let size = convert(
@@ -453,7 +555,12 @@ fn run() -> Result<()> {
                     },
                     profiling,
                 )
-                .map_err(|error| format!("{}: {error}", input.display()))?;
+                .map_err(|error| {
+                    Box::new(InputError {
+                        input: input.clone(),
+                        source: error,
+                    }) as Box<dyn std::error::Error + Send + Sync>
+                })?;
                 eprintln!(
                     "[{}/{}] {}x{}: {}",
                     index + 1,
@@ -470,13 +577,31 @@ fn run() -> Result<()> {
 }
 
 fn main() -> ExitCode {
-    match run() {
+    let support = foveonic::support::start_application(foveonic::support::Config {
+        directory: foveonic::support::default_directory(
+            option_env!("FOVEONIC_APP_ID").unwrap_or("foveonic"),
+        ),
+        application: option_env!("FOVEONIC_APP_NAME")
+            .unwrap_or("Foveonic")
+            .into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        initial_context: serde_json::json!({"application_kind":"cli","build":foveonic::support::build_identity(),
+            "system":{"status":"pending","os_family":std::env::consts::OS,"architecture":std::env::consts::ARCH},
+            "gpu":{"status":"not selected"}}),
+    });
+    let result = run();
+    let success = result.is_ok();
+    let status = match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            foveonic::support::report_error("cli.run", error.as_ref(), Default::default());
             eprintln!("{error}");
+            eprintln!("Support logs: {}", support.log_directory().display());
             ExitCode::FAILURE
         }
-    }
+    };
+    support.shutdown(success);
+    status
 }
 
 #[cfg(test)]

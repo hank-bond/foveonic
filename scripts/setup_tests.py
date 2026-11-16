@@ -1,6 +1,8 @@
 """Prepare shared test tools, Python dependencies and reproducible example images."""
 
 import argparse
+import hashlib
+import io
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,10 +11,17 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.request
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ENV = ROOT / '.local/test-python'
 PYTHON_REQUIREMENTS = ROOT / 'scripts/test-requirements.txt'
+DXC_URL = 'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip'
+DXC_SHA256 = 'ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1'
+DXC_CACHE = ROOT / '.local/test-dependencies/dxc_2026_09_29.zip'
+DXC_FILES = ('dxcompiler.dll', 'dxil.dll')
 
 
 @dataclass(frozen=True)
@@ -52,7 +61,10 @@ def version(tool):
 
 
 def check_tools(install=False, images=False, offline=False):
-    tools = (*TOOLS, GITHUB) if images and not offline else TOOLS
+    tools = tuple(Tool(tool.name, ('clang-cl', '--version'))
+                  if platform.system() == 'Windows' and tool.name == 'C/C++ compiler' else tool
+                  for tool in TOOLS)
+    tools = (*tools, GITHUB) if images and not offline else tools
     found = {tool: version(tool) for tool in tools}
     missing = [tool for tool in tools if found[tool] is None]
     if install and missing:
@@ -90,6 +102,65 @@ def prepare_images(source_dir, offline):
                    cwd=ROOT, check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/profiling/fetch_samples.py'),
                     '--directory', str(source_dir), *flags], cwd=ROOT, check=True)
+
+
+def cargo_target_directory():
+    """Ask Cargo for the configured target root without fetching dependencies."""
+    result = subprocess.run(['cargo', 'metadata', '--locked', '--offline', '--no-deps',
+                             '--format-version', '1'], cwd=ROOT, capture_output=True,
+                            text=True, check=True)
+    return Path(json.loads(result.stdout)['target_directory'])
+
+
+def prepare_dxc(install=False, archive=DXC_CACHE, target=None):
+    """Verify the pinned compiler beside Windows test and application binaries."""
+    if platform.system() != 'Windows':
+        return
+    if platform.machine().lower() not in ('amd64', 'x86_64'):
+        raise ValueError('The pinned DirectX shader compiler requires Windows x64.')
+    archive = Path(archive)
+    if not archive.is_file():
+        if not install:
+            raise ValueError('Missing pinned DirectX shader compiler archive. Run scripts/setup_tests.py --install')
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=archive.parent) as temporary:
+            download = Path(temporary) / 'dxc.zip'
+            with download.open('wb') as output, urllib.request.urlopen(DXC_URL, timeout=60) as response:
+                shutil.copyfileobj(response, output)
+            if hashlib.sha256(download.read_bytes()).hexdigest() != DXC_SHA256:
+                raise ValueError('DirectX shader compiler archive checksum mismatch')
+            # Do not replace a file created by another preparation process.
+            destination = archive.open('xb')
+            try:
+                with destination, download.open('rb') as source:
+                    shutil.copyfileobj(source, destination)
+            except Exception:
+                archive.unlink(missing_ok=True)
+                raise
+    contents = archive.read_bytes()
+    if hashlib.sha256(contents).hexdigest() != DXC_SHA256:
+        raise ValueError('DirectX shader compiler archive checksum mismatch')
+    try:
+        with zipfile.ZipFile(io.BytesIO(contents)) as package:
+            files = {name: package.read(f'bin/x64/{name}') for name in DXC_FILES}
+    except (KeyError, zipfile.BadZipFile) as error:
+        raise ValueError('DirectX shader compiler archive is incomplete or invalid') from error
+    target = Path(target) if target is not None else cargo_target_directory()
+    destinations = [target / profile / suffix / name
+                    for profile in ('debug', 'release') for suffix in ('', 'deps') for name in DXC_FILES]
+    # Validate every existing destination before making any changes. Never
+    # overwrite a different compiler in a shared/custom target directory.
+    for path in destinations:
+        if path.exists() and (not path.is_file() or path.read_bytes() != files[path.name]):
+            raise ValueError(f'Existing DirectX shader compiler differs from the pinned archive: {path}')
+    missing = [path for path in destinations if not path.is_file()]
+    if missing and not install:
+        raise ValueError('Missing staged DirectX shader compiler files. Run scripts/setup_tests.py --install')
+    for path in missing:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('xb') as output:
+            output.write(files[path.name])
+    print('DirectX shader compiler: pinned archive and debug/release application and test paths verified')
 
 
 def prepare_python(install=False, directory=PYTHON_ENV):
@@ -134,6 +205,7 @@ def main():
     try:
         check_tools(args.install, args.images, args.offline)
         prepare_python(args.install)
+        prepare_dxc(args.install)
         if args.images:
             prepare_images(args.source_dir.resolve(), args.offline)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

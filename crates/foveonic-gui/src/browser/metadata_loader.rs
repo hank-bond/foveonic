@@ -108,9 +108,18 @@ impl Loader {
                                 (PathBuf::from(path.file_name().unwrap_or_default()), *rating)
                             })
                             .collect();
-                        let error = review::save_many(&folder, &changes)
-                            .err()
-                            .map(|e| e.to_string());
+                        let error = review::save_many(&folder, &changes).err().map(|error| {
+                            foveonic::support::report_error(
+                                "ratings.save",
+                                error.as_ref(),
+                                foveonic::support::OperationContext {
+                                    destination: Some(folder.to_string_lossy().into_owned()),
+                                    settings: Some(serde_json::json!({"changes":changes.iter().map(|(path,rating)|serde_json::json!({"photo":crate::support::path(path),"rating":rating})).collect::<Vec<_>>()})),
+                                    ..Default::default()
+                                },
+                            );
+                            error.to_string()
+                        });
                         trace::event(trace::Category::Io, "browser.ratings_result", |fields| {
                             fields.bool("success", error.is_none());
                         });
@@ -153,9 +162,19 @@ impl Loader {
                             }
                             let _read = trace::scope(trace::Category::Cpu, "browser.metadata_read");
                             let folder = request.path.parent().unwrap_or(Path::new(""));
-                            let ratings = folders
-                                .entry(folder.to_owned())
-                                .or_insert_with(|| review::load(folder).map_err(|e| e.to_string()));
+                            let ratings = folders.entry(folder.to_owned()).or_insert_with(|| {
+                                review::load(folder).map_err(|error| {
+                                    foveonic::support::report_error(
+                                        "ratings.load",
+                                        error.as_ref(),
+                                        foveonic::support::OperationContext {
+                                            source: Some(folder.to_string_lossy().into_owned()),
+                                            ..Default::default()
+                                        },
+                                    );
+                                    error.to_string()
+                                })
+                            });
                             let error = ratings.as_ref().err().cloned();
                             let rating = ratings
                                 .as_ref()

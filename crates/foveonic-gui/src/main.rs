@@ -51,6 +51,7 @@ mod shortcuts;
 mod sidecars;
 mod smoke;
 mod startup;
+mod support;
 mod timing;
 mod toolbar;
 mod viewport;
@@ -126,6 +127,10 @@ struct App {
     memory_reply_epoch: u64,
     exporting: bool,
     preferences: preferences::Preferences,
+    support_preferences: Option<preferences::Preferences>,
+    support_photo: Option<(Option<PathBuf>, u64)>,
+    support_context_due: Option<std::time::Instant>,
+    support_log_open: bool,
     activity: activity::Log,
     srgb_target: bool,
     display_target: display::Target,
@@ -174,15 +179,15 @@ impl App {
                         .requested_settings(path)
                         .or_else(|| self.multi_edit.settings(path))
                 };
-                serde_json::json!({"source":path,
+                serde_json::json!({"source":path.to_string_lossy(),
                     "photo":timing::context_for(0,0,path,"snapshot").photo,
                     "settings":settings})
             })
             .collect();
         serde_json::json!({"workspace_mode":if self.browser.import_mode {"import"} else {"browse"},
-            "active_photo":self.selected,"targets":self.edit_selection.paths(),"photos":photos,
+            "active_photo":self.selected.as_deref().map(|path|path.to_string_lossy()),"targets":self.edit_selection.paths().iter().map(|path|path.to_string_lossy()).collect::<Vec<_>>(),"photos":photos,
             "settings":self.settings,"processing_quality":self.preferences.processing_quality,
-            "displayed":self.frame.as_ref().map(|frame|serde_json::json!({"source":frame.path,
+            "displayed":self.frame.as_ref().map(|frame|serde_json::json!({"source":frame.path.to_string_lossy(),
                 "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
                 "presentation_revision":frame.revision,"artifact":frame.artifact.name,
                 "scale":frame.artifact.settings.working_scale.divisor(),"purpose":frame.diagnostic_task.purpose})),
@@ -251,11 +256,21 @@ impl App {
             &mut startup_profile,
             &mut progress,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            foveonic::support::report_error("startup.engine", error.as_ref(), Default::default());
+            error.to_string()
+        })?;
         let engine = if let Some(directory) = std::env::var_os("FOVEONIC_CALIBRATION_RESOURCES") {
             engine
                 .with_calibration_resources(directory)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    foveonic::support::report_error(
+                        "startup.calibration_resources",
+                        error.as_ref(),
+                        Default::default(),
+                    );
+                    error.to_string()
+                })?
         } else {
             engine
         };
@@ -342,6 +357,10 @@ impl App {
             memory_reply_epoch: 0,
             exporting: false,
             preferences,
+            support_preferences: None,
+            support_photo: None,
+            support_context_due: None,
+            support_log_open: false,
             activity: Default::default(),
             srgb_target: rs.target_format.is_srgb(),
             display_target: target,
@@ -820,9 +839,9 @@ impl App {
                         self.update_browser_preview(&frame);
                         self.multi_edit.retain(frame);
                     }
-                    Err(error) if current => {
-                        self.fail(format!("{}: {error}", reply.path.display()))
-                    }
+                    Err(error) if current => self
+                        .activity
+                        .error_reported(format!("{}: {error}", reply.path.display())),
                     _ => {}
                 }
                 continue;
@@ -911,7 +930,7 @@ impl App {
                             .is_none_or(|smoke| smoke.expects_failure(&reply.path)),
                         "native smoke processing failed: {e}"
                     );
-                    self.fail(e);
+                    self.activity.error_reported(e);
                 }
             }
         }
@@ -1704,6 +1723,12 @@ impl eframe::App for App {
         self.diagnostics.poll(ctx);
         let _update = timing::Span::new(self.revision, "ui_update");
         if let Some(ready) = self.startup_ready.take() {
+            foveonic::support::event(
+                foveonic::support::Level::Info,
+                "startup.ready",
+                "Workspace ready",
+                serde_json::Value::Null,
+            );
             timing::emit(
                 "startup",
                 || serde_json::json!({"phase":"first_update", "since_constructed_ms": ready.elapsed().as_secs_f64() * 1000.}),
@@ -2074,6 +2099,39 @@ impl eframe::App for App {
                     .selected(self.preferences.noise_profile),
             });
         self.editor_ui.dialog(ctx, &mut self.preferences.editor);
+        let support_photo = (self.selected.clone(), self.revision);
+        let source_changed = self
+            .support_photo
+            .as_ref()
+            .is_none_or(|previous| previous.0 != self.selected);
+        if self.support_preferences.as_ref() != Some(&self.preferences)
+            || self.support_photo.as_ref() != Some(&support_photo)
+        {
+            self.support_preferences = Some(self.preferences.clone());
+            self.support_photo = Some(support_photo);
+            self.support_context_due =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        let opened = self.activity.is_open() && !self.support_log_open;
+        if source_changed
+            || opened
+            || self
+                .support_context_due
+                .is_some_and(|due| std::time::Instant::now() >= due)
+        {
+            foveonic::support::update_context("preferences", self.preferences.support_context());
+            foveonic::support::update_context(
+                "requested_workspace",
+                serde_json::json!({
+                    "source":self.selected.as_deref().map(crate::support::path),"revision":self.revision,
+                    "settings":self.settings,"quality":self.preferences.processing_quality,"output":self.output,
+                    "camera_overrides":self.camera_overrides,
+                }),
+            );
+            self.support_context_due = None;
+        }
+        self.support_log_open = self.activity.is_open();
         self.activity.show(ctx);
         if !self.multi_photo_overview() {
             self.update_smart();
@@ -2095,17 +2153,27 @@ impl eframe::App for App {
 fn multi_photo_overview(paths: &[PathBuf], active: Option<&std::path::Path>) -> bool {
     paths.len() > 1 && active.is_some_and(|active| paths.iter().any(|path| path == active))
 }
-#[cfg(target_os = "windows")]
-fn main() {
-    if let Err(error) = run() {
-        show_startup_error(&error.to_string());
-        std::process::exit(1);
+fn main() -> std::process::ExitCode {
+    let guard = support::initialize();
+    let result = run();
+    if let Err(error) = &result {
+        foveonic::support::report_error("application.run", error, Default::default());
+        let message = format!(
+            "{error}\n\nSupport logs: {}",
+            guard.log_directory().display()
+        );
+        #[cfg(target_os = "windows")]
+        show_startup_error(&message);
+        #[cfg(not(target_os = "windows"))]
+        eprintln!("{message}");
     }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn main() -> eframe::Result {
-    run()
+    let success = result.is_ok() && !support::startup_failed();
+    support::shutdown(guard, success);
+    if success {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -2143,16 +2211,19 @@ fn run() -> eframe::Result {
             _ => {
                 if path.is_some() || arg.starts_with('-') {
                     let message = format!("Unexpected argument: {arg}");
-                    eprintln!("{message}");
-                    #[cfg(target_os = "windows")]
-                    show_startup_error(&message);
-                    std::process::exit(2);
+                    return Err(eframe::Error::AppCreation(
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput, message).into(),
+                    ));
                 }
                 path = Some(PathBuf::from(arg));
             }
         }
     }
     let startup_observations = startup::Observations::new(startup_began);
+    foveonic::support::update_context(
+        "startup_request",
+        serde_json::json!({"source":path.as_deref().map(|path|path.to_string_lossy()),"settings":settings}),
+    );
     startup_observations.record(
         "startup.entry_to_arguments",
         startup_began,
@@ -2161,20 +2232,9 @@ fn run() -> eframe::Result {
     let startup_capture = startup::Capture::new(startup_observations.clone())
         .map_err(|error| eframe::Error::AppCreation(error.into()))?;
     let options_began = std::time::Instant::now();
-    #[cfg(target_os = "windows")]
-    let instance_descriptor = wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::DX12,
-        backend_options: wgpu::BackendOptions {
-            dx12: wgpu::Dx12BackendOptions {
-                shader_compiler: wgpu::Dx12Compiler::default_dynamic_dxc(),
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
     let setup = egui_wgpu::WgpuSetupCreateNew {
         #[cfg(target_os = "windows")]
-        instance_descriptor,
+        instance_descriptor: foveonic::gpu_instance_descriptor(),
         device_descriptor: Arc::new(|adapter| wgpu::DeviceDescriptor {
             label: Some("Shared GUI/image device"),
             required_features: timing::required_features(adapter.features()),
@@ -2241,6 +2301,12 @@ fn run() -> eframe::Result {
         "startup.window_options",
         options_began,
         std::time::Instant::now(),
+    );
+    foveonic::support::event(
+        foveonic::support::Level::Info,
+        "startup.graphics",
+        "Creating native window and GPU device",
+        serde_json::Value::Null,
     );
     eframe::run_native(
         preferences::APP_NAME,

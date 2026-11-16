@@ -133,6 +133,9 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
         let [width, height] = full.view().extent;
         let expected = engine.readback_image(&full).unwrap();
         drop(full);
+        let warm_native = session_image(&engine, &mut session, &settings, &mut Profile::default());
+        assert_eq!(engine.readback_image(&warm_native).unwrap(), expected);
+        drop(warm_native);
 
         settings.working_scale = Scale::new(2).unwrap();
         let started = Instant::now();
@@ -182,6 +185,17 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
         );
         drop(restored);
 
+        assert!(session.cached_bytes() <= crate::interactive::Cache::LIMIT);
+        let checkpoints = session.checkpoints();
+        for role in ["highlight-restoration.rgb", "noise.rgb", "sector-color.rgb"] {
+            assert!(
+                checkpoints
+                    .entries
+                    .iter()
+                    .any(|entry| entry.working_scale == 1 && entry.role == role),
+                "native checkpoint {role} was not retained before detail"
+            );
+        }
         settings.working_scale = Scale::NATIVE;
         for [x, y] in [[0, 0], [width / 2, height / 2], [width - 480, height - 320]] {
             settings.preview_region = Some([x, y, x + 480, y + 320]);

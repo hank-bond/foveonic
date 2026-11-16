@@ -1070,7 +1070,10 @@ fn original_folder_prefetch_waits_for_foreground_and_skips_disabled_families() {
     assert!(!cache.root.exists());
     drop(foreground);
     let deadline = Instant::now() + Duration::from_secs(15);
-    while cache.status().ready.len() < 2 {
+    while {
+        let status = cache.status();
+        status.ready.len() < 2 || status.files.get(&classic) != Some(&EntryState::Disabled)
+    } {
         assert!(
             Instant::now() < deadline,
             "folder prefetch did not finish: {:?}",
@@ -1503,14 +1506,34 @@ fn navigation_keeps_nearest_decodes_when_the_window_exceeds_the_disk_budget() {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(!ready(&cache.root, &files[index + 2], &settings));
+        // A partial fourth decoded entry may remain. Complete readiness also
+        // requires its companions, and all physical files share this budget.
+        let stored_bytes: u64 = fs::read_dir(&cache.root)
+            .unwrap()
+            .map(|entry| entry.unwrap().metadata().unwrap())
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len())
+            .sum();
+        assert!(stored_bytes <= settings.max_bytes);
         assert!(cache.status().bytes <= settings.max_bytes);
         let _foreground = cache.foreground();
-        let decoded = cache.open_cached(&files[index], |_| {}).unwrap();
-        assert_eq!(
-            bytemuck::cast_slice::<f32, u8>(decoded.samples().as_ref()),
-            bytemuck::cast_slice::<f32, u8>(expected.samples().as_ref())
-        );
+        for path in &nearest {
+            let identity = Identity::read(path).unwrap();
+            let original_copy = cache.root.join(identity.name()).with_extension("original");
+            assert!(
+                fs::read(original_copy).unwrap() == fs::read(path).unwrap(),
+                "complete neighbor original changed: {}",
+                path.display()
+            );
+            assert!(cache.selection(path).is_some());
+            let decoded = cache.open_cached(path, |_| {}).unwrap();
+            assert!(
+                bytemuck::cast_slice::<f32, u8>(decoded.samples().as_ref())
+                    == bytemuck::cast_slice::<f32, u8>(expected.samples().as_ref()),
+                "complete neighbor decoded samples changed: {}",
+                path.display()
+            );
+        }
         eprintln!(
             "selection {index}: retained current/+1/-1 in a three-decode budget, {:.1} ms",
             began.elapsed().as_secs_f64() * 1000.

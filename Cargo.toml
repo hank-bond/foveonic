@@ -8,3 +8,9 @@ egui-wgpu = { path = "vendor/egui-wgpu" }
 
 [workspace.package]
 version = "0.8.2"
+
+[profile.release.package.foveonic]
+debug = 1
+
+[profile.release.package.foveonic-gui]
+debug = 1

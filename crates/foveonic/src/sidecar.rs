@@ -25,6 +25,22 @@ struct Recipe {
     settings: Settings,
 }
 
+#[derive(Debug)]
+struct SidecarError {
+    path: PathBuf,
+    source: Box<dyn std::error::Error + Send + Sync>,
+}
+impl std::fmt::Display for SidecarError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path.display(), self.source)
+    }
+}
+impl std::error::Error for SidecarError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 /// Keep the complete filename and its non-UTF-8 bytes inside a visible folder.
 pub fn path(input: &Path) -> PathBuf {
     let mut name = input.file_name().unwrap_or_default().to_os_string();
@@ -144,13 +160,26 @@ fn load_at(destination: &Path) -> Result<Option<Settings>> {
     let file = match File::open(destination) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("{}: {error}", destination.display()).into()),
+        Err(error) => {
+            return Err(Box::new(SidecarError {
+                path: destination.into(),
+                source: Box::new(error),
+            }))
+        }
     };
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
-    decode(&bytes)
-        .map(Some)
-        .map_err(|error| format!("{}: {error}", destination.display()).into())
+    file.take(MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| SidecarError {
+            path: destination.into(),
+            source: Box::new(error),
+        })?;
+    decode(&bytes).map(Some).map_err(|error| {
+        Box::new(SidecarError {
+            path: destination.into(),
+            source: error,
+        }) as _
+    })
 }
 
 /// Do not overwrite a recipe we cannot read. A temporary file beside the

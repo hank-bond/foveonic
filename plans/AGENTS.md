@@ -38,7 +38,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[full-option-scaled-pipeline](./full-option-scaled-pipeline.md)** Replace recipe-wide scale exceptions with numeric working grids, graph-owned dependency cuts and complete downstream option support.
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
-- **[gui-release-regressions](./gui-release-regressions.md)** Resolve four native GUI acceptance failures and require packaged desktop checks before releasing 0.8.2.
+- **[gui-release-regressions](./gui-release-regressions.md)** Resolve GUI and GPU correctness failures and require packaged desktop checks before releasing 0.8.2.
 - **[loupe-motion-diagnostics](./loupe-motion-diagnostics.md)** Attribute loupe-motion stuttering through sustained input and native presentation timing before changing scheduling.
 - **[memory-sweep](./memory-sweep.md)** Reduce peak and retained application memory through measured, behavior-preserving changes.
 - **[merrill-banding-width](./merrill-banding-width.md)** Compare scale-separated native row and column correction against the accepted fine-band baseline.
@@ -56,6 +56,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[sectional-rendering](./sectional-rendering.md)** Reduce native sectional rendering work through explicit input support and measured Whole comparisons.
 - **[sequoia-compatibility](./sequoia-compatibility.md)** Ship a macOS 15-targeted Apple Silicon build for Sequoia user testing while retaining explicit runtime coverage limits.
 - **[shared-photographic-finishing](./shared-photographic-finishing.md)** Integrate shared photographic tone, monochrome sensitivity, local contrast and sharpening with camera recipes and bounded interactive reuse.
+- **[support-logging](./support-logging.md)** Astra and eight Terra audits map missing user-support evidence to shared error reporting and staged logging work.
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
 - **[tonal-ranges](./tonal-ranges.md)** Implement and evaluate coordinated Merrill HDR controls after researching spatial tone mapping.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.

@@ -385,6 +385,36 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
     assert_eq!(detail.histogram(0)[0], 1);
     assert_eq!(detail.histogram(0)[128], 1);
     assert_eq!(detail.histogram(0)[255], 2);
+    // Compare the signed code range before normalization, including values
+    // immediately adjacent to both exactly representable endpoints.
+    for (value, outside, bin) in [
+        (f32::from_bits((-1000_f32).to_bits() + 1), [4, 0, 0], 0),
+        (-1000., [0, 0, 0], 0),
+        (f32::from_bits((-1000_f32).to_bits() - 1), [0, 0, 0], 0),
+        (f32::from_bits(1000_f32.to_bits() - 1), [0, 0, 0], 255),
+        (1000., [0, 0, 0], 255),
+        (f32::from_bits(1000_f32.to_bits() + 1), [0, 4, 0], 255),
+    ] {
+        buffer.buffer = engine
+            .gpu
+            .upload("Signed scope endpoint fixture", &[value; 6])
+            .unwrap();
+        let endpoint = engine
+            .scopes(&buffer, None, &mut Profile::default())
+            .unwrap();
+        for channel in 0..4 {
+            assert_eq!(
+                endpoint.outside(channel),
+                outside,
+                "value={value}, channel={channel}"
+            );
+            assert_eq!(endpoint.histogram(channel)[bin], 4);
+            assert_eq!(
+                endpoint.density(channel).iter().sum::<u32>(),
+                4 * crate::scopes::DENSITY_SCALE
+            );
+        }
+    }
     buffer.buffer = engine
         .gpu
         .upload(

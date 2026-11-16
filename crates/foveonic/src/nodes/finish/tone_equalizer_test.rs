@@ -193,8 +193,9 @@ fn gpu_hdr_preserves_native_control_coupling_and_detail_direction() {
         .collect();
     let input = gpu.upload("HDR response detail fixture", &data).unwrap();
     // Native Metal outputs include all four controls simultaneously and both
-    // signs of the original-minus-base detail. These detect accidental changes
-    // to gain coupling even when each isolated flat range still looks plausible.
+    // signs of the original-minus-base detail. Near-full lowering expectations
+    // are independently evaluated from the response equations in f64.
+    let near_full_lowering = -f32::from_bits(1.0_f32.to_bits() - 1);
     for (residual, amount, expected) in [
         (
             -0.5_f32,
@@ -202,8 +203,18 @@ fn gpu_hdr_preserves_native_control_coupling_and_detail_direction() {
             [0.0000068793406_f32, 0.346_422, 0.5366148],
         ),
         (-0.5, 1., [13.205472, 1.4678612, 2.8237767]),
+        (
+            -0.5,
+            near_full_lowering,
+            [0.000006893299, 0.34642208, 0.536_614_8],
+        ),
         (0.5, -1., [0.0000048572033, 0.06143027, 0.77813244]),
         (0.5, 1., [23.457682, 3.044465, 1.7864335]),
+        (
+            0.5,
+            near_full_lowering,
+            [0.0000048711404, 0.06143034, 0.7781326],
+        ),
     ] {
         let values: Vec<f32> = (0..1)
             .flat_map(|_| {
@@ -236,7 +247,12 @@ fn gpu_hdr_preserves_native_control_coupling_and_detail_direction() {
         let actual: &[f32] = bytemuck::cast_slice(&bytes);
         for (i, gain) in expected.into_iter().enumerate() {
             let p = (i * 8 + 4) * 3;
-            assert!((actual[p] / data[p] - gain).abs() / gain < 0.00002);
+            let actual_gain = actual[p] / data[p];
+            assert!(
+                (actual_gain - gain).abs() / gain < 0.00002,
+                "residual={residual}, amount={amount}, EV={}, gain={actual_gain}, expected={gain}",
+                levels[i]
+            );
         }
     }
 }

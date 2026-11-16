@@ -5,11 +5,19 @@ struct Params { shape: vec4<u32>, calibration: vec4<f32>, gain_high: vec4<f32>, 
 @group(0) @binding(2) var<storage, read_write> rgb: array<f32>;
 @group(0) @binding(3) var<storage, read_write> blue: array<f32>;
 
+// The host keeps gain_high.w at positive zero. Exposing each rounded bit
+// pattern prevents contraction across the Float32 and split-gain steps.
+fn rounded(value: f32) -> f32 {
+    return bitcast<f32>(bitcast<u32>(value) ^ bitcast<u32>(params.gain_high.w));
+}
+
 fn channel_code(value: f32, channel: u32) -> f32 {
-    let high = fma(value, params.gain_high[channel], 0.);
-    let low = fma(value, params.gain_low[channel], 0.);
-    let error = fma(1., fma(value, params.gain_high[channel], -high), low);
-    return min(fma(1., high, error), params.calibration.z);
+    let v = rounded(value);
+    let high = rounded(v * params.gain_high[channel]);
+    let low = rounded(v * params.gain_low[channel]);
+    let residual = fma(v, params.gain_high[channel], -high);
+    let error = rounded(residual + low);
+    return min(rounded(high + error), params.calibration.z);
 }
 
 @compute @workgroup_size(8, 8)

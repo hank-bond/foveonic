@@ -3,6 +3,18 @@
 use eframe::{egui_wgpu, wgpu};
 use foveonic::source::Result;
 
+/// Uniform layout shared by the photographic viewport and its shader tests.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct ViewParams {
+    pub(crate) rotation: [[f32; 4]; 2],
+    pub(crate) rect: [f32; 4],
+    pub(crate) circle: [f32; 4],
+    pub(crate) options: [f32; 4],
+    pub(crate) primaries: [[f32; 4]; 3],
+    pub(crate) color_transform: egui_wgpu::ColorTransform,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     /// The fragment shader supplies ordinary encoded sRGB.
@@ -30,6 +42,41 @@ impl Target {
     pub fn managed(self) -> bool {
         self == Self::ExtendedSrgbEncoded
     }
+    fn encoding(self) -> &'static str {
+        match self {
+            Self::SrgbEncoded => "encoded sRGB",
+            Self::SrgbLinear => "linear input to sRGB attachment",
+            Self::ExtendedSrgbEncoded => "extended encoded sRGB",
+        }
+    }
+}
+
+fn display_context(format: wgpu::TextureFormat) -> serde_json::Value {
+    let target = Target::for_format(format);
+    serde_json::json!({"surface_format":format!("{format:?}"), "presentation":target.encoding()})
+}
+
+fn warns_srgb_fallback(target: Target, macos: bool) -> bool {
+    macos && !target.managed()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FailureChange {
+    Unchanged,
+    Failed,
+    Recovered,
+}
+
+fn failure_change(previous: &mut Option<String>, current: Option<&str>) -> FailureChange {
+    if previous.as_deref() == current {
+        return FailureChange::Unchanged;
+    }
+    *previous = current.map(str::to_owned);
+    if current.is_some() {
+        FailureChange::Failed
+    } else {
+        FailureChange::Recovered
+    }
 }
 
 /// Managed macOS windows prefer floating presentation. Unsupported surfaces
@@ -43,24 +90,53 @@ pub fn configure(mut config: egui_wgpu::WgpuConfiguration) -> egui_wgpu::WgpuCon
 
 pub struct Host {
     pub target: Target,
+    last_refresh_error: Option<String>,
     #[cfg(target_os = "macos")]
     platform: macos::LayerColor,
 }
 
 impl Host {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Result<Self> {
+        Self::initialize(cc).map_err(|error| {
+            foveonic::support::reported_error(
+                "display.initialize",
+                error,
+                foveonic::support::OperationContext::default(),
+            )
+        })
+    }
+
+    fn initialize(cc: &eframe::CreationContext<'_>) -> Result<Self> {
         let format = cc
             .wgpu_render_state
             .as_ref()
             .ok_or("missing display device")?
             .target_format;
         let target = Target::for_format(format);
+        let context = display_context(format);
+        foveonic::support::update_context("display", context.clone());
+        let fallback = warns_srgb_fallback(target, cfg!(target_os = "macos"));
+        foveonic::support::event(
+            if fallback {
+                foveonic::support::Level::Warning
+            } else {
+                foveonic::support::Level::Info
+            },
+            "display.presentation",
+            if fallback {
+                "Using sRGB presentation"
+            } else {
+                "Display presentation selected"
+            },
+            context,
+        );
         #[cfg(target_os = "macos")]
         let mut platform = macos::LayerColor::new(target.managed())?;
         #[cfg(target_os = "macos")]
         platform.refresh(cc)?;
         Ok(Self {
             target,
+            last_refresh_error: None,
             #[cfg(target_os = "macos")]
             platform,
         })
@@ -70,10 +146,32 @@ impl Host {
     /// itself, so there is no monitor-specific image transform to rebuild here.
     pub fn refresh(&mut self, frame: &eframe::Frame) -> Result<()> {
         #[cfg(target_os = "macos")]
-        self.platform.refresh(frame)?;
+        let result = self.platform.refresh(frame);
         #[cfg(not(target_os = "macos"))]
-        let _ = frame;
-        Ok(())
+        let result: Result<()> = {
+            let _ = frame;
+            Ok(())
+        };
+        let message = result.as_ref().err().map(ToString::to_string);
+        match failure_change(&mut self.last_refresh_error, message.as_deref()) {
+            FailureChange::Failed => {
+                if let Err(error) = &result {
+                    foveonic::support::report_error(
+                        "display.refresh",
+                        error.as_ref(),
+                        foveonic::support::OperationContext::default(),
+                    );
+                }
+            }
+            FailureChange::Recovered => foveonic::support::event(
+                foveonic::support::Level::Info,
+                "display.recovered",
+                "Display color management recovered",
+                serde_json::Value::Null,
+            ),
+            FailureChange::Unchanged => (),
+        }
+        result
     }
 }
 

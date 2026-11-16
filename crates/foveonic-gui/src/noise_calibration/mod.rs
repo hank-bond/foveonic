@@ -21,6 +21,16 @@ use captures::{Availability, Dataset};
 type Properties = BTreeMap<String, String>;
 const PROFILE_FILE: &str = "noise-calibration.json";
 
+fn storage_unavailable(boundary: &str) -> String {
+    let error = std::io::Error::other("Application storage is unavailable");
+    foveonic::support::report_error(
+        boundary,
+        &error,
+        foveonic::support::OperationContext::default(),
+    );
+    error.to_string()
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Slot {
     #[default]
@@ -104,6 +114,14 @@ impl State {
                     None
                 }
                 Err(e) => {
+                    foveonic::support::warning_error(
+                        "noise_calibration.load_profile",
+                        e.as_ref(),
+                        foveonic::support::OperationContext {
+                            source: Some(path.display().to_string()),
+                            ..Default::default()
+                        },
+                    );
                     error = Some(format!("Cannot load User calibration: {e}"));
                     None
                 }
@@ -181,7 +199,7 @@ impl State {
     }
     fn save_dataset(&mut self) {
         let Some(directory) = self.directory.clone() else {
-            self.error = Some("Application storage is unavailable".into());
+            self.error = Some(storage_unavailable("noise_calibration.save_dataset"));
             return;
         };
         let dataset = self.dataset.clone();
@@ -190,9 +208,17 @@ impl State {
         let (tx, rx) = mpsc::channel();
         self.job = Some(Job::Save(rx));
         std::thread::spawn(move || {
-            let result = cache
-                .background(|| dataset.save(&directory))
-                .map_err(|e| format!("Cannot save cap list: {e}"));
+            let result = cache.background(|| dataset.save(&directory)).map_err(|e| {
+                foveonic::support::report_error(
+                    "noise_calibration.save_dataset",
+                    e.as_ref(),
+                    foveonic::support::OperationContext {
+                        destination: Some(directory.display().to_string()),
+                        ..Default::default()
+                    },
+                );
+                format!("Cannot save cap list: {e}")
+            });
             let _ = tx.send(Event::Saved(result));
             ctx.request_repaint();
         });
@@ -213,6 +239,12 @@ impl State {
         let (tx, rx) = mpsc::channel();
         self.job = Some(Job::Import(rx));
         std::thread::spawn(move || {
+            foveonic::support::event(
+                foveonic::support::Level::Info,
+                "calibration.import_started",
+                "Calibration capture import started",
+                captures::import_fields(&paths),
+            );
             cache.background(|| {
                 captures::visit(paths, &cache, |result| {
                     let event = match result {
@@ -233,7 +265,7 @@ impl State {
             return;
         }
         let Some(directory) = self.directory.clone() else {
-            self.error = Some("Application storage is unavailable".into());
+            self.error = Some(storage_unavailable("noise_calibration.train"));
             return;
         };
         self.trained = false;
@@ -252,6 +284,15 @@ impl State {
             cancel,
         });
         std::thread::spawn(move || {
+            let destination = directory.join(PROFILE_FILE);
+            let mut training_fields = captures::destination_fields(&destination);
+            training_fields["captures"] = serde_json::json!(captures.len());
+            foveonic::support::event(
+                foveonic::support::Level::Info,
+                "calibration.training_started",
+                "Calibration training started",
+                training_fields,
+            );
             let result = cache
                 .processing(|| {
                     let profile = engine.train_noise_calibration(
@@ -268,7 +309,31 @@ impl State {
                     profile.save(directory.join(PROFILE_FILE))?;
                     Ok::<_, Box<dyn std::error::Error + Send + Sync>>(Arc::new(profile))
                 })
-                .map_err(|e| e.to_string());
+                .map_err(|e| {
+                    let cancelled = cancellation.load(Ordering::Acquire)
+                        && (e.to_string() == "Calibration training cancelled"
+                            || foveonic::support::is_interrupted(e.as_ref()));
+                    if !cancelled {
+                        foveonic::support::report_error(
+                            "noise_calibration.train",
+                            e.as_ref(),
+                            foveonic::support::OperationContext {
+                                destination: Some(destination.display().to_string()),
+                                settings: Some(serde_json::json!({"captures":captures.len()})),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    e.to_string()
+                });
+            if result.is_ok() {
+                foveonic::support::event(
+                    foveonic::support::Level::Info,
+                    "artifact.published",
+                    "User calibration saved",
+                    captures::destination_fields(&destination),
+                );
+            }
             let _ = tx.send(Event::Trained(result));
             ctx.request_repaint();
         });
@@ -338,6 +403,13 @@ impl State {
             self.completed.clear();
             self.progress = None;
             self.error = Some("Calibration worker stopped before completing the request".into());
+            let error =
+                std::io::Error::other("Calibration worker stopped before completing the request");
+            foveonic::support::report_error(
+                "noise_calibration.worker",
+                &error,
+                foveonic::support::OperationContext::default(),
+            );
         }
     }
 }

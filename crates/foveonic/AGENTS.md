@@ -15,4 +15,8 @@ Read [`src/AGENTS.md`](./src/AGENTS.md) before implementation. Follow the select
 - **[examples/](./examples/AGENTS.md)** Rendering examples separate fresh processing, warm editing, resources, export and photographic checks. _Measure pipeline performance or compare an optimization with retained float-image goldens._
 - **[src/](./src/AGENTS.md)** The library separates source decoding, metadata preparation, typed graph construction, GPU execution, and photographic packaging.
 
+### Source files
+
+- **[build.rs](./build.rs)** Records the source identity needed to interpret support reports from released builds.
+
 <!-- INDEX:END -->

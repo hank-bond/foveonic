@@ -59,8 +59,10 @@ fn native_classification(x:u32,y:u32,source:vec3<f32>,weighted:vec3<f32>)->vec2<
 
 @compute @workgroup_size(8,8)
 fn highlight_evidence(@builtin(global_invocation_id) id:vec3<u32>) {
- if any(id.xy>=blocks.shape.zw){return;}
- let cell=vec2<u32>(clamp(vec2<i32>(id.xy)-vec2<i32>(blocks.origin.xy),vec2(0),vec2<i32>(blocks.origin.zw)-vec2(1)));
+ if any(id.xy>=blocks.origin.zw){return;}
+ let cell=id.xy;
+ let output_first=select(blocks.origin.xy+cell,vec2<u32>(0),cell==vec2<u32>(0));
+ let output_end=select(blocks.origin.xy+cell+vec2<u32>(1),blocks.shape.zw,cell+vec2<u32>(1)==blocks.origin.zw);
  let first=cell*blocks.controls.x;let end=min(blocks.shape.xy,first+vec2(blocks.controls.x));
  var peaks=vec3(-3.402823466e38);var total=vec3(0.);var original_total=vec3(0.);
  var coverage=0.;var green_mask=0.;
@@ -77,7 +79,11 @@ fn highlight_evidence(@builtin(global_invocation_id) id:vec3<u32>) {
   total+=row/f32(end.x-first.x);original_total+=original_row/f32(end.x-first.x);coverage+=row_coverage/f32(end.x-first.x);
  }
  let base=evidence_weighted(original_total/f32(end.y-first.y));
- let index=(id.y*blocks.shape.z+id.x)*2u;
- output[index]=vec4(peaks,coverage/f32(end.y-first.y));
- output[index+1u]=vec4(total/f32(end.y-first.y)-base,green_mask);
+ for(var y=output_first.y;y<output_end.y;y++) {
+  for(var x=output_first.x;x<output_end.x;x++) {
+   let index=(y*blocks.shape.z+x)*2u;
+   output[index]=vec4(peaks,coverage/f32(end.y-first.y));
+   output[index+1u]=vec4(total/f32(end.y-first.y)-base,green_mask);
+  }
+ }
 }

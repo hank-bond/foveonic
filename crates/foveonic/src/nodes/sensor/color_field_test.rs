@@ -659,7 +659,7 @@ fn gpu_color_field_checkpoints_preserve_conjugacy_and_validate_true_residual() {
                 gpu.uniform(&SolverParams {
                     size: [1, 1, 1, 0],
                     metric: [1., 1., 0., 0.],
-                    tolerance: [1e-6, fixed_rhs_max, 0., 0.],
+                    tolerance: [1e-6, fixed_rhs_max, 1., 0.],
                 }),
             ),
             (1, gpu.upload("checkpoint equation", &[equation]).unwrap()),
@@ -766,7 +766,7 @@ fn gpu_color_field_compensated_iterates_retain_small_color_updates() {
                 gpu.uniform(&SolverParams {
                     size: [1, 1, 1, 0],
                     metric: [1., 1., 0., 1.],
-                    tolerance: [2e-6, 0., 0., 0.],
+                    tolerance: [2e-6, 0., 1., 0.],
                 }),
             ),
             (

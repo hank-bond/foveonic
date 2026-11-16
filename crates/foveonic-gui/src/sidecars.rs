@@ -62,7 +62,18 @@ fn restore(
             sidecar::load(path)
         })
         .map(|saved| recent.or(saved))
-        .map_err(|e| e.to_string())
+        .map_err(|error| {
+            foveonic::support::report_error(
+                "sidecar.load",
+                error.as_ref(),
+                foveonic::support::OperationContext {
+                    source: Some(path.to_string_lossy().into_owned()),
+                    phase: Some("restore edits".into()),
+                    ..Default::default()
+                },
+            );
+            error.to_string()
+        })
     } else {
         Ok(None)
     };
@@ -219,7 +230,19 @@ impl Store {
                         trace::scope_with(trace::Category::Io, "sidecars.save_job", |fields| {
                             fields.str("source", &path.to_string_lossy());
                         });
-                    let result = sidecar::save(&path, &settings).map_err(|e| e.to_string());
+                    let result = sidecar::save(&path, &settings).map_err(|error| {
+                        foveonic::support::report_error(
+                            "sidecar.save",
+                            error.as_ref(),
+                            foveonic::support::OperationContext {
+                                source: Some(path.to_string_lossy().into_owned()),
+                                phase: Some("save edits".into()),
+                                settings: Some(serde_json::to_value(&settings).unwrap_or_default()),
+                                ..Default::default()
+                            },
+                        );
+                        error.to_string()
+                    });
                     trace::event(trace::Category::Io, "sidecars.save_result", |fields| {
                         fields.bool("success", result.is_ok());
                     });
@@ -470,7 +493,14 @@ impl Session {
                     match result {
                         Ok(()) => {
                             self.unsaved.remove(&path);
-                            self.errors.remove(&path);
+                            if self.errors.remove(&path).is_some() {
+                                foveonic::support::event(
+                                    foveonic::support::Level::Info,
+                                    "sidecar.recovered",
+                                    "Edits were saved after an earlier failure",
+                                    serde_json::json!({"source":crate::support::path(&path)}),
+                                );
+                            }
                         }
                         Err(error) => {
                             self.errors

@@ -137,6 +137,19 @@ impl Loader {
                 let mode = request.mode.resolve(discovery.canonical.as_deref());
                 (discovery, mode)
             });
+            if let Err(error) = &result {
+                foveonic::support::report_error(
+                    "folder.scan",
+                    error,
+                    foveonic::support::OperationContext {
+                        component: Some("folder loader".into()),
+                        source: Some(request.path.to_string_lossy().into_owned()),
+                        revision: Some(request.generation.to_string()),
+                        phase: Some("discover files".into()),
+                        ..Default::default()
+                    },
+                );
+            }
             let mut state = worker.0.lock().unwrap();
             if state.stop {
                 return;

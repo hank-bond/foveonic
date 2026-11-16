@@ -1734,7 +1734,13 @@ impl Gpu {
             profile.record("gpu pipelines and validation", began);
         }
         if let Some(error) = validation {
-            return Err(error.into());
+            return Err(super::failure(
+                "compile-pipelines",
+                error.into(),
+                serde_json::json!({
+                    "adapter":adapter_name,"kernel_count":kernels.len(),
+                }),
+            ));
         }
         Ok(Self {
             device,

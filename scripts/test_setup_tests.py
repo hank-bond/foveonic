@@ -2,16 +2,119 @@
 
 from contextlib import redirect_stdout
 import io
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import setup_tests as setup
 
 
 class SetupTests(unittest.TestCase):
+    @staticmethod
+    def dxc_archive(include_dxil=True):
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, 'w') as package:
+            package.writestr('bin/x64/dxcompiler.dll', b'compiler')
+            if include_dxil:
+                package.writestr('bin/x64/dxil.dll', b'validator')
+            package.writestr('ignored/other.dll', b'other')
+        return data.getvalue()
+
+    def test_windows_dxc_is_explicit_verified_and_reused_in_every_loader_directory(self):
+        payload = self.dxc_archive()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, target = root/'cache'/'dxc.zip', root/'custom-target'
+            with patch('setup_tests.platform.system', return_value='Windows'), \
+                    patch('setup_tests.platform.machine', return_value='AMD64'), \
+                    patch('setup_tests.DXC_SHA256', hashlib.sha256(payload).hexdigest()), \
+                    patch('setup_tests.urllib.request.urlopen', return_value=io.BytesIO(payload)) as download, \
+                    redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(ValueError, 'Missing pinned'):
+                    setup.prepare_dxc(archive=archive, target=target)
+                download.assert_not_called()
+                self.assertFalse(root.joinpath('cache').exists())
+                setup.prepare_dxc(True, archive=archive, target=target)
+                self.assertEqual(download.call_count, 1)
+                for profile in ('debug', 'release'):
+                    for suffix in ('', 'deps'):
+                        self.assertEqual((target/profile/suffix/'dxcompiler.dll').read_bytes(), b'compiler')
+                        self.assertEqual((target/profile/suffix/'dxil.dll').read_bytes(), b'validator')
+                setup.prepare_dxc(archive=archive, target=target)
+                setup.prepare_dxc(True, archive=archive, target=target)
+                self.assertEqual(download.call_count, 1)
+
+    def test_windows_dxc_rejects_corruption_and_never_overwrites_a_conflicting_file(self):
+        payload = self.dxc_archive()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, target = root/'dxc.zip', root/'target'
+            archive.write_bytes(payload)
+            with patch('setup_tests.platform.system', return_value='Windows'), \
+                    patch('setup_tests.platform.machine', return_value='x86_64'), \
+                    patch('setup_tests.DXC_SHA256', hashlib.sha256(payload).hexdigest()):
+                with self.assertRaisesRegex(ValueError, 'Missing staged'):
+                    setup.prepare_dxc(archive=archive, target=target)
+                self.assertFalse(target.exists())
+                conflict = target/'release'/'dxcompiler.dll'
+                conflict.parent.mkdir(parents=True)
+                conflict.write_bytes(b'unrelated')
+                with self.assertRaisesRegex(ValueError, 'differs'):
+                    setup.prepare_dxc(True, archive=archive, target=target)
+                self.assertEqual(conflict.read_bytes(), b'unrelated')
+                self.assertFalse((target/'debug').exists())
+                archive.write_bytes(b'corrupt')
+                with self.assertRaisesRegex(ValueError, 'checksum'):
+                    setup.prepare_dxc(True, archive=archive, target=target)
+
+    def test_windows_dxc_rejects_download_mismatch_and_incomplete_archive(self):
+        payload = self.dxc_archive(False)
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary)/'cache'/'dxc.zip'
+            with patch('setup_tests.platform.system', return_value='Windows'), \
+                    patch('setup_tests.platform.machine', return_value='AMD64'), \
+                    patch('setup_tests.urllib.request.urlopen', side_effect=lambda *args, **kwargs: io.BytesIO(payload)):
+                with self.assertRaisesRegex(ValueError, 'checksum'):
+                    setup.prepare_dxc(True, archive=archive, target=Path(temporary)/'target')
+                self.assertFalse(archive.exists())
+                with patch('setup_tests.DXC_SHA256', hashlib.sha256(payload).hexdigest()):
+                    with self.assertRaisesRegex(ValueError, 'incomplete'):
+                        setup.prepare_dxc(True, archive=archive, target=Path(temporary)/'target')
+                self.assertFalse((Path(temporary)/'target').exists())
+
+    def test_dxc_target_directory_uses_cargo_metadata_and_non_windows_is_a_noop(self):
+        result = subprocess.CompletedProcess([], 0, json.dumps({'target_directory':'/custom/cargo-target'}), '')
+        with patch('setup_tests.subprocess.run', return_value=result) as run:
+            self.assertEqual(setup.cargo_target_directory(), Path('/custom/cargo-target'))
+            self.assertEqual(run.call_args.args[0], ['cargo', 'metadata', '--locked', '--offline',
+                                                      '--no-deps', '--format-version', '1'])
+        with patch('setup_tests.platform.system', return_value='Darwin'), \
+                patch('setup_tests.urllib.request.urlopen') as download, \
+                patch('setup_tests.cargo_target_directory') as target:
+            setup.prepare_dxc(True)
+            download.assert_not_called()
+            target.assert_not_called()
+
+    def test_dxc_pin_matches_the_windows_release_workflow(self):
+        workflow = (setup.ROOT/'.github/workflows/windows-test.yml').read_text().lower()
+        self.assertIn(setup.DXC_URL.lower(), workflow)
+        self.assertIn(setup.DXC_SHA256, workflow)
+
+    def test_windows_compiler_check_requires_clang_cl(self):
+        seen = []
+        def version(tool):
+            seen.append(tool)
+            return 'installed'
+        with patch('setup_tests.platform.system', return_value='Windows'), \
+                patch('setup_tests.version', side_effect=version), redirect_stdout(io.StringIO()):
+            setup.check_tools()
+        compiler = next(tool for tool in seen if tool.name == 'C/C++ compiler')
+        self.assertEqual(compiler.command, ('clang-cl', '--version'))
     def test_shared_python_check_is_read_only_when_environment_is_missing(self):
         with tempfile.TemporaryDirectory() as temporary, patch('setup_tests.subprocess.run') as run:
             with self.assertRaisesRegex(ValueError, 'shared Python test environment'):

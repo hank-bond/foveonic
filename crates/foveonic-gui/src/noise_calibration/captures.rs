@@ -13,6 +13,14 @@ use std::{
 const CAPTURES_FILE: &str = "noise-captures.json";
 const PROPERTIES_FILE: &str = "noise-capture-properties.json";
 
+pub(super) fn destination_fields(path: &Path) -> serde_json::Value {
+    serde_json::json!({"destination":crate::support::path(path)})
+}
+
+pub(super) fn import_fields(paths: &[PathBuf]) -> serde_json::Value {
+    serde_json::json!({"paths":paths.iter().map(|path| crate::support::path(path)).collect::<Vec<_>>()})
+}
+
 #[derive(Clone, Default)]
 pub(super) struct Dataset {
     pub captures: Vec<Capture>,
@@ -45,7 +53,20 @@ impl Dataset {
     }
     pub fn save(&self, directory: &Path) -> foveonic::source::Result<()> {
         save_json(directory, CAPTURES_FILE, &self.captures)?;
-        save_json(directory, PROPERTIES_FILE, &self.properties)
+        foveonic::support::event(
+            foveonic::support::Level::Info,
+            "artifact.published",
+            "Calibration capture list saved",
+            destination_fields(&directory.join(CAPTURES_FILE)),
+        );
+        save_json(directory, PROPERTIES_FILE, &self.properties)?;
+        foveonic::support::event(
+            foveonic::support::Level::Info,
+            "artifact.published",
+            "Calibration capture properties saved",
+            destination_fields(&directory.join(PROPERTIES_FILE)),
+        );
+        Ok(())
     }
     pub fn insert(&mut self, capture: Capture, properties: Properties) -> bool {
         self.properties.insert(capture.path.clone(), properties);
@@ -86,11 +107,29 @@ fn read_optional<T: DeserializeOwned>(
     let file = match std::fs::File::open(directory.join(name)) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("Cannot read {name}: {e}")),
+        Err(e) => {
+            foveonic::support::warning_error(
+                "noise_calibration.read_dataset",
+                &e,
+                foveonic::support::OperationContext {
+                    source: Some(directory.join(name).display().to_string()),
+                    ..Default::default()
+                },
+            );
+            return Err(format!("Cannot read {name}: {e}"));
+        }
     };
-    serde_json::from_reader(file)
-        .map(Some)
-        .map_err(|e| format!("Cannot read {name}: {e}"))
+    serde_json::from_reader(file).map(Some).map_err(|e| {
+        foveonic::support::warning_error(
+            "noise_calibration.parse_dataset",
+            &e,
+            foveonic::support::OperationContext {
+                source: Some(directory.join(name).display().to_string()),
+                ..Default::default()
+            },
+        );
+        format!("Cannot read {name}: {e}")
+    })
 }
 fn save_json(directory: &Path, name: &str, value: &impl Serialize) -> foveonic::source::Result<()> {
     std::fs::create_dir_all(directory)?;
@@ -132,7 +171,17 @@ pub(super) fn visit(
         let result = match result {
             Ok(None) => continue,
             Ok(Some(capture)) => Ok(capture),
-            Err(e) => Err(format!("{}: {e}", path.display())),
+            Err(e) => {
+                foveonic::support::report_error(
+                    "noise_calibration.import_capture",
+                    e.as_ref(),
+                    foveonic::support::OperationContext {
+                        source: Some(path.display().to_string()),
+                        ..Default::default()
+                    },
+                );
+                Err(format!("{}: {e}", path.display()))
+            }
         };
         if !loaded(result) {
             return;

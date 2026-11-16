@@ -27,7 +27,11 @@ fn limited(q: f32, limit: f32) -> f32 {
 fn coordinate(base: f32, detail: f32, amount: f32) -> f32 {
     return base + select(-LIFT_DETAIL * detail, LOWER_DETAIL * detail, amount < 0.0);
 }
-fn blend_gain(amount: f32, ev: f32) -> f32 { return mix(1.0, exp2(ev), abs(max(amount, -1.0))); }
+fn blend_gain(amount: f32, ev: f32) -> f32 {
+    let strength = abs(max(amount, -1.0));
+    // Positive weights preserve small gains near full strength without cancellation.
+    return fma(exp2(ev), strength, 1.0 - strength);
+}
 fn hdr_gain(light: f32, base: f32, amounts: vec4<f32>) -> f32 {
     let detail = light - base;
     let s = amounts.y;

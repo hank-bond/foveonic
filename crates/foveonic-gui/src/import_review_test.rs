@@ -219,6 +219,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
             &engine,
             &mut RenderSession::new(source.clone()),
             recipe,
+            &fixture,
             &Export {
                 path: directory.path().join(format!("expected-{index}.tiff")),
                 format: ExportFormat::Tiff,

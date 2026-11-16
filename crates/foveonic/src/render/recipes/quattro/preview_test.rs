@@ -16,6 +16,84 @@ fn preview_divisors(default: &[u32]) -> Vec<u32> {
     divisors
 }
 
+// Diagnostic-only readbacks of the actual reduced graph, not native inspection outputs.
+fn extreme_graph_probe(
+    engine: &Engine,
+    source: &Source,
+    settings: &Settings,
+    cache: Option<&mut crate::interactive::Cache>,
+) -> crate::source::Result<()> {
+    let recipe = build(
+        engine,
+        super::super::RecipeInput::Original(source),
+        settings,
+        &["final"],
+        &mut Profile::default(),
+        &mut Execution::default(),
+    )?;
+    let execution = Execution {
+        cache,
+        ..Default::default()
+    };
+    let mut targets = Vec::new();
+    let mut retained = Vec::new();
+    for (id, output) in recipe.graph.outputs.iter().enumerate() {
+        let name = output.cache_name();
+        if let Some(value) = execution.seed(&name) {
+            if value.buffer.size() <= 4 * 1024 * 1024 {
+                targets.push(id);
+                retained.push(Some((
+                    engine.gpu.readback(&value.buffer)?,
+                    execution.can_reuse(&recipe.graph, id),
+                )));
+            }
+        } else if execution.cache.is_none()
+            && recipe.graph.session_outputs.contains(&id)
+            && (name.contains("sensor-rgb-grid")
+                || name.contains("sensor-clipping-grid")
+                || name.contains("working-grid"))
+        {
+            targets.push(id);
+            retained.push(None);
+        }
+    }
+    eprintln!("extreme graph probe: {} reduced checkpoints", targets.len());
+    let values = engine.execute(
+        crate::render::execute::Input::Source(source),
+        &recipe.graph,
+        &targets,
+        &mut Profile::default(),
+    )?;
+    for ((id, old), fresh) in targets.into_iter().zip(retained).zip(values) {
+        let name = recipe.graph.outputs[id].cache_name();
+        let bytes = engine.gpu.readback(&fresh.buffer)?;
+        let words: &[f32] = bytemuck::cast_slice(&bytes);
+        let finite = words.iter().filter(|v| v.is_finite()).count();
+        let min = words
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f32::INFINITY, f32::min);
+        let max = words
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f32::NEG_INFINITY, f32::max);
+        let old_bytes = old.as_ref().map(|(old, _)| old.len());
+        let graph_identity_retained = old.as_ref().map(|(_, valid)| *valid);
+        let changed = old.as_ref().map(|(old, _)| {
+            old.iter().zip(&bytes).filter(|(a, b)| a != b).count() + old.len().abs_diff(bytes.len())
+        });
+        eprintln!(
+            "extreme graph output {name}: type={:?} retained_bytes={old_bytes:?} fresh_bytes={} graph_identity_retained={graph_identity_retained:?} changed_bytes={changed:?} raw_f32_finite={finite}/{} raw_f32_min={min:?} raw_f32_max={max:?}",
+            recipe.graph.outputs[id].data,
+            bytes.len(),
+            words.len()
+        );
+    }
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires GPU and QUATTRO_X3F original for synthetic LOW geometry"]
 fn synthetic_low_grid_renders_without_high_blue_storage() {
@@ -125,6 +203,11 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
             let bytes = engine.readback_image(&result).unwrap();
             let pixels: &[f32] = bytemuck::cast_slice(&bytes);
             assert!(pixels.iter().all(|v| v.is_finite()));
+            if !pixels.iter().any(|v| *v > 0.)
+                && std::env::var_os("FOVEONIC_QUATTRO_EXTREME_PROBE").is_some()
+            {
+                extreme_graph_probe(&engine, &source, &reduced, None).unwrap();
+            }
             assert!(
                 pixels.iter().any(|v| *v > 0.),
                 "{rendering:?} LOW divisor {divisor} has no positive output"
@@ -368,6 +451,11 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
         let bytes = engine.readback_image(&image).unwrap();
         let pixels: &[f32] = bytemuck::cast_slice(&bytes);
         assert!(pixels.iter().all(|v| v.is_finite()));
+        if !pixels.iter().any(|v| *v > 0.)
+            && std::env::var_os("FOVEONIC_QUATTRO_EXTREME_PROBE").is_some()
+        {
+            extreme_graph_probe(&engine, &source, &settings, None).unwrap();
+        }
         assert!(pixels.iter().any(|v| *v > 0.));
         let mut edited = settings.clone();
         let controls = edited.reconstruction.as_mut().unwrap();
@@ -417,6 +505,11 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
             .zip(bytemuck::cast_slice::<u8, f32>(&edited_bytes))
             .map(|(a, b)| (a - b).abs())
             .fold(0_f32, f32::max);
+        if retained_bytes != edited_bytes
+            && std::env::var_os("FOVEONIC_QUATTRO_EXTREME_PROBE").is_some()
+        {
+            extreme_graph_probe(&engine, &source, &edited, Some(&mut session.cache)).unwrap();
+        }
         assert!(
             retained_bytes == edited_bytes,
             "{quality:?} retained/fresh maximum difference {difference}"

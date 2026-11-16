@@ -217,25 +217,28 @@ pub(super) fn build(
             )?;
         }
     }
-    let mode = match mode {
-        Some(name) => profile.measure("prepare color mode", || {
-            color_mode::prepare(source.metadata(), name)
-        })?,
-        None => dng_base::unselected_mode(),
-    };
-    let mut color = profile.measure("prepare color matrix", || {
-        calibration::color(source.metadata(), &settings.white_balance, &mode)
-    })?;
-    if preview.is_some() || region.is_some() {
-        color.source[..2].copy_from_slice(&params.source[..2]);
-    }
-    let reconstruction = if let Some(controls) = noise_controls {
+    let prepare_color =
+        |profile: &mut Profile| -> Result<(calibration::ColorParams, color_mode::Settings)> {
+            let mode = match mode {
+                Some(name) => profile.measure("prepare color mode", || {
+                    color_mode::prepare(source.metadata(), name)
+                })?,
+                None => dng_base::unselected_mode(),
+            };
+            let mut color = profile.measure("prepare color matrix", || {
+                calibration::color(source.metadata(), &settings.white_balance, &mode)
+            })?;
+            if preview.is_some() || region.is_some() {
+                color.source[..2].copy_from_slice(&params.source[..2]);
+            }
+            Ok((color, mode))
+        };
+    let (reconstruction, color, mode) = if let Some(controls) = noise_controls {
         let result = reconstruction::append(
             reconstruction::Request {
                 source,
                 settings,
                 names,
-                color,
                 space,
                 preview: preview.as_ref(),
                 region: region.as_ref(),
@@ -245,6 +248,7 @@ pub(super) fn build(
             &mut graph,
             calibrated,
             controls,
+            prepare_color,
             profile,
             execution,
         )?;
@@ -259,10 +263,16 @@ pub(super) fn build(
                     rgb_bounds: params.crop,
                 }));
             }
-            Some(reconstruction::Reconstructed { params, tiles }) => Some((params, tiles)),
+            Some(reconstruction::Reconstructed {
+                params,
+                tiles,
+                color,
+                mode,
+            }) => (Some((params, tiles)), color, mode),
         }
     } else {
-        None
+        let (color, mode) = prepare_color(profile)?;
+        (None, color, mode)
     };
     let mut linear = if let Some((params, restored)) = reconstruction {
         graph.add(

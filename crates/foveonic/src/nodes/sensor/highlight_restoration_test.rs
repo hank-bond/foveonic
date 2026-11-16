@@ -174,6 +174,24 @@ fn pooled_detector_coverage_matches_native_classification() {
 }
 
 #[test]
+fn evidence_rejects_grid_origins_outside_output() {
+    use crate::nodes::sensor::pool::{Prepared as Grid, Signal};
+    let extent = [17, 13];
+    let prepared = Prepared::new(
+        extent,
+        [1, 1, 16, 12],
+        1.,
+        [1., 1., 2.],
+        [2., 0., 0., 0., 2., 0., 0., 0., 2.],
+    )
+    .unwrap();
+    let grid = Grid::new(extent, 4, Signal::Rgb).unwrap();
+    assert!(prepared.evidence(grid).is_ok());
+    assert!(prepared.evidence(grid.with_origin([1, 0])).is_err());
+    assert!(prepared.evidence(grid.with_origin([0, u32::MAX])).is_err());
+}
+
+#[test]
 #[ignore = "requires GPU"]
 fn pooled_evidence_preserves_partial_cell_peaks_and_native_control_coverage() {
     let gpu = Gpu::new().unwrap();

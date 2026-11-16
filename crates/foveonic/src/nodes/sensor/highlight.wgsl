@@ -22,6 +22,14 @@ var<workgroup> donor_rgb:array<vec3<f32>,128>;
 fn in_image(xy:vec2<u32>)->bool{return xy.x<params.source.x && xy.y<params.source.y;}
 fn work(xy:vec2<u32>)->bool{return all(xy>=params.area.xy) && all(xy<=params.area.zw);}
 fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u]);}
+// Correct division rounding at integer boundaries before both donor passes use the bin.
+fn donor_bucket(rgb:vec3<f32>)->u32{
+    let numerator=rgb.x*255.0;let denominator=rgb.x+rgb.y;
+    var bucket=u32(numerator/denominator);
+    if bucket>0u && numerator<f32(bucket)*denominator{bucket-=1u;}
+    if numerator>=f32(bucket+1u)*denominator{bucket+=1u;}
+    return min(bucket,255u);
+}
 fn clipped(p:u32)->u32 { return original[p]; }
 @compute @workgroup_size(8,8)
 fn connected_flags(@builtin(global_invocation_id)id:vec3<u32>){
@@ -85,7 +93,7 @@ fn donor_scatter(@builtin(global_invocation_id)id:vec3<u32>,@builtin(workgroup_i
 fn bin_histogram(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3<u32>){
     atomicStore(&histogram[local],0u);workgroupBarrier();
     if id.x<counts[params.source.w]{
-        let rgb=max(color(donors[id.x]),vec3(1.0));let bucket=u32(rgb.x*255.0/(rgb.x+rgb.y));
+        let rgb=max(color(donors[id.x]),vec3(1.0));let bucket=donor_bucket(rgb);
         // Original rank scratch is no longer needed after donor_scatter.
         marks[id.x]=bucket;atomicAdd(&histogram[bucket],1u);
     }
@@ -123,7 +131,7 @@ fn correction_table(@builtin(local_invocation_index)lane:u32,@builtin(workgroup_
         workgroupBarrier();
         if lane==0u{
             for(var i=0u;i<min(128u,range.y-base);i++){
-                let rgb=donor_rgb[i];let bin=u32(rgb.x*255.0/(rgb.x+rgb.y));
+                let rgb=donor_rgb[i];let bin=donor_bucket(rgb);
                 if bin==bucket{sum+=rgb.z/rgb.y;count+=1.0;}
             }
         }

@@ -150,7 +150,21 @@ impl Worker {
                         return Err("Preview request superseded".into());
                     }
                     let _read = trace::scope(trace::Category::Cpu, "browser.image_load");
-                    read(&request.path).map_err(|e| e.to_string())
+                    let _support_context=tracing::info_span!("browser_preview",source=%request.path.display(),purpose=purpose).entered();
+                    read(&request.path).map_err(|error| {
+                        foveonic::support::report_error(
+                            "browser.preview",
+                            error.as_ref(),
+                            foveonic::support::OperationContext {
+                                component: Some("browser images".into()),
+                                source: Some(request.path.to_string_lossy().into_owned()),
+                                revision: Some(request.version.to_string()),
+                                purpose: Some(purpose.into()),
+                                ..Default::default()
+                            },
+                        );
+                        error.to_string()
+                    })
                 };
                 let image = match source.as_ref() {
                     Some(cache) if kind == Kind::Thumbnail => cache.thumbnail(load),

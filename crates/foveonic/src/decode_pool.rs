@@ -8,10 +8,35 @@ use std::{
 };
 
 pub(crate) struct Pool(rayon::ThreadPool);
-static HOST: LazyLock<std::result::Result<Arc<Pool>, String>> = LazyLock::new(|| {
+
+type PoolFailure = Arc<dyn std::error::Error + Send + Sync>;
+
+#[derive(Debug)]
+struct SharedPoolError(PoolFailure);
+impl std::fmt::Display for SharedPoolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for SharedPoolError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+static HOST: LazyLock<std::result::Result<Arc<Pool>, PoolFailure>> = LazyLock::new(|| {
     Pool::new(available_workers())
         .map(Arc::new)
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            Arc::from(crate::support::reported_error(
+                "decode_pool.create",
+                error,
+                crate::support::OperationContext {
+                    component: Some("processing CPU pool".into()),
+                    ..Default::default()
+                },
+            ))
+        })
 });
 
 pub(crate) fn available_workers() -> usize {
@@ -23,7 +48,7 @@ pub(crate) fn available_workers() -> usize {
 pub(crate) fn shared() -> Result<Arc<Pool>> {
     HOST.as_ref()
         .map(Arc::clone)
-        .map_err(|error| error.clone().into())
+        .map_err(|error| Box::new(SharedPoolError(error.clone())) as _)
 }
 
 /// Run borrowed CPU preparation within the same capacity as sensor decoding.

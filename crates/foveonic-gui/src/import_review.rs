@@ -250,7 +250,7 @@ impl Review {
         for event in self.events.drain(..) {
             log.record(event);
         }
-        log.observe(
+        log.observe_reported(
             crate::activity::Origin::Processing,
             self.errors.iter().cloned().chain(
                 self.destination_check
@@ -323,6 +323,12 @@ impl Review {
                 });
             }
         }
+        self.events.extend(
+            self.errors
+                .iter()
+                .cloned()
+                .map(crate::activity::Event::Error),
+        );
         self.receive_events(&self.worker.progress());
         let submitted_decisions = decisions
             .iter()
@@ -387,7 +393,7 @@ impl Review {
                 .iter()
                 .skip(self.received_errors)
                 .cloned()
-                .map(crate::activity::Event::Error),
+                .map(crate::activity::Event::ReportedError),
         );
         self.received_errors = progress.errors.len();
     }

@@ -4,6 +4,34 @@ use super::*;
 use eframe::egui;
 use wgpu::util::DeviceExt;
 
+#[test]
+fn display_context_and_refresh_transitions_are_stable() {
+    let extended = display_context(wgpu::TextureFormat::Rgba16Float);
+    assert_eq!(extended["surface_format"], "Rgba16Float");
+    assert_eq!(extended["presentation"], "extended encoded sRGB");
+    let fallback = display_context(wgpu::TextureFormat::Bgra8UnormSrgb);
+    assert_eq!(fallback["presentation"], "linear input to sRGB attachment");
+    assert!(!Target::for_format(wgpu::TextureFormat::Bgra8UnormSrgb).managed());
+    assert!(warns_srgb_fallback(Target::SrgbLinear, true));
+    assert!(!warns_srgb_fallback(Target::SrgbLinear, false));
+    assert!(!warns_srgb_fallback(Target::ExtendedSrgbEncoded, true));
+    let mut error = None;
+    assert_eq!(
+        failure_change(&mut error, Some("unavailable")),
+        FailureChange::Failed
+    );
+    assert_eq!(
+        failure_change(&mut error, Some("unavailable")),
+        FailureChange::Unchanged
+    );
+    assert_eq!(
+        failure_change(&mut error, Some("different")),
+        FailureChange::Failed
+    );
+    assert_eq!(failure_change(&mut error, None), FailureChange::Recovered);
+    assert_eq!(failure_change(&mut error, None), FailureChange::Unchanged);
+}
+
 fn device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
@@ -127,12 +155,17 @@ fn photographic_shader_preserves_extended_colors_and_retains_the_srgb_fallback()
                 )
             })
             .unwrap_or_default();
-        let mut bytes = bytemuck::cast_slice(&[0_f32, 0., 1., 1., -1., 1., 1., 0.]).to_vec();
-        bytes.extend_from_slice(bytemuck::cast_slice(&primaries));
-        bytes.extend_from_slice(bytemuck::bytes_of(&transform));
+        let params = ViewParams {
+            rotation: [[1., 0., 0., 0.], [0., 1., 0., 0.]],
+            rect: [0., 0., 1., 1.],
+            circle: [0.; 4],
+            options: [-1., 1., 1., 0.],
+            primaries,
+            color_transform: transform,
+        };
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
-            contents: &bytes,
+            contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let constants = [("EXTENDED_DISPLAY", f64::from(extended))];

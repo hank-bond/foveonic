@@ -437,3 +437,20 @@ fn restored_recipe_replays_exact_photographic_pixels() {
         "recipe replay changes photographic samples"
     );
 }
+
+#[test]
+fn unreadable_sidecar_preserves_the_io_cause_and_path() {
+    let directory = Directory::new();
+    let destination = directory.0.join("recipe.json");
+    fs::create_dir(&destination).unwrap();
+    let error = load_at(&destination).unwrap_err();
+    assert!(error
+        .to_string()
+        .starts_with(&destination.display().to_string()));
+    let cause = error.source().unwrap();
+    assert!(cause
+        .downcast_ref::<std::io::Error>()
+        .unwrap()
+        .raw_os_error()
+        .is_some());
+}

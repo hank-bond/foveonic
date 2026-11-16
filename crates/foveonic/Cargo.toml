@@ -22,3 +22,12 @@ tempfile = "3"
 rayon = "1.11"
 perfetto-sdk = "1.2.1"
 sha2 = "0.10"
+fs2 = "0.4.3"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry"] }
+tracing-log = "0.2"
+sysinfo = { version = "=0.36.1", default-features = false, features = ["system"] }
+time = { version = "0.3", features = ["formatting", "local-offset"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61.3", features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_Registry"] }

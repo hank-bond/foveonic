@@ -43,6 +43,27 @@ fn source() -> Source {
     }
 }
 
+fn supported_source() -> Source {
+    let mut source = source();
+    let metadata = Arc::make_mut(&mut source.metadata);
+    metadata.width = 5888;
+    metadata.height = 3672;
+    metadata.matrices.insert(
+        "CAMERAID".into(),
+        crate::source::Matrix {
+            encoding: crate::source::MatrixEncoding::Float32,
+            representation: "f64",
+            dimensions: vec![1],
+            values: vec![81.],
+        },
+    );
+    source.pixels = (0..metadata.width * metadata.height / 4)
+        .flat_map(|i| [2100. + (i % 6) as f32, 2200., 2300., 2400., 2500., 2600.])
+        .collect::<Vec<_>>()
+        .into();
+    source
+}
+
 #[test]
 fn raw_catalogue_does_not_require_calibration_fields() {
     let mut source = source();
@@ -61,7 +82,7 @@ fn raw_catalogue_does_not_require_calibration_fields() {
 fn planes_keep_their_extents_and_retained_siblings() {
     let engine = Engine::new().unwrap();
     let settings = Settings::new("", "");
-    let mut session = RenderSession::new(source());
+    let mut session = RenderSession::new(supported_source());
     let mut retained = Vec::new();
     // Begin with a side output. Later requests must preserve earlier snapshots.
     for name in [
@@ -86,7 +107,7 @@ fn planes_keep_their_extents_and_retained_siblings() {
         };
         let blue = name.ends_with("blue");
         let corrected = name.starts_with("extraction.");
-        let extent = if blue { [6, 4] } else { [3, 2] };
+        let extent = if blue { [5888, 3672] } else { [2944, 1836] };
         assert_eq!(image.description().extent, extent);
         assert_eq!(
             image.description().layout,
@@ -125,10 +146,8 @@ fn planes_keep_their_extents_and_retained_siblings() {
         );
         let scopes = engine.scopes(image, None, &mut Profile::default()).unwrap();
         assert_eq!(scopes.channels(), if blue { 1 } else { 3 });
-        assert_eq!(
-            scopes.histogram(0).iter().sum::<u32>(),
-            extent[0] * extent[1]
-        );
+        assert_eq!(scopes.samples, [319, 512]);
+        assert_eq!(scopes.histogram(0).iter().sum::<u32>(), 319 * 512);
         assert_eq!(scopes.outside(0), [0, 0, 0]);
         retained.push((image.clone(), bytes));
         for (prior, expected) in &retained {
@@ -151,7 +170,7 @@ fn planes_keep_their_extents_and_retained_siblings() {
         .is_err());
 
     // Earlier requests must stop before unrelated calibration preparation.
-    let mut uncalibrated = source();
+    let mut uncalibrated = supported_source();
     Arc::make_mut(&mut uncalibrated.metadata).matrices.insert(
         "RawOffset".into(),
         crate::source::Matrix {
@@ -1062,6 +1081,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
     let mut session = RenderSession::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([678, 452]);
+    settings.reconstruction = Some(super::recipes::quattro::default_noise_controls());
     let mut render = |settings: &Settings| {
         let results = engine
             .render_session(
@@ -1097,6 +1117,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
         let mean = values.iter().map(|v| f64::from(*v)).sum::<f64>() / values.len() as f64;
         (bytes[0].clone(), fingerprints, mean)
     };
+    let baseline_settings = settings.clone();
     let baseline = render(&settings);
     for (luminance, detail) in [(0, 0.), (2, 1.), (4, 1.)] {
         settings.reconstruction = Some(crate::noise::Controls {
@@ -1121,7 +1142,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
             "noise/detail changed global brightness"
         );
     }
-    for chroma in [2, 4] {
+    for chroma in [0, 4] {
         settings.reconstruction = Some(crate::noise::Controls {
             chroma,
             ..super::recipes::quattro::default_noise_controls()
@@ -1141,7 +1162,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
             "chroma changed exposure"
         );
     }
-    settings.reconstruction = None;
+    settings.reconstruction = Some(super::recipes::quattro::default_noise_controls());
     settings.sharpen_amount = Some(1.);
     let sharpened = render(&settings);
     assert_eq!(
@@ -1152,8 +1173,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
         sharpened.0, baseline.0,
         "sharpness had no photographic effect"
     );
-    settings.sharpen_amount = Some(0.);
-    settings.reconstruction = None;
+    settings = baseline_settings;
     assert_eq!(render(&settings), baseline);
 }
 
@@ -1189,7 +1209,7 @@ fn missing_white_balance_uses_the_recorded_file_choice() {
 #[ignore = "requires a GPU"]
 fn preparation_can_stop_before_later_calibration() {
     let engine = Engine::new().unwrap();
-    let source = source();
+    let source = supported_source();
     let checks = std::cell::Cell::new(0);
     let cancel = || {
         checks.set(checks.get() + 1);

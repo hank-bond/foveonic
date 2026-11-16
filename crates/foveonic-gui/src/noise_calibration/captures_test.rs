@@ -70,3 +70,26 @@ fn stale_availability_cannot_enable_training_for_a_changed_dataset() {
     assert!(!status.ready());
     assert!(status.missing.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn calibration_logging_accepts_non_utf8_native_paths() {
+    use std::os::unix::ffi::OsStringExt;
+    let root = tempfile::tempdir().unwrap();
+    let directory = root
+        .path()
+        .join(std::ffi::OsString::from_vec(b"caps-\xff".to_vec()));
+    Dataset::default().save(root.path()).unwrap();
+    assert!(root.path().join(CAPTURES_FILE).exists());
+    assert!(root.path().join(PROPERTIES_FILE).exists());
+    let source = directory.join(std::ffi::OsString::from_vec(b"photo-\xff.x3f".to_vec()));
+    let paths = [source.clone()];
+    let value = import_fields(&paths);
+    assert!(value["paths"][0].as_str().unwrap().contains('\u{fffd}'));
+    let value = destination_fields(&directory.join(super::super::PROFILE_FILE));
+    assert!(value["destination"].as_str().unwrap().contains('\u{fffd}'));
+    assert_eq!(
+        source.file_name().unwrap().as_encoded_bytes(),
+        b"photo-\xff.x3f"
+    );
+}
