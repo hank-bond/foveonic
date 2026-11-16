@@ -2,14 +2,14 @@
 summary: "Persistent support logs preserve launch context, startup progress and actionable failures for user-supplied issue reports."
 kind: reference
 status: accepted
-implementation: incomplete
+implementation: conforming
 ---
 
 # Support logging
 
 ## Owner direction
 
-The owner approved implementing always-available local support logs in 0.8.2. Users must be able to provide actionable evidence when reporting problems, including failures before the application window opens. The current [workspace status](./workspace-status.md) remains an in-memory activity log until this work is implemented and verified. Detailed [performance captures](./performance-diagnostics.md) remain opt-in.
+The owner approved implementing always-available local support logs in 0.8.2. Users must be able to provide actionable evidence when reporting problems, including failures before the application window opens. The [workspace status](./workspace-status.md) uses retained launch history from the shared support store. Detailed [performance captures](./performance-diagnostics.md) remain opt-in.
 
 Optimize this work for diagnosing user-reported failures. Existing developer diagnostics already serve internal investigation. Performance analysis, latency measurement, memory tracing and user-facing Perfetto capture are outside this slice. User-supplied Perfetto latency and memory traces are a later goal. Static RAM and GPU-memory capacities remain part of system identification.
 

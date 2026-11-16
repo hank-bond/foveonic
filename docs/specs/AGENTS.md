@@ -71,12 +71,12 @@ These specifications capture the agreed scope. Detailed algorithm, format, and i
 - **[slider-test-sessions](./slider-test-sessions.md)** _(accepted, conforming, reference)._ Native slider correctness checks may reuse an application session while preserving independent case inputs and image assertions.
 - **[small-previews](./small-previews.md)** _(accepted, incomplete, reference)._ Power-of-two working grids reduce corrected sensor layers before the complete camera and photographic pipeline.
 - **[smart-preview](./smart-preview.md)** _(accepted, incomplete, reference)._ Smart preview chooses processing resolution from displayed pixel demand and refines native detail through supported visible regions.
-- **[support-logging](./support-logging.md)** _(accepted, incomplete, reference)._ Persistent support logs preserve launch context, startup progress and actionable failures for user-supplied issue reports.
+- **[support-logging](./support-logging.md)** _(accepted, conforming, reference)._ Persistent support logs preserve launch context, startup progress and actionable failures for user-supplied issue reports.
 - **[tiger-rendering](./tiger-rendering.md)** _(accepted, conforming, reference)._ Tiger uses its native calibrated single-frame route while sharing proven numerical operations with Quattro.
 - **[tonal-ranges](./tonal-ranges.md)** _(accepted, incomplete, reference)._ Shared HDR controls use a multiscale spatial base before camera tone and bake their brightness response into DNG.
 - **[viewport-workflows](./viewport-workflows.md)** _(accepted, conforming, reference)._ Smart overview sizing, persistent photograph views and a native-detail loupe share explicit viewport requirements.
 - **[white-balance-picker](./white-balance-picker.md)** _(accepted, conforming, reference)._ A neutral-patch eyedropper saves Custom white balance with independent Warmth and Tint fine adjustments.
-- **[workspace-status](./workspace-status.md)** _(accepted, conforming, reference)._ Workspace activity separates live progress from a session log of file operations, tool communications and errors.
+- **[workspace-status](./workspace-status.md)** _(accepted, conforming, reference)._ Workspace activity separates live progress from retained launch history of file operations, tool communications and errors.
 - **[x3f-input](./x3f-input.md)** _(accepted, conforming, reference)._ X3F loading distinguishes damaged originals from unsupported variants and preserves supported RAW resolution modes.
 
 <!-- INDEX:END -->
