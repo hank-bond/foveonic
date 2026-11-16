@@ -1112,7 +1112,7 @@ impl Scenario {
                         .filter(|frame| self.matches(app, path, frame, self.minimum_revision))
                     {
                         if !self.observed.contains_key(path) {
-                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.config.quality), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
+                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.expected_frame_quality()), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
                             self.observed.insert(path.clone(), frame.diagnostic_task.id);
                         }
                     }
@@ -1551,6 +1551,15 @@ impl Scenario {
             .filter(|frame| frame.path == *path)
             .or_else(|| app.multi_edit_frame(path))
     }
+    fn expected_frame_quality(&self) -> ProcessingQuality {
+        // The transition sequence ends with Restore in Speed. Setup still uses
+        // the configured quality, independently of that terminal expectation.
+        if matches!(self.action, Some(Action::TransitionJourney)) {
+            ProcessingQuality::Speed
+        } else {
+            self.config.quality
+        }
+    }
     fn matches(
         &self,
         app: &App,
@@ -1562,9 +1571,11 @@ impl Scenario {
             && (matches!(self.action, Some(Action::CacheWorkflow))
                 || frame.diagnostic_task.revision >= minimum)
             && (matches!(self.action, Some(Action::CacheWorkflow))
-                || frame.processing_quality == self.config.quality
+                || frame.processing_quality == self.expected_frame_quality()
                     && frame.artifact.settings.working_scale.divisor()
-                        <= app.preview_scale_for(path, self.config.quality).divisor())
+                        <= app
+                            .preview_scale_for(path, self.expected_frame_quality())
+                            .divisor())
             && crate::rendering::matching::same_authored_edits(
                 &frame.requested,
                 self.expected
@@ -2099,6 +2110,33 @@ mod automation_tests {
             "inputs":[{"source":"/original/a.x3f", "staged_source":inputs.join("a.x3f"), "sha256":"a".repeat(64), "length":1, "settings":{}},
                       {"source":"/original/b.x3f", "staged_source":inputs.join("b.x3f"), "sha256":"b".repeat(64), "length":1, "settings":{}}]
         })
+    }
+
+    #[test]
+    fn transition_terminal_quality_preserves_configured_setup_quality() {
+        use foveonic::render::ProcessingQuality::{Quality, Speed};
+        for configured in [Quality, Speed] {
+            let root = tempfile::tempdir().unwrap();
+            let mut manifest = session_case(root.path(), "policy");
+            manifest["scenario"]["quality"] = serde_json::to_value(configured).unwrap();
+            let mut scenario = super::Scenario::from_manifest(manifest);
+            for action in [
+                None,
+                Some(super::Action::Initial),
+                Some(super::Action::SliderDrag),
+                Some(super::Action::CacheWorkflow),
+            ] {
+                scenario.action = action;
+                assert_eq!(scenario.expected_frame_quality(), configured);
+            }
+            scenario.action = Some(super::Action::TransitionJourney);
+            assert_eq!(scenario.expected_frame_quality(), Speed);
+            assert_eq!(scenario.config.quality, configured);
+            assert_eq!(
+                scenario.manifest["scenario"]["quality"],
+                serde_json::to_value(configured).unwrap()
+            );
+        }
     }
 
     #[test]

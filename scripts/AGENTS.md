@@ -22,5 +22,6 @@ Keep measurement orchestration outside the Rust processing and GUI layers. Do no
 - **[generate_signed_node_fixtures.py](./generate_signed_node_fixtures.py)** Generate bounded native fixtures for signed chroma and direct root/detail operations.
 - **[setup_tests.py](./setup_tests.py)** Prepare shared test tools, Python dependencies and reproducible example images.
 - **[verify_gui_release.py](./verify_gui_release.py)** Verify a packaged release reaches real native GUI smoke checkpoints on a desktop.
+- **[windows_av_diagnosis.py](./windows_av_diagnosis.py)** Run a fixed, bounded matrix against the retained Windows core-test executable.
 
 <!-- INDEX:END -->

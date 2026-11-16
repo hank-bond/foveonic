@@ -1,0 +1,42 @@
+name: Diagnose retained Windows core test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download fixed retained artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          @'
+          import os
+          from pathlib import Path
+          import subprocess
+          destination = Path(os.environ['RUNNER_TEMP']) / 'windows-av-input.zip'
+          with destination.open('xb') as output:
+              subprocess.run(['gh', 'api', 'repos/' + os.environ['GITHUB_REPOSITORY'] + '/actions/artifacts/14224215814/zip'], stdout=output, check=True)
+          '@ | python
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed' }
+      - name: Run fixed diagnostic matrix
+        shell: pwsh
+        run: python scripts/windows_av_diagnosis.py "$env:RUNNER_TEMP\windows-av-input.zip" "$env:RUNNER_TEMP\windows-av-evidence"
+      - name: Retain diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-av-diagnosis-${{ github.run_id }}
+          path: ${{ runner.temp }}/windows-av-evidence
+          if-no-files-found: error
+          retention-days: 14
