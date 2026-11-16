@@ -2,7 +2,7 @@
 summary: "Native slider correctness checks may reuse an application session while preserving independent case inputs and image assertions."
 kind: reference
 status: accepted
-implementation: incomplete
+implementation: conforming
 ---
 
 # Slider test sessions
