@@ -24,6 +24,89 @@ fn wait_for(mut predicate: impl FnMut() -> bool) {
 }
 
 #[test]
+fn settings_snapshot_preserves_transient_inputs_without_changing_sidecars() {
+    use crate::render::{ProcessingQuality, Scale, Settings};
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.exposure = -0.75;
+    settings.dehaze_estimate = true;
+    settings.processing_sections.noise = false;
+    settings.working_scale = Scale::new(8).unwrap();
+    settings.processing_quality = ProcessingQuality::Speed;
+    settings.preview_region = Some([1, 2, 30, 40]);
+    settings.color_range_preview = Some(2);
+    settings.adaptive_tone_tuning.natural.blacks = 0.2;
+    let before = settings.clone();
+    let authored = serde_json::to_value(&settings).unwrap();
+    let snapshot = settings_snapshot(&settings);
+    let transient = json!({
+        "dehaze_estimate":true,
+        "processing_sections":settings.processing_sections,
+        "working_scale":8,
+        "processing_quality":"speed",
+        "preview_region":[1,2,30,40],
+        "color_range_preview":2,
+        "adaptive_tone_tuning":settings.adaptive_tone_tuning,
+    });
+    for (key, value) in transient.as_object().unwrap() {
+        assert!(authored.get(key).is_none(), "sidecar contains {key}");
+        assert_eq!(snapshot.get(key), Some(value), "snapshot field {key}");
+    }
+    let mut expected = authored.clone();
+    expected
+        .as_object_mut()
+        .unwrap()
+        .extend(transient.as_object().unwrap().clone());
+    assert_eq!(snapshot, expected);
+    assert_eq!(settings, before);
+    assert_eq!(serde_json::to_value(&settings).unwrap(), authored);
+    settings.exposure = 1.;
+    settings.processing_quality = ProcessingQuality::Quality;
+    settings.working_scale = Scale::NATIVE;
+    settings.preview_region = None;
+    settings.processing_sections.noise = true;
+    settings.adaptive_tone_tuning.natural.blacks = 0.4;
+    assert_eq!(snapshot, expected);
+}
+
+#[test]
+fn requested_and_effective_export_snapshots_keep_distinct_frozen_policies() {
+    use crate::render::{ProcessingQuality, Scale, Settings};
+    let requested = Settings {
+        working_scale: Scale::new(8).unwrap(),
+        processing_quality: ProcessingQuality::Speed,
+        preview_region: Some([10, 20, 30, 40]),
+        color_range_preview: Some(1),
+        dehaze_estimate: true,
+        exposure: 0.75,
+        ..Default::default()
+    };
+    let mut effective = requested.for_export();
+    effective.processing_sections.noise = false;
+    effective.white_balance = "Sunlight".into();
+    let context = json!({"requested":settings_snapshot(&requested),"effective":settings_snapshot(&effective)});
+    assert_eq!(context["requested"]["working_scale"], 8);
+    assert_eq!(context["requested"]["processing_quality"], "speed");
+    assert_eq!(
+        context["requested"]["preview_region"],
+        json!([10, 20, 30, 40])
+    );
+    assert_eq!(context["requested"]["color_range_preview"], 1);
+    assert_eq!(context["requested"]["dehaze_estimate"], true);
+    assert_eq!(context["requested"]["processing_sections"]["noise"], true);
+    assert_eq!(context["effective"]["working_scale"], 1);
+    assert_eq!(context["effective"]["processing_quality"], "quality");
+    assert_eq!(context["effective"]["preview_region"], Value::Null);
+    assert_eq!(context["effective"]["color_range_preview"], Value::Null);
+    assert_eq!(context["effective"]["dehaze_estimate"], false);
+    assert_eq!(context["effective"]["processing_sections"]["noise"], false);
+    assert_eq!(context["effective"]["white_balance"], "Sunlight");
+    effective.exposure = -1.;
+    effective.processing_sections.noise = true;
+    assert_eq!(context["effective"]["exposure"], 0.75);
+    assert_eq!(context["effective"]["processing_sections"]["noise"], false);
+}
+
+#[test]
 fn clear_persists_cutoffs_and_copy_uses_visible_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let mut guard = store::start(config(dir.path()));

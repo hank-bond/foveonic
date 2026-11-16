@@ -61,7 +61,7 @@ pub fn write_file(
                     phase: Some("open-source".into()),
                     source: Some(input.to_string_lossy().into_owned()),
                     destination: Some(destination.to_string_lossy().into_owned()),
-                    settings: Some(serde_json::json!({"requested":settings})),
+                    settings: Some(serde_json::json!({"requested":crate::support::settings_snapshot(settings)})),
                     ..Default::default()
                 },
             )
@@ -172,7 +172,7 @@ pub fn write_source(
         let context = crate::support::OperationContext {
             component: Some("export".into()), phase: Some(phase.into()),
             destination: Some(destination.to_string_lossy().into_owned()),
-            settings: Some(serde_json::json!({"requested":settings,"export_recipe":settings.for_export(),
+            settings: Some(serde_json::json!({"requested":crate::support::settings_snapshot(settings),"export_recipe":crate::support::settings_snapshot(&settings.for_export()),
                 "camera":source.metadata.properties.get("CAMMODEL"),"extent":[source.metadata.width,source.metadata.height],
                 "temporary":temporary_path.as_ref().map(|path|path.to_string_lossy()),"cleanup":cleanup})), ..Default::default()
         };

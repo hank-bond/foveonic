@@ -31,9 +31,13 @@ Copied reports must disclose incomplete history caused by retention, overflow or
 
 Record the application version/build and architecture, exact OS product/version/build, CPU model and core counts, physical RAM, adapter identities, selected GPU/backend/driver, relevant device limits, and application processing, cache and display settings. Capture graphics compiler identity when available. Relevant launch overrides should use explicitly supported fields rather than an unrestricted environment dump.
 
+On macOS, retain the product build identifier separately from the Darwin kernel version. An unavailable query must remain explicitly unavailable.
+
 Keep dedicated GPU memory, shared-system-memory allowances and unified-memory working-set guidance separately labeled. Do not report a device buffer limit as physical VRAM or add these different memory quantities together. Before adapter selection, report selection as pending rather than guessing from another adapter or previous launch.
 
 Operation records should retain job identity, source/destination, available camera and image details, output format/encoding, requested processing policy, effective recipe and completion/failure with elapsed time. Capture frozen settings used by that operation. A later UI snapshot must not replace an older export's settings. Export context must reflect camera-choice resolution and export overrides.
+
+Support settings snapshots include transient working scale, processing quality, preview region, selected color-range preview, Dehaze estimation, processing sections and adaptive-tone tuning. These diagnostic fields must not change photo-sidecar or embedded editing-history serialization.
 
 Failures should retain the attempted operation, relevant paths, full error cause chain, error kind and numeric OS code before errors are converted to UI strings. Preserve existing user-facing explanations. Log startup phase entry and completion, first presentation, coarse preparation progress, readiness and orderly exit. Entry records are needed to identify operations that never return.
 

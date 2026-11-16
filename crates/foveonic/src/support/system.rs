@@ -22,9 +22,34 @@ pub fn collect() -> Value {
     {
         context["os"]["windows_update"] = windows_update();
     }
+    #[cfg(target_os = "macos")]
+    {
+        context["os"]["product_build"] = macos_product_build(macos_command_output(
+            "/usr/bin/sw_vers",
+            &["-buildVersion"],
+            1024,
+        ));
+    }
+    super::update_context("system", context.clone());
     context["gpu_inventory"] = gpu_inventory(system.total_memory());
     context["status"] = json!("collected");
     context
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_product_build(output: std::io::Result<String>) -> Value {
+    let source = "sw_vers -buildVersion";
+    match output {
+        Ok(output) => {
+            let build = output.trim();
+            if build.is_empty() || !build.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+                json!({"status":"unavailable","source":source,"reason":"sw_vers returned an invalid product build"})
+            } else {
+                json!({"status":"collected","value":build,"source":source})
+            }
+        }
+        Err(error) => json!({"status":"unavailable","source":source,"reason":error.to_string()}),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -141,14 +166,24 @@ fn mac_gpu_inventory(report: &Value, total_ram: u64, apple_silicon: bool) -> Val
 
 #[cfg(target_os = "macos")]
 fn display_report() -> std::io::Result<Value> {
+    let output = macos_command_output(
+        "/usr/sbin/system_profiler",
+        &["SPDisplaysDataType", "-json"],
+        512 * 1024,
+    )?;
+    serde_json::from_str(&output).map_err(std::io::Error::other)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_command_output(program: &str, arguments: &[&str], limit: u64) -> std::io::Result<String> {
     use std::{
         io::{Read, Seek},
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
     let mut file = tempfile::tempfile()?;
-    let mut child = Command::new("/usr/sbin/system_profiler")
-        .args(["SPDisplaysDataType", "-json"])
+    let mut child = Command::new(program)
+        .args(arguments)
         .stdout(Stdio::from(file.try_clone()?))
         .stderr(Stdio::null())
         .spawn()?;
@@ -162,20 +197,25 @@ fn display_report() -> std::io::Result<Value> {
             let _ = child.wait();
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                "GPU inventory timed out",
+                format!("{program} timed out"),
             ));
         }
         std::thread::sleep(Duration::from_millis(25));
     };
     if !status.success() {
         return Err(std::io::Error::other(format!(
-            "GPU inventory exited with {status}"
+            "{program} exited with {status}"
         )));
     }
     file.rewind()?;
     let mut output = String::new();
-    file.take(512 * 1024).read_to_string(&mut output)?;
-    serde_json::from_str(&output).map_err(std::io::Error::other)
+    file.take(limit + 1).read_to_string(&mut output)?;
+    if output.len() as u64 > limit {
+        return Err(std::io::Error::other(format!(
+            "{program} output exceeded its limit"
+        )));
+    }
+    Ok(output)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -186,6 +226,27 @@ fn gpu_inventory(_: u64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn macos_product_build_retains_exact_identifier_and_truthful_failures() {
+        assert_eq!(
+            macos_product_build(Ok("25G201\n".into())),
+            json!({"status":"collected","value":"25G201","source":"sw_vers -buildVersion"})
+        );
+        for output in ["", "\n", "25.6.0\n", "25G201\nunrelated"] {
+            let value = macos_product_build(Ok(output.into()));
+            assert_eq!(value["status"], "unavailable");
+            assert!(value.get("value").is_none());
+            assert_eq!(value["source"], "sw_vers -buildVersion");
+        }
+        let value = macos_product_build(Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "build query timed out",
+        )));
+        assert_eq!(value["status"], "unavailable");
+        assert_eq!(value["reason"], "build query timed out");
+        assert!(value.get("value").is_none());
+    }
+
     #[test]
     fn mac_inventory_distinguishes_unified_memory_and_omits_display_serials() {
         let input = json!({"SPDisplaysDataType":[{"sppci_model":"Apple M1 Pro","spdisplays_vendor":"sppci_vendor_Apple","spdisplays_ndrvs":[{"serial":"private-display-serial"}]}]});

@@ -2125,7 +2125,7 @@ impl eframe::App for App {
                 "requested_workspace",
                 serde_json::json!({
                     "source":self.selected.as_deref().map(crate::support::path),"revision":self.revision,
-                    "settings":self.settings,"quality":self.preferences.processing_quality,"output":self.output,
+                    "settings":foveonic::support::settings_snapshot(&self.settings),"quality":self.preferences.processing_quality,"output":self.output,
                     "camera_overrides":self.camera_overrides,
                 }),
             );
@@ -2222,7 +2222,7 @@ fn run() -> eframe::Result {
     let startup_observations = startup::Observations::new(startup_began);
     foveonic::support::update_context(
         "startup_request",
-        serde_json::json!({"source":path.as_deref().map(|path|path.to_string_lossy()),"settings":settings}),
+        serde_json::json!({"source":path.as_deref().map(|path|path.to_string_lossy()),"settings":foveonic::support::settings_snapshot(&settings)}),
     );
     startup_observations.record(
         "startup.entry_to_arguments",

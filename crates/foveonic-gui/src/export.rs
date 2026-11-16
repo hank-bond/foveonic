@@ -66,7 +66,7 @@ pub fn write(
     });
     static NEXT_EXPORT: AtomicU64 = AtomicU64::new(1);
     let operation_id = format!("export-{}", NEXT_EXPORT.fetch_add(1, Ordering::Relaxed));
-    let requested = serde_json::json!(settings);
+    let requested = support::settings_snapshot(settings);
     let mut settings = settings.for_export();
     settings.processing_sections = export.sections;
     settings.tiff_color_space = export.tiff_color_space;
@@ -86,7 +86,7 @@ pub fn write(
         source: Some(source_path.to_string_lossy().into_owned()),
         destination: Some(export.path.to_string_lossy().into_owned()),
         settings: Some(
-            serde_json::json!({"requested":requested,"effective":settings,
+            serde_json::json!({"requested":requested,"effective":support::settings_snapshot(&settings),
             "format":export.format.extension(),"encoding":export.encoding,"conflict":export.conflict,
             "sections":export.sections,"tiff_color_space":export.tiff_color_space,
             "camera":session.metadata().properties.get("CAMMODEL"),

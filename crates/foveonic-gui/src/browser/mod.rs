@@ -390,7 +390,7 @@ impl Browser {
                     self.preview_checked.insert(path.clone());
                 }
             }
-            if let Ok(image) = image {
+            if let Ok(Some(image)) = image {
                 self.insert(ctx, path, image);
             } else if kind == Kind::Thumbnail {
                 // A missing larger preview says nothing about a small thumbnail
@@ -1246,7 +1246,7 @@ mod tests {
             path: path.clone(),
             version: 1,
             kind: super::Kind::Thumbnail,
-            image: Ok(prepared([0, 0, 255], [16, 8])),
+            image: Ok(Some(prepared([0, 0, 255], [16, 8]))),
         })
         .unwrap();
         browser.receive(&context);
@@ -1322,7 +1322,7 @@ mod tests {
             path: path.clone(),
             version: 1,
             kind: super::Kind::Preview,
-            image: Err("No cached preview".into()),
+            image: Ok(None),
         })
         .unwrap();
         browser.receive(&context);
@@ -1346,7 +1346,7 @@ mod tests {
             path: path.clone(),
             version: 1,
             kind: super::Kind::Preview,
-            image: Err("No cached preview".into()),
+            image: Ok(None),
         })
         .unwrap();
         browser.receive(&context);

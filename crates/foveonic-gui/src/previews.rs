@@ -59,7 +59,9 @@ fn preview_warning(boundary: &str, error: &(dyn std::error::Error + 'static), jo
                 source: Some(job.path.display().to_string()),
                 revision: Some(job.revision.to_string()),
                 purpose: Some("rendered preview".into()),
-                settings: Some(serde_json::json!({"occurrences":count,"recipe":job.settings})),
+                settings: Some(
+                    serde_json::json!({"occurrences":count,"recipe":foveonic::support::settings_snapshot(&job.settings)}),
+                ),
                 ..Default::default()
             },
         );

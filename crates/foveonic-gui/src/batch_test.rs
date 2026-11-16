@@ -53,7 +53,10 @@ fn copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_err
         Some("save-import-history")
     );
     let recorded = report.operation.settings.as_ref().unwrap();
-    assert_eq!(recorded["frozen_recipe"], serde_json::json!(settings));
+    assert_eq!(
+        recorded["frozen_recipe"],
+        support::settings_snapshot(&settings)
+    );
     assert_eq!(recorded["history_committed"], false);
     assert_eq!(
         recorded["published"],

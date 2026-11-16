@@ -19,7 +19,7 @@ fn failure(
         error,
         phase,
         metadata,
-        serde_json::json!({"settings":settings}),
+        serde_json::json!({"settings":crate::support::settings_snapshot(settings)}),
     )
 }
 

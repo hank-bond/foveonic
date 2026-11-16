@@ -296,7 +296,7 @@ pub(super) fn write<W: Write + Seek>(
         component: Some("export".into()),
         phase: Some(phase.into()),
         settings: Some(
-            serde_json::json!({"format":"dng","extent":size,"recipe":settings,"sample_scale":scale}),
+            serde_json::json!({"format":"dng","extent":size,"recipe":crate::support::settings_snapshot(settings),"sample_scale":scale}),
         ),
         ..Default::default()
     };

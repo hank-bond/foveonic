@@ -472,7 +472,7 @@ impl Worker {
                                     if !cancel() {
                                         foveonic::support::report_error("render.color_pick",error.as_ref(),foveonic::support::OperationContext {
                                             component:Some("color selection".into()), source:Some(pick.path.to_string_lossy().into_owned()),
-                                            settings:Some(serde_json::json!({"tool":format!("{:?}",pick.tool),"uv":pick.uv,"settings":pick.settings})),
+                                            settings:Some(serde_json::json!({"tool":format!("{:?}",pick.tool),"uv":pick.uv,"settings":foveonic::support::settings_snapshot(&pick.settings)})),
                                             ..Default::default()
                                         });
                                     }
@@ -842,7 +842,7 @@ impl Worker {
                         operation_id:Some(format!("render-{}",task.stamp.id.0)), component:Some("render worker".into()),
                         source:Some(request.path.to_string_lossy().into_owned()), revision:Some(request.revision.to_string()),
                         purpose:Some(format!("{:?}",request.purpose())),
-                        settings:Some(serde_json::json!({"requested":request.settings,"effective":settings,"output":request.output,"quality":request.processing_quality})),
+                        settings:Some(serde_json::json!({"requested":foveonic::support::settings_snapshot(&request.settings),"effective":foveonic::support::settings_snapshot(&settings),"output":request.output,"quality":request.processing_quality})),
                         ..Default::default()
                     });
                     if defaults_errors.is_empty() {

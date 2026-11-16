@@ -262,7 +262,7 @@ fn convert(
     let settings = &quality_settings;
     let mut operation = cli_operation(input, Some(destination), "validate-export");
     operation.settings = Some(
-        serde_json::json!({"requested":requested_settings,"effective":quality_settings,"format":format,"encoding":encoding}),
+        serde_json::json!({"requested":foveonic::support::settings_snapshot(requested_settings),"effective":foveonic::support::settings_snapshot(&quality_settings),"format":format,"encoding":encoding}),
     );
     foveonic::support::event(
         foveonic::support::Level::Info,
@@ -428,7 +428,7 @@ fn run() -> Result<()> {
                 options::parse_settings_for_camera(control_args, &source.metadata)?;
             foveonic::support::update_context(
                 "command",
-                serde_json::json!({"command":command.to_string_lossy(),"source":Path::new(&path).to_string_lossy(),"destination":destination.to_string_lossy(),"effective_settings":settings,"format":format,"encoding":encoding}),
+                serde_json::json!({"command":command.to_string_lossy(),"source":Path::new(&path).to_string_lossy(),"destination":destination.to_string_lossy(),"effective_settings":foveonic::support::settings_snapshot(&settings),"format":format,"encoding":encoding}),
             );
             let mut setup = Profile::new(profiling);
             let engine = setup.measure("GPU init", configured_engine)?;
@@ -446,7 +446,7 @@ fn run() -> Result<()> {
                 let mut operation =
                     cli_operation(Path::new(&path), Some(&destination), "write-dng");
                 operation.settings = Some(
-                    serde_json::json!({"requested":settings,"effective":settings.for_export()}),
+                    serde_json::json!({"requested":foveonic::support::settings_snapshot(&settings),"effective":foveonic::support::settings_snapshot(&settings.for_export())}),
                 );
                 foveonic::support::event(
                     foveonic::support::Level::Info,

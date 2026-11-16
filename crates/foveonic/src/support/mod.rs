@@ -17,6 +17,35 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
+/// Freeze the complete processing request without changing photo-sidecar serialization.
+pub fn settings_snapshot(settings: &crate::render::Settings) -> Value {
+    #[derive(Serialize)]
+    struct SettingsSnapshot<'a> {
+        #[serde(flatten)]
+        authored: &'a crate::render::Settings,
+        dehaze_estimate: bool,
+        processing_sections: crate::render::ProcessingSections,
+        working_scale: crate::render::Scale,
+        processing_quality: crate::render::ProcessingQuality,
+        preview_region: Option<[u32; 4]>,
+        color_range_preview: Option<usize>,
+        adaptive_tone_tuning: crate::render::AdaptiveToneTuning,
+    }
+    serde_json::to_value(SettingsSnapshot {
+        authored: settings,
+        dehaze_estimate: settings.dehaze_estimate,
+        processing_sections: settings.processing_sections,
+        working_scale: settings.working_scale,
+        processing_quality: settings.processing_quality,
+        preview_region: settings.preview_region,
+        color_range_preview: settings.color_range_preview,
+        adaptive_tone_tuning: settings.adaptive_tone_tuning,
+    })
+    .unwrap_or_else(|error| {
+        serde_json::json!({"status":"unavailable","reason":format!("Settings snapshot failed: {error}")})
+    })
+}
+
 /// Storage and initial launch information supplied by the executable.
 #[derive(Clone, Debug)]
 pub struct Config {

@@ -27,7 +27,7 @@ pub(super) struct Reply {
     pub path: PathBuf,
     pub version: u64,
     pub kind: Kind,
-    pub image: Result<PreparedPreview, String>,
+    pub image: Result<Option<PreparedPreview>, String>,
     pub(super) memory: Option<crate::display_image::StagedBytes>,
 }
 #[derive(Default)]
@@ -97,7 +97,7 @@ impl Worker {
         cache: Option<Arc<Cache>>,
         context: egui::Context,
         replies: mpsc::SyncSender<Reply>,
-        read: impl Fn(&Path) -> foveonic::source::Result<PreparedPreview> + Send + 'static,
+        read: impl Fn(&Path) -> foveonic::source::Result<Option<PreparedPreview>> + Send + 'static,
     ) -> Self {
         let state = Arc::new((Mutex::new(Queue::default()), Condvar::new()));
         let pending = state.clone();
@@ -189,10 +189,12 @@ impl Worker {
                             "outcome",
                             if !current {
                                 "superseded"
-                            } else if image.is_ok() {
-                                "ready"
                             } else {
-                                "failed"
+                                match &image {
+                                    Ok(Some(_)) => "ready",
+                                    Ok(None) => "miss",
+                                    Err(_) => "failed",
+                                }
                             },
                         );
                     },
@@ -200,8 +202,10 @@ impl Worker {
                 if current {
                     // Wake before a bounded send so a full reply queue can always drain.
                     context.request_repaint();
-                    let memory = worker_staging
-                        .track(image.as_ref().map_or(0, PreparedPreview::retained_bytes));
+                    let memory = worker_staging.track(match &image {
+                        Ok(Some(image)) => image.retained_bytes(),
+                        _ => 0,
+                    });
                     let _publish = trace::scope_with(
                         trace::Category::Coordinator,
                         "browser.image_reply_send",
@@ -309,7 +313,7 @@ fn load(
     kind: Kind,
     cache: Option<&Cache>,
     path: &Path,
-) -> foveonic::source::Result<PreparedPreview> {
+) -> foveonic::source::Result<Option<PreparedPreview>> {
     let _scope = trace::scope_with(trace::Category::Cpu, "browser.prepare_preview", |fields| {
         fields.str("source", &path.to_string_lossy()).str(
             "kind",
@@ -330,11 +334,14 @@ fn load(
                 None => foveonic::preview::read(path)?,
             }
         }
-        Kind::Preview => cache
-            .and_then(|c| c.preview(path))
-            .ok_or("No cached preview")?,
+        Kind::Preview => {
+            let Some(preview) = cache.and_then(|c| c.preview(path)) else {
+                return Ok(None);
+            };
+            preview
+        }
     };
-    PreparedPreview::new(preview, kind == Kind::Preview)
+    PreparedPreview::new(preview, kind == Kind::Preview).map(Some)
 }
 
 #[cfg(test)]

@@ -856,7 +856,7 @@ fn photo_context(
         source: Some(photo.path.to_string_lossy().into_owned()),
         destination: Some(destination.to_string_lossy().into_owned()),
         settings: Some(
-            serde_json::json!({"frozen_recipe":photo.settings,"source_identity":photo.identity,"rating":photo.rating,
+            serde_json::json!({"frozen_recipe":support::settings_snapshot(&photo.settings),"source_identity":photo.identity,"rating":photo.rating,
             "formats":output.formats.iter().map(|format|format.extension()).collect::<Vec<_>>(),
             "encoding":output.encoding,"conflict":output.conflict,"sections":output.sections,"tiff_color_space":output.tiff_color_space,
             "published":published.iter().map(|path|path.to_string_lossy()).collect::<Vec<_>>(),
