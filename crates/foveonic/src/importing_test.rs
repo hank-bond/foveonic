@@ -121,6 +121,50 @@ fn output_failure_and_collision_leave_no_partial_output() {
 }
 
 #[test]
+fn publication_reports_preserve_os_causes_and_the_first_failure_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("photo.tiff");
+    fs::write(&destination, b"previous complete image").unwrap();
+    let error = write_output(&destination, ConflictPolicy::Overwrite, |temporary| {
+        fs::write(temporary, b"partial image")?;
+        Err(std::io::Error::from_raw_os_error(5).into())
+    })
+    .unwrap_err();
+    let report = &error
+        .downcast_ref::<crate::support::ReportedError>()
+        .unwrap()
+        .report;
+    assert_eq!(report.operation.phase.as_deref(), Some("encode-output"));
+    assert_eq!(
+        report.operation.destination.as_deref(),
+        destination.to_str()
+    );
+    assert!(report.causes.iter().any(|cause| cause.os_code == Some(5)));
+    assert!(!report.backtrace.is_empty());
+    let first = report.clone();
+    let outer = crate::support::reported_error("test.export", error, Default::default());
+    let outer = &outer
+        .downcast_ref::<crate::support::ReportedError>()
+        .unwrap()
+        .report;
+    assert!(std::sync::Arc::ptr_eq(&first, outer));
+    assert_eq!(fs::read(&destination).unwrap(), b"previous complete image");
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+
+    let error = write_output(&destination, ConflictPolicy::Overwrite, |_| Ok(())).unwrap_err();
+    let report = &error
+        .downcast_ref::<crate::support::ReportedError>()
+        .unwrap()
+        .report;
+    assert_eq!(report.operation.phase.as_deref(), Some("sync-output"));
+    assert!(report
+        .causes
+        .iter()
+        .any(|cause| cause.io_kind.as_deref() == Some("NotFound")));
+    assert_eq!(fs::read(&destination).unwrap(), b"previous complete image");
+}
+
+#[test]
 fn overwrite_publishes_only_complete_outputs_and_preserves_the_previous_file_on_failure() {
     let destination = tempfile::tempdir().unwrap();
     let path = destination.path().join("image.dng");

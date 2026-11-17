@@ -52,7 +52,7 @@ fn regional_guide_identity_tracks_signal_basis_and_support_only() {
 #[test]
 #[ignore = "requires a GPU"]
 fn shadow_neutralization_preserves_brightness_and_protects_lights_and_strong_color() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [128, 64];
     let colors = [
         [100., 95., 100.],

@@ -84,7 +84,7 @@ fn rejects_invalid_controls() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_reconstruction_toggle_preserves_flat_signal_color_and_gain() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut c = controls();
     // A bright constant field avoids the intentional dark neutralization and
     // black estimation branches. Filtering has no spatial signal to change.
@@ -117,7 +117,7 @@ fn gpu_reconstruction_toggle_preserves_flat_signal_color_and_gain() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_range_constant_and_deterministic_diffusion() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let input = vec![100_f32; 32 * 32 * 3];
     let src = gpu.upload("range constant fixture", &input).unwrap();
     for factor in [1, 2, 4] {
@@ -145,7 +145,7 @@ fn gpu_range_constant_and_deterministic_diffusion() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_finalizer_applies_matrix_before_nonlinear_correction() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut c = controls();
     c.channel_noise = [41., 63., 27.];
     c.matrix = [1.3, -0.2, 0.1, -0.15, 1.2, 0.05, 0.1, -0.25, 1.15];
@@ -242,7 +242,7 @@ fn shader_contract_validates() {
 #[test]
 #[ignore = "requires a GPU"]
 fn disabled_filter_retains_spatial_samples_and_floating_color() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut c = controls();
     c.enabled = false;
     c.downsample = 4;
@@ -275,7 +275,7 @@ fn gpu_reduction_matches_recovered_finite_support() {
         .iter()
         .map(|v| v.as_f64().unwrap() as f32)
         .collect();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let src = gpu.upload("reduction signed fixture", &input).unwrap();
     for case in fixture["cases"].as_array().unwrap() {
         let mut c = controls();

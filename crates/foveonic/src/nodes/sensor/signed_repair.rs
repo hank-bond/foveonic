@@ -225,7 +225,7 @@ mod tests {
                 }
             }
         }
-        let gpu = Gpu::new().unwrap();
+        let gpu = Gpu::test_executor();
         let source = gpu.upload("Tiled signed repair fixture", &input).unwrap();
         let output = Despeckle::new([width as u32, height as u32], true)
             .apply(&gpu, &source, &mut Default::default())
@@ -241,7 +241,7 @@ mod tests {
             "../../../tests/data/signed-repair-reference.json"
         ))
         .unwrap();
-        let gpu = Gpu::new().unwrap();
+        let gpu = Gpu::test_executor();
         for case in fixture["cases"].as_array().unwrap() {
             let width = case["width"].as_u64().unwrap() as u32;
             let height = case["height"].as_u64().unwrap() as u32;

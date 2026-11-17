@@ -5,7 +5,7 @@ use super::*;
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn completed_spares_keep_one_per_size_within_the_limit_and_remain_reusable() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut scratch = Scratch::default();
     // Allocate before releasing so the pool contains real duplicate spares.
     let buffers = [16, 16, 32, 64, 256].map(|size| scratch.take(&gpu, size).unwrap());
@@ -37,7 +37,7 @@ fn completed_spares_keep_one_per_size_within_the_limit_and_remain_reusable() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn trimming_spares_does_not_change_a_retained_readers_samples() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let original = gpu
         .upload("retained scratch fixture", &[1_u32, 2, 3, 4])
         .unwrap();

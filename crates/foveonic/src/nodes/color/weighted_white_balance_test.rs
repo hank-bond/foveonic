@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn signed_black_reduction_preserves_samples_and_unequal_shields() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let [w, h] = [1031_u32, 1031];
     let mut pixels = Vec::with_capacity((w * h * 3) as usize);
     for y in 0..h {
@@ -58,7 +58,7 @@ fn signed_black_reduction_preserves_samples_and_unequal_shields() {
 
 #[test]
 fn candidate_scores_cover_all_candidates_and_only_first_quarter() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let n = REDUCTION_CHUNK + 1;
     let mut params: Params = bytemuck::Zeroable::zeroed();
     params.shape = [n * 4, 1, n * 4, 1];
@@ -106,7 +106,7 @@ fn candidate_scores_cover_all_candidates_and_only_first_quarter() {
 
 #[test]
 fn weighted_reduction_preserves_sparse_tail_and_boundary_weights() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let n = REDUCTION_CHUNK * 2 + 1;
     let mut params: Params = bytemuck::Zeroable::zeroed();
     params.shape = [n, 1, n, 1];

@@ -41,7 +41,7 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
             .map(|v| v.as_f64().unwrap() as f32)
             .collect::<Vec<_>>()
     };
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let source = array(&f["input"]);
     let input = gpu.upload("Immutable reduced fixture", &source).unwrap();
     let check = |actual: Vec<f32>, expected: Vec<f32>, tolerance: f32, label: &str| {
@@ -96,7 +96,8 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
         0.08,
         "global bilateral",
     );
-    let global = filter(&gpu, &input, p, true, &mut Profile::default()).unwrap();
+    let filter_input = gpu.upload("Global filter fixture", &source).unwrap();
+    let global = filter(&gpu, filter_input, p, true, &mut Profile::default()).unwrap();
     check(
         floats(&gpu, global.tiles.as_ref().unwrap()),
         array(&f["global"]["filtered"]),
@@ -233,7 +234,7 @@ fn all_column_banding_presets_match_native_windows_and_coefficients() {
         .iter()
         .map(|v| v.as_f64().unwrap() as f32)
         .collect();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let input = gpu
         .upload("Five-preset identical column source", &source)
         .unwrap();
@@ -246,12 +247,8 @@ fn all_column_banding_presets_match_native_windows_and_coefficients() {
         p.tile = [80, 112, 0, 11];
         p.area = [0, 0, 80, 112];
         p.column_area = [0, 8, 80, 104];
-        p.column = [
-            row["coefficient"].as_f64().unwrap() as f32,
-            row["window"].as_f64().unwrap() as f32,
-            0.,
-            0.,
-        ];
+        p.column[0] = row["coefficient"].as_f64().unwrap() as f32;
+        p.column[1] = row["window"].as_f64().unwrap() as f32;
         let result = column(&gpu, &input, p, &mut Profile::default()).unwrap();
         let actual = floats(&gpu, &result);
         let expected = row["corrected"].as_array().unwrap();
@@ -304,7 +301,7 @@ fn column_conditioning_matches_native_blocks_borders_gain_and_clamps() {
         .iter()
         .map(|v| v.as_f64().unwrap() as f32)
         .collect();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for gain in [0., 1., 1.3] {
         let mut p = parameters();
         p.source = [80, 112, 1, 1];
@@ -499,7 +496,7 @@ fn noise_base_and_luminance_conditioning_match_synthetic_fixtures() {
 #[test]
 #[ignore = "requires a GPU"]
 fn processing_tile_projection_matches_reference_overlap_ramps() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut p = parameters();
     p.source = [32, 24, 2, 2];
     p.input_bounds = [0, 0, p.source[0], p.source[1]];
@@ -532,7 +529,7 @@ fn processing_tile_projection_matches_reference_overlap_ramps() {
 #[test]
 #[ignore = "requires a GPU"]
 fn compact_native_tiles_match_full_filters_and_projection_at_edges_and_seams() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut p = parameters();
     p.source = [256, 256, 4, 4];
     p.input_bounds = [0, 0, p.source[0], p.source[1]];
@@ -652,7 +649,7 @@ fn compact_native_tiles_match_full_filters_and_projection_at_edges_and_seams() {
 #[test]
 #[ignore = "requires a GPU"]
 fn edge_map_covers_recursive_mean_outer_column() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut p = parameters();
     let (width, height) = (32u32, 720u32);
     p.source = [width, height, 1, 1];

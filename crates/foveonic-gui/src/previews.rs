@@ -35,6 +35,38 @@ struct Job {
     settings: Settings,
     native_extent: [u32; 2],
 }
+
+fn preview_warning(boundary: &str, error: &(dyn std::error::Error + 'static), job: &Job) {
+    if foveonic::support::is_interrupted(error) {
+        return;
+    }
+    static POLICY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static READBACK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static DECODE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static PERSIST: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let counter = match boundary {
+        "preview.storage_policy" => &POLICY,
+        "preview.readback" => &READBACK,
+        "preview.decode" => &DECODE,
+        _ => &PERSIST,
+    };
+    let count = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if count.is_power_of_two() {
+        foveonic::support::warning_error(
+            boundary,
+            error,
+            foveonic::support::OperationContext {
+                source: Some(job.path.display().to_string()),
+                revision: Some(job.revision.to_string()),
+                purpose: Some("rendered preview".into()),
+                settings: Some(
+                    serde_json::json!({"occurrences":count,"recipe":foveonic::support::settings_snapshot(&job.settings)}),
+                ),
+                ..Default::default()
+            },
+        );
+    }
+}
 #[derive(Default)]
 struct Pending {
     job: Option<Job>,
@@ -111,10 +143,13 @@ impl Previews {
                             .u64("epoch", job.epoch);
                     });
                 let result = cache.background(|| {
-                    if !cache
+                    let permitted = cache
                         .permits_preview_storage(&job.settings, &job.metadata)
-                        .unwrap_or(false)
-                    {
+                        .map_err(|error| {
+                            preview_warning("preview.storage_policy", error.as_ref(), &job)
+                        })
+                        .ok()?;
+                    if !permitted {
                         return None;
                     }
                     // A newer frame can replace this job while it waits for foreground work.
@@ -135,18 +170,21 @@ impl Previews {
                         }
                     }
                     let _generate = trace::scope(trace::Category::Cpu, "preview.generate");
-                    let preview = downsample(&rs, &job.source).ok()?;
-                    let prepared = PreparedPreview::new(
-                        Preview {
-                            rgb: preview.rgb.clone(),
-                            color_space: preview.color_space,
-                            extent: preview.extent,
-                            rotation: 0,
-                            native_extent: job.native_extent,
-                        },
+                    let preview = downsample(&rs, &job.source)
+                        .map_err(|error| preview_warning("preview.readback", error.as_ref(), &job))
+                        .ok()?;
+                    let prepared = PreparedPreview::from_linear(
+                        preview
+                            .linear_image()
+                            .map_err(|error| {
+                                preview_warning("preview.decode", error.as_ref(), &job)
+                            })
+                            .ok()?,
+                        0,
+                        preview.color_space,
+                        job.native_extent,
                         true,
-                    )
-                    .ok()?;
+                    );
                     let _persist = trace::scope(trace::Category::Cache, "preview.persist_request");
                     let persisted = cache.save_preview(
                         &job.path,
@@ -158,6 +196,9 @@ impl Previews {
                         },
                         job.calibration_signature.as_deref(),
                     );
+                    if let Err(error) = &persisted {
+                        preview_warning("preview.persist", error.as_ref(), &job);
+                    }
                     trace::event(trace::Category::Cache, "preview.persist_result", |fields| {
                         fields.bool("api_ok", persisted.is_ok());
                     });
@@ -375,7 +416,10 @@ fn scaled_texture(
     target
 }
 
-fn downsample(rs: &egui_wgpu::RenderState, source: &ImageTexture) -> Result<Preview, String> {
+fn downsample(
+    rs: &egui_wgpu::RenderState,
+    source: &ImageTexture,
+) -> foveonic::source::Result<Preview> {
     downsample_texture(rs, source.texture(), source.description().space)
 }
 
@@ -383,7 +427,7 @@ fn downsample_texture(
     rs: &egui_wgpu::RenderState,
     source: &wgpu::Texture,
     space: foveonic::image::Space,
-) -> Result<Preview, String> {
+) -> foveonic::source::Result<Preview> {
     let _scope = trace::scope(trace::Category::Cpu, "preview.downsample_readback");
     let extent = [source.width(), source.height()];
     let target = scaled_texture(rs, source, space, PREVIEW_SIDE);
@@ -419,7 +463,7 @@ fn downsample_texture(
         let _wait = trace::scope_with(trace::Category::Gpu, "preview.readback_wait", |fields| {
             fields.str("measurement", "host_wait");
         });
-        foveonic::map_readback(&rs.device, &buffer).map_err(|e| e.to_string())?;
+        foveonic::map_readback(&rs.device, &buffer)?;
     }
     let color_space = foveonic::color_space::TiffColorSpace::ProPhotoRgb;
     let matrix = color_space.transform(foveonic::image::ColorSpace::Srgb);

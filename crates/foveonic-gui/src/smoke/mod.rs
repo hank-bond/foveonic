@@ -419,6 +419,7 @@ pub struct Smoke {
     multi_paths: Vec<PathBuf>,
     multi_expected: Vec<foveonic::render::Settings>,
     multi_cached_textures: Vec<std::sync::Weak<foveonic::image::ImageTexture>>,
+    multi_cached_scales: Vec<foveonic::render::Scale>,
     multi_sweep_groups: usize,
     multi_sweep_started: Option<std::time::Instant>,
     multi_sweep_ms: Vec<f64>,
@@ -554,6 +555,7 @@ impl Smoke {
             multi_paths: Vec::new(),
             multi_expected: Vec::new(),
             multi_cached_textures: Vec::new(),
+            multi_cached_scales: Vec::new(),
             multi_sweep_groups: std::env::var("FOVEONIC_GUI_SMOKE_MULTI_SWEEP")
                 .ok()
                 .map(|value| {
@@ -1089,17 +1091,18 @@ impl App {
                 assert_eq!(self.scope_key, Some(key));
                 let data = &snapshot.data;
                 assert_eq!(key.revision, frame.revision);
+                assert!(!frame.framing_preview);
+                assert!(frame.artifact.settings.preview_region.is_none());
                 let expected_region = self.preferences.scope_viewport.then(|| {
-                    let pixels = self
-                        .viewports
-                        .view(self.selected.as_deref())
-                        .visible_pixels()
-                        .unwrap();
+                    let uv = self.viewports.view(self.selected.as_deref()).visible_uv();
+                    let [width, height] = frame.texture.description().extent;
+                    // Scopes sample the displayed buffer, while the photographic
+                    // readout uses native coordinates. Include partial edge pixels.
                     [
-                        pixels.top_left[0],
-                        pixels.top_left[1],
-                        pixels.bottom_right[0] + 1,
-                        pixels.bottom_right[1] + 1,
+                        (uv.min.x.clamp(0., 1.) * width as f32).floor() as u32,
+                        (uv.min.y.clamp(0., 1.) * height as f32).floor() as u32,
+                        (uv.max.x.clamp(0., 1.) * width as f32).ceil() as u32,
+                        (uv.max.y.clamp(0., 1.) * height as f32).ceil() as u32,
                     ]
                 });
                 assert_eq!(key.region, expected_region);
@@ -1377,8 +1380,19 @@ impl App {
                 let target = smoke.targets[smoke.index];
                 if target.starts_with("dehaze-") && target != "dehaze-off" {
                     assert_eq!(
-                        frame.artifact.settings.working_scale,
-                        foveonic::render::Scale::NATIVE
+                        frame.processing_quality,
+                        self.preferences.processing_quality
+                    );
+                    let bound = automatic_scale_bound(
+                        frame,
+                        self.viewports.view(self.selected.as_deref()),
+                        self.preferences.processing_quality,
+                        ctx.pixels_per_point(),
+                    )
+                    .unwrap();
+                    assert!(
+                        frame.artifact.settings.working_scale.divisor() <= bound.divisor(),
+                        "Dehaze preview is coarser than physical display demand"
                     );
                     assert_eq!(frame.artifact.settings.preview_region, None);
                     assert_eq!(frame.artifact.settings.dehaze, self.settings.dehaze);

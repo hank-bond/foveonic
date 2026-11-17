@@ -44,6 +44,24 @@ fn copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_err
     )
     .unwrap_err();
     assert!(error.to_string().contains("history could not be saved"));
+    let report = &error
+        .downcast_ref::<support::ReportedError>()
+        .unwrap()
+        .report;
+    assert_eq!(
+        report.operation.phase.as_deref(),
+        Some("save-import-history")
+    );
+    let recorded = report.operation.settings.as_ref().unwrap();
+    assert_eq!(
+        recorded["frozen_recipe"],
+        support::settings_snapshot(&settings)
+    );
+    assert_eq!(recorded["history_committed"], false);
+    assert_eq!(
+        recorded["published"],
+        serde_json::json!([original.to_string_lossy(), sidecar.to_string_lossy()])
+    );
     assert_eq!(fs::read(&original).unwrap(), fs::read(&path).unwrap());
     assert_eq!(Identity::read(&original).unwrap(), photo.identity);
     assert_eq!(

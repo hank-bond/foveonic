@@ -125,7 +125,7 @@ pub const DEFAULT_MEMORY_CACHE_BYTES: u64 = 2048 * MIB;
 pub const MEMORY_BYTES_RANGE: std::ops::RangeInclusive<u64> = 64 * MIB..=64 * 1024 * MIB;
 pub const DEFAULT_THUMBNAIL_BYTES: u64 = DEFAULT_MEMORY_CACHE_BYTES / 4;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub last_folder: Option<std::path::PathBuf>,
@@ -204,10 +204,39 @@ impl Preferences {
 
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Self {
         let mut result: Self = storage
-            .and_then(|s| eframe::get_value(s, STORAGE_KEY))
+            .and_then(|storage| storage.get_string(STORAGE_KEY))
+            .and_then(|text| match ron::from_str(&text) {
+                Ok(preferences) => Some(preferences),
+                Err(error) => {
+                    foveonic::support::report_error(
+                        "preferences.parse",
+                        &error,
+                        Default::default(),
+                    );
+                    foveonic::support::event(
+                        foveonic::support::Level::Warning,
+                        "preferences.fallback",
+                        "Preferences could not be read. Using application defaults.",
+                        serde_json::json!({"storage_key":STORAGE_KEY}),
+                    );
+                    None
+                }
+            })
             .unwrap_or_default();
         result.normalize();
         result
+    }
+    pub fn support_context(&self) -> serde_json::Value {
+        let mut preferences = self.clone();
+        preferences.last_folder = preferences
+            .last_folder
+            .as_deref()
+            .map(|path| std::path::PathBuf::from(crate::support::path(path)));
+        preferences.processing_destination = preferences
+            .processing_destination
+            .as_deref()
+            .map(|path| std::path::PathBuf::from(crate::support::path(path)));
+        serde_json::to_value(preferences).unwrap_or_default()
     }
     fn normalize(&mut self) {
         self.multi_edit_limit = self.multi_edit_limit.max(1);

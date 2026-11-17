@@ -7,7 +7,7 @@ use crate::nodes::sensor::calibration::{CalibrationParams, EncodeParams};
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn activity_counts_engine_owned_transfers_and_not_device_copies_as_readbacks() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let before = gpu.activity();
     let source = gpu.upload("Activity source", &[1_f32, 2., 3., 4.]).unwrap();
     let mut target = gpu.storage("Activity target", 16).unwrap();
@@ -36,7 +36,7 @@ fn activity_counts_engine_owned_transfers_and_not_device_copies_as_readbacks() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn shader_black_calibration_and_orientation() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut params = CalibrationParams {
         source: [10, 10, 100, 0],
         dark: [0, 0, 10, 10],

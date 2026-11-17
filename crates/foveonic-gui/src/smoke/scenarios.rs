@@ -11,7 +11,7 @@ use foveonic::render::ProcessingQuality;
 use foveonic::{profile::Mode, render::Settings};
 use serde::Deserialize;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Weak},
     time::{Duration, Instant},
@@ -40,6 +40,16 @@ enum Case {
     CacheWorkflow,
 }
 impl Case {
+    fn observes_controls(self) -> bool {
+        matches!(
+            self,
+            Self::SliderDrag
+                | Self::LifecycleJourney
+                | Self::ChoiceJourney
+                | Self::BackgroundEdit
+                | Self::SourceLoading
+        )
+    }
     fn selection_journey(self) -> bool {
         matches!(self, Self::SelectionJourney | Self::SelectionPressure)
     }
@@ -152,6 +162,7 @@ fn read_mode<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Mode, D::Erro
 #[derive(Clone, Copy)]
 enum Action {
     Initial,
+    PrepareGrid,
     Edit(f64),
     Switch(usize),
     Remove,
@@ -177,6 +188,7 @@ impl Action {
     fn name(self) -> &'static str {
         match self {
             Self::Initial => "initial-selection",
+            Self::PrepareGrid => "prepare-demand-grid",
             Self::Edit(_) => "warm-edit",
             Self::Switch(_) => "cached-switch",
             Self::Remove => "remove-pending",
@@ -259,6 +271,7 @@ pub(super) struct Scenario {
     screenshot_finished: bool,
     image_captures: Option<Vec<ImageCapture>>,
     journey: Option<super::selection::SelectionJourney>,
+    prefetched_exposure: Option<super::journey::ExposureJourney>,
     background_edit: Option<super::background::BackgroundEdit>,
     transitions: Option<super::transitions::TransitionJourney>,
     choices: Option<super::choices::ChoiceJourney>,
@@ -276,6 +289,16 @@ pub(super) struct Scenario {
     geometry: serde_json::Value,
     shutdown_exposures: Vec<f32>,
     shutdown_pending: Option<serde_json::Value>,
+    session: Option<SessionCase>,
+    remaining: VecDeque<Scenario>,
+}
+
+struct SessionCase {
+    id: String,
+    case_id: String,
+    index: usize,
+    count: usize,
+    evidence_directory: PathBuf,
 }
 impl Scenario {
     pub(super) fn observe_admitted(
@@ -304,6 +327,35 @@ impl Scenario {
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).expect("cannot read scenario manifest"))
                 .expect("invalid scenario manifest");
+        if let Some(session) = manifest.get("session") {
+            let (id, cases) = validate_session(session).expect("invalid slider session");
+            let count = cases.len();
+            let mut scenarios: VecDeque<_> = cases
+                .into_iter()
+                .enumerate()
+                .map(|(index, manifest)| {
+                    let case_id = manifest["case_id"].as_str().unwrap().to_owned();
+                    let evidence_directory =
+                        PathBuf::from(manifest["evidence_directory"].as_str().unwrap());
+                    let mut scenario = Self::from_manifest(manifest);
+                    scenario.session = Some(SessionCase {
+                        id: id.clone(),
+                        case_id,
+                        index,
+                        count,
+                        evidence_directory,
+                    });
+                    scenario
+                })
+                .collect();
+            let mut first = scenarios.pop_front().unwrap();
+            first.remaining = scenarios;
+            Some(first)
+        } else {
+            Some(Self::from_manifest(manifest))
+        }
+    }
+    fn from_manifest(manifest: serde_json::Value) -> Self {
         let config: Config = serde_json::from_value(manifest["scenario"].clone())
             .expect("invalid scenario configuration");
         assert!(
@@ -371,30 +423,49 @@ impl Scenario {
                 || config.name.manual_exposure_journey(),
             "image comparison requires an exposure or selection journey"
         );
-        let exposures = if config.name.manual_exposure_journey() {
-            assert!(
-                config.photo_count >= 2,
-                "selection journeys require at least two photographs"
-            );
-            let exposures = manifest["inputs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|input| {
-                    assert_eq!(input["settings"]["exposure_auto"], false);
-                    input["settings"]["exposure"]
-                        .as_f64()
-                        .expect("declared exposure") as f32
-                })
-                .collect();
-            exposures
-        } else {
-            Vec::new()
-        };
+        let exposures =
+            if config.name.manual_exposure_journey() || config.name == Case::PrefetchedSelection {
+                assert!(
+                    config.photo_count >= 2,
+                    "selection journeys require at least two photographs"
+                );
+                let exposures = manifest["inputs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|input| {
+                        assert_eq!(input["settings"]["exposure_auto"], false);
+                        input["settings"]["exposure"]
+                            .as_f64()
+                            .expect("declared exposure") as f32
+                    })
+                    .collect();
+                exposures
+            } else {
+                Vec::new()
+            };
         let journey = config
             .name
             .selection_journey()
             .then(|| super::selection::SelectionJourney::new(exposures.clone()));
+        let prefetched_exposure = (config.name == Case::PrefetchedSelection)
+            .then(|| super::journey::ExposureJourney::new(exposures.clone()));
+        if config.name == Case::PrefetchedSelection {
+            assert!(
+                exposures
+                    .iter()
+                    .all(|value: &f32| value.is_finite() && (-4. ..=3.625).contains(value)),
+                "prefetched selection exposure offsets must remain in range"
+            );
+        }
+        if config.name.selection_journey() {
+            assert!(
+                exposures
+                    .iter()
+                    .all(|value: &f32| value.is_finite() && (-3.625..=3.625).contains(value)),
+                "selection journey exposure offsets must remain in range"
+            );
+        }
         if config.name == Case::CacheWorkflow {
             assert!(
                 exposures
@@ -446,20 +517,10 @@ impl Scenario {
         let cache_workflow = (config.name == Case::CacheWorkflow).then(|| {
             super::cache_workflow::Driver::new(exposures.clone(), config.native_photo_count)
         });
-        if matches!(
-            config.name,
-            Case::SliderDrag
-                | Case::LifecycleJourney
-                | Case::ChoiceJourney
-                | Case::BackgroundEdit
-                | Case::SourceLoading
-        ) {
-            crate::automation::enable();
-        }
         let feedback = (0..config.photo_count)
             .map(|_| super::journey::ImageFeedback::default())
             .collect();
-        Some(Self {
+        Self {
             paths: config.sources.clone(),
             config,
             source_loading,
@@ -486,6 +547,7 @@ impl Scenario {
             screenshot_finished: false,
             image_captures: None,
             journey,
+            prefetched_exposure,
             background_edit,
             transitions,
             choices,
@@ -502,7 +564,9 @@ impl Scenario {
             geometry: serde_json::Value::Null,
             shutdown_exposures,
             shutdown_pending: None,
-        })
+            session: None,
+            remaining: VecDeque::new(),
+        }
     }
     fn marker(&self, phase: &str, extra: serde_json::Value) {
         let mut fields = serde_json::json!({"scenario":self.manifest["scenario"]["name"],"action":self.action.map_or("setup",Action::name),"phase":phase,"step":self.step,"photo_count":self.targets.len(),"processing_quality":format!("{:?}",self.config.quality)});
@@ -525,6 +589,11 @@ impl Scenario {
     }
     pub(super) fn tick(&mut self, app: &mut App, ctx: &egui::Context, smoke: &mut Smoke) {
         ctx.request_repaint_after(Duration::from_millis(20));
+        if matches!(self.phase, Phase::Setup) {
+            if let Some(session) = &self.session {
+                smoke.directory = session.evidence_directory.clone();
+            }
+        }
         if matches!(self.phase, Phase::Running) {
             self.observe_ui(app, ctx);
             if self.exposure_model().is_some() {
@@ -669,10 +738,14 @@ impl Scenario {
                 self.actions.push_back(Action::Initial);
                 match self.config.name {
                     Case::Initial | Case::WarmDisk => {}
-                    Case::PrefetchedSelection => self.actions.extend(
-                        (0..self.config.repeats)
-                            .map(|index| Action::Edit(if index % 2 == 0 { 0.25 } else { -0.25 })),
-                    ),
+                    Case::PrefetchedSelection => {
+                        self.actions.push_back(Action::PrepareGrid);
+                        self.actions.extend(
+                            (0..self.config.repeats).map(|index| {
+                                Action::Edit(if index % 2 == 0 { 0.25 } else { -0.25 })
+                            }),
+                        );
+                    }
                     Case::WarmEdit => self.actions.extend(
                         (0..self.config.repeats)
                             .map(|index| Action::Edit(if index % 2 == 0 { 0.25 } else { -0.25 })),
@@ -693,12 +766,14 @@ impl Scenario {
                     }
                     Case::SliderDrag => self.actions.push_back(Action::SliderDrag),
                     Case::SelectionJourney => self.actions.extend([
+                        Action::PrepareGrid,
                         Action::SelectionJourney,
                         Action::Switch(0),
                         Action::Switch(self.paths.len() - 1),
                         Action::Restore,
                     ]),
                     Case::SelectionPressure => self.actions.extend([
+                        Action::PrepareGrid,
                         Action::SelectionJourney,
                         Action::Switch(0),
                         Action::Evict,
@@ -979,7 +1054,14 @@ impl Scenario {
                         self.config.drag_pattern,
                         &mut smoke.direct_events,
                     ) {
-                        Ok(drag) => self.drag = Some(drag),
+                        Ok(drag) => {
+                            if self.session.is_some() {
+                                // Give egui a complete hover frame at the new control before
+                                // pressing, after the preceding case's pointer position.
+                                prepend_session_hover(&mut smoke.direct_events);
+                            }
+                            self.drag = Some(drag);
+                        }
                         Err(error) => {
                             self.failed = Some(error);
                             self.finish(app);
@@ -1030,7 +1112,7 @@ impl Scenario {
                         .filter(|frame| self.matches(app, path, frame, self.minimum_revision))
                     {
                         if !self.observed.contains_key(path) {
-                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.config.quality), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
+                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.expected_frame_quality()), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
                             self.observed.insert(path.clone(), frame.diagnostic_task.id);
                         }
                     }
@@ -1040,6 +1122,16 @@ impl Scenario {
                     return;
                 }
                 if let Some(model) = self.exposure_model() {
+                    if self.prefetched_exposure.is_some()
+                        && self
+                            .paths
+                            .iter()
+                            .any(|path| self.settings(app, path).exposure_auto)
+                    {
+                        self.failed = Some("prefetched selection requires manual exposure".into());
+                        self.finish(app);
+                        return;
+                    }
                     let observed: Vec<_> = self
                         .paths
                         .iter()
@@ -1109,6 +1201,9 @@ impl Scenario {
                         "settings":self.settings(app,path)})
                 }).collect::<Vec<_>>();
                 self.results.push(serde_json::json!({"step":self.step,"action":self.action.unwrap().name(),"coverage":self.action.unwrap().coverage(),"baseline_elapsed_ms":if self.config.mode==Mode::Off && !matches!(self.action,Some(Action::CacheWorkflow)) {Some(self.began.elapsed().as_secs_f64()*1000.)}else{None},"photos":photos,"retained":app.worker.memory_status().resources}));
+                if matches!(self.action, Some(Action::PrepareGrid)) {
+                    self.results.last_mut().unwrap()["exposure_delta"] = 0.125.into();
+                }
                 self.results.last_mut().unwrap()["geometry"] = self.geometry.clone();
                 if self.config.name == Case::BackgroundEdit {
                     let batch = app.import.smoke_batch_progress();
@@ -1130,6 +1225,12 @@ impl Scenario {
                 self.next(app, ctx, smoke);
             }
             Phase::Saving => {
+                if self.session.is_some()
+                    && self.failed.is_none()
+                    && self.began.elapsed() > Duration::from_secs(self.config.timeout_seconds)
+                {
+                    self.failed = Some("scenario image capture did not finish".into());
+                }
                 if self.failed.is_some()
                     && (self.config.name == Case::SliderDrag
                         || self.config.name.manual_exposure_journey())
@@ -1202,7 +1303,7 @@ impl Scenario {
                         .filter(|capture| capture.finished)
                         .map(|capture| capture.evidence.clone())
                         .collect();
-                    let result = serde_json::json!({
+                    let mut result = serde_json::json!({
                         "schema_version":1,
                         "input_kind":if self.config.mode == Mode::Off { "baseline" } else { "native-perfetto-scenario" },
                         "scenario":self.manifest["scenario"],
@@ -1251,6 +1352,13 @@ impl Scenario {
                         "numerical_equality":"app image captures require separate fresh-render comparison",
                         "coverage":"egui input dispatch and declared direct application commands; physical input and screen presentation not measured",
                     });
+                    if let Some(session) = &self.session {
+                        result["session"] = serde_json::json!({
+                            "id": session.id, "case_id": session.case_id,
+                            "index": session.index, "count": session.count,
+                            "pid": std::process::id(),
+                        });
+                    }
                     std::fs::create_dir_all(&smoke.directory).unwrap();
                     if let Some(drag) = &self.drag {
                         std::fs::write(
@@ -1270,6 +1378,24 @@ impl Scenario {
                         serde_json::to_vec_pretty(&result).unwrap(),
                     )
                     .unwrap();
+                    if self.failed.is_none() {
+                        if let Some(mut next) = self.remaining.pop_front() {
+                            next.remaining = std::mem::take(&mut self.remaining);
+                            next.began = Instant::now();
+                            smoke.direct_events.clear();
+                            smoke.pointer_motion = None;
+                            // The prior gesture is released, but egui retains its last
+                            // pointer position and hover state across cases.
+                            smoke
+                                .direct_events
+                                .push_back(vec![egui::Event::PointerGone]);
+                            ctx.stop_dragging();
+                            crate::automation::reveal(None);
+                            ctx.data_mut(|data| data.clear());
+                            *self = next;
+                            return;
+                        }
+                    }
                     self.phase = Phase::Done;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -1293,6 +1419,26 @@ impl Scenario {
             "viewport_points":[viewport.x,viewport.y],"pixels_per_point":ctx.pixels_per_point()});
         let mut sample = serde_json::json!({"elapsed_ms":started.elapsed().as_secs_f64()*1000.,
             "action":self.action.map_or("initial-selection",Action::name),"worker_busy":app.worker.busy()});
+        if self.session.is_some() && matches!(self.action, Some(Action::SliderDrag)) {
+            let (position, down) = ctx.input(|input| {
+                (
+                    input.pointer.latest_pos().map(|pos| [pos.x, pos.y]),
+                    input.pointer.primary_down(),
+                )
+            });
+            let (dragged, hovered) = ctx.interaction_snapshot(|interaction| {
+                (
+                    interaction.dragged.map(|id| id.short_debug_format()),
+                    interaction
+                        .hovered
+                        .iter()
+                        .map(|id| id.short_debug_format())
+                        .collect::<Vec<_>>(),
+                )
+            });
+            sample["pointer"] = serde_json::json!({"position":position,"down":down,
+                "dragged_widget":dragged,"hovered_widgets":hovered});
+        }
         if self.config.name == Case::BackgroundEdit {
             let progress = app.import.smoke_batch_progress();
             sample["background_running"] = (progress.running && progress.decisions_saved).into();
@@ -1304,6 +1450,7 @@ impl Scenario {
         self.journey
             .as_ref()
             .map(|journey| &journey.model)
+            .or(self.prefetched_exposure.as_ref())
             .or_else(|| self.source_loading.as_ref().map(|journey| &journey.model))
             .or_else(|| self.transitions.as_ref().map(|journey| &journey.model))
             .or_else(|| self.cache_workflow.as_ref().map(|journey| &journey.model))
@@ -1320,6 +1467,7 @@ impl Scenario {
             .journey
             .as_ref()
             .map(|journey| &journey.model)
+            .or(self.prefetched_exposure.as_ref())
             .or_else(|| self.source_loading.as_ref().map(|journey| &journey.model))
             .or_else(|| self.transitions.as_ref().map(|journey| &journey.model))
             .or_else(|| self.cache_workflow.as_ref().map(|journey| &journey.model))
@@ -1403,6 +1551,15 @@ impl Scenario {
             .filter(|frame| frame.path == *path)
             .or_else(|| app.multi_edit_frame(path))
     }
+    fn expected_frame_quality(&self) -> ProcessingQuality {
+        // The transition sequence ends with Restore in Speed. Setup still uses
+        // the configured quality, independently of that terminal expectation.
+        if matches!(self.action, Some(Action::TransitionJourney)) {
+            ProcessingQuality::Speed
+        } else {
+            self.config.quality
+        }
+    }
     fn matches(
         &self,
         app: &App,
@@ -1414,9 +1571,11 @@ impl Scenario {
             && (matches!(self.action, Some(Action::CacheWorkflow))
                 || frame.diagnostic_task.revision >= minimum)
             && (matches!(self.action, Some(Action::CacheWorkflow))
-                || frame.processing_quality == self.config.quality
+                || frame.processing_quality == self.expected_frame_quality()
                     && frame.artifact.settings.working_scale.divisor()
-                        <= app.preview_scale_for(path, self.config.quality).divisor())
+                        <= app
+                            .preview_scale_for(path, self.expected_frame_quality())
+                            .divisor())
             && crate::rendering::matching::same_authored_edits(
                 &frame.requested,
                 self.expected
@@ -1426,6 +1585,8 @@ impl Scenario {
     }
     fn ready(&self, app: &App, minimum: u64) -> bool {
         !app.worker.busy()
+            // Coordinator idleness can become visible before the UI settles progress.
+            && app.worker.progress.snapshot().is_none_or(|progress| !progress.running())
             && app.sidecars.ready()
             && (self.targets.len() == 1 || app.multi_edit.editable_ready())
             && self.targets.iter().all(|path| {
@@ -1435,10 +1596,20 @@ impl Scenario {
     }
     fn edit(&mut self, app: &mut App, delta: f64) {
         let changed = app.edit_selection.paths().to_vec();
+        if let Some(model) = &mut self.prefetched_exposure {
+            model.adjust_exposure(delta as f32);
+        }
+        if let Some(journey) = &mut self.journey {
+            journey.model.adjust_exposure(delta as f32);
+        }
         apply_exposure(app, delta);
-        for path in changed {
-            self.expected
-                .insert(path.clone(), self.settings(app, &path).clone());
+        if self.prefetched_exposure.is_some() || self.journey.is_some() {
+            self.update_journey_expectations();
+        } else {
+            for path in changed {
+                self.expected
+                    .insert(path.clone(), self.settings(app, &path).clone());
+            }
         }
     }
     fn next(&mut self, app: &mut App, ctx: &egui::Context, smoke: &mut Smoke) {
@@ -1511,13 +1682,14 @@ impl Scenario {
             && (matches!(action, Action::Switch(_))
                 || (matches!(action, Action::Restore) && !may_rebuild));
         if !matches!(action, Action::Initial)
+            && !(matches!(action, Action::PrepareGrid) && self.config.disk_cache_bytes == 0)
             && !may_rebuild
             && !target_reuse
             && (self.config.name != Case::MemoryPressure || self.config.disk_cache_bytes > 0)
         {
             expectation["expect_original_reads"] = 0.into();
         }
-        if !matches!(action, Action::Initial)
+        if !matches!(action, Action::Initial | Action::PrepareGrid)
             && !may_rebuild
             && !target_reuse
             && (self.config.name != Case::MemoryPressure || self.config.disk_cache_bytes == 0)
@@ -1531,6 +1703,9 @@ impl Scenario {
             if self.config.disk_cache_bytes > 0 {
                 expectation["expect_original_reads"] = 0.into();
             }
+        }
+        if matches!(action, Action::PrepareGrid) {
+            expectation["exposure_delta"] = 0.125.into();
         }
         if matches!(action, Action::SourceLoading) {
             // A deliberately reacquires native input. B's edit must complete
@@ -1575,6 +1750,10 @@ impl Scenario {
                 self.minimum_revision = app.revision + 1;
                 self.edit(app, delta);
             }
+            Action::PrepareGrid => {
+                self.minimum_revision = app.revision + 1;
+                self.edit(app, 0.125);
+            }
             Action::Switch(index) => self.click(app, ctx, smoke, index, egui::Modifiers::NONE),
             Action::Remove => {
                 self.edit(app, 0.125);
@@ -1596,14 +1775,9 @@ impl Scenario {
             | Action::ChoiceJourney
             | Action::CacheWorkflow => {}
             Action::Restore => {
-                self.click(app, ctx, smoke, 0, egui::Modifiers::NONE);
-                self.click(
-                    app,
-                    ctx,
-                    smoke,
-                    self.paths.len() - 1,
-                    egui::Modifiers::SHIFT,
-                );
+                let (first, last) = app.smoke_visual_range(&self.paths);
+                self.click(app, ctx, smoke, first, egui::Modifiers::NONE);
+                self.click(app, ctx, smoke, last, egui::Modifiers::SHIFT);
             }
             Action::Evict => {
                 self.retained_before = app
@@ -1711,7 +1885,185 @@ impl Scenario {
                 .stop_to(self.config.capture_directory.clone())
                 .expect("cannot save scenario capture");
         }
+        if self.session.is_some() {
+            self.began = Instant::now();
+        }
         self.phase = Phase::Saving;
+    }
+}
+
+fn prepend_session_hover(events: &mut VecDeque<Vec<egui::Event>>) {
+    let start = events
+        .front()
+        .and_then(|events| {
+            events.iter().find_map(|event| match event {
+                egui::Event::PointerMoved(position) => Some(*position),
+                _ => None,
+            })
+        })
+        .expect("slider gesture must begin with a pointer position");
+    events.push_front(vec![egui::Event::PointerMoved(start)]);
+}
+
+// Validate the entire queue before the first case can touch the application.
+fn validate_session(
+    session: &serde_json::Value,
+) -> Result<(String, Vec<serde_json::Value>), String> {
+    fn path(value: &serde_json::Value, name: &str) -> Result<PathBuf, String> {
+        let path = PathBuf::from(value.as_str().ok_or_else(|| format!("missing {name}"))?);
+        if !path.is_absolute()
+            || path.components().any(|part| {
+                matches!(
+                    part,
+                    std::path::Component::ParentDir | std::path::Component::CurDir
+                )
+            })
+        {
+            return Err(format!("{name} must be an absolute normalized path"));
+        }
+        Ok(path)
+    }
+    fn resolved(path: &Path) -> Result<PathBuf, String> {
+        let mut ancestor = path;
+        while !ancestor.exists() {
+            ancestor = ancestor.parent().ok_or("cannot resolve owned directory")?;
+        }
+        let root = std::fs::canonicalize(ancestor).map_err(|error| error.to_string())?;
+        Ok(root.join(
+            path.strip_prefix(ancestor)
+                .map_err(|error| error.to_string())?,
+        ))
+    }
+    let id = session["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("missing session id")?
+        .to_owned();
+    if session["kind"] != "slider-correctness" {
+        return Err("unsupported session kind".into());
+    }
+    let cases = session["cases"]
+        .as_array()
+        .filter(|cases| !cases.is_empty() && cases.len() <= 1024)
+        .ok_or("session must contain 1 through 1024 cases")?;
+    let mut ids = BTreeSet::new();
+    let mut owned = Vec::<PathBuf>::new();
+    let mut fixture = None;
+    let mut group = None;
+    for case in cases {
+        let case_id = case["case_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or("missing case id")?;
+        if !ids.insert(case_id.to_owned()) {
+            return Err("duplicate case id".into());
+        }
+        let config: Config =
+            serde_json::from_value(case["scenario"].clone()).map_err(|error| error.to_string())?;
+        if config.name != Case::SliderDrag
+            || config.mode != Mode::Off
+            || !config.capture_images
+            || config.folder_mode != FolderMode::Import
+            || config.save_on_exit
+            || config.exit_with_pending
+        {
+            return Err("session requires slider-drag, off, image capture and Import without shutdown saving".into());
+        }
+        let current_group = (
+            case["scenario"]["quality"].clone(),
+            config.light_theme,
+            config.disk_cache_bytes,
+            config.memory_cache_bytes,
+        );
+        if group
+            .as_ref()
+            .is_some_and(|expected| *expected != current_group)
+        {
+            return Err("session configuration differs".into());
+        }
+        group = Some(current_group);
+        let directory = path(&case["scenario"]["directory"], "input directory")?;
+        let capture = path(&case["scenario"]["capture_directory"], "capture directory")?;
+        let evidence = path(&case["evidence_directory"], "evidence directory")?;
+        if [
+            "scenario-result.json",
+            "slider-drag.json",
+            "slider-observation.json",
+            "slider-failure.png",
+        ]
+        .iter()
+        .any(|name| evidence.join(name).exists())
+            || (0..config.photo_count)
+                .any(|index| evidence.join(format!("image-{index:02}.f32")).exists())
+        {
+            return Err("session evidence already exists".into());
+        }
+        for candidate in [&directory, &capture, &evidence] {
+            let candidate = resolved(candidate)?;
+            if owned
+                .iter()
+                .any(|other| candidate.starts_with(other) || other.starts_with(&candidate))
+            {
+                return Err("session directories overlap".into());
+            }
+            owned.push(candidate);
+        }
+        let inputs = case["inputs"].as_array().ok_or("missing inputs")?;
+        if inputs.len() != config.photo_count || inputs.len() != config.sources.len() {
+            return Err("input count differs".into());
+        }
+        let mut identities = Vec::new();
+        let mut staged_paths = BTreeSet::new();
+        for (input, source) in inputs.iter().zip(&config.sources) {
+            let staged = path(&input["staged_source"], "staged source")?;
+            if staged != *source
+                || staged.parent() != Some(directory.as_path())
+                || !staged_paths.insert(staged.clone())
+            {
+                return Err("staged source does not belong to input directory".into());
+            }
+            let original = input["source"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or("missing source identity")?;
+            let hash = input["sha256"]
+                .as_str()
+                .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+                .ok_or("invalid source hash")?;
+            let length = input["length"]
+                .as_u64()
+                .filter(|length| *length > 0)
+                .ok_or("missing source length")?;
+            if !input["settings"].is_object() {
+                return Err("missing input recipe".into());
+            }
+            identities.push((original.to_owned(), hash.to_owned(), length));
+        }
+        if fixture
+            .as_ref()
+            .is_some_and(|expected| *expected != identities)
+        {
+            return Err("session fixture identities or order differ".into());
+        }
+        fixture = Some(identities);
+    }
+    Ok((id, cases.clone()))
+}
+
+fn enable_automation_for(case: Option<Case>) {
+    if case.is_some_and(Case::observes_controls) {
+        crate::automation::enable();
+    }
+}
+
+impl App {
+    pub(crate) fn enable_scenario_automation(&self) {
+        enable_automation_for(
+            self.smoke
+                .as_ref()
+                .and_then(|smoke| smoke.scenario.as_ref())
+                .map(|scenario| scenario.config.name),
+        );
     }
 }
 
@@ -1742,4 +2094,225 @@ pub(super) fn apply_exposure(app: &mut App, delta: f64) {
         }
     }
     app.submit(None);
+}
+
+#[cfg(test)]
+mod automation_tests {
+    use super::{enable_automation_for, Case};
+
+    fn session_case(root: &std::path::Path, id: &str) -> serde_json::Value {
+        let base = root.join(id);
+        let inputs = base.join("inputs");
+        serde_json::json!({
+            "case_id": id, "evidence_directory": base.join("evidence"),
+            "scenario": {"name":"slider-drag", "photo_count":2, "quality":"quality", "mode":"off",
+                "directory":inputs, "sources":[inputs.join("a.x3f"), inputs.join("b.x3f")],
+                "capture_directory":base.join("capture"), "repeats":1, "rapid_edits":1,
+                "pressure_bytes":0, "timeout_seconds":30, "capture_images":true},
+            "inputs":[{"source":"/original/a.x3f", "staged_source":inputs.join("a.x3f"), "sha256":"a".repeat(64), "length":1, "settings":{}},
+                      {"source":"/original/b.x3f", "staged_source":inputs.join("b.x3f"), "sha256":"b".repeat(64), "length":1, "settings":{}}]
+        })
+    }
+
+    #[test]
+    fn transition_terminal_quality_preserves_configured_setup_quality() {
+        use foveonic::render::ProcessingQuality::{Quality, Speed};
+        for configured in [Quality, Speed] {
+            let root = tempfile::tempdir().unwrap();
+            let mut manifest = session_case(root.path(), "policy");
+            manifest["scenario"]["quality"] = serde_json::to_value(configured).unwrap();
+            let mut scenario = super::Scenario::from_manifest(manifest);
+            for action in [
+                None,
+                Some(super::Action::Initial),
+                Some(super::Action::SliderDrag),
+                Some(super::Action::CacheWorkflow),
+            ] {
+                scenario.action = action;
+                assert_eq!(scenario.expected_frame_quality(), configured);
+            }
+            scenario.action = Some(super::Action::TransitionJourney);
+            assert_eq!(scenario.expected_frame_quality(), Speed);
+            assert_eq!(scenario.config.quality, configured);
+            assert_eq!(
+                scenario.manifest["scenario"]["quality"],
+                serde_json::to_value(configured).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn slider_session_validates_queue_and_isolation() {
+        let root = tempfile::tempdir().unwrap();
+        let session = serde_json::json!({"id":"session", "kind":"slider-correctness", "cases":[session_case(root.path(), "one"), session_case(root.path(), "two")]});
+        assert!(super::validate_session(&session).is_ok());
+        let mut duplicate = session.clone();
+        duplicate["cases"][1]["case_id"] = "one".into();
+        assert!(super::validate_session(&duplicate).is_err());
+        let mut overlap = session.clone();
+        overlap["cases"][1]["evidence_directory"] =
+            serde_json::to_value(root.path().join("one/inputs/nested")).unwrap();
+        assert!(super::validate_session(&overlap).is_err());
+        let mut reordered = session.clone();
+        reordered["cases"][1]["inputs"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        reordered["cases"][1]["scenario"]["sources"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        assert!(super::validate_session(&reordered).is_err());
+        for (field, value) in [
+            ("mode", serde_json::json!("full")),
+            ("capture_images", serde_json::json!(false)),
+            ("folder_mode", serde_json::json!("browse")),
+            ("save_on_exit", serde_json::json!(true)),
+            ("light_theme", serde_json::json!(true)),
+        ] {
+            let mut changed = session.clone();
+            changed["cases"][1]["scenario"][field] = value;
+            assert!(
+                super::validate_session(&changed).is_err(),
+                "accepted {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn slider_session_retains_distinct_gestures_for_the_same_recipe() {
+        let root = tempfile::tempdir().unwrap();
+        let forward = session_case(root.path(), "forward");
+        let mut scrub = session_case(root.path(), "scrub");
+        scrub["scenario"]["drag_pattern"] = "scrub".into();
+        scrub["scenario"]["drag_steps"] = 24.into();
+        let session = serde_json::json!({
+            "id":"session", "kind":"slider-correctness", "cases":[forward, scrub]
+        });
+        let (_, cases) = super::validate_session(&session).unwrap();
+        assert_eq!(cases, session["cases"].as_array().unwrap().clone());
+        assert_ne!(cases[0]["case_id"], cases[1]["case_id"]);
+        assert_ne!(
+            cases[0]["scenario"]["drag_pattern"],
+            cases[1]["scenario"]["drag_pattern"]
+        );
+        assert_eq!(
+            cases[0]["inputs"][0]["settings"],
+            cases[1]["inputs"][0]["settings"]
+        );
+    }
+
+    #[test]
+    fn session_hover_frame_targets_new_control_before_drag() {
+        use eframe::egui;
+        use std::collections::VecDeque;
+
+        fn frame(ctx: &egui::Context, time: f64, events: Vec<egui::Event>) -> (bool, bool) {
+            let mut result = (false, false);
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 400.),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.interact(
+                        egui::Rect::from_min_max(egui::pos2(40., 40.), egui::pos2(160., 60.)),
+                        egui::Id::new("previous-control"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let response = ui.interact(
+                        egui::Rect::from_min_max(egui::pos2(40., 100.), egui::pos2(160., 120.)),
+                        egui::Id::new("new-control"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    result = (response.hovered(), response.dragged());
+                });
+            });
+            result
+        }
+        let ctx = egui::Context::default();
+        frame(&ctx, 0., vec![]);
+        frame(
+            &ctx,
+            0.1,
+            vec![egui::Event::PointerMoved(egui::pos2(100., 50.))],
+        );
+        frame(&ctx, 0.2, vec![egui::Event::PointerGone]);
+        let start = egui::pos2(100., 110.);
+        let end = egui::pos2(120., 110.);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut events = VecDeque::from([
+            vec![egui::Event::PointerMoved(start), button(true)],
+            vec![egui::Event::PointerMoved(end)],
+        ]);
+        super::prepend_session_hover(&mut events);
+        assert!(frame(&ctx, 0.3, events.pop_front().unwrap()).0);
+        frame(&ctx, 0.4, events.pop_front().unwrap());
+        assert!(frame(&ctx, 0.5, events.pop_front().unwrap()).1);
+    }
+
+    #[test]
+    fn scenario_observers_are_enabled_only_on_the_handoff_thread() {
+        let observers = [
+            Case::SliderDrag,
+            Case::LifecycleJourney,
+            Case::ChoiceJourney,
+            Case::BackgroundEdit,
+            Case::SourceLoading,
+        ];
+        let others = [
+            Case::Initial,
+            Case::WarmDisk,
+            Case::PrefetchedSelection,
+            Case::WarmEdit,
+            Case::CachedSwitch,
+            Case::RapidSupersession,
+            Case::MemoryPressure,
+            Case::SelectionJourney,
+            Case::SelectionPressure,
+            Case::TransitionJourney,
+            Case::BrowserJourney,
+            Case::CollectionJourney,
+            Case::CacheWorkflow,
+        ];
+        for case in others {
+            assert!(!case.observes_controls());
+        }
+        for case in observers {
+            std::thread::spawn(move || {
+                assert!(!crate::automation::enabled());
+                let case = std::thread::spawn(move || {
+                    assert!(!crate::automation::enabled());
+                    case
+                })
+                .join()
+                .unwrap();
+                enable_automation_for(Some(case));
+                assert!(crate::automation::snapshot().is_some());
+                assert!(!std::thread::spawn(crate::automation::enabled)
+                    .join()
+                    .unwrap());
+            })
+            .join()
+            .unwrap();
+        }
+        std::thread::spawn(|| {
+            enable_automation_for(None);
+            assert!(!crate::automation::enabled());
+            enable_automation_for(Some(Case::WarmEdit));
+            assert!(!crate::automation::enabled());
+        })
+        .join()
+        .unwrap();
+    }
 }

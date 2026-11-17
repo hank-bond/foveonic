@@ -31,7 +31,7 @@ fn gpu_pattern_matches_native_extents_seeded_edges_and_global_offset_order() {
     let f = fixture();
     let source = array(&f["input"]);
     let edges = array(&f["edges"]);
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     // Two independently initialized tiles must each restart both native offset sequences.
     let input: Vec<f32> = source.iter().chain(&source).copied().collect();
     let seed: Vec<f32> = edges.iter().chain(&edges).copied().collect();
@@ -40,6 +40,7 @@ fn gpu_pattern_matches_native_extents_seeded_edges_and_global_offset_order() {
     let mut geometry: crate::noise::Parameters = bytemuck::Zeroable::zeroed();
     geometry.source = [80, 72, 2, 1];
     geometry.tile = [80, 72, 0, 11];
+    geometry.window = [0, 0, 2, 1];
     geometry.reduction = [1., 0., 0., 0.];
     geometry.geometry = [8, 8, 21, 0];
     let edge = crate::nodes::color::reconstruction::pattern_seed(

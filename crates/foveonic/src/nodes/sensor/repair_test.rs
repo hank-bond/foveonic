@@ -80,7 +80,7 @@ fn gpu_camera_repair_matches_reference_masks_order_borders_and_sentinels() {
         .iter()
         .map(|v| v.as_f64().unwrap() as f32)
         .collect();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for (reverse, key) in [(false, "output"), (true, "reverse_output")] {
         let mut selected = records.clone();
         if reverse {
@@ -137,7 +137,7 @@ fn leaf_camera_record_block_is_repaired_before_despeckle_with_independent_artifa
     let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("glossy-leaves-and-buds.x3f");
     let source = Source::open(path).unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let engine = Engine::from_device(
         gpu.device.clone(),
         gpu.queue.clone(),

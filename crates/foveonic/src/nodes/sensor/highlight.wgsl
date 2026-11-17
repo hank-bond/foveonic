@@ -22,6 +22,26 @@ var<workgroup> donor_rgb:array<vec3<f32>,128>;
 fn in_image(xy:vec2<u32>)->bool{return xy.x<params.source.x && xy.y<params.source.y;}
 fn work(xy:vec2<u32>)->bool{return all(xy>=params.area.xy) && all(xy<=params.area.zw);}
 fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u]);}
+// Compare positive normal f32 values against an integer boundary no greater than 256.
+fn at_least_boundary(numerator:f32,denominator:f32,boundary:u32)->bool{
+    if boundary==0u{return true;}
+    let n=bitcast<u32>(numerator);let d=bitcast<u32>(denominator);
+    let ns=(n&0x7fffffu)|0x800000u;let ds=((d&0x7fffffu)|0x800000u)*boundary;
+    let nl=countLeadingZeros(ns);let dl=countLeadingZeros(ds);
+    let ne=i32((n>>23u)&255u)-i32(nl);let de=i32((d>>23u)&255u)-i32(dl);
+    return ne>de || (ne==de && (ns<<nl)>=(ds<<dl));
+}
+// Classify donors with floor(N/D), with N=f32(red*255) and D=f32(red+green).
+fn donor_bucket(rgb:vec3<f32>)->u32{
+    let numerator=rgb.x*255.0;let denominator=rgb.x+rgb.y;
+    var bucket=min(u32(numerator/denominator),255u);
+    // Keep the division fallback for nonfinite inputs, outside the donor contract.
+    if (bitcast<u32>(numerator)&0x7f800000u)==0x7f800000u ||
+       (bitcast<u32>(denominator)&0x7f800000u)==0x7f800000u{return bucket;}
+    if bucket>0u && !at_least_boundary(numerator,denominator,bucket){bucket-=1u;}
+    if at_least_boundary(numerator,denominator,bucket+1u){bucket+=1u;}
+    return min(bucket,255u);
+}
 fn clipped(p:u32)->u32 { return original[p]; }
 @compute @workgroup_size(8,8)
 fn connected_flags(@builtin(global_invocation_id)id:vec3<u32>){
@@ -85,7 +105,7 @@ fn donor_scatter(@builtin(global_invocation_id)id:vec3<u32>,@builtin(workgroup_i
 fn bin_histogram(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3<u32>){
     atomicStore(&histogram[local],0u);workgroupBarrier();
     if id.x<counts[params.source.w]{
-        let rgb=max(color(donors[id.x]),vec3(1.0));let bucket=u32(rgb.x*255.0/(rgb.x+rgb.y));
+        let rgb=max(color(donors[id.x]),vec3(1.0));let bucket=donor_bucket(rgb);
         // Original rank scratch is no longer needed after donor_scatter.
         marks[id.x]=bucket;atomicAdd(&histogram[bucket],1u);
     }
@@ -118,13 +138,13 @@ fn correction_table(@builtin(local_invocation_index)lane:u32,@builtin(workgroup_
     let range=workgroupUniformLoad(&donor_range);var sum=0.0;var count=0.0;
     // Parallel loads are safe, but changing accumulation order changes rounding.
     // Keep the bin recurrence sequential and do not store separately rounded ratios.
+    // Stable scatter already classified every donor in this range into this bin.
     for(var base=range.x;base<range.y;base+=128u){
         if base+lane<range.y{donor_rgb[lane]=max(color(sorted_donors[base+lane]),vec3(1.0));}
         workgroupBarrier();
         if lane==0u{
             for(var i=0u;i<min(128u,range.y-base);i++){
-                let rgb=donor_rgb[i];let bin=u32(rgb.x*255.0/(rgb.x+rgb.y));
-                if bin==bucket{sum+=rgb.z/rgb.y;count+=1.0;}
+                let rgb=donor_rgb[i];sum+=rgb.z/rgb.y;count+=1.0;
             }
         }
         workgroupBarrier();

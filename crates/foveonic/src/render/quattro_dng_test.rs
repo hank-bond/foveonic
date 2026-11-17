@@ -36,7 +36,7 @@ fn samples(
 #[ignore = "requires GPU and QUATTRO_X3F; optional QUATTRO_DNG_REPORT retains boundary statistics"]
 fn quattro_dng_base_separates_appearance_and_preserves_technical_controls() {
     let source = original();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let settings = controls(&source);
     let (base, expected) = samples(&engine, &source, &settings);
     assert_eq!(base.description().space, Space::LinearCodeRgb);
@@ -99,7 +99,7 @@ fn quattro_dng_base_separates_appearance_and_preserves_technical_controls() {
     assert_eq!(engine.gpu.readback(base.buffer()).unwrap(), expected);
 
     let prepared = dng::appearance::Prepared::new(&source.metadata, &settings).unwrap();
-    let other = Engine::new().unwrap();
+    let other = Engine::test_executor();
     assert_eq!(
         other
             .encode_dng_base(&base, &prepared, &mut Default::default())
@@ -134,7 +134,7 @@ fn quattro_dng_base_separates_appearance_and_preserves_technical_controls() {
 #[ignore = "requires GPU and QUATTRO_X3F"]
 fn quattro_monochrome_dng_freezes_mix_and_defers_inactive_appearance() {
     let source = original();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = controls(&source);
     settings.rendering = Rendering::Monochrome;
     let frozen_mix = settings.monochrome.mix;

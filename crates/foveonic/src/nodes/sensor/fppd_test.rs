@@ -8,7 +8,7 @@ fn rejects_unowned_patch_context() {
 #[test]
 #[ignore = "requires a GPU"]
 fn sparse_chroma_and_all_paired_luma_branches() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let p = Prepared::new(
         [19, 17],
         [2, 3, 8, 8],

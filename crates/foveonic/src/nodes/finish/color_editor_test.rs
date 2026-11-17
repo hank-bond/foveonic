@@ -5,7 +5,7 @@ use crate::{color_space::ColorSpace, gpu::Gpu, profile::Profile};
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_sensitivity_sectors_gray_and_signed_samples() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [24, 16];
     let n = (extent[0] * extent[1]) as usize;
     let mono: Vec<f32> = (0..n)
@@ -118,7 +118,7 @@ fn gpu_color_sensitivity_sectors_gray_and_signed_samples() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_and_monochrome_share_the_same_chromaticity_preserving_gain() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [32, 24];
     let n = (extent[0] * extent[1]) as usize;
     let guide: Vec<f32> = (0..n)
@@ -194,7 +194,7 @@ fn editor_controls_keep_monochrome_chromatic_values_inactive() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_editor_hue_saturation_neutral_and_monochrome_contracts() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [32, 8];
     let n = (extent[0] * extent[1]) as usize;
     for space in [
@@ -261,7 +261,7 @@ fn gpu_editor_hue_saturation_neutral_and_monochrome_contracts() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_editor_eight_ranges_leave_unselected_color_centers_unchanged() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let colors: [[f32; 3]; 8] = [
         [2000., 0., 0.],
         [2000., 1000., 0.],
@@ -311,7 +311,7 @@ fn gpu_editor_eight_ranges_leave_unselected_color_centers_unchanged() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_range_picker_shares_overlap_and_neutral_protection() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [5, 5];
     let mut params =
         color_editor::PickParams::new(extent, ColorSpace::Srgb, 1., [2, 2], [0, 0, 5, 5]);
@@ -347,7 +347,7 @@ fn gpu_color_range_picker_shares_overlap_and_neutral_protection() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_picker_neighborhood_stays_inside_the_active_crop() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut params =
         color_editor::PickParams::new([5, 5], ColorSpace::Srgb, 1., [1, 1], [1, 1, 4, 4]);
     params.guide_matrix = [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]];

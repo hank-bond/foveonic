@@ -155,15 +155,16 @@ fn gpu_color_field_reliability_quantization_matches_original_sensor_codes() {
             }
         }
     }
+    let samples = source.samples();
     let pixel = 2170 * source.metadata.width + 3127;
     eprintln!(
         "0170 worst pixel original {:?}, black {:?}, GPU mask {:?}",
-        &source.pixels[pixel * 3..pixel * 3 + 3],
+        &samples[pixel * 3..pixel * 3 + 3],
         black,
         masks(
             &gpu,
             &prepared.params,
-            &source.pixels[pixel * 3..pixel * 3 + 3],
+            &samples[pixel * 3..pixel * 3 + 3],
             black
         )
     );
@@ -177,7 +178,7 @@ fn gpu_color_field_reliability_quantization_matches_original_sensor_codes() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn pooled_original_clipping_overrides_below_threshold_means() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let n = 8u32;
     let params = Params {
         size: [n, 1, n, 0],
@@ -226,7 +227,7 @@ fn pooled_original_clipping_overrides_below_threshold_means() {
 #[test]
 #[ignore = "requires a GPU"]
 fn filtered_numerical_input_does_not_become_repair_evidence() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let n = 128;
     let params = Params {
         size: [16, 8, n, 0],

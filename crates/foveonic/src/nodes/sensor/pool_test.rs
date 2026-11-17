@@ -17,7 +17,7 @@ fn pooling_covers_partial_cells_at_every_power_of_two() {
 #[test]
 #[ignore = "requires GPU"]
 fn pooling_preserves_means_coverage_and_source() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for divisor in [2, 4, 8] {
         for signal in [Signal::Rgb, Signal::Blue, Signal::Mask, Signal::Flags] {
             let p = Prepared::new([16, 16], divisor, signal).unwrap();
@@ -80,7 +80,7 @@ fn pooling_preserves_means_coverage_and_source() {
 #[test]
 #[ignore = "requires GPU"]
 fn partial_cells_and_halos_replicate_completed_means_and_flag_unions() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for extent in [[1, 1], [17, 13]] {
         for divisor in [1, 2, 4, 16, 64, 1 << 31] {
             for signal in [Signal::Rgb, Signal::Blue, Signal::Mask, Signal::Flags] {
@@ -181,6 +181,75 @@ fn partial_cells_and_halos_replicate_completed_means_and_flag_unions() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a GPU"]
+fn full_quattro_extreme_partial_cell_is_replicated_into_halo() {
+    let gpu = Gpu::test_executor();
+    let extent = [2944, 1836];
+    for split in [false, true] {
+        let source: Vec<f32> = (0..extent[1])
+            .flat_map(|y| {
+                std::iter::repeat_n(
+                    if split && y >= extent[1] / 2 { 3. } else { 1. },
+                    extent[0] as usize,
+                )
+            })
+            .collect();
+        let input = gpu.upload("Extreme partial-cell source", &source).unwrap();
+        let prepared = Prepared::new(extent, 1 << 31, Signal::Blue).unwrap();
+        let plain = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+        let plain_bytes = gpu.readback(&plain).unwrap();
+        let plain_value = bytemuck::cast_slice::<u8, f32>(&plain_bytes)[0];
+        let expected = if split { 2. } else { 1. };
+        assert!(
+            (plain_value - expected).abs() < 0.000001,
+            "split={split}, mean={plain_value}, expected={expected}"
+        );
+        let padded = prepared.with_extent([3, 3]).unwrap().with_origin([1, 1]);
+        let halo = apply(&gpu, &input, &padded, &mut Profile::default()).unwrap();
+        let halo_bytes = gpu.readback(&halo).unwrap();
+        for &value in bytemuck::cast_slice::<u8, f32>(&halo_bytes) {
+            assert_eq!(value.to_bits(), plain_value.to_bits());
+        }
+        assert_eq!(
+            gpu.readback(&input).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&source)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn full_quattro_rgb_extreme_cell_preserves_balanced_mean_and_halo() {
+    let gpu = Gpu::test_executor();
+    let extent = [2944, 1836];
+    let source: Vec<f32> = (0..extent[1])
+        .flat_map(|y| {
+            let value = if y < extent[1] / 2 { 1. } else { 3. };
+            std::iter::repeat_n([value, 2. * value, 3. * value], extent[0] as usize).flatten()
+        })
+        .collect();
+    let input = gpu.upload("Extreme RGB pooling source", &source).unwrap();
+    let prepared = Prepared::new(extent, 1 << 31, Signal::Rgb)
+        .unwrap()
+        .with_extent([136, 136])
+        .unwrap()
+        .with_origin([64, 64]);
+    let output = apply(&gpu, &input, &prepared, &mut Profile::default()).unwrap();
+    let bytes = gpu.readback(&output).unwrap();
+    let values: &[[f32; 3]] = bytemuck::cast_slice(&bytes);
+    for value in values {
+        for (actual, expected) in value.iter().zip([2., 4., 6.]) {
+            assert!((actual - expected).abs() < 0.000001, "{value:?}");
+        }
+        assert_eq!(value.map(f32::to_bits), values[0].map(f32::to_bits));
+    }
+    assert_eq!(
+        gpu.readback(&input).unwrap(),
+        bytemuck::cast_slice::<f32, u8>(&source)
+    );
+}
 #[test]
 fn pooling_maps_each_component_frame_with_its_own_origin() {
     let prepared = Prepared::new([33, 35], 4, Signal::Rgb)
@@ -221,7 +290,7 @@ fn area_noise_and_signed_rounding_follow_the_working_grid() {
 #[test]
 #[ignore = "requires GPU"]
 fn signed_area_means_round_once_without_negative_bias() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for extent in [[8, 8], [9, 7]] {
         let pixels: Vec<f32> = (0..extent[1])
             .flat_map(|y| {
@@ -253,7 +322,7 @@ fn signed_area_means_round_once_without_negative_bias() {
 #[test]
 #[ignore = "requires GPU"]
 fn a_sensor_spike_reaches_one_logical_cell_with_one_dispatch() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [17_u32, 13];
     for point in [[0, 0], [7, 5], [16, 12]] {
         let mut pixels = vec![100_f32; (extent[0] * extent[1] * 3) as usize];

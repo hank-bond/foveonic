@@ -141,16 +141,35 @@ impl History {
     }
     pub fn save(&self, destination: &Path) -> Result<()> {
         let path = Self::path(destination);
-        fs::create_dir_all(path.parent().unwrap())?;
-        let bytes = serde_json::to_vec_pretty(self)?;
-        if bytes.len() as u64 > MAX_HISTORY_BYTES {
-            return Err("import history exceeds 32 MiB".into());
-        }
-        let mut temporary = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
-        temporary.write_all(&bytes)?;
-        temporary.as_file().sync_all()?;
-        temporary.persist(path)?;
-        Ok(())
+        let mut phase = "create-history-directory";
+        let result = (|| {
+            fs::create_dir_all(path.parent().unwrap())?;
+            phase = "encode-history";
+            let bytes = serde_json::to_vec_pretty(self)?;
+            if bytes.len() as u64 > MAX_HISTORY_BYTES {
+                return Err("import history exceeds 32 MiB".into());
+            }
+            phase = "write-history";
+            let mut temporary = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
+            temporary.write_all(&bytes)?;
+            phase = "sync-history";
+            temporary.as_file().sync_all()?;
+            phase = "publish-history";
+            temporary.persist(&path)?;
+            Ok(())
+        })();
+        result.map_err(|error| {
+            crate::support::reported_error(
+                "import.history",
+                error,
+                crate::support::OperationContext {
+                    component: Some("import".into()),
+                    phase: Some(phase.into()),
+                    destination: Some(path.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+        })
     }
 }
 
@@ -203,39 +222,66 @@ pub fn copy_original(
     expected: &Identity,
     conflict: ConflictPolicy,
 ) -> Result<()> {
-    if &Identity::read(source)? != expected {
-        return Err("source changed since import was submitted".into());
-    }
-    let mut input = File::open(source)?;
-    let metadata = input.metadata()?;
-    let mut temporary =
-        tempfile::NamedTempFile::new_in(destination.parent().ok_or("destination has no parent")?)?;
-    let mut chunk = vec![0; COPY_CHUNK_BYTES];
-    let mut length = 0;
-    loop {
-        crate::background::checkpoint();
-        let read = input.read(&mut chunk)?;
-        if read == 0 {
-            break;
+    let mut phase = "check-source";
+    let mut temporary_path = None;
+    let result = (|| {
+        if &Identity::read(source)? != expected {
+            return Err("source changed since import was submitted".into());
         }
-        temporary.write_all(&chunk[..read])?;
-        length += read as u64;
-    }
-    if length != expected.length
-        || &Identity::read(source)? != expected
-        || fs::metadata(source)?.modified()? != metadata.modified()?
-    {
-        return Err("source changed while importing".into());
-    }
-    temporary
-        .as_file()
-        .set_times(FileTimes::new().set_modified(metadata.modified()?))?;
-    temporary.as_file().sync_all()?;
-    match conflict {
-        ConflictPolicy::Overwrite => temporary.persist(destination)?,
-        ConflictPolicy::Rename => temporary.persist_noclobber(destination)?,
-    };
-    Ok(())
+        phase = "open-source";
+        let mut input = File::open(source)?;
+        let metadata = input.metadata()?;
+        phase = "create-temporary-file";
+        let mut temporary = tempfile::NamedTempFile::new_in(
+            destination.parent().ok_or("destination has no parent")?,
+        )?;
+        temporary_path = Some(temporary.path().to_owned());
+        phase = "copy-original";
+        let mut chunk = vec![0; COPY_CHUNK_BYTES];
+        let mut length = 0;
+        loop {
+            crate::background::checkpoint();
+            let read = input.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            temporary.write_all(&chunk[..read])?;
+            length += read as u64;
+        }
+        phase = "verify-source-unchanged";
+        if length != expected.length
+            || &Identity::read(source)? != expected
+            || fs::metadata(source)?.modified()? != metadata.modified()?
+        {
+            return Err("source changed while importing".into());
+        }
+        phase = "preserve-modification-time";
+        temporary
+            .as_file()
+            .set_times(FileTimes::new().set_modified(metadata.modified()?))?;
+        phase = "sync-original";
+        temporary.as_file().sync_all()?;
+        phase = "publish-original";
+        match conflict {
+            ConflictPolicy::Overwrite => temporary.persist(destination)?,
+            ConflictPolicy::Rename => temporary.persist_noclobber(destination)?,
+        };
+        Ok(())
+    })();
+    result.map_err(|error| {
+        crate::support::reported_error(
+            "import.copy_original",
+            error,
+            crate::support::OperationContext {
+                component: Some("import".into()),
+                phase: Some(phase.into()),
+                source: Some(source.to_string_lossy().into_owned()),
+                destination: Some(destination.to_string_lossy().into_owned()),
+                settings: Some(serde_json::json!({"conflict":conflict,"expected_identity":expected,"temporary":temporary_path.as_ref().map(|path|path.to_string_lossy()),"cleanup":"temporary-file drop attempts cleanup"})),
+                ..Default::default()
+            },
+        )
+    })
 }
 
 /// Determines whether a completed file replaces an existing destination or keeps both versions.
@@ -253,20 +299,43 @@ pub fn write_output(
     conflict: ConflictPolicy,
     write: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
-    let directory = tempfile::tempdir_in(destination.parent().ok_or("destination has no parent")?)?;
-    let temporary = directory.path().join(
-        destination
-            .file_name()
-            .ok_or("destination has no filename")?,
-    );
-    write(&temporary)?;
-    File::open(&temporary)?.sync_all()?;
-    let temporary = tempfile::TempPath::try_from_path(temporary)?;
-    match conflict {
-        ConflictPolicy::Overwrite => temporary.persist(destination)?,
-        ConflictPolicy::Rename => temporary.persist_noclobber(destination)?,
-    }
-    Ok(())
+    let mut phase = "create-temporary-directory";
+    let mut temporary_path = None;
+    let result = (|| {
+        let directory =
+            tempfile::tempdir_in(destination.parent().ok_or("destination has no parent")?)?;
+        let temporary = directory.path().join(
+            destination
+                .file_name()
+                .ok_or("destination has no filename")?,
+        );
+        temporary_path = Some(temporary.clone());
+        phase = "encode-output";
+        write(&temporary)?;
+        phase = "sync-output";
+        // Windows requires write access when flushing the completed output.
+        File::options().write(true).open(&temporary)?.sync_all()?;
+        phase = "publish-output";
+        let temporary = tempfile::TempPath::try_from_path(temporary)?;
+        match conflict {
+            ConflictPolicy::Overwrite => temporary.persist(destination)?,
+            ConflictPolicy::Rename => temporary.persist_noclobber(destination)?,
+        }
+        Ok(())
+    })();
+    result.map_err(|error| {
+        crate::support::reported_error(
+            "output.publish",
+            error,
+            crate::support::OperationContext {
+                component: Some("import".into()),
+                phase: Some(phase.into()),
+                destination: Some(destination.to_string_lossy().into_owned()),
+                settings: Some(serde_json::json!({"conflict":conflict,"temporary":temporary_path.as_ref().map(|path|path.to_string_lossy()),"cleanup":"temporary-directory drop attempts cleanup"})),
+                ..Default::default()
+            },
+        )
+    })
 }
 
 #[cfg(test)]

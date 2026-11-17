@@ -37,20 +37,27 @@ impl<'a> Bytes<'a> {
             .ok_or_else(|| damaged("unterminated X3F string"))?;
         Ok(std::str::from_utf8(&tail[..end])?.to_owned())
     }
-    pub(super) fn utf16(self, offset: usize) -> Result<String> {
+    pub(super) fn utf16(self, offset: usize, remaining: &mut usize) -> Result<String> {
         let tail = self
             .0
             .get(offset..)
             .ok_or_else(|| damaged("string outside property section"))?;
-        let mut units = Vec::new();
-        for pair in tail.as_chunks::<2>().0 {
-            let value = u16::from_le_bytes([pair[0], pair[1]]);
-            if value == 0 {
-                return Ok(String::from_utf16(&units)?);
-            }
-            units.push(value);
+        let units = tail.as_chunks::<2>().0;
+        let end = units
+            .iter()
+            .position(|pair| *pair == [0, 0])
+            .ok_or_else(|| damaged("unterminated UTF16 property"))?;
+        // Shared offsets may reuse the same text many times. Charge each owned
+        // string before growing it, rather than limiting only encoded bytes.
+        let mut text = String::new();
+        for character in char::decode_utf16(units[..end].iter().copied().map(u16::from_le_bytes)) {
+            let character = character.map_err(|_| damaged("invalid UTF16 property"))?;
+            *remaining = remaining
+                .checked_sub(character.len_utf8())
+                .ok_or_else(|| damaged("decoded X3F properties exceed limit"))?;
+            text.push(character);
         }
-        Err(damaged("unterminated UTF16 property"))
+        Ok(text)
     }
 }
 
@@ -70,7 +77,7 @@ mod tests {
         assert!(bytes.range(usize::MAX, 2).is_err());
         assert!(bytes.u32(0).is_err());
         assert!(product(usize::MAX, 2).is_err());
-        assert!(Bytes(&[0, 0xd8, 0, 0]).utf16(0).is_err());
-        assert!(Bytes(&[65, 0]).utf16(0).is_err());
+        assert!(Bytes(&[0, 0xd8, 0, 0]).utf16(0, &mut 1024).is_err());
+        assert!(Bytes(&[65, 0]).utf16(0, &mut 1024).is_err());
     }
 }

@@ -385,7 +385,7 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let first = Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
     let second = Arc::new(Source::open(root.join("merrill-hazy-coast.x3f")).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(first.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.working_scale = Scale::new(8).unwrap();
@@ -427,7 +427,13 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
         &settings,
         "adaptive and changed tone curves",
     );
+    // Reduced rendering need not materialize native clipping. Request it
+    // explicitly so this release check owns a real native payload.
+    let native = engine.clipping_flags(&first.metadata, None).unwrap();
+    let native_bytes = native.len() * std::mem::size_of::<u32>();
+    assert_eq!(native.len(), first.metadata.width * first.metadata.height);
     let before = engine.cached_preparation_bytes();
+    assert!(before >= native_bytes);
     engine.release_native_preparation(&second.metadata);
     assert_eq!(
         engine.cached_preparation_bytes(),
@@ -435,10 +441,7 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
         "other source release"
     );
     engine.release_native_preparation(&first.metadata);
-    assert_eq!(
-        engine.cached_preparation_bytes(),
-        before - first.metadata.width * first.metadata.height * 4
-    );
+    assert_eq!(engine.cached_preparation_bytes(), before - native_bytes);
     compare(
         &engine,
         &mut session,

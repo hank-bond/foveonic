@@ -1,6 +1,7 @@
 //! Uploads bounded linear-light photographic previews without clipping them to sRGB.
 
 use eframe::{egui, egui_wgpu, wgpu};
+use std::cell::RefCell;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -9,6 +10,93 @@ use std::sync::{
 #[cfg(test)]
 #[path = "display_image_test.rs"]
 mod tests;
+
+thread_local! {
+    // Native wgpu reports allocation errors synchronously on the caller. The
+    // shared device's error-scope stack cannot isolate simultaneous UI/worker use.
+    static UPLOAD_ERROR: RefCell<Option<Option<wgpu::Error>>> = const { RefCell::new(None) };
+    #[cfg(test)]
+    static FAIL_UPLOAD_AT: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn install_upload_error_handler(device: &wgpu::Device) {
+    device.on_uncaptured_error(Box::new(|error| {
+        if let Err(error) = capture_upload_error(error) {
+            foveonic::support::report_error(
+                "gpu.uncaptured_error",
+                &error,
+                foveonic::support::OperationContext {
+                    component: Some("shared GPU".into()),
+                    phase: Some("uncaptured error callback".into()),
+                    ..Default::default()
+                },
+            );
+            // Preserve wgpu's fatal behavior outside this narrow recovery path.
+            panic!("wgpu error: {error}");
+        }
+    }));
+}
+
+fn capture_upload_error(error: wgpu::Error) -> Result<(), wgpu::Error> {
+    UPLOAD_ERROR.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(first) = slot.as_mut() else {
+            return Err(error);
+        };
+        if first.is_none() && !matches!(error, wgpu::Error::OutOfMemory { .. }) {
+            return Err(error);
+        }
+        // A failed sampler allocation inside registration can cause follow-on
+        // validation errors before that API returns. Keep the original cause.
+        if first.is_none() {
+            foveonic::support::warning_error(
+                "display.upload_recovery",
+                &error,
+                foveonic::support::OperationContext {
+                    component: Some("display upload".into()),
+                    phase: Some("recoverable allocation error callback".into()),
+                    ..Default::default()
+                },
+            );
+            *first = Some(error);
+        }
+        Ok(())
+    })
+}
+
+struct Upload;
+impl Upload {
+    fn begin() -> Self {
+        UPLOAD_ERROR.with(|slot| {
+            assert!(slot.borrow().is_none(), "nested browser upload");
+            *slot.borrow_mut() = Some(None);
+        });
+        Self
+    }
+    fn check(&self, stage: &'static str) -> Result<(), String> {
+        #[cfg(test)]
+        FAIL_UPLOAD_AT.with(|target| {
+            if target.get() == Some(stage) {
+                target.set(None);
+                capture_upload_error(wgpu::Error::OutOfMemory {
+                    source: std::io::Error::other("injected allocation failure").into(),
+                })
+                .unwrap();
+            }
+        });
+        UPLOAD_ERROR.with(
+            |slot| match slot.borrow().as_ref().and_then(Option::as_ref) {
+                Some(error) => Err(format!("Not enough GPU memory while {stage}: {error}")),
+                None => Ok(()),
+            },
+        )
+    }
+}
+impl Drop for Upload {
+    fn drop(&mut self) {
+        UPLOAD_ERROR.with(|slot| *slot.borrow_mut() = None);
+    }
+}
 
 pub(crate) struct Pixels {
     pub size: [usize; 2],
@@ -41,7 +129,21 @@ impl Pixels {
         }
     }
 
-    pub fn upload(self, rs: &egui_wgpu::RenderState) -> Texture {
+    pub(crate) fn validate(&self, maximum_side: u32) -> Result<(), String> {
+        if self
+            .size
+            .iter()
+            .any(|v| *v == 0 || *v > maximum_side as usize)
+            || self.size[0].checked_mul(self.size[1]) != Some(self.rgba.len())
+        {
+            return Err("Invalid preview dimensions or pixel data".into());
+        }
+        Ok(())
+    }
+
+    pub fn upload(self, rs: &egui_wgpu::RenderState) -> Result<Texture, String> {
+        self.validate(rs.device.limits().max_texture_dimension_2d)?;
+        let upload = Upload::begin();
         let texture = rs.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Linear wide-gamut photo preview"),
             size: wgpu::Extent3d {
@@ -56,6 +158,7 @@ impl Pixels {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        upload.check("creating preview texture")?;
         rs.queue.write_texture(
             texture.as_image_copy(),
             bytemuck::cast_slice(&self.rgba),
@@ -66,7 +169,12 @@ impl Pixels {
             },
             texture.size(),
         );
-        Texture::from_native(rs, texture)
+        upload.check("uploading preview pixels")?;
+        let view = texture.create_view(&Default::default());
+        upload.check("creating preview view")?;
+        let texture = Texture::register(rs, texture, &view);
+        upload.check("registering preview")?;
+        Ok(texture)
     }
 
     /// Headless browser tests exercise reply ordering without a graphics device.
@@ -152,12 +260,19 @@ impl Drop for Storage {
 pub(crate) struct Texture(Arc<Storage>);
 impl Texture {
     pub(crate) fn from_native(rs: &egui_wgpu::RenderState, texture: wgpu::Texture) -> Self {
+        let view = texture.create_view(&Default::default());
+        Self::register(rs, texture, &view)
+    }
+    fn register(
+        rs: &egui_wgpu::RenderState,
+        texture: wgpu::Texture,
+        view: &wgpu::TextureView,
+    ) -> Self {
         let size = [texture.width() as usize, texture.height() as usize];
-        let id = rs.renderer.write().register_native_texture(
-            &rs.device,
-            &texture.create_view(&Default::default()),
-            wgpu::FilterMode::Linear,
-        );
+        let id =
+            rs.renderer
+                .write()
+                .register_native_texture(&rs.device, view, wgpu::FilterMode::Linear);
         Self(Arc::new(Storage::Native {
             id,
             size,

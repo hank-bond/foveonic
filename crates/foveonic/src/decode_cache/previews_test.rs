@@ -51,6 +51,39 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn preview_reuse_updates_recency_and_keeps_read_only_entries_usable() {
+    let fixture = Fixture::new();
+    let cache = Cache::at(fixture.root.join("cache"));
+    cache.control.lock().unwrap().settings = Settings::default();
+    let write = fixture.write(true, [100; 3]);
+    let key = write.header.key.clone();
+    write_checked(cache.directory(), write, &Settings::default(), &[], &|| {
+        true
+    })
+    .unwrap();
+    let path = key.location(cache.directory());
+    let original = fs::read(&path).unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+    assert!(cache.preview(&fixture.source).is_some());
+    assert!(fs::metadata(&path).unwrap().modified().unwrap() > UNIX_EPOCH + Duration::from_secs(1));
+    assert_eq!(fs::read(&path).unwrap(), original);
+
+    let permissions = fs::metadata(&path).unwrap().permissions();
+    let mut read_only = permissions.clone();
+    read_only.set_readonly(true);
+    fs::set_permissions(&path, read_only).unwrap();
+    let loaded = cache.preview(&fixture.source);
+    fs::set_permissions(&path, permissions).unwrap();
+    assert!(loaded.is_some());
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
 fn preview_storage_policy_avoids_unused_handoffs_and_source_access() {
     let fixture = Fixture::new();
     let cache = Cache::at(fixture.root.join("cache"));
@@ -304,7 +337,9 @@ fn previews_share_the_decoded_entry_budget_and_clear_policy() {
     let bytes = fs::metadata(key.location(&root)).unwrap().len();
     let decoded = root.join("old.decode");
     fs::write(&decoded, vec![0; 1000]).unwrap();
-    File::open(&decoded)
+    File::options()
+        .write(true)
+        .open(&decoded)
         .unwrap()
         .set_modified(UNIX_EPOCH)
         .unwrap();

@@ -516,10 +516,10 @@ fn prefetch(
                 control.lock().unwrap().rejected.remove(&identity);
             }
         }
+        drop(source);
         super::selection::publish(root, path, &original, selection, settings, nearby, &current)?;
         published();
     }
-    drop(source);
     Ok(())
 }
 fn complete_identity(root: &Path, identity: &Identity, settings: &Settings) -> bool {

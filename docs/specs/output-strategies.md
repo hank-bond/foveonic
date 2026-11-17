@@ -7,6 +7,24 @@ implementation: incomplete
 
 # Output strategies
 
+## Capture metadata
+
+Every processed format must carry available, valid standard EXIF capture details from X3F properties and embedded JPEG EXIF. This includes camera and lens identity, exposure, capture dates and conditions, authorship and location when available. All output formats must use the same capture mapping. Rebuild file geometry, orientation and software for the processed image and use the actual output color declaration. Preserve distinct embedded capture timestamps and location without guessing missing values. Omit malformed values, source thumbnails, structural offsets and opaque proprietary metadata.
+
+The [FOVb property specification](https://raw.githubusercontent.com/wiki/drewnoakes/metadata-extractor/docs/x3f-raw-format.pdf) groups the source data as follows:
+
+| Source data | Export treatment |
+| --- | --- |
+| `CAMMANUF`, `CAMMODEL`, `CAMSERIAL`, `FIRMVERS`, `LENSMODEL`, `LENSFRANGE`, `LENSARANGE` | Camera and lens identity, firmware, and lens specification when the values are valid. |
+| `TIME`, `EXPTIME`, `SHUTTER`, `SH_DESC`, `APERTURE`, `AP_DESC`, `ISO`, `EXPCOMP`, `PMODE`, `AEMODE`, `FLENGTH`, `FLEQ35MM`, `WB_DESC` | Capture time, exposure, lens and white-balance facts with documented units and recognized choices. |
+| Embedded standard EXIF capture fields, authorship and GPS | Preserve compatible validated values, including distinct dates, lens and body identifiers, flash information and location. |
+| `FLASH`, `AFMODE`, `FOCUS`, `DRIVE`, `BRACKET`, `BURST`, `EXPNET`, sensor and board identifiers, sensor temperatures, CAMF and private camera settings | Keep in the original. Do not infer a standard EXIF value when the source property does not establish equivalent meaning. In particular, a flash setting does not prove that the flash fired. |
+| Source image geometry, subject coordinates, CFA pattern, preview thumbnail, offsets, compression, color profile and software | Regenerate or omit according to the processed image and its container. |
+
+Exported capture rationals must use simple reduced numerator/denominator pairs, preserving exact source fractions when available. Valid standard EXIF values take precedence over fallback camera-property interpretations, including descriptive lens names and metering modes. Each container must regenerate its required EXIF fields and declare the actual output color space. TIFF directories and external tag values must begin on word boundaries. ImageUniqueID must contain exactly 32 hexadecimal ASCII characters and a terminating NUL. Extra source NUL padding may be removed without changing the identifier. Source comments with unrecognized encoding prefixes, malformed ASCII or invalid UTF-16 must be omitted. Unicode comments must retain their byte order when moved between TIFF containers. Recognized legacy JIS and unspecified-encoding comment bodies remain opaque.
+
+Maintained export checks must inspect raw rational storage and compare source and exported capture values across Classic, Merrill, Quattro and Quattro H. [The shared capture EXIF checks](../../crates/foveonic/tests/common/capture_exif.rs) are the sole source for reviewed validator warning decisions, their acceptance conditions and justifications. Reports must retain the original warnings and generate any accompanying explanations from those same records.
+
 ## DNG
 
 - The application **must** produce DNG output intended for further editing in downstream raw editors. The initial implementation **must** use uncompressed unsigned 16-bit samples; compression is evaluated after this path works. DNG **must** be an output-only format for this application; regeneration uses the original X3F and its [editing sidecar](./editing-sidecars.md).

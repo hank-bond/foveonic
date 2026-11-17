@@ -256,15 +256,6 @@ impl Settings {
         }
     }
 
-    /// Sensor sampling is independent of the selected photographic operations.
-    pub fn working_scale_available(
-        &self,
-        metadata: &crate::source::Metadata,
-        _scale: Scale,
-    ) -> bool {
-        metadata.width != 0 && metadata.height != 0 && metadata.processing_family().is_ok()
-    }
-
     /// Supported camera recipes can process native visible detail with neighboring context.
     pub fn regional_preview_available(&self, metadata: &crate::source::Metadata) -> bool {
         ((self.crop.is_full() && self.rotation.is_neutral()) || self.output_size.is_none())

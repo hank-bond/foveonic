@@ -16,7 +16,8 @@ pub struct Params {
     shape: [u32; 4],
     /// Offset, scale, calibrated upper bound, reserved.
     calibration: [f32; 4],
-    /// Split Double channel gains. The fourth component is reserved.
+    /// Split Double channel gains. The fourth high component stays positive zero
+    /// for the shader's Float32 rounding barriers.
     gain_high: [f32; 4],
     gain_low: [f32; 4],
 }

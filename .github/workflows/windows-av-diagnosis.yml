@@ -1,0 +1,61 @@
+name: Diagnose retained Windows core test
+
+on:
+  workflow_dispatch:
+    inputs:
+      crash_only:
+        description: 'Run only the fixed plain/debugger crash pair after debugger health checks'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare the hosted debugger's Python runtime
+        if: ${{ inputs.crash_only }}
+        uses: actions/setup-python@v6
+        with:
+          # The hosted LLVM liblldb.dll imports python310.dll.
+          python-version: '3.10'
+          architecture: x64
+          update-environment: false
+      - name: Download fixed retained artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          @'
+          import os
+          from pathlib import Path
+          import subprocess
+          destination = Path(os.environ['RUNNER_TEMP']) / 'windows-av-input.zip'
+          with destination.open('xb') as output:
+              subprocess.run(['gh', 'api', 'repos/' + os.environ['GITHUB_REPOSITORY'] + '/actions/artifacts/14224215814/zip'], stdout=output, check=True)
+          '@ | python
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed' }
+      - name: Run fixed diagnostic matrix
+        shell: pwsh
+        env:
+          CRASH_ONLY: ${{ inputs.crash_only }}
+        run: |
+          $diagnosticArgs = @('scripts/windows_av_diagnosis.py', "$env:RUNNER_TEMP\windows-av-input.zip", "$env:RUNNER_TEMP\windows-av-evidence")
+          if ($env:CRASH_ONLY -eq 'true') { $diagnosticArgs += '--crash-only' }
+          python @diagnosticArgs
+      - name: Retain diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-av-diagnosis-${{ github.run_id }}
+          path: ${{ runner.temp }}/windows-av-evidence
+          if-no-files-found: error
+          retention-days: 14

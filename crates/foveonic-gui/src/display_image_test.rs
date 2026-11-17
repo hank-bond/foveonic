@@ -2,6 +2,132 @@
 
 use super::*;
 
+fn memory_error() -> wgpu::Error {
+    wgpu::Error::OutOfMemory {
+        source: std::io::Error::other("injected allocation failure").into(),
+    }
+}
+fn validation_error() -> wgpu::Error {
+    wgpu::Error::Validation {
+        source: std::io::Error::other("injected invalid resource").into(),
+        description: "invalid resource".into(),
+    }
+}
+
+#[test]
+fn upload_capture_is_scoped_sticky_and_thread_local() {
+    assert!(capture_upload_error(memory_error()).is_err());
+    {
+        let upload = Upload::begin();
+        assert!(capture_upload_error(validation_error()).is_err());
+        assert!(
+            std::thread::spawn(|| capture_upload_error(memory_error()).is_err())
+                .join()
+                .unwrap()
+        );
+        assert!(upload.check("test").is_ok());
+        capture_upload_error(memory_error()).unwrap();
+        capture_upload_error(validation_error()).unwrap();
+        assert!(upload
+            .check("test")
+            .unwrap_err()
+            .contains("Not enough GPU memory"));
+        assert!(upload.check("cleanup").is_err());
+    }
+    assert!(capture_upload_error(memory_error()).is_err());
+    assert!(Upload::begin().check("retry").is_ok());
+    let unwind = std::panic::catch_unwind(|| {
+        let _upload = Upload::begin();
+        panic!("test guard cleanup");
+    });
+    assert!(unwind.is_err());
+    assert!(Upload::begin().check("after unwind").is_ok());
+}
+
+#[test]
+fn upload_validates_geometry_and_samples_without_allocating_gpu_resources() {
+    for (size, count) in [
+        ([0, 1], 0),
+        ([2, 2], 3),
+        ([8193, 1], 0),
+        ([usize::MAX, 2], 0),
+    ] {
+        assert!(Pixels {
+            size,
+            rgba: vec![[0; 4]; count]
+        }
+        .validate(8192)
+        .is_err());
+    }
+    assert!(Pixels {
+        size: [2, 1],
+        rgba: vec![[0; 4]; 2]
+    }
+    .validate(8192)
+    .is_ok());
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn failed_browser_uploads_report_errors_release_registration_and_allow_other_photos() {
+    let rs = crate::navigator::gpu_tests::state();
+    install_upload_error_handler(&rs.device);
+    let ctx = egui::Context::default();
+    let mut browser = crate::browser::Browser::with_cache(ctx.clone(), None, rs.clone());
+    let first = std::path::PathBuf::from("failed.x3f");
+    let second = std::path::PathBuf::from("healthy.x3f");
+    browser.files = vec![first.clone(), second.clone()];
+    let prepared = || {
+        crate::preview_image::PreparedPreview::new(
+            foveonic::preview::Preview {
+                rgb: vec![32768; 6],
+                color_space: foveonic::color_space::TiffColorSpace::Srgb,
+                extent: [2, 1],
+                native_extent: [2, 1],
+                rotation: 0,
+            },
+            false,
+        )
+        .unwrap()
+    };
+    for (index, stage) in [
+        "creating preview texture",
+        "uploading preview pixels",
+        "creating preview view",
+        "registering preview",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        FAIL_UPLOAD_AT.with(|target| target.set(Some(stage)));
+        browser.rendered(&ctx, first.clone(), index as u64, prepared());
+        assert!(browser.thumbnail(&first).is_none());
+        assert!(UPLOAD_ERROR.with(|slot| slot.borrow().is_none()));
+        let mut log = crate::activity::Log::default();
+        log.receive(&ctx);
+        assert!(log.unread_errors());
+        browser.rendered(&ctx, second.clone(), index as u64, prepared());
+        assert!(browser.thumbnail(&second).is_some());
+    }
+    let pixels = || Pixels {
+        size: [1, 1],
+        rgba: vec![[0; 4]],
+    };
+    let previous = pixels().upload(&rs).unwrap();
+    let egui::TextureId::User(id) = previous.id() else {
+        unreachable!()
+    };
+    FAIL_UPLOAD_AT.with(|target| target.set(Some("registering preview")));
+    assert!(pixels().upload(&rs).is_err());
+    assert!(rs
+        .renderer
+        .read()
+        .texture(&egui::TextureId::User(id + 1))
+        .is_none());
+    let next = pixels().upload(&rs).unwrap();
+    assert!(rs.renderer.read().texture(&next.id()).is_some());
+}
+
 #[test]
 #[ignore = "requires a GPU"]
 fn native_previews_preserve_gamut_and_filter_in_linear_light() {
@@ -70,7 +196,7 @@ fn native_previews_preserve_gamut_and_filter_in_linear_light() {
                         }
                 });
                 let image = image::Rgb32FImage::from_raw(2, 1, samples).unwrap();
-                let texture = Pixels::from_linear(&image, space).upload(&rs);
+                let texture = Pixels::from_linear(&image, space).upload(&rs).unwrap();
                 let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1., 1.));
                 let mut mesh = egui::Mesh::with_texture(texture.id());
                 mesh.add_rect_with_uv(rect, rect, egui::Color32::WHITE);
@@ -169,7 +295,9 @@ fn thumbnail_quarter_turns_preserve_direction_and_linear_wide_colors() {
     // Two columns make clockwise and counterclockwise orientation unambiguous.
     let colors = [[-0.25_f32, 1.25, 0.1], [0.8, 0.2, 0.3]];
     let image = image::Rgb32FImage::from_raw(2, 1, colors.concat()).unwrap();
-    let original = Pixels::from_linear(&image, foveonic::image::ColorSpace::Srgb).upload(&rs);
+    let original = Pixels::from_linear(&image, foveonic::image::ColorSpace::Srgb)
+        .upload(&rs)
+        .unwrap();
     for clockwise in [false, true] {
         let rotated = original.quarter_turn(clockwise).unwrap();
         assert_eq!(rotated.size(), [1, 2]);

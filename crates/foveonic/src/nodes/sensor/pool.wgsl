@@ -5,15 +5,21 @@ struct Params { shape: vec4<u32>, controls: vec4<u32>, origin: vec4<u32> }
 
 @compute @workgroup_size(8, 8)
 fn pool_signal(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= p.shape.z || id.y >= p.shape.w { return; }
-    // Padding repeats a completed cell. Its source footprint is unchanged.
-    let cell = vec2<u32>(clamp(vec2<i32>(id.xy) - vec2<i32>(p.origin.xy), vec2(0), vec2<i32>(p.origin.zw) - vec2(1)));
+    if any(id.xy >= p.origin.zw) { return; }
+    let cell = id.xy;
+    // Each edge cell owns its adjacent halo, so its reduction runs only once.
+    let output_first = select(p.origin.xy + cell, vec2<u32>(0), cell == vec2<u32>(0));
+    let output_end = select(p.origin.xy + cell + vec2<u32>(1), p.shape.zw, cell + vec2<u32>(1) == p.origin.zw);
     let first = cell * p.controls.x;
     let end = min(p.shape.xy, first + vec2(p.controls.x));
-    let output = (id.y * p.shape.z + id.x) * p.controls.y;
     if p.controls.x == 1u {
         let input = (first.y * p.shape.x + first.x) * p.controls.y;
-        for (var c = 0u; c < p.controls.y; c++) { destination[output+c] = source[input+c]; }
+        for (var y = output_first.y; y < output_end.y; y++) {
+            for (var x = output_first.x; x < output_end.x; x++) {
+                let output = (y * p.shape.z + x) * p.controls.y;
+                for (var c = 0u; c < p.controls.y; c++) { destination[output+c] = source[input+c]; }
+            }
+        }
         return;
     }
     if p.controls.z == 1u || p.controls.z == 2u {
@@ -25,7 +31,11 @@ fn pool_signal(@builtin(global_invocation_id) id: vec3<u32>) {
                 else { category |= value; }
             }
         }
-        destination[output] = category;
+        for (var y = output_first.y; y < output_end.y; y++) {
+            for (var x = output_first.x; x < output_end.x; x++) {
+                destination[y * p.shape.z + x] = category;
+            }
+        }
         return;
     }
     // Keep the same row-mean then column-mean arithmetic for RGB and blue.
@@ -43,9 +53,14 @@ fn pool_signal(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     var mean = total / f32(end.y - first.y);
     if p.controls.z == 3u { mean = sign(mean) * floor(abs(mean) + vec3(0.5)); }
-    destination[output] = bitcast<u32>(mean.x);
-    if p.controls.y == 3u {
-        destination[output+1u] = bitcast<u32>(mean.y);
-        destination[output+2u] = bitcast<u32>(mean.z);
+    for (var y = output_first.y; y < output_end.y; y++) {
+        for (var x = output_first.x; x < output_end.x; x++) {
+            let output = (y * p.shape.z + x) * p.controls.y;
+            destination[output] = bitcast<u32>(mean.x);
+            if p.controls.y == 3u {
+                destination[output+1u] = bitcast<u32>(mean.y);
+                destination[output+2u] = bitcast<u32>(mean.z);
+            }
+        }
     }
 }

@@ -56,13 +56,64 @@ The [release workflow](../.github/workflows/release.yml) runs checks on an Apple
 
 - `Foveonic-v0.3.0-macos-arm64.zip`, containing `Foveonic.app`.
 - `Foveonic-v0.3.0-windows-x64.zip`, containing the unsigned app and its DirectX compiler DLLs and license notices.
-- `SHA256SUMS`, containing both archive hashes. Verify each archive using its corresponding checksum.
+- `SHA256SUMS`, containing the two application archive hashes. Verify each archive using its corresponding checksum.
 
 Signing or signature-verification failures stop uploads, without an unsigned fallback. There is no notarization submission, ticket stapling or Gatekeeper-acceptance gate.
 
+Matching dSYM and PDB archives remain developer CI artifacts. Public application downloads exclude these archives and the Windows PDB. Keep each symbol archive with the exact application build it describes, and preserve a developer copy before CI retention expires. The macOS packaging step compares the executable and dSYM UUIDs. The Windows symbol archive records hashes of the executable and PDB. Verify these identities before publication. User support reports retain structured errors and best-effort stacks, but production packages do not guarantee resolved function names or source lines. Native crash investigation may require a crash dump and matching retained symbols.
+
+When replacing an unpublished draft that contains symbol downloads, validate the rebuilt application archives and retain matching developer symbols before deleting the standalone symbol assets. Regenerate the public checksums for the application archives only. Published historical releases remain unchanged.
+
 The Windows archive is unsigned and must be tested on Windows before publication. The Windows build runs independently, and its draft upload waits for the macOS draft. A new draft receives only the tagged changelog section. An existing draft keeps its title and notes, including your prose. Rerunning the workflow replaces its build assets. An already published release rejects uploads. Tags unrelated to application versions, such as `example-photographs`, do not trigger this workflow.
 
+Start independent host lanes against one frozen candidate as soon as their inputs and builds are ready. Full local correctness can run before CI packages arrive. Preserve the local source identity, executable hashes, toolchain and build flags with that evidence. A quiet Mac can run the required Rust checks while another Mac runs native correctness, and Windows checks can run alongside both. On each host, finish compilation and correctness before its exclusive performance measurements. Keep host reports separate when their contracts or executable hashes differ.
+
+On two quiet Macs, one useful partition gives the 32 GiB host the slider matrix, then its exact packaged smoke and exclusive performance work. The other host can finish required Rust checks and run the remaining native jobs, including the numerical matrix. Use the [existing job selection and exact-union report merger](testing-coverage.md) with identical frozen tools and executable hashes. Performance may begin after its own host is clear while the other host continues correctness. Join all required results before publication. This partition needs measurement on the prepared hosts before claiming a total release duration.
+
+The final evidence combines these local candidate checks with native startup/rendering smoke and matched latency/memory checks of the exact packaged executables. Verify their source revision, build configuration and package hashes. Do not describe a local test executable as the signed package or relabel its results with the package hash. A source or relevant build-configuration change invalidates affected evidence and needs the corresponding checks again.
+
+To overlap local checks with CI validation, download the early Actions artifact for that exact workflow run and commit: `Foveonic-macos-arm64-COMMIT` or `Foveonic-windows-x64-COMMIT`. Verify its package identity before running native checks. These artifacts appear before the remaining tests finish and are unapproved candidates. A later CI failure still blocks the release. Keep Mac and Windows host lanes independent, and begin each package's smoke checks as soon as that package is available. Run performance comparisons exclusively on their host after its builds and correctness work stop. Reconcile both host reports, all CI checks and the final draft executable hashes before publication.
+
+The workflows cache compatible dependency compilation, preferring matching compiler/native tools, runner image, target flags and dependency manifests. A final [restore prefix](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) permits an older dependency manifest only within the same toolchain fingerprint. Cargo still [validates dependency fingerprints](https://doc.rust-lang.org/stable/nightly-rustc/cargo/compiler/fingerprint/index.html) and runs the build and checks. Workspace products and assembled packages are rebuilt. Both observed Cargo output layouts are excluded from the workspace cache. Cache effectiveness is unmeasured until a hosted run exercises it. GitHub cache visibility is scoped by ref. A tag can restore an eligible default-branch cache, but one release tag cannot warm another tag directly. The manual build workflows on `main` can seed compatible caches without adding test jobs to every push.
+
+## Compare performance before publication
+
+Every release needs a matched latency and memory comparison against the previous published app before publication, in addition to correctness checks. Use the exact packaged executables on the same quiet test host, with the same pinned photographs, fixed recipes, display geometry, processing policies and cache budgets. Record executable hashes and actual delivered resolution. A workload label such as Full or Fast does not establish the working grid. Keep enabled ColorField, nonneutral HDR, native-detail and representative multi-photo work in the declared coverage, alongside camera defaults.
+
+The correctness command `acceptance.py --full` deliberately excludes latency jobs. Run the existing latency domain separately for both versions:
+
+```sh
+python3 scripts/profiling/acceptance.py --domain latency \
+  --binary PATH_TO_PREVIOUS_APP --cases CASES.json \
+  --directory .local/release-performance-before \
+  --record-latency-baseline --latency-trials 3
+python3 scripts/profiling/acceptance.py --domain latency \
+  --binary PATH_TO_CANDIDATE_APP --cases CASES.json \
+  --directory .local/release-performance-after \
+  --latency-before .local/release-performance-before --latency-trials 3
+```
+
+Use fresh output directories and enough repetitions to assess variability. The existing comparator requires complete behavior, checked uncontended timing and matching workload identities. Review per-action median and p95 changes, first-photo and complete-group delivery, and UI-update gaps. Three trials are a minimum, not evidence of statistical significance. These scenarios begin after the app and one active photograph have loaded. They do not measure cold process startup. Repeated exposure edits may reuse upstream recovery, so they do not establish ColorField or denoiser recomputation costs. Add the maintained [fresh-processing, checkpoint and native-detail measurements](profiling.md) needed by the declared coverage. The latency catalog alone does not cover every enabled feature or native-detail workflow.
+
+Differences consistent with ordinary run-to-run variation are not regressions. Investigate meaningful, repeatable slowdowns or memory growth. Repeat suspicious comparisons in reversed order and inspect the raw trials before attributing them to the release. A small isolated p95 change does not require a fix merely because its percentage is nonzero.
+
+Run memory measurements separately from timing, using the same recipes and workflows. Preserve sampled process footprint and settled usage, the sampling interval, stage boundaries and any separately available GPU-memory observations. On macOS, use physical footprint rather than treating RSS or graph-owned bytes as total application memory. Keep loading peaks, retained multi-photo state and post-edit settlement distinct. The [profiling guide](profiling.md#resource-overlap) describes the existing resource measurements. A memory guard limit is an operational stop threshold, not an approved regression budget.
+
+Use matched Wall/Perfetto captures to explain changes after ordinary Off comparisons. Trace durations, screenshots, image verification and reused correctness sessions must not substitute for uninstrumented latency measurements. Keep compact versioned reports and raw timing/memory records. Bound diagnostic captures and discard disposable successful image captures after their checks complete rather than accumulating every run indefinitely.
+
+Do not publish with missing comparisons or unexplained regressions without an explicit release-specific owner decision. Record unavailable platforms, failed workloads, unmatched settings and known measurement gaps. A prior app that cannot start does not provide a valid native baseline. Do not modify it silently or weaken workload matching to obtain a comparison. Without an approved regression budget, results are observations that require review, not an automatic performance pass.
+
 ## Publish manually
+
+Run all maintained correctness checks in the [test inventory](testing-coverage.md), including native GUI acceptance on available supported platforms. List unavailable inputs and unperformed checks for owner review. The hosted workflow's workspace tests include GUI unit tests, while its packaged `--help` checks only load the executable. The 0.8.1 Windows main-thread stack overflow escaped those checks because `--help` returns before graphics and the application handoff. Native smoke on an interactive Windows desktop reproduces the failure in the original archive and passes after heap-owning the prepared application.
+
+Before publishing, download and extract the exact draft archives, verify `SHA256SUMS`, and run the [packaged GUI verifier](../scripts/verify_gui_release.py) on both macOS and an interactive Windows desktop:
+
+```sh
+python3 scripts/verify_gui_release.py --binary path/to/Foveonic.app/Contents/MacOS/foveonic-gui --directory .local/release-smoke-macos
+```
+
+On Windows, use `--binary path/to/foveonic-gui.exe` from a desktop terminal or a task running with the logged-on user's interactive token. A noninteractive SSH session may fail surface creation even for working releases. Supply `--source path/to/blue-parking-sign.x3f` if the pinned [example photograph](testing-coverage.md) is elsewhere. The verifier copies it into an owned folder, isolates smoke settings, requires successful exit and all ten workspace checkpoints, and saves stdout, stderr, captures and `result.json`. It rejects an existing output directory. Confirm the report's executable hash matches the extracted release executable. Do not enlarge the application's stack for this check. This startup/rendering smoke supplements the complete acceptance suites and does not establish native file-dialog or every editing workflow's coverage.
 
 Review the draft notes and download the archive through a browser so macOS applies its normal download checks. Releases target macOS 15 Sequoia or later. Sequoia runtime testing remains pending user feedback. Verify the executable and bundle both target 15.0, and test the app on available supported systems before publishing. Downloads are Developer ID signed but not notarized, so Gatekeeper may block the first launch.
 

@@ -23,7 +23,7 @@ fn rejects_empty_levels_and_keeps_explicit_ratio_geometry() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn half_sampling_preserves_constants_and_filters_alternating_pixels() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let pixels: Vec<f32> = (0..8)
         .flat_map(|_| (0..8).flat_map(|x| [7., if x % 2 == 0 { 0. } else { 16. }, -3.]))
         .collect();

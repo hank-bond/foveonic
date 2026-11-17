@@ -2,6 +2,10 @@
 
 #[path = "../src/options.rs"]
 mod options;
+#[path = "profile_pipeline/sample_difference.rs"]
+mod sample_difference;
+#[path = "profile_pipeline/verify_batch.rs"]
+mod verify_batch;
 use foveonic::{
     profile::{self, Mode, Profile},
     render::Engine,
@@ -13,7 +17,30 @@ fn milliseconds(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.
 }
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut args = std::env::args_os().skip(1);
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if arguments.first().is_some_and(|arg| arg == "--verify-batch") {
+        if arguments.len() != 2 {
+            return Err("usage: profile_pipeline --verify-batch MANIFEST.json".into());
+        }
+        return verify_batch::run(std::path::Path::new(&arguments[1]));
+    }
+    if arguments
+        .first()
+        .is_some_and(|arg| arg == "--compare-samples")
+    {
+        if arguments.len() != 5 || arguments[3] != "--endianness" {
+            return Err(
+                "usage: profile_pipeline --compare-samples LEFT RIGHT --endianness little|big"
+                    .into(),
+            );
+        }
+        return sample_difference::run(
+            std::path::Path::new(&arguments[1]),
+            std::path::Path::new(&arguments[2]),
+            arguments[4].to_str().ok_or("endianness must be UTF-8")?,
+        );
+    }
+    let mut args = arguments.into_iter();
     let input=PathBuf::from(args.next().ok_or("usage: profile_pipeline INPUT.x3f NEW_EXPORT_DIR [--warm N] [--goldens DIR] [--render-only] --wb NAME --mode NAME [normal render options]")?);
     let output = PathBuf::from(args.next().ok_or("missing export directory")?);
     // Mixing old and new runs would make the evidence ambiguous. Require

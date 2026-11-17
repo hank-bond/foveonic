@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 
 ASSETS = Path(__file__).resolve().parent
@@ -15,6 +16,17 @@ SPEC.loader.exec_module(ICON)
 
 
 class IconTests(unittest.TestCase):
+    def test_startup_exports_share_the_composer_document_and_explicit_appearances(self):
+        with mock.patch.object(ICON.subprocess, "run") as run:
+            ICON.export_startup_images(ASSETS, Path("composer-tool"))
+        self.assertEqual(run.call_count, 2)
+        for call, (appearance, rendition) in zip(run.call_args_list, [("light", "Default"), ("dark", "Dark")]):
+            command = call.args[0]
+            self.assertEqual(command[:2], ["composer-tool", str(ASSETS / "Foveonic.icon")])
+            self.assertEqual(command[command.index("--rendition") + 1], rendition)
+            self.assertEqual(command[command.index("--output-file") + 1], str(ASSETS / f"startup-{appearance}.png"))
+            self.assertEqual(command[command.index("--scale") + 1], "2")
+
     def test_bevel_is_inward_and_follows_upper_left_light(self):
         square = [(0., 0.), (10., 0.), (10., 10.), (0., 10.)]
         faces = ICON.bevel_faces(square, 1.)

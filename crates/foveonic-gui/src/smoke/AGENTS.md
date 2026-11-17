@@ -6,7 +6,7 @@ summary: "Native app checks keep scenario expectations separate from shared inpu
 
 Follow the parent GUI source instructions and the [behavioral testing plan](../../../../plans/behavioral-testing.md). Keep each feature's actions, readiness and assertions together. Shared support observes application behavior without reproducing processing or scheduling policy. Preserve the opt-in environment, stable scenario names and evidence formats.
 
-Run native checks serially on a quiet host. Keep controlled delivery pauses separate from natural latency measurements. Independent test expectations must remain distinct from the application state they check.
+Run performance checks serially on a quiet host. Correctness slider groups may run concurrently through the explicit bounded [cohort runner](../../../../scripts/profiling/correctness_workers.py), following [session isolation requirements](../../../../docs/specs/slider-test-sessions.md). Keep controlled delivery pauses separate from natural latency measurements. Independent test expectations must remain distinct from the application state they check.
 
 <!-- INDEX:START -->
 

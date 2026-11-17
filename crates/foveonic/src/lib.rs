@@ -1,6 +1,7 @@
 //! Shares X3F decoding and GPU photo processing between photographic and DNG exports.
 
 mod background;
+mod capture_metadata;
 pub mod color_space;
 pub mod crop;
 pub mod decode_cache;
@@ -8,6 +9,7 @@ mod decode_pool;
 pub mod diagnostics;
 pub mod dng;
 mod gpu;
+pub use gpu::instance_descriptor as gpu_instance_descriptor;
 pub use gpu::map_readback;
 mod graph;
 pub mod image;
@@ -28,6 +30,7 @@ pub mod rotation;
 pub mod scopes;
 pub mod sidecar;
 pub mod source;
+pub mod support;
 mod x3f;
 
 #[cfg(test)]

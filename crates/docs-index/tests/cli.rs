@@ -68,6 +68,28 @@ fn copy_repository(source: &Path, destination: &Path) {
 
 fn create_repository_fixture() -> FixtureDirectory {
     let fixture = FixtureDirectory::create();
+    for directory in [
+        ".",
+        "docs",
+        "docs/design",
+        "docs/research",
+        "docs/decisions",
+        "docs/specs",
+        "plans",
+        "crates",
+        "scripts",
+    ] {
+        write(
+            fixture.path(),
+            &format!("{directory}/AGENTS.md"),
+            "---\nsummary: \"Routes fixture files.\"\n---\n\n# Fixture index\n\n<!-- INDEX:START -->\n<!-- INDEX:END -->\n",
+        );
+    }
+    fixture
+}
+
+fn create_real_repository_fixture() -> FixtureDirectory {
+    let fixture = FixtureDirectory::create();
     copy_repository(&repository_root(), fixture.path());
     // Tool checks also exercise documentation categories absent from this repo.
     for directory in ["docs/design", "docs/research", "docs/decisions", "scripts"] {
@@ -152,7 +174,7 @@ fn fixtures_keep_manifest_and_previews_but_exclude_full_size_and_build_files() {
 
 #[test]
 fn generation_is_idempotent_and_check_mode_does_not_repair_stale_indexes() {
-    let fixture = create_repository_fixture();
+    let fixture = create_real_repository_fixture();
     let root = fixture.path();
     assert_success(&run_index_command(root, false));
     assert_success(&run_index_command(root, true));

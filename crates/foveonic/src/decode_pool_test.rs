@@ -535,3 +535,34 @@ fn row_failures_join_every_chunk_and_choose_row_order_for_foreground_and_pool() 
         assert!(error.is::<background::Interrupted>());
     });
 }
+
+#[test]
+fn cached_pool_failure_preserves_first_report_and_typed_cause() {
+    use std::error::Error;
+    let original: Box<dyn Error + Send + Sync> = Box::new(std::io::Error::from_raw_os_error(13));
+    let text = original.to_string();
+    let reported = crate::support::reported_error(
+        "decode_pool.create",
+        original,
+        crate::support::OperationContext::default(),
+    );
+    let first = reported
+        .downcast_ref::<crate::support::ReportedError>()
+        .unwrap()
+        .report
+        .clone();
+    let shared: Arc<dyn Error + Send + Sync> = Arc::from(reported);
+    let a = SharedPoolError(shared.clone());
+    let b = SharedPoolError(shared);
+    assert_eq!(a.to_string(), text);
+    let repeated = crate::support::report_error("later", &b, Default::default());
+    assert!(Arc::ptr_eq(&first, &repeated));
+    let cause = a.source().unwrap().source().unwrap();
+    assert_eq!(
+        cause
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(13)
+    );
+}

@@ -21,15 +21,40 @@ impl PreparedPreview {
         preview: foveonic::preview::Preview,
         large: bool,
     ) -> foveonic::source::Result<Self> {
-        let image = preview.linear_image()?;
-        let image = match preview.rotation {
-            90 => image::imageops::rotate90(&image),
-            180 => image::imageops::rotate180(&image),
-            270 => image::imageops::rotate270(&image),
-            _ => image,
-        };
-        let mut native_extent = preview.native_extent;
-        if matches!(preview.rotation, 90 | 270) {
+        let rotation = preview.rotation;
+        let color_space = preview.color_space;
+        let native_extent = preview.native_extent;
+        let image = preview.linear_resized(if large {
+            foveonic::decode_cache::PREVIEW_MAX_SIDE
+        } else {
+            THUMBNAIL_SIDE
+        })?;
+        drop(preview);
+        Ok(Self::from_linear(
+            image,
+            rotation,
+            color_space,
+            native_extent,
+            large,
+        ))
+    }
+    pub(crate) fn from_linear(
+        image: image::Rgb32FImage,
+        rotation: u32,
+        color_space: foveonic::color_space::TiffColorSpace,
+        mut native_extent: [u32; 2],
+        large: bool,
+    ) -> Self {
+        fn rotate(image: image::Rgb32FImage, rotation: u32) -> image::Rgb32FImage {
+            match rotation {
+                90 => image::imageops::rotate90(&image),
+                180 => image::imageops::rotate180(&image),
+                270 => image::imageops::rotate270(&image),
+                _ => image,
+            }
+        }
+        let image = rotate(image, rotation);
+        if matches!(rotation, 90 | 270) {
             native_extent.swap(0, 1);
         }
         let scale = (THUMBNAIL_SIDE as f64 / f64::from(image.width().max(image.height()))).min(1.);
@@ -41,11 +66,11 @@ impl PreparedPreview {
             ],
         );
         let thumbnail = DecodedThumbnail {
-            image: Pixels::from_linear(&small, preview.color_space.into()),
+            image: Pixels::from_linear(&small, color_space.into()),
             native_extent,
         };
-        let preview = large.then(|| Pixels::from_linear(&image, preview.color_space.into()));
-        Ok(Self { thumbnail, preview })
+        let preview = large.then(|| Pixels::from_linear(&image, color_space.into()));
+        Self { thumbnail, preview }
     }
 }
 #[cfg(test)]
@@ -58,6 +83,52 @@ impl DecodedThumbnail {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reduction_before_rotation_keeps_framing_and_linear_colors() {
+        for space in foveonic::color_space::TiffColorSpace::ALL {
+            let rgb: Vec<_> = (0..1025 * 601 * 3)
+                .map(|i| (i as u16).wrapping_mul(7919))
+                .collect();
+            for rotation in [0, 90, 180, 270] {
+                let preview = foveonic::preview::Preview {
+                    rgb: rgb.clone(),
+                    color_space: space,
+                    extent: [1025, 601],
+                    native_extent: [6000, 4000],
+                    rotation,
+                };
+                let image = preview.linear_image().unwrap();
+                let rotated = match rotation {
+                    90 => image::imageops::rotate90(&image),
+                    180 => image::imageops::rotate180(&image),
+                    270 => image::imageops::rotate270(&image),
+                    _ => image,
+                };
+                let prepared = PreparedPreview::new(preview, false).unwrap();
+                let expected = foveonic::preview::resize_linear(
+                    &rotated,
+                    prepared.thumbnail.image.size.map(|v| v as u32),
+                );
+                let expected = Pixels::from_linear(&expected, space.into());
+                assert_eq!(
+                    prepared.thumbnail.native_extent,
+                    if matches!(rotation, 90 | 270) {
+                        [4000, 6000]
+                    } else {
+                        [6000, 4000]
+                    }
+                );
+                for (actual, expected) in prepared.thumbnail.image.rgba.iter().zip(expected.rgba) {
+                    for c in 0..4 {
+                        let a = half::f16::from_bits(actual[c]).to_f32();
+                        let b = half::f16::from_bits(expected[c]).to_f32();
+                        assert!((a - b).abs() <= 0.001, "{space:?} {rotation}: {a} != {b}");
+                    }
+                }
+                assert!(prepared.preview.is_none());
+            }
+        }
+    }
     #[test]
     fn decoded_preview_rotates_pixels_and_native_extent_once() {
         let preview = foveonic::preview::Preview {

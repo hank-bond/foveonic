@@ -59,24 +59,26 @@ The Rust tool generates index blocks between `<!-- INDEX:START -->` and `<!-- IN
 
 ## Run checks
 
-Run from the repository root:
+Run from the repository root. Check tools and prepare photographic inputs using [test environment setup](./testing-coverage.md#test-environment-setup).
+
+Use one test harness thread for workspace and required ignored checks. Selected core numerical and artifact checks share device/kernel setup with fresh executors; initialization, diagnostics and lifecycle checks keep fresh devices. These fixtures do not establish cold-start or latency results. Tests that exercise concurrency still create their own threads. Dedicated parallel diagnostic controls keep their existing scheduling. Debug GUI test workers use the same 8 MiB stack budget as CI; keep that override scoped to the test command. Packaged application checks use their normal stack, and the release smoke verifier removes this override.
 
 ```sh
-cargo test --offline --workspace
+RUST_MIN_STACK=8388608 cargo test --offline --workspace -- --test-threads=1
+RUST_MIN_STACK=8388608 cargo test --offline --release -p foveonic --example profile_pipeline -- --test-threads=1
 cargo clippy --offline --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 cargo run --offline -p docs-index -- --root "$PWD"
 cargo run --offline -p docs-index -- --root "$PWD" --check
-python3 -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
-python3 -m unittest discover -s scripts/profiling -p 'test_*.py'
+.local/test-python/bin/python -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
+.local/test-python/bin/python -m unittest discover -s scripts/profiling -p 'test_*.py'
+.local/test-python/bin/python -m unittest discover -s scripts -p 'test_*.py'
 ```
+
+The explicit renderer-example command runs nineteen checks that ordinary workspace tests do not run. Keep it alongside the workspace and required ignored-test commands.
 
 Documentation checks cover metadata, titles, relative file links and stale indexes. Review prose and requirement meaning separately. Artwork tests need Python. Ordinary app builds do not.
 
-Run GPU and original-file tests serially with local fixtures:
+Run every required GPU/original-file command from the [ignored Rust capability inventory](./testing-coverage.md#ignored-rust-test-inventory), using its exact disposable fixture sets and environment assignments. The planner reconciles actual compiled test names before emitting serial libtest commands. A blanket workspace `--ignored` selection also includes declared research checks and does not supply their distinct inputs. Missing required inputs and failed checks must remain explicit release blockers.
 
-```sh
-FOVEONIC_FIXTURE_DIR=path/to/x3f cargo test --offline --release --workspace -- --ignored --test-threads=1
-```
-
-Camera-specific tests may need additional reference inputs. Their specifications and implementation plans describe those local research requirements. Do not assume access to private originals or reference captures.
+Camera-specific research checks may need additional original-processing inputs. Their specifications and plans describe those dependencies; the inventory records their classification without counting them as passes. Do not assume access to private originals or captures.

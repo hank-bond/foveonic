@@ -669,7 +669,11 @@
     "processing_qualities": [
       "quality",
       "speed"
-    ]
+    ],
+    "worker_memory_mb_by_family": {
+      "quattro": 8192,
+      "tiger": 8192
+    }
   },
   {
     "name": "highlight-threshold",

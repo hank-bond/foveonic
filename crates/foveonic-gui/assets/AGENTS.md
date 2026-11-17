@@ -16,6 +16,16 @@ Xcode 26 or later's `actool` compiles the document with a macOS 15 deployment ta
 
 `iconutil` extracts the compiled default ICNS rendition as `icon.png` for non-macOS window icons and regression checks. Its opaque tile spans 824 pixels, centered with 100-pixel margins in the 1024 canvas; these margins come from Apple's compiler. Composer's `ictool` preview fills the canvas and is unsuitable as a direct Dock image. No manual mask, padding, or guessed shrink factor is added.
 
+`startup-light.png` and `startup-dark.png` are 256-pixel Composer previews for the 128-point loading-window image. These deliberately fill the canvas because they are in-window artwork. The native bundle still owns the Dock icon and its platform margins. The startup panel selects the rendition from egui's effective system theme.
+
+Regenerate the startup appearances explicitly with the standalone Composer's generation-26 export tool:
+
+```sh
+python3 crates/foveonic-gui/assets/generate-icon.py --startup-images
+```
+
+Use `--preview-tool PATH_TO_ICTOOL` when Composer is installed elsewhere. Normal Rust builds embed the checked-in PNGs and do not invoke Composer.
+
 Regenerate artwork and the static PNG from the repository root:
 
 ```sh

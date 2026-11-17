@@ -24,7 +24,7 @@ fn gpu_root_and_detail_match_native_direct_crop() {
         f["height"].as_u64().unwrap() as u32,
     ];
     let p = Prepared::new(extent, crop, 0.001, 200, f["scale"].as_f64().unwrap()).unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let source = gpu.upload("Native direct crop fixture", &input).unwrap();
     let out = apply(&gpu, &source, &p, &mut Profile::default()).unwrap();
     for (name, buffer, channels) in [("rgb", &out.rgb, 3), ("detail", &out.detail, 1)] {
@@ -57,7 +57,7 @@ fn gpu_detail_axis_order_matches_native_quarter_turns() {
         "../../../tests/data/root-detail-rotated-reference.json"
     ))
     .unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for f in fixture["cases"].as_array().unwrap() {
         let input: Vec<f32> = f["input"]
             .as_array()

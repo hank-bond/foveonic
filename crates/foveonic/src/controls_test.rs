@@ -20,7 +20,7 @@ fn shader_native_high_pass_and_final_sharpen_match_reference_limits_and_packing(
             .map(|v| v.as_f64().unwrap() as f32)
             .collect::<Vec<_>>()
     };
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let pixels = array(&fixture["input"]);
     let input = gpu.upload("Native sharpen source", &pixels).unwrap();
     let uniform = |amount: f32| {
@@ -92,7 +92,7 @@ fn code(value: f32, route: u32) -> u16 {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn shader_resize_preserves_crop_orientation_and_both_transfer_routes() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let pixels: Vec<f32> = (0..20)
         .flat_map(|p| {
             let (x, y) = (p % 5, p / 5);
@@ -178,7 +178,7 @@ fn shader_resize_preserves_crop_orientation_and_both_transfer_routes() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn shader_color_dq_matches_signed_lookup_math() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let table = crate::nodes::color::color_dq::table([8., 12., 16.]).unwrap();
     let pixels = [
         [0_f32, 0., 0.],
@@ -231,7 +231,7 @@ fn shader_color_dq_matches_signed_lookup_math() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn small_high_pass_preserves_native_quadratic_support_and_scaled_borders() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [17_u32, 17];
     for divisor in [1_u32, 4, 8] {
         let scale = 1. / divisor as f32;

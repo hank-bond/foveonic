@@ -11,7 +11,9 @@ fn source(folder: &Path, name: &str) -> PathBuf {
 fn decoded(root: &Path, source: &Path, bytes: usize, age: u64) -> PathBuf {
     let path = root.join(Identity::read(source).unwrap().name());
     fs::write(&path, vec![0; bytes]).unwrap();
-    fs::File::open(&path)
+    fs::File::options()
+        .write(true)
+        .open(&path)
         .unwrap()
         .set_modified(UNIX_EPOCH + Duration::from_secs(age))
         .unwrap();

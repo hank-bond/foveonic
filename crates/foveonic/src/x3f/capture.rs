@@ -2,8 +2,8 @@
 
 use super::{
     bytes::Bytes, read_properties, BASE_HEADER_BYTES, DIRECTORY_ENTRY_BYTES,
-    DIRECTORY_HEADER_BYTES, MAXIMUM_DIRECTORY_ENTRIES, MAXIMUM_FILE_BYTES, MINIMUM_FILE_BYTES,
-    SECTION_VERSION, SUPPORTED_FILE_VERSIONS,
+    DIRECTORY_HEADER_BYTES, MAXIMUM_DIRECTORY_ENTRIES, MAXIMUM_FILE_BYTES, MAXIMUM_PROPERTY_BYTES,
+    MINIMUM_FILE_BYTES, SECTION_VERSION, SUPPORTED_FILE_VERSIONS,
 };
 use crate::input_error::damaged;
 use crate::source::Result;
@@ -12,11 +12,18 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
-// Capture strings are small. A corrupt PROP length must not cause an
-// allocation as large as the sensor image.
-const MAXIMUM_PROPERTY_BYTES: usize = 1024 * 1024;
-
 pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, String>> {
+    read_impl(reader, false)
+}
+
+pub(crate) fn read_for_export(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, String>> {
+    read_impl(reader, true)
+}
+
+fn read_impl(
+    reader: &mut (impl Read + Seek),
+    include_embedded: bool,
+) -> Result<BTreeMap<String, String>> {
     let length = reader.seek(SeekFrom::End(0))?;
     if length < MINIMUM_FILE_BYTES {
         return Err(damaged("truncated X3F header"));
@@ -87,7 +94,7 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
         }
         if index.range(entry + 8, 4)? == b"PROP" {
             if size > MAXIMUM_PROPERTY_BYTES {
-                return Err("X3F capture properties too large".into());
+                return Err(damaged("X3F capture properties too large"));
             }
             if properties.replace((start, size)).is_some() {
                 return Err(damaged("duplicate X3F input section"));
@@ -109,7 +116,8 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
     } else {
         BTreeMap::new()
     };
-    if properties.is_empty()
+    if include_embedded
+        || properties.is_empty()
         || properties.get("CAMMODEL").is_some_and(|m| {
             m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
         })
@@ -128,10 +136,7 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
             if area <= preview_area {
                 continue;
             }
-            reader.seek(SeekFrom::Start(start + 28))?;
-            let mut jpeg = vec![0; (size - 28).min(128 * 1024)];
-            reader.read_exact(&mut jpeg)?;
-            let values = super::exif::properties(&jpeg);
+            let values = super::exif::properties_at(reader, start + 28, size - 28)?;
             if !values.is_empty() {
                 preview_properties = values;
                 preview_area = area;
@@ -149,6 +154,9 @@ pub(crate) fn read(reader: &mut (impl Read + Seek)) -> Result<BTreeMap<String, S
         if let Ok(adjustments) = super::adjustments::read(&header) {
             properties.extend(adjustments);
         }
+    }
+    if include_embedded {
+        properties.insert("EXIF_CAPTURE_CHECKED".into(), "1".into());
     }
     properties.insert("X3F_MARK_BITS".into(), mark_bits.to_string());
     super::record_image_extent(&mut properties, &image_header)?;

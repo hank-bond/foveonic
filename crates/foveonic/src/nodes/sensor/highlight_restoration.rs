@@ -141,7 +141,7 @@ impl Prepared {
     }
 
     pub(crate) fn evidence(&self, grid: crate::nodes::sensor::pool::Prepared) -> Result<Evidence> {
-        if self.extent() != grid.extent() {
+        if self.extent() != grid.extent() || !grid.valid_output_geometry() {
             return Err("highlight evidence grid differs from native source".into());
         }
         Ok(Evidence {
@@ -191,19 +191,53 @@ impl Evidence {
         let params = gpu.uniform(&self.params);
         let grid = gpu.uniform(&self.grid);
         let matrix = gpu.upload("Highlight evidence camera matrices", &self.matrix)?;
-        let mut trace = gpu.trace(profile.mode.gpu(), 1);
-        gpu.dispatch(
-            Kernel::HighlightEvidence,
-            &mut [
-                (0, Read(input)),
-                (1, Read(&params)),
-                (2, Read(&matrix)),
-                (4, Write(output.write())),
-                (9, Read(&grid)),
-            ],
-            [w.div_ceil(8), h.div_ceil(8)],
-            &mut trace,
-        );
+        let [logical_width, logical_height] = self.grid.logical_extent();
+        // Large native cells need bounded per-invocation work. Ordinary cells
+        // keep the single pass. Large cells retain ordered row and column means.
+        let split = self.grid.largest_cell_area() > 65_536;
+        let mut trace = gpu.trace(profile.mode.gpu(), if split { 2 } else { 1 });
+        if split {
+            let mut rows = gpu.storage(
+                "Original highlight evidence rows",
+                u64::from(logical_width) * u64::from(native[1]) * 48,
+            )?;
+            gpu.dispatch(
+                Kernel::HighlightEvidenceRows,
+                &mut [
+                    (0, Read(input)),
+                    (1, Read(&params)),
+                    (2, Read(&matrix)),
+                    (4, Write(rows.write())),
+                    (9, Read(&grid)),
+                ],
+                [logical_width.div_ceil(8), native[1].div_ceil(8)],
+                &mut trace,
+            );
+            gpu.dispatch(
+                Kernel::HighlightEvidenceColumns,
+                &mut [
+                    (1, Read(&params)),
+                    (4, Write(output.write())),
+                    (9, Read(&grid)),
+                    (11, Read(&rows)),
+                ],
+                [logical_width.div_ceil(8), logical_height.div_ceil(8)],
+                &mut trace,
+            );
+        } else {
+            gpu.dispatch(
+                Kernel::HighlightEvidence,
+                &mut [
+                    (0, Read(input)),
+                    (1, Read(&params)),
+                    (2, Read(&matrix)),
+                    (4, Write(output.write())),
+                    (9, Read(&grid)),
+                ],
+                [logical_width.div_ceil(8), logical_height.div_ceil(8)],
+                &mut trace,
+            );
+        }
         gpu.finish_trace(&trace, profile)?;
         Ok(output)
     }

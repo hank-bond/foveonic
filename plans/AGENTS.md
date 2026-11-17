@@ -33,11 +33,14 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[early-sensor-reduction](./early-sensor-reduction.md)** Move the sensor reduction boundary earlier with working-resolution inputs, preserved native algorithms and existing recipe ownership.
 - **[editing-optimization-handoff](./editing-optimization-handoff.md)** Continue native editing measurements with guarded GPU ownership while preserving the deferred mismatch evidence.
 - **[editing-sidecars](./editing-sidecars.md)** Persist shared photographic settings in atomic versioned JSON sidecars and restore them independently of render completion.
+- **[exif-export](./exif-export.md)** Audit and preserve X3F capture metadata across all supported export formats.
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
 - **[full-option-scaled-pipeline](./full-option-scaled-pipeline.md)** Replace recipe-wide scale exceptions with numeric working grids, graph-owned dependency cuts and complete downstream option support.
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
+- **[gui-release-regressions](./gui-release-regressions.md)** Resolve GUI and GPU correctness failures and require packaged desktop checks before releasing 0.8.2.
 - **[loupe-motion-diagnostics](./loupe-motion-diagnostics.md)** Attribute loupe-motion stuttering through sustained input and native presentation timing before changing scheduling.
+- **[memory-sweep](./memory-sweep.md)** Reduce peak and retained application memory through measured, behavior-preserving changes.
 - **[merrill-banding-width](./merrill-banding-width.md)** Compare scale-separated native row and column correction against the accepted fine-band baseline.
 - **[multi-edit-latency](./multi-edit-latency.md)** Reduce multi-edit application latency through work avoidance, reusable preparation, scale-aware execution and coordinated delivery.
 - **[multi-edit](./multi-edit.md)** Implement independent viewport editing selection, Pointer-only selection routing and shared mixed-value controls before finalizing memory policy.
@@ -48,11 +51,16 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
 - **[regional-bounds](./regional-bounds.md)** Inventory regional storage, active samples and delivered coverage before a separate geometry consolidation slice.
 - **[regional-preview-completion](./regional-preview-completion.md)** Complete native visible-region rendering for adaptive tone, monochrome and authored rotation, with whole-image comparisons and measured app latency.
+- **[release-0.8.4](./release-0.8.4.md)** Prepare and validate 0.8.4 with reviewed capture-metadata and TIFF interoperability fixes.
+- **[release-0.9.0](./release-0.9.0.md)** Integrate wide rendering and relative group viewing, then prepare and validate the 0.9.0 minor release with the maintained release lanes.
+- **[release-test-efficiency](./release-test-efficiency.md)** Reduce healthy release validation toward thirty minutes with bounded correctness workers, reusable verification and explicit isolation.
 - **[render-coordination-consistency](./render-coordination-consistency.md)** Inventory coordination, scheduling and cache inconsistencies before choosing small current-architecture cleanup slices.
 - **[render-runtime](./render-runtime.md)** Clarify render ownership and responsibilities through one owner-reviewed concept at a time while preserving serial engine execution.
 - **[sectional-rendering](./sectional-rendering.md)** Reduce native sectional rendering work through explicit input support and measured Whole comparisons.
 - **[sequoia-compatibility](./sequoia-compatibility.md)** Ship a macOS 15-targeted Apple Silicon build for Sequoia user testing while retaining explicit runtime coverage limits.
 - **[shared-photographic-finishing](./shared-photographic-finishing.md)** Integrate shared photographic tone, monochrome sensitivity, local contrast and sharpening with camera recipes and bounded interactive reuse.
+- **[slider-session-reuse](./slider-session-reuse.md)** Pilot native slider session reuse while retaining declared case isolation and independent photographic comparisons.
+- **[support-logging](./support-logging.md)** Astra and eight Terra audits map missing user-support evidence to shared error reporting and staged logging work.
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
 - **[tonal-ranges](./tonal-ranges.md)** Implement and evaluate coordinated Merrill HDR controls after researching spatial tone mapping.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.

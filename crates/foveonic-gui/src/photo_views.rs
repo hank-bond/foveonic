@@ -485,6 +485,147 @@ mod tests {
     }
 
     #[test]
+    fn rapid_clicks_on_different_photos_do_not_zoom_the_second() {
+        for modifiers in [
+            egui::Modifiers::NONE,
+            egui::Modifiers::ALT,
+            egui::Modifiers::SHIFT,
+            egui::Modifiers::COMMAND,
+        ] {
+            let mut views = PhotoViews::default();
+            let ctx = egui::Context::default();
+            let a = Path::new("a.x3f");
+            let b = Path::new("b.x3f");
+            draw(&mut views, &ctx, &[a, b], 0., vec![]);
+            let first = views.view(Some(a)).response().unwrap().rect.center();
+            let second = views.view(Some(b)).response().unwrap().rect.center();
+            draw(&mut views, &ctx, &[a, b], 0.1, click(first, true));
+            draw(&mut views, &ctx, &[a, b], 0.15, click(first, false));
+            let button = |pressed| egui::Event::PointerButton {
+                pos: second,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            draw_with_modifiers(
+                &mut views,
+                &ctx,
+                &[a, b],
+                0.2,
+                vec![egui::Event::PointerMoved(second), button(true)],
+                modifiers,
+            );
+            draw_with_modifiers(
+                &mut views,
+                &ctx,
+                &[a, b],
+                0.25,
+                vec![button(false)],
+                modifiers,
+            );
+            assert!(!views.view(Some(a)).explicit_zoom());
+            assert!(!views.view(Some(b)).explicit_zoom());
+            draw_with_modifiers(
+                &mut views,
+                &ctx,
+                &[a, b],
+                0.3,
+                vec![button(true)],
+                modifiers,
+            );
+            draw_with_modifiers(
+                &mut views,
+                &ctx,
+                &[a, b],
+                0.35,
+                vec![button(false)],
+                modifiers,
+            );
+            assert_eq!(
+                views.view(Some(b)).explicit_zoom(),
+                modifiers == egui::Modifiers::NONE
+            );
+        }
+    }
+
+    #[test]
+    fn coalesced_second_click_still_zooms_the_same_photo() {
+        for coalesce_first in [false, true] {
+            let mut views = PhotoViews::default();
+            let ctx = egui::Context::default();
+            let a = Path::new("a.x3f");
+            draw(&mut views, &ctx, &[a], 0., vec![]);
+            let point = views.view(Some(a)).response().unwrap().rect.center();
+            if coalesce_first {
+                let mut events = click(point, true);
+                events.extend(click(point, false));
+                draw(&mut views, &ctx, &[a], 0.15, events);
+            } else {
+                draw(&mut views, &ctx, &[a], 0.1, click(point, true));
+                draw(&mut views, &ctx, &[a], 0.15, click(point, false));
+            }
+            let mut events = click(point, true);
+            events.extend(click(point, false));
+            draw(&mut views, &ctx, &[a], 0.2, events);
+            assert!(views.view(Some(a)).explicit_zoom());
+        }
+    }
+
+    #[test]
+    fn slow_second_click_does_not_zoom() {
+        let mut views = PhotoViews::default();
+        let ctx = egui::Context::default();
+        let a = Path::new("a.x3f");
+        draw(&mut views, &ctx, &[a], 0., vec![]);
+        let point = views.view(Some(a)).response().unwrap().rect.center();
+        for (time, pressed) in [(0.1, true), (0.15, false), (0.2, true), (0.6, false)] {
+            draw(&mut views, &ctx, &[a], time, click(point, pressed));
+        }
+        assert!(!views.view(Some(a)).explicit_zoom());
+    }
+
+    #[test]
+    fn tool_click_does_not_prime_pointer_zoom() {
+        for tool in [
+            crate::photo_tools::Tool::Loupe,
+            crate::photo_tools::Tool::Crop,
+        ] {
+            let mut views = PhotoViews::default();
+            let ctx = egui::Context::default();
+            let a = Path::new("a.x3f");
+            crate::photo_tools::select(&ctx, tool);
+            draw(&mut views, &ctx, &[a], 0., vec![]);
+            let point = views.view(Some(a)).response().unwrap().rect.center();
+            draw(&mut views, &ctx, &[a], 0.1, click(point, true));
+            draw(&mut views, &ctx, &[a], 0.15, click(point, false));
+            crate::photo_tools::pointer(&ctx);
+            draw(&mut views, &ctx, &[a], 0.2, click(point, true));
+            draw(&mut views, &ctx, &[a], 0.25, click(point, false));
+            assert!(!views.view(Some(a)).explicit_zoom());
+        }
+    }
+
+    #[test]
+    fn rapid_clicks_far_apart_on_one_photo_do_not_zoom() {
+        let mut views = PhotoViews::default();
+        let ctx = egui::Context::default();
+        let a = Path::new("a.x3f");
+        draw(&mut views, &ctx, &[a], 0., vec![]);
+        let rect = views.view(Some(a)).response().unwrap().rect;
+        let first = rect.center() - egui::vec2(50., 0.);
+        let second = rect.center() + egui::vec2(50., 0.);
+        for (time, pos, pressed) in [
+            (0.1, first, true),
+            (0.15, first, false),
+            (0.2, second, true),
+            (0.25, second, false),
+        ] {
+            draw(&mut views, &ctx, &[a], time, click(pos, pressed));
+        }
+        assert!(!views.view(Some(a)).explicit_zoom());
+    }
+
+    #[test]
     fn double_click_and_pointer_drag_affect_only_the_hovered_photo() {
         let mut views = PhotoViews::default();
         let ctx = egui::Context::default();

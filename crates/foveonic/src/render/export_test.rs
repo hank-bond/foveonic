@@ -27,7 +27,7 @@ impl Drop for Directory {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn saved_rotation_agrees_between_preview_export_and_picker_coordinates() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let directory = Directory::new();
     let pixels: Vec<f32> = (0..24)
         .flat_map(|y| {
@@ -147,7 +147,7 @@ fn saved_rotation_agrees_between_preview_export_and_picker_coordinates() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn saved_crop_exports_the_same_oriented_pixels_without_changing_the_working_image() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let directory = Directory::new();
     let pixels: Vec<f32> = (0..8 * 6 * 3).map(|i| (i + 1) as f32 / 160.).collect();
     let mut image = RenderedImage {
@@ -229,7 +229,7 @@ fn saved_crop_exports_the_same_oriented_pixels_without_changing_the_working_imag
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let directory = Directory::new();
     let pixels = [
         [0_f32; 3],
@@ -391,7 +391,7 @@ fn tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image() 
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let pixels = [-10_f32, 0.5, 40000.].repeat(25);
     let image = RenderedImage {
         buffer: engine
@@ -482,7 +482,7 @@ fn zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged() {
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn auto_sharpen_matches_manual_for_color_mono_cached_and_dng_recipes() {
     let directory = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session =
         RenderSession::new(Source::open(directory.join("blue-parking-sign.x3f")).unwrap());
     let render = |session: &mut RenderSession, settings: &Settings| {
@@ -583,7 +583,7 @@ fn auto_sharpen_matches_manual_for_color_mono_cached_and_dng_recipes() {
 #[ignore = "requires a working GPU adapter"]
 fn jxl_native_prophoto_encodes_shadows_with_its_declared_gamma() {
     use crate::output::{EncodingOptions, Format};
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let directory = Directory::new();
     let metadata = Arc::new(crate::source::Metadata {
         processing_version: None,
@@ -666,7 +666,7 @@ fn jxl_native_prophoto_encodes_shadows_with_its_declared_gamma() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn regional_rotation_samples_match_the_whole_composed_view() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let pixels: Vec<f32> = (0..24)
         .flat_map(|y| {
             (0..32).flat_map(move |x| [(x % 2) as f32, (y % 2) as f32, ((x + y) % 2) as f32])

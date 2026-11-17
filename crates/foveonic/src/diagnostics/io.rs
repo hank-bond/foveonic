@@ -49,10 +49,6 @@ impl<R> ObservedReader<R> {
         self.finish(true);
     }
 
-    pub fn get_ref(&self) -> &R {
-        &self.reader
-    }
-
     fn finish(&mut self, complete: bool) {
         if let Some(mut observation) = self.observation.take() {
             observation.complete = complete;
@@ -138,7 +134,7 @@ mod tests {
         let mut rest = Vec::new();
         assert_eq!(reader.read_to_end(&mut rest).unwrap(), 5);
         assert_eq!(&rest, b"bytes");
-        assert_eq!(reader.get_ref().position(), 12);
+        assert_eq!(reader.reader.position(), 12);
         reader.complete();
     }
 

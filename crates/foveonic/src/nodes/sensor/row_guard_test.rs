@@ -448,7 +448,7 @@ fn row_guard_oracle_preserves_bright_detail_and_rejects_strong_color_lines() {
 #[test]
 #[ignore = "requires a GPU"]
 fn row_guard_matches_independent_confidence_and_preserves_sensor_contracts() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let GuardFixture {
         prepared,
         original,
@@ -696,7 +696,7 @@ fn resized_supports_preserve_distinct_pixel_and_row_noise_units() {
 #[test]
 #[ignore = "requires a GPU"]
 fn resized_rows_match_independent_equations_and_preserve_repairs() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let native = [515, 387];
     let black = [18., 16., 19.];
     for d in [2, 4, 8, 64] {
@@ -810,7 +810,7 @@ fn resized_rows_match_independent_equations_and_preserve_repairs() {
 #[test]
 #[ignore = "requires a GPU"]
 fn resized_rows_handle_single_cells_and_short_spans_without_inventing_offsets() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let native = [257, 193];
     for d in [64, 512, 1 << 31] {
         let grid = WorkingGrid::new(native, crate::render::Scale::new(d).unwrap(), 8)

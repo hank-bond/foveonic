@@ -145,7 +145,7 @@ fn dedicated_filters_match_reference_arithmetic_fixture() {
             .map(|v| v.as_f64().unwrap() as f32)
             .collect::<Vec<_>>()
     };
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut prepared = prepared(48, 48);
     prepared.params.filter[3] = (1_f32 / 32.).powi(3);
     let raw = gpu
@@ -303,7 +303,7 @@ fn rolling_histogram(source: &[f32], borders: &[f32], prepared: &Prepared) -> Ve
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn histogram_reuses_bins_across_strips_with_partial_groups_and_immutable_inputs() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut prepared = prepared(83, 344);
     prepared.params.source[3] = 8;
     let source: Vec<f32> = (0..83 * 344)
@@ -370,7 +370,7 @@ fn histogram_reuses_bins_across_strips_with_partial_groups_and_immutable_inputs(
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn pure_layer_mixing_precedes_noise_and_color_conversion() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut prepared = prepared(64, 80);
     let source: Vec<f32> = (0..64 * 80)
         .flat_map(|p| [10. + p as f32, 100., 700.])
@@ -402,7 +402,7 @@ fn pure_layer_mixing_precedes_noise_and_color_conversion() {
 #[test]
 #[ignore = "requires a GPU"]
 fn histogram_preserves_highlight_headroom_and_matches_bounded_neighborhood_means() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let prepared = prepared(64, 64);
     let samples: Vec<f32> = (0..64 * 64)
         .map(|i| {

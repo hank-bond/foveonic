@@ -11,6 +11,12 @@ implementation: incomplete
 
 The application must support empirical attribution of runtime across UI interaction, scheduling, source access, caching, processing and presentation. Diagnostics must support both exploratory profiling and repeatable correctness and performance-regression checks. Renderer experiments must use validated capture and correctness checks.
 
+## Startup capture
+
+An opt-in process-startup capture must retain host timestamps from application entry, including graphics instance, adapter, device, UI renderer and surface preparation. Start the recorder asynchronously and preserve early intervals until it is ready. Distinguish first root presentation from application readiness and per-program engine preparation. These observations measure host elapsed time, including backend waits. They do not measure OS launch work before process entry or physical screen scanout.
+
+Closing or failing during startup must save the active capture through the existing recorder. Ordinary unrecorded startup must not start a recorder. Instrumentation must not add GPU completion waits or block interaction while the recorder starts.
+
 ## Measurement contract
 
 Measurements must distinguish elapsed latency, CPU execution scopes, queue residence, explicit waits, GPU execution, resource retention and delivery. Host elapsed time must not be described as CPU-active time or inferred GPU execution. Parallel and nested intervals must remain distinguishable rather than being added into misleading totals. CPU work must use a common monotonic timeline. GPU timestamps must retain their clock provenance and associate with submissions without inventing a calibrated host position.
@@ -62,6 +68,8 @@ Expected user-visible behavior must be derived independently of the application 
 Headless and real-app checks should report common observations and assertion outcomes in one test-result shape where their evidence describes the same behavior. Reuse those assertions without making an engine-only run claim user-interface coverage. Each driver retains its own detailed evidence and identifies how it exercised the application.
 
 Opt-in app image verification must read the settled rendered artifacts retained by the application. Check the intended edit independently before replaying its exact effective settings in fresh headless processing. Preserve transient render settings in diagnostic snapshots without changing photo-sidecar serialization. Compare complete floating samples and their storage and view geometry through the same assertion used by headless baselines. Perform image readback and image file writes off the UI thread, after measured interaction and capture saving; run fresh verification after the app exits. Report numerical equality separately from physical screen presentation and latency.
+
+Independent verification may run a finite case's photographs in one process while retaining device and compiled-kernel resources. Declare the full request queue first. Each request must reopen its source, clear prepared source statistics and build a fresh graph. No interactive output or per-photo preparation may satisfy a later request. Bind every request's terminal evidence to the actual independent process and declared source/settings/output paths. A failed, missing or unrun request must block case success. Compare representative repeated recipes after unrelated requests against separate-process verification before using the option in a complete sweep.
 
 Behavioral coordination checks must derive expected edits from declared recipes and explicit user actions. Check all participating photographs, including unchanged targets, without depending on completion order. A controlled image-delivery pause may make an in-flight handoff deterministic, but it must be identified as harness work and released on failure. Reuse assertions must check actual payload reads and photographic dispatches for the affected targets. Rebuild assertions must include runtime evidence that the required photo was retained and then evicted.
 

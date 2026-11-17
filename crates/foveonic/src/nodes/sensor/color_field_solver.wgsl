@@ -40,13 +40,14 @@ fn block_product(b:vec3<f32>,v:vec2<f32>)->vec2<f32>{
     if !color(){return vec2(b.x*v.x,0.0);}
     return vec2(b.x*v.x+b.z*v.y,b.z*v.x+b.y*v.y);
 }
-// Explicit fused operations retain the rounding remainder. Ordinary additions
-// in the ratio product can lose these components after shader compilation.
+// A runtime multiplication identity keeps shader compilers from eliminating
+// the rounded intermediate values needed by the compensated color iterate.
 fn compensated_add(value:vec4<f32>,increment:vec2<f32>)->vec4<f32>{
     let swap=abs(increment)>abs(value.xy);
     let big=select(value.xy,increment,swap);let small=select(increment,value.xy,swap);
-    let sum=big+small;let remainder=fma(vec2(1.0),small,fma(vec2(-1.0),sum,big))+value.zw;
-    let hi=sum+remainder;let lo=fma(vec2(1.0),remainder,fma(vec2(-1.0),hi,sum));
+    let unit=vec2(solve_params.tolerance.z);
+    let sum=fma(unit,big,small);let remainder=fma(unit,small,fma(-unit,sum,big))+value.zw;
+    let hi=fma(unit,sum,remainder);let lo=fma(unit,remainder,fma(-unit,hi,sum));
     return vec4(hi,lo);
 }
 fn product(i:u32,use_x:bool)->vec2<f32>{

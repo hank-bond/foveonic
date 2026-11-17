@@ -5,6 +5,72 @@ kind: reference
 
 # Changelog
 
+## 0.9.0
+
+Edit groups of photographs faster and keep their views in sync.
+
+### Changes
+
+- Render photographs together when cache memory allows, while preserving useful cached inputs.
+- Reuse fitted-image output for browser previews and refresh previews behind active editing.
+- Prioritize visible images, navigator and scopes, then browser thumbnails. Make full-image completion while idle optional.
+- Apply Before/After to every actively edited photograph, using its own Camera or Defaults settings.
+- Use Shift-drag, Shift-scroll or pinch, and Shift-double-click to move and zoom the editing group together.
+- Keep group zoom anchored within each photograph's displayed view and group panning at the same on-screen distance across different aspect ratios.
+- Simplify editing outlines, disable navigator and scopes during multi-edit, and resize image tiles continuously with either side panel.
+- Preserve useful native detail while a new zoomed area renders.
+
+## 0.8.4
+
+Improve capture metadata and exported-file compatibility across supported cameras.
+
+### Changes
+
+- Store exposure and lens values in compact EXIF form for better compatibility with photo viewers and websites.
+- Preserve descriptive lens names, metering modes and ISO values from standard camera metadata.
+- Write the required format and color declarations for each export type.
+- Fix TIFF directory and metadata alignment, normalize padded image identifiers and omit malformed comments.
+- Preserve Unicode comment byte order when exporting.
+
+## 0.8.3
+
+Faster Classic highlight recovery.
+
+### Changes
+
+- Reduce redundant work in Classic highlight recovery while preserving the rendered result.
+
+## 0.8.2
+
+Fix Windows startup and processed-photo exports, and make support reports easier to share.
+
+### Changes
+
+- Fix an Access denied error when publishing completed exports on Windows.
+- Fix a startup stack overflow introduced in 0.8.1 on Windows.
+- Keep local support logs across launches, with per-run and full-history copying from Log.
+- Refresh decoded and preview cache recency correctly on Windows.
+- Keep color-range renaming from scheduling image processing, including multi-photo edits.
+- Keep rapid clicks on different photos from accidentally triggering double-click zoom.
+- Use the desktop GPU configuration consistently in Windows command-line tools and tests.
+- Preserve small color corrections in ColorField recovery.
+- Keep HDR adjustments accurate near full strength.
+- Keep highlight grouping and signed scope counts stable at boundary values.
+- Preserve highlight evidence at very coarse processing grids.
+- Preserve sensor calibration rounding across graphics drivers.
+
+## 0.8.1
+
+Preserve capture metadata in processed photographs.
+
+### Changes
+
+- Carry available camera, lens, exposure, capture date, authorship and location metadata from X3F files into DNG, TIFF, JPEG, PNG and JPEG XL exports. Exported dimensions and orientation match the processed image.
+- Reduce memory use when loading Merrill photographs, preparing previews and exporting images.
+- Bound browser loading memory and recover from GPU preview upload failures with a usable error state.
+- Show a responsive startup window with progress while graphics processing is prepared.
+- Reduce stack usage when retaining photographs for multi-editing.
+
 ## 0.8.0
 
 White balance picking, rotation, streamlined previews and an initial Windows build.

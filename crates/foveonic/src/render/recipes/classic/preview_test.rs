@@ -107,7 +107,7 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
         source::{ProcessingFamily, Source},
     };
     let directory = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut supported = 0;
     for file in std::fs::read_dir(directory).unwrap() {
         let path = file.unwrap().path();

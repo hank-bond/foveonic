@@ -88,7 +88,7 @@ fn saturation_uses_equal_channel_weights_and_reference_integer_rounding() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn gpu_signed_response_matches_scalar_with_adjusted_tone_saturation_and_detail() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let source: Vec<f32> = ROOT_SAMPLES
         .into_iter()
         .flatten()
@@ -184,7 +184,7 @@ fn gpu_signed_response_matches_scalar_with_adjusted_tone_saturation_and_detail()
 #[test]
 #[ignore = "requires a GPU"]
 fn protected_classic_saturation_matches_profile_sampling_and_preserves_neutral_response() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let samples = [
         [0.7, 0.3, 0.2],
         [1.8, 0.15, 0.05],

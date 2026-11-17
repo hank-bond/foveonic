@@ -365,31 +365,36 @@ fn residual_half_integer_lut_decisions_match_native_power_rounding() {
         0x43aeaa95, 0x4388dab2,
     ]
     .map(f32::from_bits);
-    // Independent native BlendImages, constant brightness and linear damping.
-    let expected = [
-        0x435ab837, 0x438560e1, 0x43525739, 0x4387d310, 0x439ab765, 0x43553c42, 0x4388dd48,
-        0x43ab24f7, 0x43867332,
-    ]
-    .map(f32::from_bits);
-    let mut lookup = vec![1.; 14344];
-    lookup.extend((0..1024).map(|i| (-f64::from(i) / 1023.) as f32));
-    let gpu = Gpu::new().unwrap();
-    let current = gpu.upload("Residual decision source", &current).unwrap();
-    let candidate = gpu
+    let gpu = Gpu::test_executor();
+    let current_buffer = gpu.upload("Residual decision source", &current).unwrap();
+    let candidate_buffer = gpu
         .upload("Residual decision candidate", &candidate)
         .unwrap();
-    let output = residual_blend(
-        &gpu,
-        &current,
-        &candidate,
-        [3, 1],
-        &lookup,
-        0.,
-        &mut Default::default(),
-    )
-    .unwrap();
-    let bytes = gpu.readback(&output).unwrap();
-    assert_eq!(bytemuck::cast_slice::<u8, f32>(&bytes), expected);
+    // Native BlendImages selects these three LUT entries. A sentinel makes
+    // each choice observable without depending on final blend contraction.
+    for (pixel, index) in [121, 75, 92].into_iter().enumerate() {
+        let mut lookup = vec![1.; 14344];
+        lookup.resize(14344 + 1024, 0.);
+        lookup[14344 + index] = -1.;
+        let output = residual_blend(
+            &gpu,
+            &current_buffer,
+            &candidate_buffer,
+            [3, 1],
+            &lookup,
+            0.,
+            &mut Default::default(),
+        )
+        .unwrap();
+        let bytes = gpu.readback(&output).unwrap();
+        let mut expected = candidate;
+        expected[pixel * 3..pixel * 3 + 3].copy_from_slice(&current[pixel * 3..pixel * 3 + 3]);
+        assert_eq!(
+            bytemuck::cast_slice::<u8, f32>(&bytes),
+            expected,
+            "native residual LUT entry {index} must select only pixel {pixel}"
+        );
+    }
 }
 
 #[test]

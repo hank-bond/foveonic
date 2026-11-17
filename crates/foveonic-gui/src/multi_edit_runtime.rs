@@ -40,7 +40,9 @@ impl Photo {
 pub struct Runtime {
     editing_paths: Vec<PathBuf>,
     render_paths: Vec<PathBuf>,
-    photos: BTreeMap<PathBuf, Photo>,
+    // Several settings and frame snapshots make each photo large. Keep map
+    // insertion and balancing from moving those records through the stack.
+    photos: BTreeMap<PathBuf, Box<Photo>>,
     recent: Vec<PathBuf>,
     retention_changed: bool,
     viewed: Option<Viewed>,
@@ -52,7 +54,9 @@ struct Viewed {
 }
 impl Runtime {
     fn targets(&self) -> impl Iterator<Item = &Photo> {
-        self.editing_paths.iter().map(|path| &self.photos[path])
+        self.editing_paths
+            .iter()
+            .map(|path| self.photos[path].as_ref())
     }
     pub fn selected(&mut self, path: &Path) {
         if self.photos.contains_key(path) {
@@ -190,7 +194,9 @@ impl Runtime {
     ) {
         if let Some(photo) = self.photos.get_mut(path) {
             if photo.settings.as_ref() != Some(settings) {
-                photo.dirty = true;
+                photo.dirty |= photo.settings.as_ref().is_none_or(|old| {
+                    !crate::rendering::matching::same_render_settings(old, settings)
+                });
                 photo.settings = Some(settings.clone());
             }
             if photo.error.take().is_some() {
@@ -204,8 +210,10 @@ impl Runtime {
     pub fn observe_requested(&mut self, path: &Path, settings: &Settings) {
         if let Some(photo) = self.photos.get_mut(path) {
             if photo.settings.as_ref() != Some(settings) {
+                photo.dirty |= photo.settings.as_ref().is_none_or(|old| {
+                    !crate::rendering::matching::same_render_settings(old, settings)
+                });
                 photo.settings = Some(settings.clone());
-                photo.dirty = true;
             }
         }
     }
@@ -373,6 +381,7 @@ impl Runtime {
         }
         ranges.into_iter().collect()
     }
+    /// Save all edits and report whether any changed rendering.
     pub fn apply_edits(
         &mut self,
         edits: &[multi_edit_controls::Edit],
@@ -451,8 +460,10 @@ impl Runtime {
             }
             if *settings != before {
                 sidecars.apply(path.clone(), settings.clone());
-                photo.dirty = true;
-                changed = true;
+                let render_changed =
+                    !crate::rendering::matching::same_render_settings(&before, settings);
+                photo.dirty |= render_changed;
+                changed |= render_changed;
             }
         }
         changed
@@ -1228,12 +1239,12 @@ mod tests {
             });
             runtime.photos.insert(
                 path,
-                Photo {
+                Box::new(Photo {
                     defaults_basis: Some(settings.clone()),
                     settings: Some(settings),
                     numeric_settings: Some(numeric),
                     ..Default::default()
-                },
+                }),
             );
         }
         runtime
@@ -1293,6 +1304,90 @@ mod tests {
             .request(None, Rendition::Camera)
             .iter()
             .any(|(path, _)| path == &paths[0]));
+    }
+
+    #[test]
+    fn range_names_are_retained_without_changing_render_demand() {
+        let mut runtime = runtime();
+        let paths = runtime.editing_paths.clone();
+        for path in &paths {
+            runtime
+                .photos
+                .get_mut(path)
+                .unwrap()
+                .settings
+                .as_mut()
+                .unwrap()
+                .photographic
+                .color_editor
+                .advanced
+                .push(Default::default());
+        }
+        runtime.request(None, Rendition::Current);
+        let mut renamed = runtime.settings(&paths[0]).unwrap().clone();
+        renamed.photographic.color_editor.advanced.ranges[0].name = "Sky".try_into().unwrap();
+        runtime.observe_active(&paths[0], &renamed, None);
+        assert_eq!(runtime.settings(&paths[0]), Some(&renamed));
+        assert!(!runtime.needs_render(None, Rendition::Current));
+
+        renamed.photographic.color_editor.advanced.ranges[0].name = "Clouds".try_into().unwrap();
+        runtime.observe_requested(&paths[0], &renamed);
+        assert_eq!(runtime.settings(&paths[0]), Some(&renamed));
+        assert!(!runtime.needs_render(None, Rendition::Current));
+
+        runtime.invalidate_photo(&paths[0]);
+        renamed.photographic.color_editor.advanced.ranges[0].name = "Blue".try_into().unwrap();
+        runtime.observe_active(&paths[0], &renamed, None);
+        assert!(
+            runtime.needs_render(None, Rendition::Current),
+            "rename must preserve pending work"
+        );
+        runtime.request(None, Rendition::Current);
+        renamed.color_range_preview = Some(0);
+        runtime.observe_requested(&paths[0], &renamed);
+        assert!(
+            runtime.needs_render(None, Rendition::Current),
+            "preview changes affect rendering"
+        );
+    }
+
+    #[test]
+    fn multi_photo_range_names_are_saved_without_rendering() {
+        let mut runtime = runtime();
+        let paths = runtime.editing_paths.clone();
+        for path in &paths {
+            runtime
+                .photos
+                .get_mut(path)
+                .unwrap()
+                .settings
+                .as_mut()
+                .unwrap()
+                .photographic
+                .color_editor
+                .advanced
+                .push(Default::default());
+        }
+        runtime.request(None, Rendition::Current);
+        let mut sidecars = session();
+        let rename = Edit::Assign {
+            pointer: "/photographic/color_editor/advanced/0/name".into(),
+            value: serde_json::json!("Petals"),
+        };
+        assert!(!runtime.apply_edits(&[rename], &mut sidecars));
+        for path in &paths {
+            let settings = runtime.settings(path).unwrap();
+            assert_eq!(
+                settings.photographic.color_editor.advanced.ranges[0]
+                    .name
+                    .as_str(),
+                "Petals"
+            );
+            assert_eq!(sidecars.requested_settings(path), Some(settings));
+        }
+        assert!(!runtime.needs_render(None, Rendition::Current));
+        assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
+        assert!(runtime.needs_render(None, Rendition::Current));
     }
 
     #[test]
@@ -1407,11 +1502,11 @@ mod tests {
         let inactive = PathBuf::from("inactive.x3f");
         runtime.photos.insert(
             inactive.clone(),
-            Photo {
+            Box::new(Photo {
                 dirty: true,
                 error: Some("old load failed".into()),
                 ..Default::default()
-            },
+            }),
         );
         assert!(runtime.editable_ready());
         assert_eq!(runtime.snapshots().len(), 2);

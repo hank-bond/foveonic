@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +15,19 @@ from scenarios import application_result
 
 FAKE_RENDERER = '''#!/usr/bin/env python3
 import hashlib, json, pathlib, sys
+if sys.argv[1]=='--compare-samples':
+    import struct,math
+    left=pathlib.Path(sys.argv[2]).read_bytes();right=pathlib.Path(sys.argv[3]).read_bytes()
+    endian='<' if sys.argv[-1]=='little' else '>'
+    pairs=list(zip(struct.iter_unpack(endian+'f',left),struct.iter_unpack(endian+'f',right)))
+    delta=[abs(a[0]-b[0]) for a,b in pairs if math.isfinite(a[0]) and math.isfinite(b[0])]
+    nf=len(pairs)-len(delta);n=len(pairs)
+    data={'samples':n,'different_samples':sum(x!=0 for x in delta),'nonfinite_samples':nf,
+          'max_absolute':None if nf else max(delta,default=0),
+          'mean_absolute':None if nf else sum(delta)/max(n,1),
+          'rms':None if nf else math.sqrt(sum(x*x for x in delta)/max(n,1)),
+          'quality_sha256':hashlib.sha256(left).hexdigest(),'speed_sha256':hashlib.sha256(right).hexdigest()}
+    print(json.dumps({'event':'sample_difference','data':data}));sys.exit(0)
 source=pathlib.Path(sys.argv[1]); output=pathlib.Path(sys.argv[2]); output.mkdir()
 resolution=sys.argv[sys.argv.index('--resolution')+1]
 quality=sys.argv[sys.argv.index('--processing-quality')+1]
@@ -51,6 +65,29 @@ class MatrixTests(unittest.TestCase):
             self.assertEqual(quiet.call_count, 1)
             self.assertEqual(allowed['cases'][0]['concurrent_workloads_before_render'], [workload])
             self.assertIn('correctness-only', allowed['cases'][0]['timing_validity'])
+
+    def test_contended_matrix_uses_current_comparator_for_an_older_renderer(self):
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), \
+                patch('render_matrix.require_quiet', side_effect=RuntimeError('app running')), \
+                patch('render_matrix.running_workloads', return_value=[{'pid': 42, 'executable': 'profile_wide'}]):
+            root = Path(tmp)
+            renderer = root / 'older-renderer'
+            renderer.write_text(FAKE_RENDERER.replace("if sys.argv[1]=='--compare-samples':",
+                                                     "if sys.argv[1]=='--compare-samples':\n    sys.exit('unsupported by older renderer')"))
+            renderer.chmod(0o755)
+            comparator = root / 'current-comparator'
+            comparator.write_text(FAKE_RENDERER)
+            comparator.chmod(0o755)
+            source = root / 'sample.x3f'
+            source.write_bytes(b'original')
+            cases = [{'label': 'sample', 'family': 'merrill', 'source': str(source),
+                      'resolutions': ['thumb'], 'processing_qualities': ['quality', 'speed']}]
+            report = run(renderer, cases, root / 'matrix', allow_contended_correctness=True,
+                         sample_comparator=comparator)
+            self.assertTrue(report['passed'])
+            self.assertEqual(report['sample_comparator']['path'], str(comparator.resolve()))
+            self.assertEqual(report['processing_mode_comparisons'][0]['outcome'], 'complete')
+            self.assertTrue(all('correctness-only' in row['timing_validity'] for row in report['cases']))
 
     def test_snapshot_recipes_preserve_transients_and_use_matrix_owned_axes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -151,6 +188,33 @@ class MatrixTests(unittest.TestCase):
 
 
 class ProcessingModeMatrixTests(unittest.TestCase):
+    def test_stats_helper_must_describe_complete_files_and_valid_metrics(self):
+        import copy, struct
+        from file_hash import digest
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);quality=root/'quality.f32';speed=root/'speed.f32'
+            quality.write_bytes(struct.pack('<2f',1.,2.));speed.write_bytes(quality.read_bytes())
+            valid={'samples':2,'different_samples':0,'nonfinite_samples':0,
+                   'max_absolute':0.,'mean_absolute':0.,'rms':0.,
+                   'quality_sha256':digest(quality),'speed_sha256':digest(speed)}
+            mutations=[{'samples':1},{'different_samples':3},{'nonfinite_samples':-1},
+                       {'samples':True},{'max_absolute':float('nan')},{'rms':-1.},
+                       {'nonfinite_samples':1},{'quality_sha256':'old-output'},
+                       {'different_samples':1},{'rms':1.}]
+            for mutation in mutations:
+                with self.subTest(mutation=mutation):
+                    data={**copy.deepcopy(valid),**mutation}
+                    result=subprocess.CompletedProcess([],0,json.dumps({'event':'sample_difference','data':data}),'')
+                    with patch('render_matrix.run_captured',return_value=result), self.assertRaises(ValueError):
+                        processing_mode_difference(quality,speed,{'endianness':'little'},comparator=root/'tool')
+            result=subprocess.CompletedProcess([],1,'','failed')
+            with patch('render_matrix.run_captured',return_value=result), self.assertRaisesRegex(ValueError,'status 1'):
+                processing_mode_difference(quality,speed,{'endianness':'little'},comparator=root/'tool')
+            for record in [[],{'event':'sample_difference','data':None}]:
+                result=subprocess.CompletedProcess([],0,json.dumps(record),'')
+                with patch('render_matrix.run_captured',return_value=result), self.assertRaises(ValueError):
+                    processing_mode_difference(quality,speed,{'endianness':'little'},comparator=root/'tool')
+
     def test_resolution_and_processing_quality_are_separate_axes(self):
         with tempfile.TemporaryDirectory() as temporary:
             source=Path(temporary)/'a.x3f';source.write_bytes(b'fixed source')
@@ -188,12 +252,13 @@ class ProcessingModeMatrixTests(unittest.TestCase):
         import struct
         with tempfile.TemporaryDirectory() as temporary:
             quality,speed=(Path(temporary)/name for name in ('quality.f32','speed.f32'))
+            comparator=Path(temporary)/'comparator';comparator.write_text(FAKE_RENDERER);comparator.chmod(0o755)
             quality.write_bytes(struct.pack('<3f',1.,2.,3.));speed.write_bytes(quality.read_bytes())
             original=quality.read_bytes()
-            exact=processing_mode_difference(quality,speed,{'endianness':'little'})
+            exact=processing_mode_difference(quality,speed,{'endianness':'little'},comparator=comparator)
             self.assertEqual(exact['different_samples'],0)
             speed.write_bytes(struct.pack('<3f',1.,2.5,2.5))
-            changed=processing_mode_difference(quality,speed,{'endianness':'little'})
+            changed=processing_mode_difference(quality,speed,{'endianness':'little'},comparator=comparator)
             self.assertEqual(changed['different_samples'],2)
             self.assertEqual(changed['max_absolute'],0.5)
             self.assertEqual(changed['visual_acceptance'],'unreviewed')
@@ -203,10 +268,11 @@ class ProcessingModeMatrixTests(unittest.TestCase):
         import struct
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);quality=root/'quality.f32';speed=root/'speed.f32'
+            comparator=root/'comparator';comparator.write_text(FAKE_RENDERER);comparator.chmod(0o755)
             for invalid in (float('nan'),float('inf'),float('-inf')):
                 quality.write_bytes(struct.pack('<3f',invalid,invalid,invalid))
                 speed.write_bytes(quality.read_bytes())
-                result=processing_mode_difference(quality,speed,{'endianness':'little'})
+                result=processing_mode_difference(quality,speed,{'endianness':'little'},comparator=comparator)
                 self.assertEqual(result['outcome'],'failed')
                 self.assertEqual(result['nonfinite_samples'],3)
                 for metric in ('max_absolute','mean_absolute','rms'):

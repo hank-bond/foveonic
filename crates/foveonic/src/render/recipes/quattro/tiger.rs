@@ -213,7 +213,7 @@ mod tests {
         };
         use std::sync::Arc;
 
-        let engine = Engine::new().unwrap();
+        let engine = Engine::test_executor();
         let mut source = Source::open(std::env::var_os("TIGER_X3F").unwrap()).unwrap();
         source.origin = Default::default();
         // Isolate phase-detection sites from unrelated factory defects in a flat field.
@@ -222,7 +222,7 @@ mod tests {
             .remove("BadPixelsLumaF23");
         let offset = source.metadata.scalar("RawOffset").unwrap() as f32;
         let flat_code = offset + 1000.;
-        for cell in source.pixels.as_chunks_mut::<6>().0 {
+        for cell in source.samples_mut().as_chunks_mut::<6>().0 {
             cell[2..].fill(flat_code);
         }
         let mut settings = Settings::new("Sunlight", "Standard");
@@ -269,7 +269,7 @@ mod tests {
             for y in [y, y + 1] {
                 let cell = (y / 2 * (source.metadata.width / 2) + x / 2) * 6;
                 let phase = 2 + (y % 2) * 2 + x % 2;
-                source.pixels[cell + phase] = offset + error;
+                source.samples_mut()[cell + phase] = offset + error;
             }
         }
         assert!(

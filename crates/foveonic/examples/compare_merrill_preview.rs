@@ -144,7 +144,7 @@ fn main() -> Result<()> {
         }
         scenes.push(json!({"name":scene,"load":source.load_timings(),"runs":runs,"assets":assets,"sessions":sessions}));
     }
-    let report = json!({"adapter":engine.adapter_name(),"method":"Completed render and view texture, decode/export/JPEG excluded. One warmup and three fresh trials per variant. Explicit Sunlight/Standard, Noise and Detail requested on and bypassed in Fast, no sidecars. JPEG assets are sRGB with embedded ICC at quality 100.","scenes":scenes});
+    let report = json!({"adapter":engine.adapter_name(),"method":"Completed render and view texture, decode/export/JPEG excluded. One warmup and three fresh trials per variant. Explicit Sunlight/Standard, Quality processing at native or divisor-two working scale, Noise and Detail enabled, no sidecars. Only skip-speckle disables despeckle. JPEG assets are sRGB with embedded ICC at quality 100.","scenes":scenes});
     fs::write(
         output.join("report.json"),
         serde_json::to_vec_pretty(&report)?,

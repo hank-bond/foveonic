@@ -33,7 +33,7 @@ fn export_shader_has_valid_guarded_entry_points_without_hardware() {
         assert_eq!(
             mask,
             match entry.name.as_str() {
-                "convert" => (1 << 2) | (1 << 3),
+                "convert" => 1 << 3,
                 "quantize" => 1 << 5,
                 _ => panic!("unexpected DNG entry point"),
             }
@@ -44,7 +44,7 @@ fn export_shader_has_valid_guarded_entry_points_without_hardware() {
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn technical_base_defers_presentation_and_bakes_spatial_and_signal_controls() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = Source::open(
         std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f"),
@@ -156,7 +156,7 @@ fn technical_base_defers_presentation_and_bakes_spatial_and_signal_controls() {
 #[test]
 #[ignore = "requires a GPU and CLASSIC_X3F, optionally CLASSIC_DNG_DIR for reader validation"]
 fn classic_dng_defers_appearance_and_preserves_editable_samples() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = Source::open(std::env::var_os("CLASSIC_X3F").unwrap()).unwrap();
     let mut settings = Settings::new(
         std::env::var("CLASSIC_WHITE_BALANCE")
@@ -338,7 +338,7 @@ fn classic_dng_defers_appearance_and_preserves_editable_samples() {
 #[test]
 #[ignore = "requires a GPU and CLASSIC_X3F, optionally CLASSIC_DNG_DIR for reader validation"]
 fn classic_monochrome_dng_bakes_mixture_and_defers_response() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = Source::open(std::env::var_os("CLASSIC_X3F").unwrap()).unwrap();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.rendering = crate::render::Rendering::Monochrome;

@@ -3,6 +3,7 @@
 use crate::export::{self, Export, ExportFormat};
 use eframe::egui;
 use foveonic::diagnostics as trace;
+use foveonic::support::{self, Level, OperationContext};
 use foveonic::{
     decode_cache::Cache,
     importing::{self, ConflictPolicy, Disposition, History, Identity, Record},
@@ -14,7 +15,10 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Condvar, Mutex,
+    },
     time::Instant,
 };
 
@@ -120,6 +124,7 @@ impl Worker {
         let mut engine = engine;
         let builder = std::thread::Builder::new().name("batch".into());
         let spawned = builder.spawn(move || {
+            let mut unavailable_directory = None;
             loop {
                 let (scan, batch, directory) = {
                     let mut state = slot.0.lock().unwrap();
@@ -163,7 +168,51 @@ impl Worker {
                             fields.str("path", &path.to_string_lossy());
                         },
                     );
-                    let available = path.is_dir();
+                    let available = match fs::metadata(&path) {
+                        Ok(metadata) => {
+                            if metadata.is_dir() {
+                                unavailable_directory = None;
+                                true
+                            } else {
+                                if unavailable_directory.as_ref() != Some(&(path.clone(), None)) {
+                                    support::event(
+                                        Level::Warning,
+                                        "import.destination_unavailable",
+                                        "Destination is not a folder",
+                                        serde_json::json!({"destination":path.to_string_lossy()}),
+                                    );
+                                }
+                                unavailable_directory = Some((path.clone(), None));
+                                false
+                            }
+                        }
+                        Err(error) => {
+                            let failure = (path.clone(), Some(error.kind()));
+                            if unavailable_directory.as_ref() != Some(&failure) {
+                                if error.kind() == std::io::ErrorKind::NotFound {
+                                    support::event(
+                                        Level::Warning,
+                                        "import.destination_unavailable",
+                                        "Destination folder does not exist",
+                                        serde_json::json!({"destination":path.to_string_lossy()}),
+                                    );
+                                } else {
+                                    support::report_error(
+                                        "import.destination_probe",
+                                        &error,
+                                        OperationContext {
+                                            component: Some("import".into()),
+                                            phase: Some("inspect-destination".into()),
+                                            destination: Some(path.to_string_lossy().into_owned()),
+                                            ..Default::default()
+                                        },
+                                    );
+                                }
+                            }
+                            unavailable_directory = Some(failure);
+                            false
+                        }
+                    };
                     *checked_directory.lock().unwrap() = Some((path, available));
                 }
                 if let Some(scan) = scan {
@@ -200,7 +249,19 @@ impl Worker {
                 context.request_repaint();
             }
         });
-        spawned.expect("start batch thread");
+        spawned
+            .inspect_err(|error| {
+                support::report_error(
+                    "batch.spawn",
+                    error,
+                    OperationContext {
+                        component: Some("batch".into()),
+                        phase: Some("spawn-worker".into()),
+                        ..Default::default()
+                    },
+                );
+            })
+            .expect("start batch thread");
         Self {
             pending,
             progress,
@@ -293,6 +354,20 @@ fn scan_files(
     let history = match history {
         Ok(history) => history,
         Err(error) => {
+            support::report_error(
+                "import.scan_history",
+                error.as_ref(),
+                OperationContext {
+                    component: Some("import-scan".into()),
+                    phase: Some("load-history".into()),
+                    destination: scan
+                        .destination
+                        .as_ref()
+                        .map(|p| History::path(p).to_string_lossy().into_owned()),
+                    revision: Some(scan.generation.to_string()),
+                    ..Default::default()
+                },
+            );
             result.errors.push(error.to_string());
             return result;
         }
@@ -318,6 +393,12 @@ fn scan_files(
         {
             Ok(identity) => identity,
             Err(error) => {
+                scan_failure(
+                    "read-source-identity",
+                    &path,
+                    scan.generation,
+                    error.as_ref(),
+                );
                 result.errors.push(format!("{}: {error}", path.display()));
                 continue;
             }
@@ -342,7 +423,15 @@ fn scan_files(
                 })
             }
         })()
-        .map_err(|error| error.to_string());
+        .map_err(|error| {
+            scan_failure(
+                "load-editing-settings",
+                &path,
+                scan.generation,
+                error.as_ref(),
+            );
+            error.to_string()
+        });
         if let Err(error) = &settings {
             result.errors.push(format!("{}: {error}", path.display()));
         }
@@ -352,6 +441,12 @@ fn scan_files(
                 match foveonic::review::load(folder) {
                     Ok(ratings) => ratings,
                     Err(error) => {
+                        scan_failure(
+                            "load-ratings-using-defaults",
+                            &foveonic::review::path(folder),
+                            scan.generation,
+                            error.as_ref(),
+                        );
                         result.errors.push(format!(
                             "{}: {error}",
                             foveonic::review::path(folder).display()
@@ -413,6 +508,15 @@ fn run_batch(
             .u64("photos", batch.photos.len() as u64)
             .str("destination", &batch.destination.to_string_lossy());
     });
+    let setup_context = OperationContext {
+        component: Some("batch".into()),
+        phase: Some("prepare-batch".into()),
+        destination: Some(batch.destination.to_string_lossy().into_owned()),
+        settings: Some(
+            serde_json::json!({"photos":batch.photos.len(),"formats":batch.output.formats.iter().map(|f|f.extension()).collect::<Vec<_>>(),"conflict":batch.output.conflict}),
+        ),
+        ..Default::default()
+    };
     let result = (|| -> Result<()> {
         fs::create_dir_all(&batch.destination)?;
         let mut history = match batch.operation {
@@ -535,6 +639,7 @@ fn run_batch(
         Ok(())
     })();
     if let Err(error) = result {
+        support::report_error("batch.prepare", error.as_ref(), setup_context);
         progress.lock().unwrap().errors.push(error.to_string());
     }
 }
@@ -548,33 +653,62 @@ fn export_photo(
     reserved: &mut HashSet<PathBuf>,
     record: impl Fn(&std::path::Path),
 ) -> Result<()> {
-    // Exports consume cache hits without filling the browsing cache on a miss.
-    // Writing a whole decode/preview bundle here competes with the requested output.
-    let source = match cache.open_cached(&photo.path, |_| {}) {
-        Some(source) => source,
-        None => Arc::new(foveonic::source::Source::open(&photo.path)?),
-    };
-    source_loaded(&photo.path, &source, None);
-    let mut session = RenderSession::new(source);
-    for &format in &output.formats {
-        let path = export::next_path(&photo.path, destination, format, output.conflict, reserved)?;
-        reserved.insert(path.clone());
-        write_export(
-            engine,
-            &mut session,
-            photo,
-            &Export {
-                path: path.clone(),
-                format,
-                tiff_color_space: output.tiff_color_space,
-                encoding: output.encoding,
-                sections: output.sections,
-                conflict: output.conflict,
-            },
-        )?;
-        record(&path);
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let operation_id = format!("export_photo-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+    let mut phase = "open-source";
+    let mut published = Vec::new();
+    support::event(
+        Level::Info,
+        "operation.started",
+        "Photo operation started",
+        serde_json::json!({"operation":photo_context(&operation_id, photo, destination, output, phase, &published)}),
+    );
+    let result = (|| -> Result<()> {
+        // Exports consume cache hits without filling the browsing cache on a miss.
+        // Writing a whole decode/preview bundle here competes with the requested output.
+        let source = match cache.open_cached(&photo.path, |_| {}) {
+            Some(source) => source,
+            None => Arc::new(foveonic::source::Source::open(&photo.path)?),
+        };
+        source_loaded(&photo.path, &source, None);
+        let mut session = RenderSession::new(source);
+        for &format in &output.formats {
+            phase = "choose-output-path";
+            let path =
+                export::next_path(&photo.path, destination, format, output.conflict, reserved)?;
+            reserved.insert(path.clone());
+            phase = "write-output";
+            write_export(
+                engine,
+                &mut session,
+                photo,
+                &Export {
+                    path: path.clone(),
+                    format,
+                    tiff_color_space: output.tiff_color_space,
+                    encoding: output.encoding,
+                    sections: output.sections,
+                    conflict: output.conflict,
+                },
+            )?;
+            published.push(path.clone());
+            record(&path);
+        }
+        Ok(())
+    })();
+    let operation = photo_context(&operation_id, photo, destination, output, phase, &published);
+    match result {
+        Ok(value) => {
+            support::event(
+                Level::Info,
+                "operation.completed",
+                "Photo operation completed",
+                serde_json::json!({"operation":operation}),
+            );
+            Ok(value)
+        }
+        Err(error) => Err(support::reported_error("batch.photo", error, operation)),
     }
-    Ok(())
 }
 
 fn import_photo(
@@ -586,79 +720,178 @@ fn import_photo(
     reserved: &mut HashSet<PathBuf>,
     finish: impl FnOnce(&std::path::Path) -> Result<()>,
 ) -> Result<PathBuf> {
-    let formats = &output.formats;
-    let originals = if formats.is_empty() {
-        destination.to_owned()
-    } else {
-        destination.join("x3f")
-    };
-    fs::create_dir_all(&originals)?;
-    let extensions: Vec<_> = formats.iter().map(|format| format.extension()).collect();
-    let name = importing::available_name(
-        &photo.path,
-        &originals,
-        destination,
-        &extensions,
-        output.conflict,
-        reserved,
-    )?;
-    let original = originals.join(&name);
-    let sidecar = foveonic::sidecar::path(&original);
-    let rendered: Vec<_> = formats
-        .iter()
-        .map(|format| destination.join(&name).with_extension(format.extension()))
-        .collect();
-    reserved.insert(original.clone());
-    reserved.insert(sidecar.clone());
-    reserved.extend(rendered.iter().cloned());
-
-    if !cache.copy_original(&photo.path, &original, &photo.identity, output.conflict)? {
-        importing::copy_original(&photo.path, &original, &photo.identity, output.conflict)?;
-    }
-    let recipe = foveonic::sidecar::encode(&photo.settings)?;
-    fs::create_dir_all(sidecar.parent().ok_or("sidecar has no parent")?)?;
-    importing::write_output(&sidecar, output.conflict, |temporary| {
-        fs::write(temporary, &recipe)?;
-        Ok(())
-    })?;
-    foveonic::review::save(&original, photo.rating)?;
-    if !formats.is_empty() {
-        // Reuse the source cache after copying. A miss reads the completed local copy.
-        let cached = if cache
-            .import_identity(&photo.path)
-            .or_else(|| Identity::read(&photo.path).ok())
-            .as_ref()
-            == Some(&photo.identity)
-        {
-            cache.open_cached(&photo.path, |_| {})
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let operation_id = format!("import_photo-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+    let mut phase = "create-original-directory";
+    let mut published = Vec::new();
+    support::event(
+        Level::Info,
+        "operation.started",
+        "Photo operation started",
+        serde_json::json!({"operation":photo_context(&operation_id, photo, destination, output, phase, &published)}),
+    );
+    let result = (|| -> Result<PathBuf> {
+        let formats = &output.formats;
+        let originals = if formats.is_empty() {
+            destination.to_owned()
         } else {
-            None
+            destination.join("x3f")
         };
-        let source = match cached {
-            Some(source) => source,
-            None => Arc::new(foveonic::source::Source::open(&original)?),
-        };
-        source_loaded(&photo.path, &source, Some(&original));
-        let mut session = RenderSession::new(source);
-        for (&format, path) in formats.iter().zip(rendered) {
-            write_export(
-                engine,
-                &mut session,
-                photo,
-                &Export {
-                    path,
-                    format,
-                    tiff_color_space: output.tiff_color_space,
-                    encoding: output.encoding,
-                    sections: output.sections,
-                    conflict: output.conflict,
-                },
-            )?;
+        fs::create_dir_all(&originals)?;
+        let extensions: Vec<_> = formats.iter().map(|format| format.extension()).collect();
+        phase = "choose-import-paths";
+        let name = importing::available_name(
+            &photo.path,
+            &originals,
+            destination,
+            &extensions,
+            output.conflict,
+            reserved,
+        )?;
+        let original = originals.join(&name);
+        let sidecar = foveonic::sidecar::path(&original);
+        let rendered: Vec<_> = formats
+            .iter()
+            .map(|format| destination.join(&name).with_extension(format.extension()))
+            .collect();
+        reserved.insert(original.clone());
+        reserved.insert(sidecar.clone());
+        reserved.extend(rendered.iter().cloned());
+
+        phase = "copy-original";
+        if !cache.copy_original(&photo.path, &original, &photo.identity, output.conflict)? {
+            importing::copy_original(&photo.path, &original, &photo.identity, output.conflict)?;
         }
+        published.push(original.clone());
+        published_artifact(&operation_id, &photo.path, &original, "original");
+        phase = "write-sidecar";
+        let recipe = foveonic::sidecar::encode(&photo.settings)?;
+        fs::create_dir_all(sidecar.parent().ok_or("sidecar has no parent")?)?;
+        importing::write_output(&sidecar, output.conflict, |temporary| {
+            fs::write(temporary, &recipe)?;
+            Ok(())
+        })?;
+        published.push(sidecar.clone());
+        published_artifact(&operation_id, &photo.path, &sidecar, "sidecar");
+        phase = "save-rating";
+        foveonic::review::save(&original, photo.rating)?;
+        let ratings = foveonic::review::path(&originals);
+        support::event(
+            Level::Info,
+            "import.rating_saved",
+            "Imported photo rating saved",
+            serde_json::json!({"operation_id":operation_id,"source":photo.path.to_string_lossy(),
+                "rating_file":ratings.to_string_lossy(),"rating":photo.rating}),
+        );
+        if !formats.is_empty() {
+            // Reuse the source cache after copying. A miss reads the completed local copy.
+            let cached = if cache
+                .import_identity(&photo.path)
+                .or_else(|| Identity::read(&photo.path).ok())
+                .as_ref()
+                == Some(&photo.identity)
+            {
+                cache.open_cached(&photo.path, |_| {})
+            } else {
+                None
+            };
+            phase = "open-imported-source";
+            let source = match cached {
+                Some(source) => source,
+                None => Arc::new(foveonic::source::Source::open(&original)?),
+            };
+            source_loaded(&photo.path, &source, Some(&original));
+            let mut session = RenderSession::new(source);
+            for (&format, path) in formats.iter().zip(rendered) {
+                phase = "write-output";
+                write_export(
+                    engine,
+                    &mut session,
+                    photo,
+                    &Export {
+                        path: path.clone(),
+                        format,
+                        tiff_color_space: output.tiff_color_space,
+                        encoding: output.encoding,
+                        sections: output.sections,
+                        conflict: output.conflict,
+                    },
+                )?;
+                published.push(path);
+            }
+        }
+        let relative = original.strip_prefix(destination)?.to_owned();
+        phase = "save-import-history";
+        finish(&relative)?;
+        published.push(History::path(destination));
+        Ok(relative)
+    })();
+    let operation = photo_context(&operation_id, photo, destination, output, phase, &published);
+    match result {
+        Ok(value) => {
+            support::event(
+                Level::Info,
+                "operation.completed",
+                "Photo operation completed",
+                serde_json::json!({"operation":operation}),
+            );
+            Ok(value)
+        }
+        Err(error) => Err(support::reported_error("batch.photo", error, operation)),
     }
-    let relative = original.strip_prefix(destination)?.to_owned();
-    finish(&relative)?;
-    Ok(relative)
+}
+
+fn photo_context(
+    id: &str,
+    photo: &Photo,
+    destination: &std::path::Path,
+    output: &Output,
+    phase: &str,
+    published: &[PathBuf],
+) -> OperationContext {
+    OperationContext {
+        operation_id: Some(id.into()),
+        component: Some("batch".into()),
+        phase: Some(phase.into()),
+        source: Some(photo.path.to_string_lossy().into_owned()),
+        destination: Some(destination.to_string_lossy().into_owned()),
+        settings: Some(
+            serde_json::json!({"frozen_recipe":support::settings_snapshot(&photo.settings),"source_identity":photo.identity,"rating":photo.rating,
+            "formats":output.formats.iter().map(|format|format.extension()).collect::<Vec<_>>(),
+            "encoding":output.encoding,"conflict":output.conflict,"sections":output.sections,"tiff_color_space":output.tiff_color_space,
+            "published":published.iter().map(|path|path.to_string_lossy()).collect::<Vec<_>>(),
+            "history_committed":phase=="save-import-history" && published.last().is_some_and(|p|*p==History::path(destination))}),
+        ),
+        ..Default::default()
+    }
+}
+
+fn published_artifact(id: &str, source: &std::path::Path, path: &std::path::Path, kind: &str) {
+    support::event(
+        Level::Info,
+        "artifact.published",
+        "Import artifact saved",
+        serde_json::json!({"operation_id":id,"source":source.to_string_lossy(),"destination":path.to_string_lossy(),"kind":kind}),
+    );
+}
+
+fn scan_failure(
+    phase: &str,
+    path: &std::path::Path,
+    generation: u64,
+    error: &(dyn std::error::Error + 'static),
+) {
+    support::report_error(
+        "import.scan",
+        error,
+        OperationContext {
+            component: Some("import-scan".into()),
+            phase: Some(phase.into()),
+            source: Some(path.to_string_lossy().into_owned()),
+            revision: Some(generation.to_string()),
+            ..Default::default()
+        },
+    );
 }
 
 fn source_loaded(
@@ -666,11 +899,23 @@ fn source_loaded(
     source: &foveonic::source::Source,
     copied: Option<&std::path::Path>,
 ) {
+    let cached = source
+        .load_timings()
+        .iter()
+        .any(|t| t.stage == "decoded cache read");
+    support::event(
+        Level::Info,
+        "batch.source_ready",
+        "Batch source opened",
+        serde_json::json!({
+            "source":path.to_string_lossy(),
+            "camera":source.metadata.properties.get("CAMMODEL"),
+            "input":if cached {"decoded-cache"}else if copied.is_some(){"copied-original"}else{"original"},
+            "read_from":if cached {None}else{Some(copied.unwrap_or(path).to_string_lossy())},
+            "extent":[source.metadata.width,source.metadata.height],
+        }),
+    );
     if crate::timing::enabled() {
-        let cached = source
-            .load_timings()
-            .iter()
-            .any(|t| t.stage == "decoded cache read");
         crate::timing::emit("source_load", || {
             serde_json::json!({
                 "frontend":"batch","source":path,"timings":source.load_timings(),
@@ -695,6 +940,7 @@ fn write_export(
         engine,
         session,
         &photo.settings,
+        &photo.path,
         output,
         &mut profile,
         |_| {},

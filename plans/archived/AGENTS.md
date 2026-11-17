@@ -16,6 +16,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[advanced-color-range](./advanced-color-range.md)** _(archived)._ Build and evaluate an Advanced Color Range wheel, saved HSL edit list.
 - **[alpha-sidecar-fields](./alpha-sidecar-fields.md)** _(archived)._ Use shared defaults and tolerate extra alpha editing fields without sidecar migrations.
 - **[banding-slider-and-settings-defaults](./banding-slider-and-settings-defaults.md)** _(archived)._ Add a five-stop column-banding slider and deserialize omitted image-edit fields from shared Rust defaults.
+- **[browser-loading-failures](./browser-loading-failures.md)** _(archived)._ Bound directory-triggered input and preview allocations and report browser GPU allocation failures.
 - **[browser-review](./browser-review.md)** _(archived)._ Add three browser views with independent review ratings, metadata sorting and shared search filters.
 - **[browser-thumbnail-budget](./browser-thumbnail-budget.md)** _(archived)._ Replace the browser thumbnail count limit with a persistent memory budget and group performance preferences.
 - **[cache-and-smart-cleanup](./cache-and-smart-cleanup.md)** _(archived)._ Organize cache and Smart preview responsibilities and explain constants while preserving processing behavior.
@@ -69,6 +70,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[guarded-rows-working-grid](./guarded-rows-working-grid.md)** _(archived)._ Moves Merrill guarded-row estimation onto resized evidence with shared calibration, projected noise and bounded native rounding differences.
 - **[gui-screenshot](./gui-screenshot.md)** _(archived)._ Share example-photo syncing through Cargo and explicitly refresh a lossless WebP GUI screenshot for the README.
 - **[help-comparisons](./help-comparisons.md)** _(archived)._ Manage release-hosted example photographs, explicit comparison rendering, and checked-in images through one shared popover template.
+- **[highlight-donor-reuse](./highlight-donor-reuse.md)** _(archived)._ Reuse exact donor-bin provenance while preserving corrected 0.8.2 pixels and measuring the highlight recovery cost.
 - **[highlight-retention](./highlight-retention.md)** _(archived)._ The fixed highlight-retention curve was implemented, photographically rejected and superseded by regional adaptive tone.
 - **[highlight-threshold](./highlight-threshold.md)** _(archived)._ Add a camera-relative highlight threshold while preserving default exports.
 - **[icon-background](./icon-background.md)** _(archived)._ A local macOS app bundle supports native automatic light/dark layered-X icons with opaque colored slabs and a restrained bevel.
@@ -129,6 +131,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[release-0.7.1](./release-0.7.1.md)** _(archived)._ Record verified 0.7.1 publication with the appearance, processing and responsiveness fixes.
 - **[release-0.7.2](./release-0.7.2.md)** _(archived)._ Prepare, verify and publish the 0.7.2 Smart preview, Merrill editing and licensing release.
 - **[release-0.8.0](./release-0.8.0.md)** _(archived)._ Version 0.8.0 has a verified signed draft covering white balance, rotation and reduced RAW support.
+- **[release-0.8.3](./release-0.8.3.md)** _(archived)._ Ship 0.8.3 with reviewed highlight optimization, verified packages, owner-approved publication and recorded coverage gaps.
 - **[release-coherence](./release-coherence.md)** _(archived)._ Record the release component review, structural cleanup and validation before grouped commits.
 - **[remove-sensor-gain](./remove-sensor-gain.md)** _(archived)._ Remove global Sensor gain and migrate local sidecars directly without a legacy reader.
 - **[render-progress](./render-progress.md)** _(archived)._ Replace loading text with discrete source/render progress and request-to-image milliseconds.
@@ -148,6 +151,7 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[single-read-cache](./single-read-cache.md)** _(archived)._ Prepare all browsing and rendering inputs from one original read and keep cache hits independent of card I/O.
 - **[smart-preview-response](./smart-preview-response.md)** _(archived)._ Show Full viewport detail first for zoomed Smart edits while retaining the previous image.
 - **[smart-preview-reuse](./smart-preview-reuse.md)** _(archived)._ Preserve completed Smart detail during scrubbing and reuse warm regional and whole-frame inputs across refinement.
+- **[startup-progress](./startup-progress.md)** _(archived)._ Present a responsive loading window and capture startup host work before photographic-engine preparation.
 - **[thumbnail-and-preview-cache](./thumbnail-and-preview-cache.md)** _(archived)._ Refresh rendered thumbnails, cache sharper asynchronous previews, and collect recipes in a visible source-folder directory.
 - **[thumbnail-priority](./thumbnail-priority.md)** _(archived)._ Load visible thumbnails first, greedily prepare the folder, and coordinate work behind the selected photo.
 - **[tiff-controls-and-batch](./tiff-controls-and-batch.md)** _(archived)._ Add straightforward TIFF controls, optional corrective nodes, resizing, and shared-engine batch processing.

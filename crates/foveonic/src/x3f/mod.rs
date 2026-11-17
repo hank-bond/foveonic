@@ -6,14 +6,14 @@ pub(crate) mod adjustments;
 mod bytes;
 pub(crate) mod camf;
 pub(crate) mod capture;
-mod exif;
+pub(crate) mod exif;
 mod format31;
 mod format6;
 mod huffman;
 
 use crate::input_error::damaged;
 use crate::profile::Timing;
-use crate::source::{Metadata, Result, Source, SourceStorage};
+use crate::source::{Metadata, Result, SensorSamples, Source, SourceStorage};
 use crate::{diagnostics, diagnostics::Category};
 use bytes::{product, Bytes};
 use huffman::Table;
@@ -50,6 +50,8 @@ const SENSOR_IMAGE_TYPES: [u32; 2] = [1, 3];
 const SENSOR_HUFFMAN_FORMAT: u32 = 30;
 const PROPERTY_HEADER_BYTES: usize = 24;
 const PROPERTY_ENTRY_BYTES: usize = 8;
+// Bound both the encoded section and its independently owned decoded strings.
+const MAXIMUM_PROPERTY_BYTES: usize = 1024 * 1024;
 
 pub(crate) use camf::parse as cached_camera_metadata;
 pub(crate) use exif::color_space as jpeg_color_space;
@@ -107,23 +109,39 @@ fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, 
         let _scope = diagnostics::scope(Category::Io, "source.original.metadata");
         file.metadata()?.len()
     };
+    let mut file = crate::diagnostics::io::ObservedReader::new(file, "original", path);
+    let data = read_original_bytes(&mut file, length)?;
+    file.complete();
+    let read = Timing::elapsed("file read", start);
+    read_complete();
+    Ok((data, read))
+}
+
+fn read_original_bytes(file: &mut impl std::io::Read, length: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
     if length < MINIMUM_FILE_BYTES {
         return Err(damaged("truncated X3F header"));
     }
     if length > MAXIMUM_FILE_BYTES {
         return Err("unsupported X3F file size".into());
     }
-    let mut file = crate::diagnostics::io::ObservedReader::new(file, "original", path);
+    let mut header = [0; 52];
+    let header_bytes = header.len().min(length as usize);
+    file.read_exact(&mut header[..header_bytes])?;
+    validate_header(&header[..header_bytes])?;
     let mut data = {
         let _scope = diagnostics::scope(Category::Io, "source.original.allocate");
-        Vec::with_capacity(length as usize)
+        let mut data = Vec::new();
+        data.try_reserve_exact(length as usize)
+            .map_err(|_| "Not enough memory to read this X3F original")?;
+        data
     };
-    use std::io::Read;
+    data.extend_from_slice(&header[..header_bytes]);
     // Yield background I/O between bounded reads instead of issuing the whole
     // original at once when the next selected photo needs the storage device.
     {
         let _scope = diagnostics::scope(Category::Io, "source.original.payload");
-        let mut limited = (&mut file).take(length + 1);
+        let mut limited = file.take(length - header_bytes as u64 + 1);
         loop {
             crate::background::checkpoint_or_cancel()?;
             let before = data.len();
@@ -139,10 +157,7 @@ fn read_original(path: &Path, read_complete: impl FnOnce()) -> Result<(Vec<u8>, 
             return Err("X3F file changes during reading".into());
         }
     }
-    file.complete();
-    let read = Timing::elapsed("file read", start);
-    read_complete();
-    Ok((data, read))
+    Ok(data)
 }
 
 fn decode_owned(data: Vec<u8>, read: Timing) -> Result<(Source, Vec<u8>)> {
@@ -157,8 +172,7 @@ fn decode_owned(data: Vec<u8>, read: Timing) -> Result<(Source, Vec<u8>)> {
     Ok((source, data))
 }
 
-fn decode(data: &[u8]) -> Result<Source> {
-    let sections_scope = diagnostics::scope(Category::Cpu, "decode.sections");
+fn validate_header(data: &[u8]) -> Result<(u32, Option<[u16; 4]>)> {
     let bytes = Bytes(data);
     if bytes.range(0, 4)? != b"FOVb" {
         return Err(damaged("invalid X3F signature"));
@@ -168,6 +182,13 @@ fn decode(data: &[u8]) -> Result<Source> {
     }
     let rotation = rotation(data)?;
     let processing_version = processing_version(data)?;
+    Ok((rotation, processing_version))
+}
+
+fn decode(data: &[u8]) -> Result<Source> {
+    let sections_scope = diagnostics::scope(Category::Cpu, "decode.sections");
+    let bytes = Bytes(data);
+    let (rotation, processing_version) = validate_header(data)?;
     let end = data
         .len()
         .checked_sub(4)
@@ -248,13 +269,8 @@ fn decode(data: &[u8]) -> Result<Source> {
         .map(read_properties)
         .transpose()?
         .unwrap_or_default();
-    if properties.is_empty()
-        || properties.get("CAMMODEL").is_some_and(|m| {
-            m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
-        })
-    {
-        merge_preview_properties(&mut properties, preview_properties);
-    }
+    merge_preview_properties(&mut properties, preview_properties);
+    properties.insert("EXIF_CAPTURE_CHECKED".into(), "1".into());
     properties.extend(adjustments::read(&data[..ranges[0].0])?);
     properties.insert("X3F_MARK_BITS".into(), mark_bits(data)?.to_string());
     record_image_extent(&mut properties, data)?;
@@ -298,11 +314,10 @@ fn merge_preview_properties(
     preview: BTreeMap<String, String>,
 ) {
     let fallback = properties.is_empty();
-    properties.extend(
-        preview
-            .into_iter()
-            .filter(|(name, _)| fallback || name.starts_with("EXIF_")),
-    );
+    let has_iso = properties.contains_key("ISO");
+    properties.extend(preview.into_iter().filter(|(name, _)| {
+        (fallback || name.starts_with("EXIF_")) && !(has_iso && name == "EXIF_PREVIEW_ISO")
+    }));
 }
 
 /// Keep the declared photograph size separate from compressed sensor storage.
@@ -360,6 +375,9 @@ fn insert<'a>(slot: &mut Option<&'a [u8]>, section: &'a [u8]) -> Result<()> {
 }
 
 fn read_properties(section: &[u8]) -> Result<BTreeMap<String, String>> {
+    if section.len() > MAXIMUM_PROPERTY_BYTES {
+        return Err(damaged("X3F capture properties too large"));
+    }
     let bytes = Bytes(section);
     if bytes.range(0, 4)? != b"SECp"
         || bytes.u32(4)? != SECTION_VERSION
@@ -376,15 +394,22 @@ fn read_properties(section: &[u8]) -> Result<BTreeMap<String, String>> {
     let units = bytes.offset(20)?;
     let strings = Bytes(bytes.range(PROPERTY_HEADER_BYTES + table_bytes, product(units, 2)?)?);
     let mut properties = BTreeMap::new();
+    let mut remaining = MAXIMUM_PROPERTY_BYTES;
     for i in 0..count {
-        let key = strings.utf16(product(
-            bytes.offset(PROPERTY_HEADER_BYTES + i * PROPERTY_ENTRY_BYTES)?,
-            2,
-        )?)?;
-        let value = strings.utf16(product(
-            bytes.offset(PROPERTY_HEADER_BYTES + 4 + i * PROPERTY_ENTRY_BYTES)?,
-            2,
-        )?)?;
+        let key = strings.utf16(
+            product(
+                bytes.offset(PROPERTY_HEADER_BYTES + i * PROPERTY_ENTRY_BYTES)?,
+                2,
+            )?,
+            &mut remaining,
+        )?;
+        let value = strings.utf16(
+            product(
+                bytes.offset(PROPERTY_HEADER_BYTES + 4 + i * PROPERTY_ENTRY_BYTES)?,
+                2,
+            )?,
+            &mut remaining,
+        )?;
         if key.is_empty() || properties.insert(key, value).is_some() {
             return Err(damaged("invalid or duplicate X3F property"));
         }
@@ -392,7 +417,7 @@ fn read_properties(section: &[u8]) -> Result<BTreeMap<String, String>> {
     Ok(properties)
 }
 
-type SensorRead = (usize, usize, SourceStorage, Vec<f32>, Vec<Timing>);
+type SensorRead = (usize, usize, SourceStorage, SensorSamples, Vec<Timing>);
 
 fn sensor_plane_scope(
     layer_index: usize,
@@ -454,7 +479,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
             width,
             height,
             decoded.storage,
-            decoded.pixels,
+            decoded.pixels.into(),
             vec![Timing::elapsed("sensor compressed planes", start)],
         ));
     }
@@ -465,7 +490,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
             width,
             height,
             SourceStorage::InterleavedRgb,
-            pixels,
+            pixels.into(),
             vec![Timing::elapsed("sensor interleaved Huffman", start)],
         ));
     }
@@ -525,41 +550,14 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     };
     let mut timings = vec![Timing::elapsed("sensor planes wall", start_time)];
     timings.extend(planes.iter().map(|(_, timing)| timing.clone()));
-    let start_time = Instant::now();
-    let assembly_scope = diagnostics::scope(Category::Cpu, "decode.sensor.assemble");
-    let mut pixels = {
-        let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.output.allocate");
-        vec![0.; product(count, 3)?]
-    };
-    // Disjoint contiguous triplets let the compiler vectorize this pass
-    // without changing the channel-interleaving order.
-    // Keep the existing contiguous triplets while bounding speculative CPU work.
-    let samples_per_chunk = crate::background::IO_CHUNK_BYTES / std::mem::size_of::<f32>() / 3;
-    for (((chunk, red), green), blue) in pixels
-        .chunks_mut(samples_per_chunk * 3)
-        .zip(planes[0].0.chunks(samples_per_chunk))
-        .zip(planes[1].0.chunks(samples_per_chunk))
-        .zip(planes[2].0.chunks(samples_per_chunk))
-    {
-        crate::background::checkpoint_or_cancel()?;
-        for (((pixel, red), green), blue) in chunk
-            .as_chunks_mut::<3>()
-            .0
-            .iter_mut()
-            .zip(red)
-            .zip(green)
-            .zip(blue)
-        {
-            *pixel = [*red as f32, *green as f32, *blue as f32];
-        }
-    }
-    drop(assembly_scope);
-    timings.push(Timing::elapsed("sensor interleave", start_time));
+    let [red, green, blue]: [(Vec<u16>, Timing); 3] = planes
+        .try_into()
+        .map_err(|_| "expected three sensor planes")?;
     Ok((
         width,
         height,
         SourceStorage::InterleavedRgb,
-        pixels,
+        SensorSamples::UnsignedPlanes([red.0, green.0, blue.0]),
         timings,
     ))
 }
@@ -671,3 +669,6 @@ mod tests {
         assert!(read_properties(&data).is_err());
     }
 }
+
+#[cfg(test)]
+mod browser_input_test;

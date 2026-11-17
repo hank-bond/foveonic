@@ -38,7 +38,7 @@ fn color_field_shaders_validate() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_matches_independent_cpu_recovery_equations() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let width = 48usize;
     let height = 32usize;
     let p = [0.284206, 0.604436, 1.0];
@@ -337,6 +337,7 @@ fn check_real_inputs(full: bool) {
                 Content::Table { values, .. } => values.clone(),
             }
         };
+        let source_samples = source.samples();
         let before = floats("calibration.layers");
         let after = floats("repair.layers");
         let black = floats("black.levels");
@@ -351,7 +352,7 @@ fn check_real_inputs(full: bool) {
                     for col in left..left + side {
                         let off = (row * metadata.width + col) * 3;
                         let stressed = (0..3).any(|c| {
-                            (source.pixels[off + c] - black[c])
+                            (source_samples[off + c] - black[c])
                                 / (prepared.params.white[c] - black[c])
                                 > 0.95
                         });
@@ -382,7 +383,7 @@ fn check_real_inputs(full: bool) {
             for col in left..left + width {
                 let pixel = row * metadata.width + col;
                 let off = pixel * 3;
-                raw.extend_from_slice(&source.pixels[off..off + 3]);
+                raw.extend_from_slice(&source_samples[off..off + 3]);
                 calibrated.extend_from_slice(&after[off..off + 3]);
                 unrepaired.extend_from_slice(&before[off..off + 3]);
                 measured.push(std::array::from_fn(|c| {
@@ -392,8 +393,8 @@ fn check_real_inputs(full: bool) {
                     )
                 }));
                 masks.push(std::array::from_fn(|c| {
-                    let v =
-                        (source.pixels[off + c] - black[c]) / (prepared.params.white[c] - black[c]);
+                    let v = (source_samples[off + c] - black[c])
+                        / (prepared.params.white[c] - black[c]);
                     if v >= 0.99 {
                         0
                     } else {
@@ -457,7 +458,8 @@ fn check_real_inputs(full: bool) {
                 let off = (row * metadata.width + col) * 3;
                 std::array::from_fn(|c| {
                     f64::from(
-                        (source.pixels[off + c] - black[c]) / (prepared.params.white[c] - black[c]),
+                        (source_samples[off + c] - black[c])
+                            / (prepared.params.white[c] - black[c]),
                     )
                 })
             })
@@ -623,7 +625,7 @@ fn gpu_color_field_reports_cancellation_and_invalid_preconditioners() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_checkpoints_preserve_conjugacy_and_validate_true_residual() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     #[repr(C)]
     #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -657,7 +659,7 @@ fn gpu_color_field_checkpoints_preserve_conjugacy_and_validate_true_residual() {
                 gpu.uniform(&SolverParams {
                     size: [1, 1, 1, 0],
                     metric: [1., 1., 0., 0.],
-                    tolerance: [1e-6, fixed_rhs_max, 0., 0.],
+                    tolerance: [1e-6, fixed_rhs_max, 1., 0.],
                 }),
             ),
             (1, gpu.upload("checkpoint equation", &[equation]).unwrap()),
@@ -735,7 +737,7 @@ fn gpu_color_field_checkpoints_preserve_conjugacy_and_validate_true_residual() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_compensated_iterates_retain_small_color_updates() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     #[repr(C)]
     #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -764,7 +766,7 @@ fn gpu_color_field_compensated_iterates_retain_small_color_updates() {
                 gpu.uniform(&SolverParams {
                     size: [1, 1, 1, 0],
                     metric: [1., 1., 0., 1.],
-                    tolerance: [2e-6, 0., 0., 0.],
+                    tolerance: [2e-6, 0., 1., 0.],
                 }),
             ),
             (
@@ -862,7 +864,7 @@ fn gpu_color_field_compensated_iterates_retain_small_color_updates() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_local_keeps_exactly_64_damped_sweeps_with_packed_scalars() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     #[repr(C)]
     #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -948,7 +950,7 @@ fn gpu_color_field_local_keeps_exactly_64_damped_sweeps_with_packed_scalars() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_compaction_is_stable_across_groups_and_reused_domains() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     let capacity = 257_u32 * 256 + 13;
     let mut resources = vec![
@@ -1043,7 +1045,7 @@ fn gpu_color_field_compaction_is_stable_across_groups_and_reused_domains() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_cutoff_changes_only_mixed_data_weights_not_original_neutral_weights() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     let pixels: Vec<[f32; 3]> = (0..128)
         .map(|i| {
@@ -1147,7 +1149,7 @@ fn gpu_color_field_cutoff_changes_only_mixed_data_weights_not_original_neutral_w
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_cutoff_preserves_healthy_samples_brightness_and_consistent_regions() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let width = 40;
     let height = 16;
     let neutral = [0.284206, 0.604436, 1.0];

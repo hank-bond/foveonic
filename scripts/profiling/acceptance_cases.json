@@ -379,13 +379,6 @@
       "scenario": "lifecycle-journey"
     },
     {
-      "id": "latency-warm-edit",
-      "domain": "latency",
-      "driver": "latency",
-      "scenario": "warm-edit",
-      "evidence": "Three or more natural Off trials compared with an explicit matched Off baseline. A budget is optional."
-    },
-    {
       "id": "scenario-browser-journey",
       "domain": "browser",
       "driver": "scenario",
@@ -490,7 +483,7 @@
       "evidence": "Exercises mixed dropdown and checkbox edits across two declared recipes and compares final app images with fresh renders."
     },
     {
-      "id": "latency-warm-edit-full-1",
+      "id": "latency-warm-edit-quality-1",
       "domain": "latency",
       "driver": "latency",
       "scenario": "warm-edit",
@@ -499,16 +492,7 @@
       "evidence": "Repeated natural single-photo Quality editing timings, compared only with the same quality and workload."
     },
     {
-      "id": "latency-warm-edit-fast-1",
-      "domain": "latency",
-      "driver": "latency",
-      "scenario": "warm-edit",
-      "quality": "speed",
-      "count": 1,
-      "evidence": "Repeated natural single-photo Speed editing timings, compared only with the same quality and workload."
-    },
-    {
-      "id": "latency-warm-edit-draft-1",
+      "id": "latency-warm-edit-speed-1",
       "domain": "latency",
       "driver": "latency",
       "scenario": "warm-edit",
@@ -758,7 +742,6 @@
       "domain": "latency",
       "path": "Matched natural selection and editing latency comparisons",
       "jobs": [
-        "latency-warm-edit",
         "latency-initial-1",
         "latency-warm-disk-8",
         "latency-warm-edit-8",
@@ -766,9 +749,8 @@
         "latency-rapid-supersession-8",
         "latency-memory-pressure-8",
         "latency-browse-warm-edit-8",
-        "latency-warm-edit-full-1",
-        "latency-warm-edit-fast-1",
-        "latency-warm-edit-draft-1",
+        "latency-warm-edit-quality-1",
+        "latency-warm-edit-speed-1",
         "latency-initial-8"
       ],
       "checks": [

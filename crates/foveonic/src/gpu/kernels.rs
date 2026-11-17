@@ -111,6 +111,8 @@ pub enum Kernel {
     ChromaClusters,
     LumaCluster,
     HighlightEvidence,
+    HighlightEvidenceRows,
+    HighlightEvidenceColumns,
     DynamicRangePrepare,
     DynamicRangeCells,
     DynamicRangeFit,
@@ -450,6 +452,8 @@ impl Kernel {
             Self::ChromaClusters => "repair ordered RGB defect clusters",
             Self::LumaCluster => "repair ordered mono defect clusters",
             Self::HighlightEvidence => "pool original highlight recovery controls",
+            Self::HighlightEvidenceRows => "pool original highlight recovery rows",
+            Self::HighlightEvidenceColumns => "combine original highlight recovery rows",
             Self::DynamicRangePrepare => "prepare channel highlight limits",
             Self::DynamicRangeCells => "measure highlight color cells",
             Self::DynamicRangeFit => "fit and propagate highlight colors",
@@ -710,6 +714,18 @@ impl Gpu {
         adapter_name: String,
         profile: &mut crate::profile::Profile,
     ) -> Result<Self> {
+        Self::from_device_progress(device, queue, adapter_name, profile, &mut |_, _| {})
+    }
+
+    pub(crate) fn from_device_progress(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_name: String,
+        profile: &mut crate::profile::Profile,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Self> {
+        #[cfg(test)]
+        super::test_trace("kernels-start", format_args!("adapter={adapter_name:?}"));
         let began = profile.mode.enabled().then(std::time::Instant::now);
         let _scope =
             crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.pipelines.create");
@@ -1157,6 +1173,14 @@ impl Gpu {
                 "highlight_evidence",
             ),
             (
+                include_str!("../nodes/sensor/highlight_evidence.wgsl"),
+                "highlight_evidence_rows",
+            ),
+            (
+                include_str!("../nodes/sensor/highlight_evidence.wgsl"),
+                "highlight_evidence_columns",
+            ),
+            (
                 include_str!("../nodes/sensor/dynamic_range.wgsl"),
                 "dynamic_range_prepare",
             ),
@@ -1599,10 +1623,16 @@ impl Gpu {
         #[cfg(test)]
         let mut shader_writes = Vec::new();
         let same_grid_constants = [("SAME_GRID_APPLICATION", 1.)];
+        progress(0, kernels.len());
         let pipelines = kernels
             .iter()
             .enumerate()
             .map(|(index, &(code, entry))| {
+                #[cfg(test)]
+                super::test_trace(
+                    "kernel-start",
+                    format_args!("index={index} entry={entry:?}"),
+                );
                 let _scope = crate::diagnostics::scope_with(
                     crate::diagnostics::Category::Gpu,
                     "gpu.shader.compile",
@@ -1698,6 +1728,11 @@ impl Gpu {
                     label: Some(entry),
                     source: wgpu::ShaderSource::Wgsl(code),
                 });
+                #[cfg(test)]
+                super::test_trace(
+                    "shader-ready",
+                    format_args!("index={index} entry={entry:?}"),
+                );
                 let compilation_options = if index == Kernel::AdaptiveToneGainSameGrid as usize {
                     wgpu::PipelineCompilationOptions {
                         constants: &same_grid_constants,
@@ -1706,14 +1741,21 @@ impl Gpu {
                 } else {
                     Default::default()
                 };
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some(entry),
                     layout: None,
                     module: &shader,
                     entry_point: Some(entry),
                     compilation_options,
                     cache: None,
-                })
+                });
+                #[cfg(test)]
+                super::test_trace(
+                    "kernel-ready",
+                    format_args!("index={index} entry={entry:?}"),
+                );
+                progress(index + 1, kernels.len());
+                pipeline
             })
             .collect();
         let validation = pollster::block_on(device.pop_error_scope());
@@ -1721,8 +1763,16 @@ impl Gpu {
             profile.record("gpu pipelines and validation", began);
         }
         if let Some(error) = validation {
-            return Err(error.into());
+            return Err(super::failure(
+                "compile-pipelines",
+                error.into(),
+                serde_json::json!({
+                    "adapter":adapter_name,"kernel_count":kernels.len(),
+                }),
+            ));
         }
+        #[cfg(test)]
+        super::test_trace("kernels-ready", format_args!("count={}", kernels.len()));
         Ok(Self {
             device,
             queue,

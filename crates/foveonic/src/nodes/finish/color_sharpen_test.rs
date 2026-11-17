@@ -16,7 +16,7 @@ fn channel_sharpen_matches_native_wrapped_sum_fixtures() {
     // threshold. Only its unowned bottom halo is excluded from comparison.
     let cases: serde_json::Value =
         serde_json::from_str(include_str!("color_sharpen.fixture")).unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for case in cases.as_array().unwrap() {
         let read = |name: &str| -> Vec<f32> {
             case[name]

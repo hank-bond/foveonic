@@ -647,6 +647,7 @@ mod tests {
             let full = receive(&worker, 6);
             assert_eq!(full.artifact.settings.working_scale, Scale::NATIVE);
             assert!(dispatches(&worker, 6) > 0);
+            matches_fresh(&verifier, &full, &path, &settings);
             let full_loads = worker.checks.source_loads.load(Ordering::Relaxed);
             worker.submit(request(&path, 7, Scale::NATIVE, policy, &settings, true));
             let full_plane = receive(&worker, 7);
@@ -770,10 +771,19 @@ mod tests {
             ));
             let changed = receive(&worker, 4);
             assert_eq!(changed.artifact.settings.working_scale, Scale::NATIVE);
-            assert!(
-                dispatches(&worker, 4) > 0,
-                "explicit workspace quality is a pixel request"
-            );
+            let quality_dispatches = dispatches(&worker, 4);
+            if policy == ProcessingQuality::Speed {
+                assert!(
+                    quality_dispatches > 0,
+                    "changing Speed to Quality requires native pixels"
+                );
+            } else {
+                assert_eq!(
+                    quality_dispatches, 0,
+                    "an already-Quality native image is reused"
+                );
+            }
+            matches_fresh(&verifier, &changed, &path, &settings);
         }
     }
     #[test]

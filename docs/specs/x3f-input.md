@@ -17,6 +17,8 @@ implementation: conforming
 - Full source loading, decoded-cache misses, capture metadata, embedded previews, GUI operations and CLI conversion must share this reporting. Unsupported versions, compression, camera models and resolutions must remain distinguishable from damaged data. Missing files and permission failures must give their own actionable messages. Background cancellation must retain its scheduling meaning.
 - A valid embedded preview does not establish that sensor data is intact. Never hide sensor corruption by silently substituting a preview for processing.
 
+- Original reads must validate the bounded file header before allocating the complete payload. Shared property parsing must bound aggregate decoded strings before materializing them, including repeated or overlapping string references. Rejected input must retain the existing named-file error reporting.
+
 ## Validation
 
 Use the owner-provided SD1 Merrill LOW and DP3 Merrill LOW/MED originals and a full-resolution original from [Photography Blog’s SD1 Merrill review](https://www.photographyblog.com/reviews/sigma_sd1_merrill_review). Seek independent reduced originals for other cameras. Downloads remain local validation inputs. This requirement does not authorize redistribution or adding them to release demos.

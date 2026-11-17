@@ -16,6 +16,22 @@ use crate::{
 use std::path::PathBuf;
 const MAXIMUM_GROUP_DEFECTS: u32 = 65536;
 const MAXIMUM_CAP_MEAN: f64 = 64.;
+
+#[derive(Debug)]
+struct CaptureError {
+    path: PathBuf,
+    source: Box<dyn std::error::Error + Send + Sync>,
+}
+impl std::fmt::Display for CaptureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path.display(), self.source)
+    }
+}
+impl std::error::Error for CaptureError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
@@ -147,7 +163,10 @@ fn measure_group(
             completed: index,
             total: paths.len(),
         });
-        let source = Source::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let source = Source::open(path).map_err(|e| CaptureError {
+            path: path.clone(),
+            source: e,
+        })?;
         if Condition::from_properties(&source.metadata.properties)? != *condition {
             return Err(format!("Capture identity or exposure changed: {}", path.display()).into());
         }
@@ -177,11 +196,15 @@ fn measure_group(
             return Err("Cap group has inconsistent sensor geometry".into());
         }
         params.source[2] = index as u32 + 1;
-        let original = gpu.upload("Original cap layers", source.samples())?;
+        let original = gpu.upload_sensor("Original cap layers", &source.pixels)?;
         let black = black_levels(gpu, &original, &source)?;
         frames.push(
-            measure_profiles(gpu, &original, &black, *params, regions)
-                .map_err(|e| format!("{}: {e}", path.display()))?,
+            measure_profiles(gpu, &original, &black, *params, regions).map_err(|e| {
+                CaptureError {
+                    path: path.clone(),
+                    source: e,
+                }
+            })?,
         );
         let uniform = gpu.uniform(params);
         let mut trace = gpu.trace(false, 1);
@@ -304,9 +327,28 @@ mod tests {
     use crate::{nodes::sensor::calibrated_defects, noise_calibration::SensorDefects};
 
     #[test]
+    fn capture_error_keeps_path_and_original_io_cause() {
+        use std::error::Error;
+        let error = CaptureError {
+            path: PathBuf::from("capture.x3f"),
+            source: Box::new(std::io::Error::from_raw_os_error(13)),
+        };
+        assert!(error.to_string().starts_with("capture.x3f:"));
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .raw_os_error(),
+            Some(13)
+        );
+    }
+
+    #[test]
     #[ignore = "requires a GPU"]
     fn cap_moments_distinguish_persistent_defects_from_one_frame_outliers() {
-        let gpu = Gpu::new().unwrap();
+        let gpu = Gpu::test_executor();
         let extent = [40u32, 32u32];
         let length = (extent[0] * extent[1]) as usize;
         let bytes = length as u64 * 12;

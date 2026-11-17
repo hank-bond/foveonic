@@ -194,7 +194,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
     base.white_balance = caps.default_white_balance(&original.metadata).unwrap();
     base.color_mode = caps.default_color_mode(&original.metadata).unwrap();
     drop(original);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let scales = std::env::var("SMALL_PREVIEW_SCALES").unwrap_or_else(|_| "2,4,8,16,64".into());
     let selected = std::env::var("SMALL_PREVIEW_CASE").ok();
     let mut exercised = 0;
@@ -396,7 +396,7 @@ fn shared_working_set_orders_native_reduced_and_speculative_owners() {
     use crate::render::{ProcessingWorkingSet, RenderSession, SessionKey, SessionKind, SessionUse};
     let path = std::env::var_os("SMALL_PREVIEW_X3F").unwrap();
     let source = Arc::new(Source::open(&path).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.working_scale = Scale::new(8).unwrap();
     let ReducedPreparation::Prepared(session) = engine
@@ -516,7 +516,7 @@ fn reduced_active_cut_survives_shared_budget_pressure() {
     };
     let source = Arc::new(Source::open(std::env::var_os("SMALL_PREVIEW_X3F").unwrap()).unwrap());
     let weak = Arc::downgrade(&source);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.working_scale = Scale::new(2).unwrap();
     let ReducedPreparation::Prepared(session) = engine
@@ -588,7 +588,7 @@ fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation
     let path = std::env::var_os("SMALL_PREVIEW_X3F").unwrap();
     let original = Arc::new(Source::open(&path).unwrap());
     let weak = Arc::downgrade(&original);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = super::super::ControlCapabilities::from_metadata(&original.metadata).unwrap();
     let mut settings = caps
         .editing_defaults(&original.metadata, super::super::Rendering::Color)
@@ -717,7 +717,7 @@ fn per_output_scale_and_reduced_roi_hint_match_whole_grid() {
     settings.photographic.color_editor.master.lightness = 0.2;
     let mut region = settings.clone();
     region.preview_region = Some([100, 100, 300, 300]);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let native_names: &[&str] = match source.metadata.processing_family().unwrap() {
         crate::source::ProcessingFamily::Merrill | crate::source::ProcessingFamily::Classic => {
             &["sensor.layers", "calibration.layers"]
@@ -886,7 +886,7 @@ fn every_camera_white_balance_matches_source_free_and_fresh_at_native_and_reduce
         .collect();
     assert!(!choices.is_empty());
     drop(original);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let scales = std::env::var("WHITE_BALANCE_SCALES").unwrap_or_else(|_| "1,2,8,64".into());
     for divisor in scales.split(',').map(|s| s.parse::<u32>().unwrap()) {
         settings.working_scale = Scale::new(divisor).unwrap();

@@ -1,6 +1,6 @@
 //! Shares viewport geometry between embedded previews and GPU images, with diagnostic mapping and manual filtering.
 
-use crate::preferences::ZoomPreset;
+use crate::{display::ViewParams as Params, preferences::ZoomPreset};
 use eframe::{
     egui,
     egui_wgpu::{self, CallbackResources, CallbackTrait},
@@ -34,17 +34,6 @@ impl Mapping {
         }
         params
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Params {
-    rotation: [[f32; 4]; 2],
-    rect: [f32; 4],
-    circle: [f32; 4],
-    options: [f32; 4],
-    primaries: [[f32; 4]; 3],
-    color_transform: egui_wgpu::ColorTransform,
 }
 
 impl Params {
@@ -621,9 +610,10 @@ pub struct ViewTransform {
     one_to_one: bool,
     center: Option<egui::Vec2>,
     pending_zoom: Option<f32>,
+    pending_pan: egui::Vec2,
 }
 
-/// One image-relative viewing change, independent of photo and widget identity.
+/// Group pans use UI-point displacement. Zoom anchors locate each displayed image region.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ViewChange {
     Pan(egui::Vec2),
@@ -652,13 +642,101 @@ pub struct Viewport {
     pub zoom_snap: ZoomPreset,
     explicit_zoom_pending: bool,
     last_canvas: Option<(egui::Vec2, [u32; 2])>,
+    anchor_canvas: Option<(egui::Vec2, [u32; 2])>,
     last_image: Option<(egui::Rect, egui::Rect)>,
     /// Image-relative center carried until the next photograph's geometry arrives.
     pending_center: Option<egui::Vec2>,
     navigator_offset: egui::Vec2,
     pending_zoom: Option<f32>,
+    /// UI-point displacement waiting for this photograph's first usable geometry.
+    pending_pan: egui::Vec2,
     group_drag: bool,
     group_changes: Vec<ViewChange>,
+    main_click: PhotoDoubleClick,
+    navigator_click: PhotoDoubleClick,
+}
+
+/// Egui counts clicks globally, so verify that the preceding click belonged to
+/// this surface before interpreting the next click as a double click.
+#[derive(Default)]
+struct PhotoDoubleClick {
+    last: Option<(f64, egui::Pos2)>,
+    paired_press: bool,
+}
+
+#[derive(Clone, Default)]
+struct ObservedClicks {
+    pass: Option<u64>,
+    last: Option<f64>,
+    previous: Option<f64>,
+}
+
+impl PhotoDoubleClick {
+    fn clicked(&mut self, response: &egui::Response, modified: bool, enabled: bool) -> bool {
+        let options = response.ctx.options(|options| options.input_options);
+        let (pressed, any_click, time, since_click, position) = response.ctx.input(|input| {
+            (
+                input.pointer.primary_pressed(),
+                input.pointer.any_click(),
+                input.time,
+                input.pointer.time_since_last_click(),
+                input.pointer.interact_pos(),
+            )
+        });
+        let pass = response.ctx.cumulative_pass_nr();
+        let prior_global = response.ctx.data_mut(|data| {
+            let id = egui::Id::new("photograph double click observation");
+            let mut observed = data.get_temp::<ObservedClicks>(id).unwrap_or_default();
+            if any_click && observed.pass != Some(pass) {
+                observed.pass = Some(pass);
+                observed.previous = observed.last;
+                observed.last = Some(time);
+            }
+            let prior = if any_click {
+                observed.previous
+            } else {
+                observed.last
+            };
+            data.insert_temp(id, observed);
+            prior
+        });
+        if !enabled {
+            self.last = None;
+            self.paired_press = false;
+            return false;
+        }
+        if pressed && (response.is_pointer_button_down_on() || response.clicked()) {
+            self.paired_press =
+                self.last
+                    .zip(position)
+                    .is_some_and(|((last_time, last_pos), pos)| {
+                        let elapsed = time - last_time;
+                        // Matching the observed global click rejects an intervening
+                        // click on another widget, including coalesced input.
+                        !modified
+                            && elapsed >= 0.
+                            && elapsed < options.max_double_click_delay
+                            && prior_global == Some(last_time)
+                            && (any_click || elapsed as f32 == since_click)
+                            && last_pos.distance(pos) <= options.max_click_dist
+                    });
+        }
+        if response.clicked() {
+            let paired = std::mem::take(&mut self.paired_press)
+                && !modified
+                && self.last.is_some_and(|(last, _)| {
+                    time >= last && time - last < options.max_double_click_delay
+                });
+            self.last = if paired || modified {
+                None
+            } else {
+                position.map(|pos| (time, pos))
+            };
+            paired
+        } else {
+            false
+        }
+    }
 }
 impl Default for Viewport {
     fn default() -> Self {
@@ -674,12 +752,16 @@ impl Default for Viewport {
             zoom_snap: ZoomPreset::default(),
             explicit_zoom_pending: false,
             last_canvas: None,
+            anchor_canvas: None,
             last_image: None,
             pending_center: None,
             navigator_offset: egui::Vec2::ZERO,
             pending_zoom: None,
+            pending_pan: egui::Vec2::ZERO,
             group_drag: false,
             group_changes: Vec::new(),
+            main_click: PhotoDoubleClick::default(),
+            navigator_click: PhotoDoubleClick::default(),
         }
     }
 }
@@ -717,6 +799,7 @@ impl Viewport {
             one_to_one: self.one_to_one,
             center,
             pending_zoom: self.pending_zoom,
+            pending_pan: self.pending_pan,
         }
     }
 
@@ -726,16 +809,19 @@ impl Viewport {
         self.one_to_one = transform.one_to_one;
         self.pending_center = transform.center;
         self.pending_zoom = transform.pending_zoom;
+        self.pending_pan = transform.pending_pan;
         self.explicit_zoom_pending = self.explicit_zoom();
     }
 
     pub fn reset(&mut self) {
         self.pending_zoom = None;
+        self.pending_pan = egui::Vec2::ZERO;
         self.explicit_zoom_pending = false;
         self.scale = None;
         self.pan = egui::Vec2::ZERO;
         self.one_to_one = false;
         self.last_canvas = None;
+        self.anchor_canvas = None;
         self.last_image = None;
         self.response = None;
         self.pending_center = None;
@@ -744,6 +830,9 @@ impl Viewport {
 
     /// Retain zoom and image-relative center while discarding old layout bounds.
     pub fn detach_layout(&mut self) {
+        // Hidden peers use their last displayed geometry for group viewing.
+        // Keep it separate from active bounds used by native-detail requests.
+        self.anchor_canvas = self.last_canvas.or(self.anchor_canvas);
         if let Some((size, extent)) = self.last_canvas {
             let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
             let image_size = egui::vec2(extent[0] as f32, extent[1] as f32) * scale;
@@ -776,14 +865,17 @@ impl Viewport {
         } else {
             self.scale.or_else(|| {
                 self.last_canvas
+                    .or(self.anchor_canvas)
                     .map(|(size, extent)| Self::fit_scale(size, extent))
             })
         };
         match change {
             ViewChange::Fit => {
                 let canvas = self.last_canvas;
+                let anchor_canvas = self.anchor_canvas;
                 self.reset();
                 self.last_canvas = canvas;
+                self.anchor_canvas = anchor_canvas;
                 return;
             }
             ViewChange::Snap {
@@ -792,16 +884,42 @@ impl Viewport {
             } => {
                 self.scale = Some(scale);
                 self.pending_zoom = None;
+                self.pending_pan = egui::Vec2::ZERO;
                 center = next;
             }
             ViewChange::Pan(delta) => {
-                center -= delta;
+                if let (Some(scale), Some((_, extent))) =
+                    (old_scale, self.last_canvas.or(self.anchor_canvas))
+                {
+                    center -= delta / (egui::vec2(extent[0] as f32, extent[1] as f32) * scale);
+                } else {
+                    self.pending_pan += delta;
+                }
                 self.scale = old_scale;
                 if old_scale.is_none() {
                     self.pending_zoom.get_or_insert(1.);
                 }
             }
             ViewChange::Zoom { factor, anchor } => {
+                let anchor = if let Some((size, extent)) = self.last_canvas.or(self.anchor_canvas) {
+                    let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                    let scale = old_scale.unwrap_or_else(|| Self::fit_scale(size, extent));
+                    let image_size = egui::vec2(extent[0] as f32, extent[1] as f32) * scale;
+                    let image = egui::Rect::from_center_size(
+                        canvas.center() + (egui::vec2(0.5, 0.5) - center) * image_size,
+                        image_size,
+                    );
+                    let visible = canvas.intersect(image);
+                    let region = if visible.is_positive() {
+                        visible
+                    } else {
+                        canvas
+                    };
+                    (region.min + anchor * region.size() - image.min) / image_size
+                } else {
+                    // A never-drawn Fit photograph exposes its whole image.
+                    anchor
+                };
                 let effective = if let Some(old) = old_scale {
                     let next =
                         (old * factor).clamp(0.05 / pixels_per_point, 64. / pixels_per_point);
@@ -938,6 +1056,7 @@ impl Viewport {
                 let image_size = egui::vec2(extent[0] as f32, extent[1] as f32) * scale;
                 self.pan = (egui::vec2(0.5, 0.5) - center) * image_size;
             }
+            self.pan += std::mem::take(&mut self.pending_pan);
         }
         if let (Some(scale), Some((old_size, old_extent))) = (self.scale, self.last_canvas) {
             if size != old_size && extent == old_extent && size.x > 0. && size.y > 0. {
@@ -999,11 +1118,21 @@ impl Viewport {
             let delta = ui.input(|i| i.pointer.delta());
             self.pan += delta;
             if self.group_drag {
-                let display = egui::vec2(extent[0] as f32, extent[1] as f32) * self.scale.unwrap();
-                self.group_changes.push(ViewChange::Pan(delta / display));
+                self.group_changes.push(ViewChange::Pan(delta));
             }
         }
-        if response.double_clicked() && (!self.editing || temporary_pan) && viewing {
+        let selection_click = ui.input(|input| {
+            input.modifiers.alt
+                || (input.modifiers.shift && !group)
+                || input.modifiers.ctrl
+                || input.modifiers.mac_cmd
+                || input.modifiers.command
+        });
+        if self.main_click.clicked(
+            &response,
+            selection_click,
+            (!self.editing || temporary_pan) && viewing,
+        ) {
             let anchor = response
                 .interact_pointer_pos()
                 .map(|mouse| mouse - rect.center())
@@ -1044,12 +1173,14 @@ impl Viewport {
                     .map(|mouse| mouse - rect.center())
                     .unwrap_or(egui::Vec2::ZERO);
                 let image = self.image_rect(rect, extent);
-                let image_anchor = (rect.center() + anchor - image.min) / image.size();
+                let visible = rect.intersect(image);
+                let region = if visible.is_positive() { visible } else { rect };
+                let region_anchor = (rect.center() + anchor - region.min) / region.size();
                 self.set_scale_at(next, anchor);
                 if group {
                     self.group_changes.push(ViewChange::Zoom {
                         factor,
-                        anchor: image_anchor,
+                        anchor: region_anchor,
                     });
                 }
             }
@@ -1318,7 +1449,7 @@ impl Viewport {
                 };
             }
         }
-        if response.double_clicked() {
+        if self.navigator_click.clicked(&response, false, true) {
             let fitted = self.scale.is_none() && !self.one_to_one;
             self.toggle_fit_snap(ui.ctx().pixels_per_point(), egui::Vec2::ZERO);
             if fitted {

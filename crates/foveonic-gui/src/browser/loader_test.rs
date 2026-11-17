@@ -128,3 +128,93 @@ fn a_slow_large_preview_cannot_hold_up_the_thumbnail_worker() {
     advance.send(()).unwrap();
     assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap().kind == Kind::Preview);
 }
+
+#[test]
+fn preview_misses_are_quiet_and_thumbnail_read_failures_keep_support_details() {
+    const CHILD: &str = "FOVEONIC_BROWSER_PREVIEW_REPORT_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "browser::loader::tests::preview_misses_are_quiet_and_thumbnail_read_failures_keep_support_details",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let mut guard = foveonic::support::initialize(foveonic::support::Config {
+        directory: directory.path().join("logs"),
+        application: "Browser preview test".into(),
+        version: "1".into(),
+        initial_context: serde_json::Value::Null,
+    });
+    let missing = directory.path().join("missing.x3f");
+    let enabled = Arc::new(Cache::new());
+    enabled.configure(foveonic::decode_cache::Settings::default());
+    let disabled = Arc::new(Cache::new());
+    for cache in [None, Some(enabled), Some(disabled)] {
+        let (tx, rx) = mpsc::sync_channel(REPLY_CAPACITY);
+        let worker = Worker::start(Kind::Preview, cache, egui::Context::default(), tx);
+        worker.request(Request {
+            path: missing.clone(),
+            version: 1,
+        });
+        let reply = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(matches!(reply.image, Ok(None)));
+        assert!(reply.memory.is_none());
+        worker.stop();
+    }
+    // Both inputs are generated here. Neither needs a photographic fixture.
+    let corrupt = directory.path().join("corrupt.x3f");
+    std::fs::write(&corrupt, b"not an X3F file").unwrap();
+    for path in [&missing, &corrupt] {
+        let (tx, rx) = mpsc::sync_channel(REPLY_CAPACITY);
+        let worker = Worker::start(Kind::Thumbnail, None, egui::Context::default(), tx);
+        worker.request(Request {
+            path: path.clone(),
+            version: 1,
+        });
+        assert!(rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .image
+            .is_err());
+        worker.stop();
+    }
+    assert_eq!(
+        guard.shutdown(Duration::from_secs(3)),
+        foveonic::support::ShutdownStatus::Drained
+    );
+    let snapshot = guard.snapshot();
+    let failures: Vec<_> = snapshot
+        .runs
+        .iter()
+        .flat_map(|run| &run.events)
+        .filter(|event| event.event == "operation.failed")
+        .collect();
+    assert_eq!(failures.len(), 2);
+    for (failure, path) in failures.iter().zip([&missing, &corrupt]) {
+        assert_eq!(failure.fields["boundary"], "browser.preview");
+        assert_eq!(
+            failure.fields["operation"]["source"],
+            path.to_string_lossy().as_ref()
+        );
+        assert_eq!(failure.fields["backtrace_status"], "Captured");
+        assert!(!failure.fields["backtrace"].as_str().unwrap().is_empty());
+        assert!(!failure.fields["causes"].as_array().unwrap().is_empty());
+    }
+    assert!(failures[0].fields["causes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|cause| cause["io_kind"] == "NotFound" && cause["os_code"].is_number()));
+}

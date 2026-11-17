@@ -4,7 +4,7 @@ summary: "The X3F reader decodes sensor samples and camera metadata from origina
 
 # X3F input
 
-Imported from the reference implementation at commit `d5e21fb`. The decoder owns unnormalized sensor samples and typed metadata. Equal-resolution samples are interleaved RGB. Quattro HI samples are packed six-value cells. Quattro LOW samples use equal-resolution RGB triplets. Camera and geometry checks belong to `source.rs`.
+Imported from the reference implementation at commit `d5e21fb`. The decoder owns unnormalized sensor samples and typed metadata. Equal-resolution samples are presented as interleaved RGB. Format-30 sources retain their decoded planes and interleave on upload or explicit sample access. Quattro HI samples are packed six-value cells. Quattro LOW samples use equal-resolution RGB triplets. Camera and geometry checks belong to `source.rs`.
 
 Keep decoding independent of photographic adjustments and orientation. Preserve original matrix encodings and camera property-list order, which selects color-mode tone rows.
 
@@ -18,7 +18,7 @@ Keep decoding independent of photographic adjustments and orientation. Preserve 
 - **[bytes.rs](./bytes.rs)** Read bounded little-endian values and terminated strings from owned file sections.
 - **[camf.rs](./camf.rs)** Decode camera metadata while preserving matrix encodings and property-list order.
 - **[capture.rs](./capture.rs)** Seeks directly to X3F capture properties without reading sensor or calibration payloads.
-- **[exif.rs](./exif.rs)** Reads capture properties, color declarations and bounded thumbnails from optional JPEG Exif headers.
+- **[exif.rs](./exif.rs)** Reads standard capture fields, color declarations and bounded thumbnails from JPEG EXIF.
 - **[format31.rs](./format31.rs)** Decodes unsigned sensor planes into equal-resolution RGB or RGB/blue-phase cells.
 - **[format6.rs](./format6.rs)** Decode row-local Huffman differences into signed interleaved sensor codes.
 - **[huffman.rs](./huffman.rs)** Decode category-coded differences with two-column and two-row sensor predictors.

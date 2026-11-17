@@ -11,25 +11,17 @@ use tiff::{
     tags::Tag,
 };
 
-#[path = "capture.rs"]
-mod capture;
+use crate::capture_metadata::{Capture, ExifOutput};
 
 const ROWS_PER_STRIP: u32 = 32;
 const DENOMINATOR: u32 = 1_000_000;
 
-/// The TIFF directory API leaves alignment to us. Odd-length text or history
-/// would put later values and the directory on an invalid byte boundary.
-/// Add padding outside the declared count so it does not become tag data.
 fn tag<W: Write + Seek, T: TiffValue>(
     directory: &mut DirectoryEncoder<'_, W, TiffKindStandard>,
     number: u16,
     value: T,
 ) -> Result<()> {
-    let bytes = value.bytes();
     directory.write_tag(Tag::Unknown(number), value)?;
-    if bytes > 4 && !bytes.is_multiple_of(2) {
-        directory.write_data(&[0_u8][..])?;
-    }
     Ok(())
 }
 
@@ -130,11 +122,19 @@ pub(super) fn write<W: Write + Seek>(
     let (settings, scale) = history_context;
     let [width, height] = size;
     let mut encoder = TiffEncoder::new(&mut out)?;
-    let capture = capture::Capture::new(metadata);
-    let exif = capture.write_exif(&mut encoder, size)?;
+    let capture = Capture::new(metadata);
+    let exif = capture.write_exif(&mut encoder, size, ExifOutput::Dng)?;
     let mut directory = encoder.image_directory()?;
     samples(&mut directory, packed, size)?;
     capture.write_primary(&mut directory, exif)?;
+    if let Some(serial) = metadata
+        .properties
+        .get("CAMSERIAL")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && s.is_ascii() && !s.contains('\0'))
+    {
+        tag(&mut directory, 50735, serial)?;
+    }
 
     let model = metadata
         .properties
@@ -143,8 +143,6 @@ pub(super) fn write<W: Write + Seek>(
     if settings.is_monochrome() {
         tag(&mut directory, 270, "Linear monochrome. Channel mixing and technical reconstruction are baked into equal neutral RGB samples. Exposure and tone remain presentation metadata. Retain the original X3F and sidecar to change the mix or restore color.")?;
     }
-    tag(&mut directory, 271, "SIGMA")?;
-    tag(&mut directory, 272, model.as_str())?;
     tag(&mut directory, 305, "Foveonic GPU")?;
     tag(&mut directory, 50706, &[1_u8, 4, 0, 0][..])?; // DNGVersion.
     tag(&mut directory, 50707, &[1_u8, 4, 0, 0][..])?; // DNGBackwardVersion.
@@ -287,8 +285,24 @@ pub(super) fn write<W: Write + Seek>(
     private.extend(serde_json::to_vec(&history)?);
     tag(&mut directory, 50740, private.as_slice())?;
     // Drop hides final write errors, which could make a broken export look successful.
-    directory.finish()?;
-    out.flush()?;
+    let failure_context = |phase: &str| crate::support::OperationContext {
+        component: Some("export".into()),
+        phase: Some(phase.into()),
+        settings: Some(
+            serde_json::json!({"format":"dng","extent":size,"recipe":crate::support::settings_snapshot(settings),"sample_scale":scale}),
+        ),
+        ..Default::default()
+    };
+    directory.finish().map_err(|error| {
+        crate::support::reported_error(
+            "dng.writer",
+            error.into(),
+            failure_context("finish-directory"),
+        )
+    })?;
+    out.flush().map_err(|error| {
+        crate::support::reported_error("dng.writer", error.into(), failure_context("flush-output"))
+    })?;
     Ok(())
 }
 
@@ -343,6 +357,96 @@ mod tests {
                     .flat_map(u16::to_le_bytes)
             })
             .collect()
+    }
+
+    #[test]
+    fn dng_exports_shared_capture_metadata() {
+        let (prepared, profile) = super::super::appearance::synthetic_writer_appearance();
+        let mut metadata = Metadata {
+            width: 1,
+            height: 2,
+            rotation: 90,
+            processing_version: None,
+            properties: [
+                ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
+                ("ISO".into(), "200".into()),
+                ("TIME".into(), "1790791918".into()),
+            ]
+            .into(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        };
+        let embedded = [
+            crate::capture_metadata::EmbeddedTag {
+                ifd: 1,
+                id: 0x9209,
+                kind: 3,
+                count: 1,
+                data: 1_u16.to_ne_bytes().to_vec(),
+            },
+            crate::capture_metadata::EmbeddedTag {
+                ifd: 2,
+                id: 1,
+                kind: 2,
+                count: 2,
+                data: b"N\0".to_vec(),
+            },
+        ];
+        metadata.properties.insert(
+            "EXIF_CAPTURE_TAGS".into(),
+            serde_json::to_string(&embedded).unwrap(),
+        );
+        let mut output = Cursor::new(Vec::new());
+        write(
+            &mut output,
+            &packed(&[1, 2, 3, 4, 5, 6]),
+            [2, 1],
+            &prepared,
+            &profile,
+            &metadata,
+            (&Settings::new("Sunlight", "Standard"), 1.),
+        )
+        .unwrap();
+        let bytes = output.into_inner();
+        let tags = entries(&bytes);
+        assert!(
+            tags.iter().any(|entry| entry.0 == 0x8825),
+            "GPS directory must be linked"
+        );
+        let exif_offset = u32::from_le_bytes(
+            tags.iter()
+                .find(|e| e.0 == 0x8769)
+                .unwrap()
+                .3
+                .as_slice()
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let count =
+            u16::from_le_bytes(bytes[exif_offset..exif_offset + 2].try_into().unwrap()) as usize;
+        let tags: Vec<_> = (0..count)
+            .map(|i| &bytes[exif_offset + 2 + 12 * i..exif_offset + 14 + 12 * i])
+            .collect();
+        let iso = tags
+            .iter()
+            .find(|entry| u16::from_le_bytes(entry[..2].try_into().unwrap()) == 0x8827)
+            .unwrap();
+        assert_eq!(&iso[8..10], &200_u16.to_le_bytes());
+        let flash = tags
+            .iter()
+            .find(|entry| u16::from_le_bytes(entry[..2].try_into().unwrap()) == 0x9209)
+            .unwrap();
+        assert_eq!(&flash[8..10], &1_u16.to_le_bytes());
+        let width = tags
+            .iter()
+            .find(|entry| u16::from_le_bytes(entry[..2].try_into().unwrap()) == 0xa002)
+            .unwrap();
+        assert_eq!(&width[8..12], &2_u32.to_le_bytes());
+        let height = tags
+            .iter()
+            .find(|entry| u16::from_le_bytes(entry[..2].try_into().unwrap()) == 0xa003)
+            .unwrap();
+        assert_eq!(&height[8..12], &1_u32.to_le_bytes());
     }
 
     #[test]

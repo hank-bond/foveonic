@@ -96,6 +96,21 @@ impl Prepared {
     pub(crate) fn output_extent(&self) -> [u32; 2] {
         [self.shape[2], self.shape[3]]
     }
+    pub(crate) fn largest_cell_area(&self) -> u64 {
+        self.extent()
+            .into_iter()
+            .map(|side| u64::from(side.min(self.controls[0])))
+            .product()
+    }
+    pub(crate) fn valid_output_geometry(&self) -> bool {
+        self.origin[..2]
+            .iter()
+            .zip(self.output_extent())
+            .zip(self.logical_extent())
+            .all(|((&origin, extent), logical)| {
+                origin.checked_add(logical).is_some_and(|end| end <= extent)
+            })
+    }
     pub(crate) fn map_view(&self, mut view: crate::image::View) -> crate::image::View {
         let scale = crate::render::Scale::new(self.controls[0]).expect("validated pooling divisor");
         view.crop = scale.bounds(view.crop);
@@ -128,13 +143,7 @@ pub(crate) fn apply(
     let [width, height] = prepared.extent();
     let [out_width, out_height] = prepared.output_extent();
     if input.size() != u64::from(width) * u64::from(height) * pixel_bytes
-        || prepared.origin[..2]
-            .iter()
-            .zip(prepared.output_extent())
-            .zip(prepared.logical_extent())
-            .any(|((&origin, extent), logical)| {
-                origin.checked_add(logical).is_none_or(|end| end > extent)
-            })
+        || !prepared.valid_output_geometry()
     {
         return Err("corrected-signal pooling input or origin geometry mismatch".into());
     }
@@ -149,6 +158,7 @@ pub(crate) fn apply(
         "Pooled working signal",
         u64::from(out_width) * u64::from(out_height) * pixel_bytes,
     )?;
+    let [logical_width, logical_height] = prepared.logical_extent();
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
         Kernel::PoolSignal,
@@ -157,7 +167,7 @@ pub(crate) fn apply(
             (1, Read(&uniform)),
             (2, Write(output.write())),
         ],
-        [out_width.div_ceil(8), out_height.div_ceil(8)],
+        [logical_width.div_ceil(8), logical_height.div_ceil(8)],
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;

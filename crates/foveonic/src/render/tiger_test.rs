@@ -23,8 +23,8 @@ fn original_tiger_modes_masks_and_retained_results() {
         .map(str::to_owned)
         .collect();
     assert_eq!(modes.len(), 10);
-    let source_hash = fingerprint(bytemuck::cast_slice(&source.pixels));
-    let engine = Engine::new().unwrap();
+    let source_hash = fingerprint(bytemuck::cast_slice(source.samples().as_ref()));
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([600, 400]);
@@ -86,7 +86,7 @@ fn original_tiger_modes_masks_and_retained_results() {
     assert_eq!(engine.readback_image(retained).unwrap(), original);
     assert_eq!(engine.readback_image(mask).unwrap(), mask_bytes);
     assert_eq!(
-        fingerprint(bytemuck::cast_slice(&session.source().pixels)),
+        fingerprint(bytemuck::cast_slice(session.source().samples().as_ref())),
         source_hash
     );
 }
@@ -112,11 +112,11 @@ fn session_image(
 #[test]
 #[ignore = "requires GPU and TIGER_X3F original"]
 fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for rotation in [0, 90] {
         let mut source = Source::open(std::env::var_os("TIGER_X3F").unwrap()).unwrap();
         Arc::make_mut(&mut source.metadata).rotation = rotation;
-        let source_hash = fingerprint(bytemuck::cast_slice(source.samples()));
+        let source_hash = fingerprint(bytemuck::cast_slice(source.samples().as_ref()));
         let mut session = RenderSession::new(source);
         let mut settings = Settings::new(
             "Sunlight",
@@ -133,6 +133,9 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
         let [width, height] = full.view().extent;
         let expected = engine.readback_image(&full).unwrap();
         drop(full);
+        let warm_native = session_image(&engine, &mut session, &settings, &mut Profile::default());
+        assert_eq!(engine.readback_image(&warm_native).unwrap(), expected);
+        drop(warm_native);
 
         settings.working_scale = Scale::new(2).unwrap();
         let started = Instant::now();
@@ -182,6 +185,17 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
         );
         drop(restored);
 
+        assert!(session.cached_bytes() <= crate::interactive::Cache::LIMIT);
+        let checkpoints = session.checkpoints();
+        for role in ["highlight-restoration.rgb", "noise.rgb", "sector-color.rgb"] {
+            assert!(
+                checkpoints
+                    .entries
+                    .iter()
+                    .any(|entry| entry.working_scale == 1 && entry.role == role),
+                "native checkpoint {role} was not retained before detail"
+            );
+        }
         settings.working_scale = Scale::NATIVE;
         for [x, y] in [[0, 0], [width / 2, height / 2], [width - 480, height - 320]] {
             settings.preview_region = Some([x, y, x + 480, y + 320]);
@@ -239,7 +253,7 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
             fast_hash
         );
         assert_eq!(
-            fingerprint(bytemuck::cast_slice(session.source().samples())),
+            fingerprint(bytemuck::cast_slice(session.source().samples().as_ref())),
             source_hash
         );
     }

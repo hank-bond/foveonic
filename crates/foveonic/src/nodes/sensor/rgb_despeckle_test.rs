@@ -8,7 +8,7 @@ fn rejects_invalid_controls() {
 #[test]
 #[ignore = "requires GPU"]
 fn reduced_detection_repairs_bright_outliers_and_keeps_dark_details() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for divisor in [2, 4, 8] {
         let grid = crate::render::WorkingGrid::new(
             [72, 72],
@@ -51,7 +51,7 @@ fn reduced_detection_repairs_bright_outliers_and_keeps_dark_details() {
 #[test]
 #[ignore = "requires a GPU"]
 fn isolated_rgb_outlier_is_repaired_unless_masked() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [9, 9];
     let prepared =
         Prepared::new(extent, [0.; 9], 1., [1., 0., 0., 0., 1., 0., 0., 0., 1.]).unwrap();

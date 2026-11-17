@@ -1,4 +1,4 @@
-//! Checks reduced framing, optional reconstruction bypass, and immutable Full refinement.
+//! Checks working-grid framing, selected reconstruction and immutable native refinement.
 
 use super::*;
 
@@ -73,7 +73,7 @@ fn reduced_camera_frame_places_pooled_pixel_centers_on_native_pixel_centers() {
 #[ignore = "requires a GPU"]
 fn pooled_ramps_keep_native_registration_through_camera_framing() {
     use crate::{gpu::Gpu, nodes::finish::resize, profile::Profile};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let pixels: Vec<f32> = (0..96)
         .flat_map(|y| (0..128).flat_map(move |x| [x as f32, y as f32, 1.]))
         .collect();
@@ -213,7 +213,7 @@ fn arbitrary_sensor_scales_cover_edges_and_align_every_reconstruction_ratio() {
 }
 
 #[test]
-fn color_preview_support_requires_valid_merrill_geometry_and_supports_native_regions() {
+fn native_regions_support_color_monochrome_and_camera_rotations() {
     use crate::source::{Matrix, MatrixEncoding, Metadata};
     let mut metadata = Metadata {
         width: 4928,
@@ -236,19 +236,13 @@ fn color_preview_support_requires_valid_merrill_geometry_and_supports_native_reg
     let mut settings = crate::render::Settings::default();
     for rotation in [0, 90, 180, 270] {
         metadata.rotation = rotation;
-        assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
         assert!(settings.regional_preview_available(&metadata));
     }
     settings.rendering = crate::render::Rendering::Monochrome;
-    assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
+    assert!(settings.regional_preview_available(&metadata));
     settings.rendering = crate::render::Rendering::Color;
     settings.output_size = Some([1200, 800]);
     assert!(!settings.regional_preview_available(&metadata));
-    settings.output_size = None;
-    metadata.matrices.get_mut("ActiveImageArea").unwrap().values[0] += 1.;
-    assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
-    metadata.matrices.clear();
-    assert!(settings.working_scale_available(&metadata, crate::render::Scale::new(2).unwrap()));
 }
 
 #[test]
@@ -262,7 +256,7 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = std::sync::Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
@@ -399,7 +393,7 @@ fn row_correction_follows_sensor_pooling_for_color_and_monochrome() {
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = Source::open(root.join("blue-parking-sign.x3f")).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for rendering in [Rendering::Color, Rendering::Monochrome] {
         for divisor in [1, 2, 4, 8] {
             let mut settings = Settings::new("Sunlight", "Standard");
@@ -460,7 +454,7 @@ fn speckle_inputs_share_the_requested_working_grid() {
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = Source::open(root.join("blue-parking-sign.x3f")).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for divisor in [1, 2, 4, 8, 64, 1024] {
         for (rendering, method) in [
             (Rendering::Color, MerrillSpeckleMethod::Reference),
@@ -573,7 +567,7 @@ fn regional_detail_matches_full_and_continues_without_repeating_whole_sensor_inp
         source::Source,
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for (rotation, global_context) in [
         (0, false),
         (90, false),
@@ -733,7 +727,7 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = std::sync::Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     // Isolate tile filtering. Speckle correction now follows the Noise bypass,
     // while a recipe without reconstruction can still select sensor corrections.
@@ -947,7 +941,7 @@ fn color_field_recovery_inputs_share_the_sensor_working_grid() {
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = Source::open(root.join("yellow-flowers-and-stroller.x3f")).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for rendering in [Rendering::Color, Rendering::Monochrome] {
         for approach in [
             ColorFieldApproach::Faithful,

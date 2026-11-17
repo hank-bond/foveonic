@@ -53,7 +53,7 @@ fn gpu_log_reconstruction_matches_bounded_native_output() {
         "../../../tests/data/log-reconstruction-reference.json"
     ))
     .unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for case in f["cases"].as_array().unwrap() {
         let array = |name: &str| {
             case[name]

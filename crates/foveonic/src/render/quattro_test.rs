@@ -36,10 +36,32 @@ fn source() -> Source {
         }),
         pixels: (0..6)
             .flat_map(|i| [2100. + i as f32, 2200., 2300., 2400., 2500., 2600.])
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         camf: vec![],
         timings: vec![],
     }
+}
+
+fn supported_source() -> Source {
+    let mut source = source();
+    let metadata = Arc::make_mut(&mut source.metadata);
+    metadata.width = 5888;
+    metadata.height = 3672;
+    metadata.matrices.insert(
+        "CAMERAID".into(),
+        crate::source::Matrix {
+            encoding: crate::source::MatrixEncoding::Float32,
+            representation: "f64",
+            dimensions: vec![1],
+            values: vec![81.],
+        },
+    );
+    source.pixels = (0..metadata.width * metadata.height / 4)
+        .flat_map(|i| [2100. + (i % 6) as f32, 2200., 2300., 2400., 2500., 2600.])
+        .collect::<Vec<_>>()
+        .into();
+    source
 }
 
 #[test]
@@ -58,9 +80,9 @@ fn raw_catalogue_does_not_require_calibration_fields() {
 #[test]
 #[ignore = "requires a GPU"]
 fn planes_keep_their_extents_and_retained_siblings() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let settings = Settings::new("", "");
-    let mut session = RenderSession::new(source());
+    let mut session = RenderSession::new(supported_source());
     let mut retained = Vec::new();
     // Begin with a side output. Later requests must preserve earlier snapshots.
     for name in [
@@ -85,7 +107,7 @@ fn planes_keep_their_extents_and_retained_siblings() {
         };
         let blue = name.ends_with("blue");
         let corrected = name.starts_with("extraction.");
-        let extent = if blue { [6, 4] } else { [3, 2] };
+        let extent = if blue { [5888, 3672] } else { [2944, 1836] };
         assert_eq!(image.description().extent, extent);
         assert_eq!(
             image.description().layout,
@@ -124,10 +146,8 @@ fn planes_keep_their_extents_and_retained_siblings() {
         );
         let scopes = engine.scopes(image, None, &mut Profile::default()).unwrap();
         assert_eq!(scopes.channels(), if blue { 1 } else { 3 });
-        assert_eq!(
-            scopes.histogram(0).iter().sum::<u32>(),
-            extent[0] * extent[1]
-        );
+        assert_eq!(scopes.samples, [319, 512]);
+        assert_eq!(scopes.histogram(0).iter().sum::<u32>(), 319 * 512);
         assert_eq!(scopes.outside(0), [0, 0, 0]);
         retained.push((image.clone(), bytes));
         for (prior, expected) in &retained {
@@ -150,7 +170,7 @@ fn planes_keep_their_extents_and_retained_siblings() {
         .is_err());
 
     // Earlier requests must stop before unrelated calibration preparation.
-    let mut uncalibrated = source();
+    let mut uncalibrated = supported_source();
     Arc::make_mut(&mut uncalibrated.metadata).matrices.insert(
         "RawOffset".into(),
         crate::source::Matrix {
@@ -185,12 +205,11 @@ fn original_quattro_planes_have_independent_geometry() {
     let settings = Settings::new("", "");
     let directory = std::env::var_os("QUATTRO_RESOURCE_DIRECTORY");
     let engine = if let Some(directory) = &directory {
-        Engine::new()
-            .unwrap()
+        Engine::test_executor()
             .with_calibration_resources(directory)
             .unwrap()
     } else {
-        Engine::new().unwrap()
+        Engine::test_executor()
     };
     let names = crate::inspection::output_names(&settings, Some(&source.metadata));
     for name in names.into_iter().filter(|name| {
@@ -896,7 +915,7 @@ fn composed_preprocess_matches_native_camera() {
 fn photographic_edits_preserve_reconstruction_and_cached_defaults() {
     use std::hash::{Hash, Hasher};
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([678, 452]);
@@ -962,7 +981,7 @@ fn selected_recorded_balance_keeps_identity_shading_inspectable() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     let balance = source.metadata.recorded_white_balance().unwrap();
     let settings = Settings::new(balance, "Standard");
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source);
     let results = engine
         .render_session(
@@ -1003,7 +1022,7 @@ fn every_camera_white_balance_renders_and_restores_defaults() {
         .map(str::to_owned)
         .collect();
     assert!(!balances.is_empty());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([339, 226]);
@@ -1059,10 +1078,11 @@ fn every_camera_white_balance_renders_and_restores_defaults() {
 fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
     use std::hash::{Hash, Hasher};
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([678, 452]);
+    settings.reconstruction = Some(super::recipes::quattro::default_noise_controls());
     let mut render = |settings: &Settings| {
         let results = engine
             .render_session(
@@ -1098,6 +1118,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
         let mean = values.iter().map(|v| f64::from(*v)).sum::<f64>() / values.len() as f64;
         (bytes[0].clone(), fingerprints, mean)
     };
+    let baseline_settings = settings.clone();
     let baseline = render(&settings);
     for (luminance, detail) in [(0, 0.), (2, 1.), (4, 1.)] {
         settings.reconstruction = Some(crate::noise::Controls {
@@ -1122,7 +1143,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
             "noise/detail changed global brightness"
         );
     }
-    for chroma in [2, 4] {
+    for chroma in [0, 4] {
         settings.reconstruction = Some(crate::noise::Controls {
             chroma,
             ..super::recipes::quattro::default_noise_controls()
@@ -1142,7 +1163,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
             "chroma changed exposure"
         );
     }
-    settings.reconstruction = None;
+    settings.reconstruction = Some(super::recipes::quattro::default_noise_controls());
     settings.sharpen_amount = Some(1.);
     let sharpened = render(&settings);
     assert_eq!(
@@ -1153,8 +1174,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
         sharpened.0, baseline.0,
         "sharpness had no photographic effect"
     );
-    settings.sharpen_amount = Some(0.);
-    settings.reconstruction = None;
+    settings = baseline_settings;
     assert_eq!(render(&settings), baseline);
 }
 
@@ -1163,7 +1183,7 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
 fn missing_white_balance_uses_the_recorded_file_choice() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     let recorded = source.metadata.recorded_white_balance().unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut automatic = Settings::new("", "Standard");
     automatic.output_size = Some([678, 452]);
     let mut explicit = automatic.clone();
@@ -1189,8 +1209,8 @@ fn missing_white_balance_uses_the_recorded_file_choice() {
 #[test]
 #[ignore = "requires a GPU"]
 fn preparation_can_stop_before_later_calibration() {
-    let engine = Engine::new().unwrap();
-    let source = source();
+    let engine = Engine::test_executor();
+    let source = supported_source();
     let checks = std::cell::Cell::new(0);
     let cancel = || {
         checks.set(checks.get() + 1);
@@ -1216,7 +1236,7 @@ fn preparation_can_stop_before_later_calibration() {
 #[ignore = "requires GPU, FOVEONIC_FIXTURE_DIR and optional QUATTRO_FULL_GOLDENS"]
 fn original_fast_previews_match_fresh_renders_through_quality_and_edit_changes() {
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for name in [
         "dp0-quattro",
         "dp1-quattro-pblog",
@@ -1330,7 +1350,7 @@ fn supported_preview_policy_survives_photographic_control_normalization() {
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
 fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_panning() {
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for name in [
         "dp0-quattro",
         "dp1-quattro-pblog",
@@ -1448,7 +1468,7 @@ fn progress_observers_report_real_load_and_render_boundaries_without_changing_pi
         ]
     );
     let mut session = RenderSession::new(source);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     for (quality, exposure) in [
         (Scale::NATIVE, 0.),

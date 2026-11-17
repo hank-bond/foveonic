@@ -164,6 +164,27 @@ fn merrill_owned_parameter_tables_count_capacity_and_boxed_uniforms() {
 }
 
 #[test]
+fn rejected_node_reports_its_inputs_without_mutating_the_graph() {
+    let mut graph = Graph::default();
+    let error = graph.add(Operation::Source, &[99]).unwrap_err();
+    assert_eq!(error.to_string(), "wrong number of node inputs");
+    assert!(graph.nodes.is_empty() && graph.outputs.is_empty());
+    let report = &error
+        .downcast_ref::<crate::support::ReportedError>()
+        .unwrap()
+        .report;
+    assert_eq!(
+        report.operation.phase.as_deref(),
+        Some("validate-node-inputs")
+    );
+    let details = report.operation.settings.as_ref().unwrap();
+    assert_eq!(details["inputs"], serde_json::json!([99]));
+    assert_eq!(details["input_types"], serde_json::json!([null]));
+    assert!(!report.backtrace.is_empty());
+    assert_eq!(graph.add(Operation::Source, &[]).unwrap(), 0);
+}
+
+#[test]
 fn demand_tracks_ports_without_requiring_siblings_or_unrelated_nodes() {
     let mut graph = Graph::default();
     let source = graph.add(Operation::Source, &[]).unwrap();

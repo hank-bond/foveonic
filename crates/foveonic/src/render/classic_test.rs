@@ -28,7 +28,7 @@ fn classic_original_inspection_session_and_tiff() {
     settings.tiff_color_space = Some(TiffColorSpace::Srgb);
     // The recovered neutral request adds one unit of signed root-space detail.
     settings.sharpen_amount = Some(1.);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut profile = Profile::default();
     let names = [
         "calibration.layers",
@@ -161,7 +161,7 @@ use std::time::SystemTime;
 #[ignore = "requires CLASSIC_X3F original-file inspection evidence and a GPU adapter"]
 fn classic_calibration_inspection_defers_color_selection() {
     let mut source = Source::open(std::env::var("CLASSIC_X3F").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut profile = Profile::default();
     for mode in ["", "unavailable"] {
         let settings = Settings::new("Sunlight", mode);
@@ -290,7 +290,7 @@ fn classic_low_iso_filter_toggle_preserves_photographic_and_dng_brightness() {
         source.metadata.scalar("CaptureISO").unwrap() < 400.,
         "use a low-ISO original for the fixed-point reconstruction bypass regression"
     );
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut means = Vec::new();
     for enabled in [false, true] {
         let mut settings = Settings::new("Sunlight", "Standard");
@@ -340,7 +340,7 @@ fn classic_monochrome_original_matches_reference_and_ignores_color_wb() {
         // Match its presentation before comparing spatial pixels.
         std::sync::Arc::make_mut(&mut source.metadata).rotation = 0;
     }
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mode = std::env::var("CLASSIC_COLOR_MODE").unwrap_or_else(|_| "Standard".into());
     let mut settings = Settings::new("Auto", mode);
     settings.rendering = Rendering::Monochrome;
@@ -468,7 +468,7 @@ fn classic_monochrome_original_matches_reference_and_ignores_color_wb() {
 #[ignore = "requires GPU and CLASSIC_X3F SLR original for synthetic reduced-grid rendering"]
 fn synthetic_classic_reduced_grids_preserve_declared_photograph_shape() {
     let original = crate::source::Source::open(std::env::var_os("CLASSIC_X3F").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let exports = tempfile::tempdir().unwrap();
     let model = original.metadata.properties["CAMMODEL"].trim();
     let early = matches!(model, "SIGMA SD9" | "SIGMA SD10");
@@ -519,7 +519,7 @@ fn synthetic_classic_reduced_grids_preserve_declared_photograph_shape() {
         }
         let source = crate::source::Source {
             metadata: std::sync::Arc::new(metadata),
-            pixels,
+            pixels: pixels.into(),
             storage: crate::source::SourceStorage::InterleavedRgb,
             camf: original.camf.clone(),
             timings: vec![],

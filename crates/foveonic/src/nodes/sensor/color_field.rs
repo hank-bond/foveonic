@@ -478,6 +478,7 @@ pub(crate) fn apply(
             execution,
         )?;
     }
+    drop(equations);
     trace = gpu.trace(profile.mode.gpu(), 32);
     dispatch(gpu, Kernel::FieldTone, &mut resources, count, &mut trace);
     resources.retain(|(s, _)| *s != 10 && *s != 11);
@@ -629,6 +630,7 @@ pub(crate) fn apply(
     }
     trace = gpu.trace(profile.mode.gpu(), 4);
     dispatch(gpu, Kernel::FieldCommit, &mut resources, g, &mut trace);
+    resources.retain(|(s, _)| *s != 10 && *s != 11);
     resources.push((
         17,
         gpu.storage("Color-field restored layers", u64::from(n) * 12)?,
@@ -693,6 +695,7 @@ fn relax(
 struct SolverParams {
     size: [u32; 4],
     metric: [f32; 4],
+    // Relative tolerance, prior RHS scale, runtime rounding identity, and padding.
     tolerance: [f32; 4],
 }
 #[derive(Clone, Copy)]
@@ -782,7 +785,7 @@ fn solve(
                     0,
                 ],
                 metric,
-                tolerance: [tolerance, fixed_rhs_max, 0., 0.],
+                tolerance: [tolerance, fixed_rhs_max, 1., 0.],
             }),
         ),
         (1, equations.clone()),

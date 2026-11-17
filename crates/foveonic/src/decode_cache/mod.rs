@@ -11,8 +11,8 @@ mod selection;
 pub use selection::Selection;
 mod worker;
 use crate::source::{
-    FileIdentity as Identity, LoadStage, Metadata, ProcessingFamily, Result, Source, SourceOrigin,
-    SourceStorage,
+    FileIdentity as Identity, LoadStage, Metadata, ProcessingFamily, Result, SensorSamples, Source,
+    SourceOrigin, SourceStorage,
 };
 pub use previews::MAX_SIDE as PREVIEW_MAX_SIDE;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ use std::{
 };
 
 // Bump when decoder semantics or the stored source representation change.
-const FORMAT_VERSION: u32 = 2;
+const FORMAT_VERSION: u32 = 3;
 const NAMESPACE: &str = "foveonic-decoded-v1";
 pub const DEFAULT_BUDGET: u64 = 10_000_000_000;
 const DEFAULT_PREFETCH_BEHIND: usize = 3;
@@ -42,6 +42,14 @@ const MAX_HEADER: u64 = 1024 * 1024;
 const MAX_CAMF: u64 = 64 * 1024 * 1024;
 const SAMPLES_PER_CHUNK: usize = crate::background::IO_CHUNK_BYTES / size_of::<u16>();
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Recency is best effort. A readable cache entry remains useful if it cannot be updated.
+fn mark_used(path: &Path) {
+    let _ = File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(SystemTime::now()));
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -143,6 +151,7 @@ struct Control {
     generation: u64,
     preview: Option<previews::PendingPreview>,
     identities: HashMap<PathBuf, Identity>,
+    capture_metadata: HashMap<PathBuf, (Identity, BTreeMap<String, String>)>,
     rejected: HashSet<Identity>,
     recipes: HashMap<PathBuf, crate::render::Settings>,
     recipe_updates: BTreeMap<PathBuf, crate::render::Settings>,
@@ -211,6 +220,7 @@ impl Cache {
             generation: 0,
             preview: None,
             identities: HashMap::new(),
+            capture_metadata: HashMap::new(),
             rejected: HashSet::new(),
             recipes: HashMap::new(),
             recipe_updates: BTreeMap::new(),
@@ -284,6 +294,10 @@ impl Cache {
         }
         let order_changed = state.watched != paths;
         state.watched = paths;
+        let watched: HashSet<_> = state.watched.iter().cloned().collect();
+        state
+            .capture_metadata
+            .retain(|path, _| watched.contains(path));
         state.selected = selected;
         state.restart_prefetch();
         self.gate.interrupt_prefetch();
@@ -412,23 +426,87 @@ impl Cache {
     /// Reuse verified header metadata before loading the much larger pixel payload.
     /// Selection and editing defaults must not seek through the card again on a cache hit.
     pub fn capture_properties(&self, path: &Path) -> Result<BTreeMap<String, String>> {
-        if let Some(selection) = self.selection(path) {
-            return Ok(selection.properties);
+        let identity = self
+            .control
+            .lock()
+            .unwrap()
+            .identities
+            .get(path)
+            .cloned()
+            .or_else(|| Identity::read(path).ok());
+        if let Some(identity) = identity.as_ref() {
+            if let Some(cached) = self.memoized_capture(path, identity) {
+                return Ok(cached);
+            }
         }
         let settings = self.control.lock().unwrap().settings.clone();
-        let cached = (|| -> Result<BTreeMap<String, String>> {
-            if !settings.enabled {
-                return Err("decoded cache disabled".into());
-            }
-            let identity = Identity::read(path)?;
-            let mut file = File::open(self.root.join(identity.name()))?;
-            let header = read_header(&mut file, &identity, &settings)?;
-            if Identity::read(path)? != identity {
-                return Err("source changed while reading cached capture metadata".into());
-            }
-            Ok(header.properties)
-        })();
-        cached.or_else(|_| crate::source::read_capture_properties(path))
+        let cached = self.selection(path).map(|s| s.properties).or_else(|| {
+            let identity = identity.as_ref()?;
+            let mut file = File::open(self.root.join(identity.name())).ok()?;
+            read_header(&mut file, identity, &settings)
+                .ok()
+                .map(|header| header.properties)
+        });
+        let properties = match cached {
+            Some(properties) if properties.contains_key("EXIF_CAPTURE_CHECKED") => properties,
+            Some(properties) => identity
+                .as_ref()
+                .and_then(|id| self.refresh_capture(path, id).ok())
+                .unwrap_or(properties),
+            None => match identity.as_ref() {
+                Some(id) => self.refresh_capture(path, id)?,
+                None => crate::source::read_capture_properties(path)?,
+            },
+        };
+        if let Some(identity) = identity {
+            self.remember_capture(path, identity, &properties);
+        }
+        Ok(properties)
+    }
+
+    fn memoized_capture(
+        &self,
+        path: &Path,
+        identity: &Identity,
+    ) -> Option<BTreeMap<String, String>> {
+        self.control
+            .lock()
+            .unwrap()
+            .capture_metadata
+            .get(path)
+            .filter(|(old, _)| old == identity)
+            .map(|(_, properties)| properties.clone())
+    }
+
+    fn remember_capture(
+        &self,
+        path: &Path,
+        identity: Identity,
+        properties: &BTreeMap<String, String>,
+    ) {
+        if properties.contains_key("EXIF_CAPTURE_CHECKED") {
+            self.control
+                .lock()
+                .unwrap()
+                .capture_metadata
+                .insert(path.to_owned(), (identity, properties.clone()));
+        }
+    }
+
+    fn refresh_capture(
+        &self,
+        path: &Path,
+        identity: &Identity,
+    ) -> Result<BTreeMap<String, String>> {
+        if Identity::read(path)? != *identity {
+            return Err("source changed before reading capture metadata".into());
+        }
+        let properties = crate::source::read_capture_properties(path)?;
+        if Identity::read(path)? != *identity {
+            return Err("source changed while reading capture metadata".into());
+        }
+        self.remember_capture(path, identity.clone(), &properties);
+        Ok(properties)
     }
 
     pub fn open(&self, path: &Path, progress: impl Fn(LoadStage)) -> Result<Arc<Source>> {
@@ -473,8 +551,8 @@ impl Cache {
         Ok(source)
     }
 
-    /// Reuse a verified decode without falling back to reading the original.
-    /// Import can decode its completed local copy when the card cache is missing.
+    /// Reuse a verified decode without decoding the original again.
+    /// Older entries may refresh capture metadata using a small source read.
     pub fn open_cached(&self, path: &Path, progress: impl Fn(LoadStage)) -> Option<Arc<Source>> {
         let _scope = crate::diagnostics::scope_with(
             crate::diagnostics::Category::Cache,
@@ -542,6 +620,24 @@ impl Cache {
                         fields.u64("bytes", source.retained_source_bytes());
                     },
                 );
+                if source
+                    .metadata
+                    .properties
+                    .contains_key("FOVEONIC_LEGACY_CAPTURE_METADATA")
+                {
+                    let properties = self
+                        .memoized_capture(path, &identity)
+                        .or_else(|| self.refresh_capture(path, &identity).ok());
+                    let target = &mut Arc::make_mut(&mut source.metadata).properties;
+                    target.remove("FOVEONIC_LEGACY_CAPTURE_METADATA");
+                    if let Some(properties) = properties {
+                        target.extend(
+                            properties
+                                .into_iter()
+                                .filter(|(name, _)| name.starts_with("EXIF_")),
+                        );
+                    }
+                }
                 self.control.lock().unwrap().rejected.remove(&identity);
                 source.timings.insert(0, lookup);
                 self.status.lock().unwrap().hits += 1;
@@ -565,6 +661,25 @@ impl Cache {
                 let rejected = result.as_ref().is_err_and(|error| {
                     !error.is::<crate::background::Interrupted>() && !error.is::<PolicyMiss>()
                 });
+                if let Err(error) = &result {
+                    if reportable_lookup_error(error.as_ref()) {
+                        static OCCURRENCES: std::sync::atomic::AtomicUsize =
+                            std::sync::atomic::AtomicUsize::new(0);
+                        let count =
+                            OCCURRENCES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if count.is_power_of_two() {
+                            crate::support::warning_error(
+                                "decode_cache.read",
+                                error.as_ref(),
+                                crate::support::OperationContext {
+                                    source: Some(path.display().to_string()),
+                                    settings: Some(serde_json::json!({"occurrences":count})),
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                    }
+                }
                 if rejected || result.is_ok() {
                     let mut control = self.control.lock().unwrap();
                     if control.settings == settings
@@ -620,6 +735,30 @@ fn diagnostic_root(root: PathBuf, namespace: Option<&std::ffi::OsStr>) -> Result
 
 #[derive(Debug)]
 struct PolicyMiss(&'static str);
+
+fn reportable_lookup_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    !error.is::<crate::background::Interrupted>()
+        && !error.is::<PolicyMiss>()
+        && !error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+}
+
+#[cfg(test)]
+#[test]
+fn cache_warning_excludes_misses_and_cooperative_cancellation() {
+    assert!(!reportable_lookup_error(&crate::background::Interrupted));
+    assert!(!reportable_lookup_error(&PolicyMiss("disabled")));
+    assert!(!reportable_lookup_error(&std::io::Error::from(
+        std::io::ErrorKind::NotFound
+    )));
+    assert!(reportable_lookup_error(&std::io::Error::from(
+        std::io::ErrorKind::PermissionDenied
+    )));
+    assert!(reportable_lookup_error(&std::io::Error::other(
+        "checksum mismatch"
+    )));
+}
 impl std::fmt::Display for PolicyMiss {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.0)
@@ -659,39 +798,66 @@ fn load(
                 .u64("camf_bytes", header.camf_bytes)
                 .u64("chunk_bytes", crate::background::IO_CHUNK_BYTES as u64);
         });
-        let (mut pixels, mut camf, mut codes) = {
+        let compact = matches!(header.sample_encoding, samples::Encoding::Unsigned16)
+            && header
+                .properties
+                .get("CAMMODEL")
+                .and_then(|name| ProcessingFamily::from_camera_model(name))
+                == Some(ProcessingFamily::Merrill);
+        let (mut pixels, mut camf) = {
             let _scope = scope(Category::Cache, "cache.decoded.payload.allocate");
+            let len = usize::try_from(header.samples)?;
             let pixels = {
                 let _scope = scope(Category::Cache, "cache.decoded.samples.allocate");
-                vec![0_f32; usize::try_from(header.samples)?]
+                if compact {
+                    SensorSamples::Unsigned(vec![0; len])
+                } else {
+                    SensorSamples::Float(vec![0.; len])
+                }
             };
             let camf = {
                 let _scope = scope(Category::Cache, "cache.decoded.camf.allocate");
                 vec![0; usize::try_from(header.camf_bytes)?]
             };
-            let codes = {
-                let _scope = scope(Category::Cache, "cache.decoded.scratch.allocate");
-                vec![0_u16; SAMPLES_PER_CHUNK.min(pixels.len())]
-            };
-            (pixels, camf, codes)
+            (pixels, camf)
         };
         let mut checksum = crc32fast::Hasher::new();
-        for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
-            crate::background::checkpoint_or_cancel()?;
-            let codes = &mut codes[..output.len()];
-            let bytes = bytemuck::cast_slice_mut::<u16, u8>(codes);
-            {
-                let _scope = scope(Category::Cache, "cache.decoded.samples.read");
-                file.read_exact(bytes)?;
+        match &mut pixels {
+            SensorSamples::Unsigned(pixels) => {
+                for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
+                    crate::background::checkpoint_or_cancel()?;
+                    let bytes = bytemuck::cast_slice_mut::<u16, u8>(output);
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.read");
+                        file.read_exact(bytes)?;
+                    }
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.checksum");
+                        checksum.update(bytes);
+                    }
+                }
             }
-            {
-                let _scope = scope(Category::Cache, "cache.decoded.samples.checksum");
-                checksum.update(bytes);
+            SensorSamples::Float(pixels) => {
+                let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(pixels.len())];
+                for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
+                    crate::background::checkpoint_or_cancel()?;
+                    let codes = &mut codes[..output.len()];
+                    let bytes = bytemuck::cast_slice_mut::<u16, u8>(codes);
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.read");
+                        file.read_exact(bytes)?;
+                    }
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.checksum");
+                        checksum.update(bytes);
+                    }
+                    {
+                        let _scope = scope(Category::Cache, "cache.decoded.samples.convert");
+                        header.sample_encoding.decode(codes, output);
+                    }
+                }
             }
-            {
-                let _scope = scope(Category::Cache, "cache.decoded.samples.convert");
-                header.sample_encoding.decode(codes, output);
-            }
+            SensorSamples::UnsignedPlanes(_) => unreachable!("cache reads use interleaved storage"),
         }
         for chunk in camf.chunks_mut(crate::background::IO_CHUNK_BYTES) {
             crate::background::checkpoint_or_cancel()?;
@@ -714,7 +880,11 @@ fn load(
     };
     file.complete();
     let payload_timing = crate::profile::Timing::elapsed(
-        "decoded cache payload read, checksum and conversion",
+        if matches!(pixels, SensorSamples::Unsigned(_)) {
+            "decoded cache payload read and checksum"
+        } else {
+            "decoded cache payload read, checksum and conversion"
+        },
         payload_started,
     );
     progress(LoadStage::FileRead);
@@ -723,6 +893,10 @@ fn load(
         let _scope = scope(Category::Cache, "cache.decoded.camf.parse");
         crate::x3f::cached_camera_metadata(&camf)?
     };
+    let mut properties = header.properties;
+    if header.version == 2 {
+        properties.insert("FOVEONIC_LEGACY_CAPTURE_METADATA".into(), "1".into());
+    }
     let source = Source {
         origin: SourceOrigin::File(identity.clone()),
         metadata: Arc::new(Metadata {
@@ -730,7 +904,7 @@ fn load(
             height: header.height,
             rotation: header.rotation,
             processing_version: header.processing_version,
-            properties: header.properties,
+            properties,
             matrices,
             lists,
         }),
@@ -754,7 +928,7 @@ fn load(
     }
     {
         let _scope = scope(Category::Cache, "cache.decoded.recency");
-        let _ = file.get_ref().set_modified(SystemTime::now());
+        mark_used(path);
     }
     progress(LoadStage::Decoded);
     Ok(source)
@@ -784,7 +958,7 @@ fn read_header(file: &mut File, identity: &Identity, settings: &Settings) -> Res
         return Err("decoded cache metadata checksum mismatch".into());
     }
     let header: Header = serde_json::from_slice(&json)?;
-    if header.version != FORMAT_VERSION
+    if !matches!(header.version, 2 | FORMAT_VERSION)
         || &header.identity != identity
         || header.little_endian != cfg!(target_endian = "little")
     {
@@ -866,17 +1040,63 @@ struct PreparedDecoded {
     bytes: u64,
 }
 
+fn for_code_chunks(
+    values: &SensorSamples,
+    encoding: samples::Encoding,
+    mut consume: impl FnMut(&[u16]) -> Result<()>,
+) -> Result<()> {
+    match values {
+        SensorSamples::Unsigned(values) => {
+            for chunk in values.chunks(SAMPLES_PER_CHUNK) {
+                crate::background::checkpoint_or_cancel()?;
+                consume(chunk)?;
+            }
+        }
+        SensorSamples::UnsignedPlanes(planes) => {
+            let pixels_per_chunk = SAMPLES_PER_CHUNK / 3;
+            let mut codes = Vec::with_capacity(pixels_per_chunk.min(planes[0].len()) * 3);
+            for ((red, green), blue) in planes[0]
+                .chunks(pixels_per_chunk)
+                .zip(planes[1].chunks(pixels_per_chunk))
+                .zip(planes[2].chunks(pixels_per_chunk))
+            {
+                crate::background::checkpoint_or_cancel()?;
+                codes.clear();
+                codes.extend(
+                    red.iter()
+                        .zip(green)
+                        .zip(blue)
+                        .flat_map(|((&r, &g), &b)| [r, g, b]),
+                );
+                consume(&codes)?;
+            }
+        }
+        SensorSamples::Float(values) => {
+            let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(values.len())];
+            for chunk in values.chunks(SAMPLES_PER_CHUNK) {
+                crate::background::checkpoint_or_cancel()?;
+                let codes = &mut codes[..chunk.len()];
+                encoding.encode(chunk, codes)?;
+                consume(codes)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Check compact sample encoding without allocating another full sensor buffer.
 fn prepare_decoded(identity: Identity, source: &Source) -> Result<PreparedDecoded> {
-    let sample_encoding = samples::Encoding::for_samples(&source.pixels);
+    let sample_encoding = match &source.pixels {
+        SensorSamples::Unsigned(_) | SensorSamples::UnsignedPlanes(_) => {
+            samples::Encoding::Unsigned16
+        }
+        SensorSamples::Float(values) => samples::Encoding::for_samples(values),
+    };
     let mut checksum = crc32fast::Hasher::new();
-    let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(source.pixels.len())];
-    for chunk in source.pixels.chunks(SAMPLES_PER_CHUNK) {
-        crate::background::checkpoint_or_cancel()?;
-        let codes = &mut codes[..chunk.len()];
-        sample_encoding.encode(chunk, codes)?;
+    for_code_chunks(&source.pixels, sample_encoding, |codes| {
         checksum.update(bytemuck::cast_slice::<u16, u8>(codes));
-    }
+        Ok(())
+    })?;
     checksum.update(&source.camf);
     let header = Header {
         version: FORMAT_VERSION,
@@ -950,13 +1170,10 @@ fn publish_decoded(
         file.write_all(&(json.len() as u64).to_le_bytes())?;
         file.write_all(&header_checksum.to_le_bytes())?;
         file.write_all(&json)?;
-        let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(source.pixels.len())];
-        for chunk in source.pixels.chunks(SAMPLES_PER_CHUNK) {
-            crate::background::checkpoint_or_cancel()?;
-            let codes = &mut codes[..chunk.len()];
-            sample_encoding.encode(chunk, codes)?;
+        for_code_chunks(&source.pixels, sample_encoding, |codes| {
             file.write_all(bytemuck::cast_slice::<u16, u8>(codes))?;
-        }
+            Ok(())
+        })?;
         file.write_all(&source.camf)?;
         file.flush()?;
         drop(file);
@@ -981,7 +1198,8 @@ fn boot_key() -> String {
     #[cfg(target_os = "linux")]
     let boot = fs::read("/proc/sys/kernel/random/boot_id").ok();
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let boot: Option<Vec<u8>> = None;
+    let boot = format!("{}-{:?}", std::process::id(), SystemTime::now()).into_bytes();
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let boot = boot
         .unwrap_or_else(|| format!("{}-{:?}", std::process::id(), SystemTime::now()).into_bytes());
     let mut key = DefaultHasher::new();
@@ -990,4 +1208,4 @@ fn boot_key() -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

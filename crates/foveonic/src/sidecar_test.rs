@@ -405,7 +405,7 @@ fn restored_recipe_replays_exact_photographic_pixels() {
     let input = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
     let source = Source::open(input).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = edited();
     settings.white_balance = "Sunlight".into();
     settings.color_mode = "Standard".into();
@@ -436,4 +436,21 @@ fn restored_recipe_replays_exact_photographic_pixels() {
         engine.readback_image(&original).unwrap() == engine.readback_image(&replayed).unwrap(),
         "recipe replay changes photographic samples"
     );
+}
+
+#[test]
+fn unreadable_sidecar_preserves_the_io_cause_and_path() {
+    let directory = Directory::new();
+    let destination = directory.0.join("recipe.json");
+    fs::create_dir(&destination).unwrap();
+    let error = load_at(&destination).unwrap_err();
+    assert!(error
+        .to_string()
+        .starts_with(&destination.display().to_string()));
+    let cause = error.source().unwrap();
+    assert!(cause
+        .downcast_ref::<std::io::Error>()
+        .unwrap()
+        .raw_os_error()
+        .is_some());
 }

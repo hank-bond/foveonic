@@ -75,7 +75,7 @@ fn parallel_filter_measures_native_histogram_accumulation_error() {
     // The native library SHA256 is
     // a0f64d511d4b7fdfbcc11673b74dfdd61a85bd06128804e0f324214b64f21229.
     let fixture = include_bytes!("histogram_bilateral.fixture");
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let [w, h] = [17, 64];
     let count = (w * h) as usize;
     let mut case = 0;

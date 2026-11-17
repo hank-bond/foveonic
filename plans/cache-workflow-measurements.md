@@ -15,7 +15,7 @@ The owner requested this investigation after [regional preview completion](./reg
 - Which limits are slot/count or coordination limits that extra bytes cannot solve?
 - Does background Whole preparation evict the regional working set needed by the next edit?
 
-The decoded disk format and resident source format differ: the disk cache stores compact sensor codes, while `Source.pixels` remains a `Vec<f32>`. Account the resident decoded samples independently of the disk payload and of GPU uploads.
+The disk cache stores compact sensor codes. Resident sources can retain unsigned format-30 codes compactly or use float samples for other inputs. Account the resident decoded samples independently of the disk payload and of GPU uploads.
 
 ## Workflow matrix
 

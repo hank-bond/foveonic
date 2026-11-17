@@ -10,7 +10,7 @@ use crate::{
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = Source::open(
         std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f"),
@@ -77,7 +77,7 @@ fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
     assert!(engine
         .encode_dng_base(&invalid, &prepared, &mut Profile::default())
         .is_err());
-    let other = Engine::new().unwrap();
+    let other = Engine::test_executor();
     assert_eq!(
         other
             .encode_dng_base(&base, &prepared, &mut Profile::default())
@@ -90,7 +90,7 @@ fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn saved_rotation_uses_the_same_samples_for_dng_and_photographic_preview() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = Source::open(
         std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f"),
@@ -163,4 +163,74 @@ fn saved_rotation_uses_the_same_samples_for_dng_and_photographic_preview() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn dng_dense_camera_encoding_full_frame() {
+    let engine = Engine::test_executor();
+    let source = Source::open(
+        std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+            .join("blue-parking-sign.x3f"),
+    )
+    .unwrap();
+    let settings = Settings::new("Sunlight", "Standard");
+    let mut prepared = Prepared::new(&source.metadata, &settings).unwrap();
+    prepared.mapping = Matrix([
+        0.00024, -0.000013, 0.000021, 0.000009, 0.00023, -0.000017, -0.000012, 0.000019, 0.00025,
+    ]);
+    prepared.neutral = [0.63, 1., 0.47];
+    let metadata = source.metadata.clone();
+    drop(source);
+    let extent = [4096_u32, 3072_u32];
+    let samples: Vec<f32> = (0..extent[0] as usize * extent[1] as usize * 3)
+        .map(|i| ((i.wrapping_mul(37) % 10001) as f32 * 0.5) - 300.)
+        .collect();
+    let buffer = engine.gpu.upload("DNG dense fixture", &samples).unwrap();
+    drop(samples);
+    let image = RenderedImage {
+        buffer,
+        description: Description {
+            linear_white: 4095,
+            view_baked: false,
+            extent,
+            layout: Layout::Rgb32Float,
+            space: Space::LinearRgb(ColorSpace::Srgb),
+        },
+        view: View {
+            crop: [0, 0, extent[0], extent[1]],
+            rotation: 0,
+            extent,
+        },
+        metadata,
+        settings,
+        dehaze_basis: None,
+        owner: engine.owner.clone(),
+        regional: None,
+    };
+    let (bytes, scale) = engine
+        .encode_dng_base(&image, &prepared, &mut Profile::default())
+        .unwrap();
+    assert_eq!(bytes.len(), extent[0] as usize * extent[1] as usize * 8);
+    let mut max_error = 0_u16;
+    for (pixel, packed) in bytes.as_chunks::<8>().0.iter().enumerate() {
+        let rgb: [f64; 3] = std::array::from_fn(|c| {
+            (((pixel * 3 + c).wrapping_mul(37) % 10001) as f32 * 0.5 - 300.) as f64
+        });
+        for c in 0..3 {
+            let camera = (0..3)
+                .map(|i| f64::from(prepared.mapping.0[c * 3 + i] as f32) * rgb[i])
+                .sum::<f64>()
+                .max(0.);
+            let expected = (camera / f64::from(scale) * 65535. + 0.5)
+                .floor()
+                .clamp(0., 65535.) as u16;
+            let actual = u16::from_le_bytes([packed[c * 2], packed[c * 2 + 1]]);
+            max_error = max_error.max(actual.abs_diff(expected));
+        }
+    }
+    assert!(
+        max_error <= 1,
+        "dense DNG encoding differs by {max_error} codes"
+    );
 }

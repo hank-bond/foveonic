@@ -156,7 +156,7 @@ mod tests {
         let metadata = source.metadata.clone();
         drop(source);
         assert!(weak.upgrade().is_none());
-        let engine = Engine::new().unwrap();
+        let engine = Engine::test_executor();
         let mut profile = Profile::new(crate::profile::Mode::Wall);
         for stage in [
             ordered_blue_repair::Stage::Directional,

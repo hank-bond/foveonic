@@ -182,11 +182,17 @@ impl SelectionJourney {
             }
             6 => {
                 self.observe(app, paths)?;
+                let (first, last) = app.smoke_visual_range(paths);
+                // Stage five already clicked photo zero. Repeating that click
+                // quickly would deliberately request double-click zoom.
+                if first != 0 {
+                    self.click(app, ctx, smoke, first, egui::Modifiers::NONE, vec![first]);
+                }
                 self.click(
                     app,
                     ctx,
                     smoke,
-                    paths.len() - 1,
+                    last,
                     egui::Modifiers::SHIFT,
                     (0..paths.len()).collect(),
                 );

@@ -761,7 +761,8 @@
       "sources": [
         "sd9.x3f",
         "sd10.x3f"
-      ]
+      ],
+      "worker_memory_mb": 2048
     },
     {
       "name": "merrill-high",
@@ -770,7 +771,8 @@
       "sources": [
         "blue-parking-sign.x3f",
         "merrill-hazy-coast.x3f"
-      ]
+      ],
+      "worker_memory_mb": 3072
     },
     {
       "name": "quattro-high",
@@ -779,7 +781,8 @@
       "sources": [
         "dp0-quattro.x3f",
         "dp2-quattro.x3f"
-      ]
+      ],
+      "worker_memory_mb": 4096
     },
     {
       "name": "tiger-high",
@@ -788,7 +791,8 @@
       "sources": [
         "sd-quattro-h.x3f",
         "sd-quattro-h-second.x3f"
-      ]
+      ],
+      "worker_memory_mb": 5120
     },
     {
       "name": "merrill-reduced",
@@ -797,7 +801,8 @@
       "sources": [
         "dp3-merrill-medium.x3f",
         "dp3-merrill-low.x3f"
-      ]
+      ],
+      "worker_memory_mb": 2048
     }
   ],
   "regional_cases": [

@@ -29,7 +29,7 @@ pub(super) struct Request {
 
 pub(super) struct Loaded {
     pub path: PathBuf,
-    pub result: Result<Arc<Source>, String>,
+    pub result: foveonic::source::Result<Arc<Source>>,
 }
 
 /// A yielded acquisition remains wanted and never becomes a photographic error.
@@ -136,13 +136,42 @@ pub(super) fn start(
                         if cancel() || request.cancelled.load(Ordering::Acquire) {
                             return None;
                         }
+                        let operation_id = crate::support::operation_id("source");
+                        let _support_context = tracing::info_span!("source", source = %request.path.display(), operation_id = %operation_id).entered();
+                        foveonic::support::event(
+                            foveonic::support::Level::Info,
+                            "source.open",
+                            "Opening photograph",
+                            serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.revision}),
+                        );
                         let result = cache
                             .open(&request.path, |stage| {
                                 if request.priority == TaskPriority::Viewport {
                                     reporter.loaded(stage);
                                 }
                             })
-                            .map_err(|error| error.to_string());
+                            .map_err(|error| {
+                                foveonic::support::reported_error(
+                                    "source.open",
+                                    error,
+                                    foveonic::support::OperationContext {
+                                        operation_id: Some(operation_id.clone()),
+                                        component: Some("source loader".into()),
+                                        phase: Some("open and decode".into()),
+                                        source: Some(request.path.to_string_lossy().into_owned()),
+                                        revision: Some(request.revision.to_string()),
+                                        ..Default::default()
+                                    },
+                                )
+                            });
+                        if result.is_ok() {
+                            foveonic::support::event(
+                                foveonic::support::Level::Info,
+                                "source.ready",
+                                "Photograph opened",
+                                serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.revision}),
+                            );
+                        }
                         (!cancel() && !request.cancelled.load(Ordering::Acquire)).then_some(result)
                     };
                     let attempt = match request.priority {
@@ -227,7 +256,7 @@ impl Handle {
         };
         if let Some(loaded) = loaded {
             let _ = self.signals.send(Signal::Taken);
-            return loaded.result.map(Some).map_err(Into::into);
+            return loaded.result.map(Some);
         }
         if request {
             let _ = self.signals.send(Signal::Needed(Request {

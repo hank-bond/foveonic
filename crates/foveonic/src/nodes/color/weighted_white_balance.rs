@@ -528,7 +528,7 @@ fn refine(
 mod tests {
     #[test]
     fn signed_row_statistics_preserve_integer_offsets() {
-        let gpu = crate::gpu::Gpu::new().unwrap();
+        let gpu = crate::gpu::Gpu::test_executor();
         let values = [
             -32768f32, 100., 32767., 7., -4., 2., 1000., 2000., 3000., -5., 6., -7.,
         ];

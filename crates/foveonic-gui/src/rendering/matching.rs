@@ -14,6 +14,15 @@ pub(crate) fn same_authored_edits(a: &Settings, b: &Settings) -> bool {
     authored_edits(a) == authored_edits(b)
 }
 
+/// Compare rendering settings while ignoring descriptive range names.
+pub(crate) fn same_render_settings(a: &Settings, b: &Settings) -> bool {
+    let mut a = a.clone();
+    let mut b = b.clone();
+    a.photographic.color_editor.advanced.clear_names();
+    b.photographic.color_editor.advanced.clear_names();
+    a == b
+}
+
 /// New detail may advance feedback before its overview catches up. Once the
 /// overview advances, an older section is useful only for the same edits.
 pub(crate) fn can_overlay_edits(

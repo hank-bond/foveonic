@@ -291,6 +291,41 @@ fn an_embedded_adobe_icc_profile_retains_colors_outside_srgb() {
 }
 
 #[test]
+fn icc_preview_chunking_preserves_all_samples_across_boundaries() {
+    use moxcms::{ColorProfile, Layout, TransformOptions};
+    let profile =
+        ColorProfile::new_from_slice(include_bytes!("../assets/adobe-rgb-1998-compat.icc"))
+            .unwrap();
+    let destination =
+        ColorProfile::new_from_slice(crate::color_space::TiffColorSpace::ProPhotoRgb.profile())
+            .unwrap();
+    let transform = profile
+        .create_transform_16bit(
+            Layout::Rgb,
+            &destination,
+            Layout::Rgb,
+            TransformOptions {
+                rendering_intent: moxcms::RenderingIntent::RelativeColorimetric,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let rgb: Vec<u8> = (0..(4096 * 2 + 7) * 3)
+        .map(|i| (i * 37 + i / (4096 * 3)) as u8)
+        .collect();
+    let widened: Vec<u16> = rgb.iter().map(|v| u16::from(*v) * 257).collect();
+    let mut expected = vec![0; widened.len()];
+    for (input, output) in widened.chunks(4096 * 3).zip(expected.chunks_mut(4096 * 3)) {
+        transform.transform(input, output).unwrap();
+    }
+    let encoding = color::Encoding::Profile {
+        profile: std::sync::Arc::new(profile),
+        fallback: Box::new(color::Encoding::Srgb),
+    };
+    assert_eq!(encoding.decode(&rgb).unwrap().0, expected);
+}
+
+#[test]
 fn an_unusable_rgb_profile_falls_back_before_converting_any_pixels() {
     use moxcms::{ColorProfile, Layout, TransformOptions};
     let mut profile = ColorProfile::new_srgb();

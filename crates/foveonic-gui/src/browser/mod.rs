@@ -390,7 +390,7 @@ impl Browser {
                     self.preview_checked.insert(path.clone());
                 }
             }
-            if let Ok(image) = image {
+            if let Ok(Some(image)) = image {
                 self.insert(ctx, path, image);
             } else if kind == Kind::Thumbnail {
                 // A missing larger preview says nothing about a small thumbnail
@@ -404,13 +404,14 @@ impl Browser {
         &self,
         _ctx: &egui::Context,
         pixels: crate::display_image::Pixels,
-    ) -> crate::display_image::Texture {
+    ) -> Result<crate::display_image::Texture, String> {
         if let Some(rs) = &self.render_state {
             return pixels.upload(rs);
         }
         #[cfg(test)]
         {
-            pixels.headless(_ctx)
+            pixels.validate(foveonic::decode_cache::PREVIEW_MAX_SIDE)?;
+            Ok(pixels.headless(_ctx))
         }
         #[cfg(not(test))]
         {
@@ -425,8 +426,16 @@ impl Browser {
             entry.extent = Some(native_extent);
             self.query_dirty = true;
         }
+        let texture = match self.upload(ctx, image.thumbnail.image) {
+            Ok(texture) => texture,
+            Err(error) => {
+                self.cache.entry(path.clone()).or_insert(None);
+                Self::upload_failed(ctx, &path, error);
+                return;
+            }
+        };
         let thumbnail = Thumbnail {
-            texture: self.upload(ctx, image.thumbnail.image),
+            texture,
             native_extent,
         };
         self.thumbnail_bytes += Self::thumbnail_bytes(&thumbnail);
@@ -436,10 +445,17 @@ impl Browser {
         self.order.retain(|p| p != &path);
         self.order.push_back(path.clone());
         if let Some(preview) = image.preview {
+            let texture = match self.upload(ctx, preview) {
+                Ok(texture) => texture,
+                Err(error) => {
+                    Self::upload_failed(ctx, &path, error);
+                    return;
+                }
+            };
             self.previews.insert(
                 path.clone(),
                 Thumbnail {
-                    texture: self.upload(ctx, preview),
+                    texture,
                     native_extent,
                 },
             );
@@ -451,6 +467,15 @@ impl Browser {
                 }
             }
         }
+    }
+    fn upload_failed(ctx: &egui::Context, path: &Path, error: String) {
+        crate::activity::communicate(
+            ctx,
+            crate::activity::Event::Error(format!(
+                "Cannot display preview for {}: {error}",
+                path.display()
+            )),
+        );
     }
     fn claim_rendered(&mut self, path: &Path, revision: u64) -> bool {
         if self.files.iter().any(|file| file.as_path() == path)
@@ -1221,7 +1246,7 @@ mod tests {
             path: path.clone(),
             version: 1,
             kind: super::Kind::Thumbnail,
-            image: Ok(prepared([0, 0, 255], [16, 8])),
+            image: Ok(Some(prepared([0, 0, 255], [16, 8]))),
         })
         .unwrap();
         browser.receive(&context);
@@ -1297,7 +1322,7 @@ mod tests {
             path: path.clone(),
             version: 1,
             kind: super::Kind::Preview,
-            image: Err("No cached preview".into()),
+            image: Ok(None),
         })
         .unwrap();
         browser.receive(&context);
@@ -1321,7 +1346,7 @@ mod tests {
             path: path.clone(),
             version: 1,
             kind: super::Kind::Preview,
-            image: Err("No cached preview".into()),
+            image: Ok(None),
         })
         .unwrap();
         browser.receive(&context);

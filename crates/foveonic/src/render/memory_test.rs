@@ -48,7 +48,7 @@ fn decoded_source_reservations_deduplicate_by_allocation_not_origin() {
         Arc::new(Source {
             origin: Default::default(),
             metadata: metadata.clone(),
-            pixels: vec![1., 2., 3.],
+            pixels: vec![1., 2., 3.].into(),
             storage: crate::source::SourceStorage::InterleavedRgb,
             camf: vec![],
             timings: vec![],
@@ -79,7 +79,7 @@ fn decoded_source_reservations_deduplicate_by_allocation_not_origin() {
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
 fn shared_reservations_and_processing_owners_are_counted_once() {
     let source = Arc::new(Source::open(std::env::var_os("SMALL_PREVIEW_X3F").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = super::super::Settings::new("Sunlight", "Standard");
     settings.working_scale = super::super::Scale::new(8).unwrap();
     let mut native = RenderSession::new(source.clone());
@@ -170,7 +170,7 @@ fn shared_reservations_and_processing_owners_are_counted_once() {
 #[test]
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
 fn coordinated_budget_evicts_cold_history_before_actual_active_photos() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let path = std::env::var_os("SMALL_PREVIEW_X3F").unwrap();
     let mut settings = super::super::Settings::new("Sunlight", "Standard");
     settings.working_scale = super::super::Scale::new(8).unwrap();
@@ -230,7 +230,7 @@ fn native_fine_edits_keep_their_restart_frontier_under_memory_pressure() {
     let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
     let source = Arc::new(Source::open(path).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut reduced = ProcessingWorkingSet::new();
     reduced
         .insert_native(

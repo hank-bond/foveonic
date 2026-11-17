@@ -14,7 +14,7 @@ implementation: conforming
 - Photographic fitting, residuals, statistics, and correction **must** execute on GPU. Host fitting-matrix preparation **may** use fixed geometry only, with verified equivalence to the native selected bases.
 - Original input and retained artifacts **must** remain immutable.
 - Row correction **must** default on with an independent shared GUI/CLI control. Inspection **must** provide corrected layers; the engine **must** make small row diagnostics available without requiring reconstruction/color/tone execution.
-- Merrill Fast preview **must** omit row estimation without changing the requested editing setting. Full photographs, inspection and DNG processing retain that setting.
+- Reduced Merrill previews **must** preserve the requested row correction using the [working-grid estimation contract](./small-previews.md). Native photographs, inspection and DNG processing retain their established operation order and equations.
 
 ## Implementation and evidence
 

@@ -82,7 +82,7 @@ impl App {
                 );
             }
             if target == "multi-eight" {
-                smoke.multi_cached_textures = smoke
+                (smoke.multi_cached_textures, smoke.multi_cached_scales) = smoke
                     .multi_paths
                     .iter()
                     .take(2)
@@ -93,9 +93,12 @@ impl App {
                             .filter(|frame| frame.path == *path)
                             .or_else(|| self.multi_edit_frame(path))
                             .unwrap();
-                        std::sync::Arc::downgrade(&frame.texture)
+                        (
+                            std::sync::Arc::downgrade(&frame.texture),
+                            frame.artifact.settings.working_scale,
+                        )
                     })
-                    .collect();
+                    .unzip();
             }
             self.smoke_multi_assert(&smoke, target);
             {
@@ -275,6 +278,31 @@ impl App {
     }
 
     fn smoke_multi_assert(&self, smoke: &Smoke, target: &str) {
+        if target == "multi-eight" {
+            for path in &smoke.multi_paths {
+                let frame = self
+                    .frame
+                    .as_ref()
+                    .filter(|frame| frame.path == *path)
+                    .or_else(|| self.multi_edit_frame(path))
+                    .unwrap();
+                assert_eq!(
+                    frame.processing_quality,
+                    self.preferences.processing_quality
+                );
+                let bound = super::automatic_scale_bound(
+                    frame,
+                    self.viewports.view(Some(path)),
+                    self.preferences.processing_quality,
+                    self.context.pixels_per_point(),
+                )
+                .unwrap();
+                assert!(
+                    frame.artifact.settings.working_scale.divisor() <= bound.divisor(),
+                    "multi-photo preview is coarser than physical display demand"
+                );
+            }
+        }
         if target.starts_with("multi-") && target != "multi-open" {
             assert!(
                 self.browser.import_mode,
@@ -323,9 +351,18 @@ impl App {
                     .or_else(|| self.multi_edit_frame(path))
                     .unwrap();
                 assert_eq!(
-                    frame.artifact.settings.working_scale.divisor(),
-                    8,
-                    "selecting an unchanged overview photo changed its working scale"
+                    frame.artifact.settings.working_scale, smoke.multi_cached_scales[index],
+                    "selecting an unchanged overview photo changed its working scale: target={target}, path={}, density={:?}, zoom={:?}, explicit_zoom={}, rectangles={:?}, task={}, task_revision={}, purpose={}, app_revision={}, requested_scale={:?}",
+                    path.display(),
+                    self.preview_densities.get(path),
+                    self.viewports.view(Some(path)).zoom_percent(self.context.pixels_per_point()),
+                    self.viewports.view(Some(path)).explicit_zoom(),
+                    self.viewports.view(Some(path)).image_rectangles(),
+                    frame.diagnostic_task.id,
+                    frame.diagnostic_task.revision,
+                    frame.diagnostic_task.purpose,
+                    self.revision,
+                    frame.requested.working_scale,
                 );
                 assert!(
                     std::sync::Arc::ptr_eq(&cached, &frame.texture),
@@ -423,12 +460,12 @@ impl App {
             "multi-before" => self.toggle_before(crate::editor::Rendition::Camera),
             "multi-current" => self.toggle_before(crate::editor::Rendition::Camera),
             "multi-shift" => {
-                // A normal click supplies the range anchor without changing its active context.
-                self.comparison_selection = Some(crate::viewport_selection::Request {
-                    path: smoke.multi_paths[0].clone(),
-                    gesture: crate::viewport_selection::Gesture::Replace,
-                });
-                self.smoke_multi_click(ctx, smoke, 7, egui::Modifiers::SHIFT);
+                // Shift follows the drawn tile order, which can differ from
+                // browser order when photographs have different aspect ratios.
+                assert_eq!(smoke.multi_paths.len(), 8);
+                let (first, last) = self.smoke_visual_range(&smoke.multi_paths);
+                self.smoke_multi_click(ctx, smoke, first, egui::Modifiers::NONE);
+                self.smoke_multi_click(ctx, smoke, last, egui::Modifiers::SHIFT);
             }
             "multi-space" => {
                 crate::photo_tools::pointer(ctx);
@@ -468,6 +505,28 @@ impl App {
             }
             _ => unreachable!("unknown multi-edit smoke step"),
         }
+    }
+
+    pub(super) fn smoke_visual_range(&self, paths: &[std::path::PathBuf]) -> (usize, usize) {
+        let mut tiles: Vec<_> = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let rect = self
+                    .viewports
+                    .view(Some(path))
+                    .response()
+                    .expect("range-selection tile is drawn")
+                    .rect;
+                (index, rect)
+            })
+            .collect();
+        tiles.sort_by(|(_, a), (_, b)| {
+            a.top()
+                .total_cmp(&b.top())
+                .then_with(|| a.left().total_cmp(&b.left()))
+        });
+        (tiles.first().unwrap().0, tiles.last().unwrap().0)
     }
 
     pub(super) fn smoke_multi_click(

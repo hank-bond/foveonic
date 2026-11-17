@@ -16,19 +16,99 @@ fn preview_divisors(default: &[u32]) -> Vec<u32> {
     divisors
 }
 
+// Diagnostic-only readbacks of the actual reduced graph, not native inspection outputs.
+fn extreme_graph_probe(
+    engine: &Engine,
+    source: &Source,
+    settings: &Settings,
+    cache: Option<&mut crate::interactive::Cache>,
+) -> crate::source::Result<()> {
+    let recipe = build(
+        engine,
+        super::super::RecipeInput::Original(source),
+        settings,
+        &["final"],
+        &mut Profile::default(),
+        &mut Execution::default(),
+    )?;
+    let execution = Execution {
+        cache,
+        ..Default::default()
+    };
+    let mut targets = Vec::new();
+    let mut retained = Vec::new();
+    for (id, output) in recipe.graph.outputs.iter().enumerate() {
+        let name = output.cache_name();
+        if let Some(value) = execution.seed(&name) {
+            if value.buffer.size() <= 4 * 1024 * 1024 {
+                targets.push(id);
+                retained.push(Some((
+                    engine.gpu.readback(&value.buffer)?,
+                    execution.can_reuse(&recipe.graph, id),
+                )));
+            }
+        } else if execution.cache.is_none()
+            && recipe.graph.session_outputs.contains(&id)
+            && (name.contains("sensor-rgb-grid")
+                || name.contains("sensor-clipping-grid")
+                || name.contains("working-grid"))
+        {
+            targets.push(id);
+            retained.push(None);
+        }
+    }
+    eprintln!("extreme graph probe: {} reduced checkpoints", targets.len());
+    let values = engine.run_graph(
+        crate::render::execute::Input::Source(source),
+        &recipe.graph,
+        &targets,
+        &mut Profile::default(),
+        &mut Execution::default(),
+        crate::render::execute::Completion::Queued,
+    )?;
+    for ((id, old), fresh) in targets.into_iter().zip(retained).zip(values) {
+        let name = recipe.graph.outputs[id].cache_name();
+        let bytes = engine.gpu.readback(&fresh.buffer)?;
+        let words: &[f32] = bytemuck::cast_slice(&bytes);
+        let finite = words.iter().filter(|v| v.is_finite()).count();
+        let min = words
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f32::INFINITY, f32::min);
+        let max = words
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f32::NEG_INFINITY, f32::max);
+        let old_bytes = old.as_ref().map(|(old, _)| old.len());
+        let graph_identity_retained = old.as_ref().map(|(_, valid)| *valid);
+        let changed = old.as_ref().map(|(old, _)| {
+            old.iter().zip(&bytes).filter(|(a, b)| a != b).count() + old.len().abs_diff(bytes.len())
+        });
+        eprintln!(
+            "extreme graph output {name}: type={:?} retained_bytes={old_bytes:?} fresh_bytes={} graph_identity_retained={graph_identity_retained:?} changed_bytes={changed:?} raw_f32_finite={finite}/{} raw_f32_min={min:?} raw_f32_max={max:?}",
+            recipe.graph.outputs[id].data,
+            bytes.len(),
+            words.len()
+        );
+    }
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires GPU and QUATTRO_X3F original for synthetic LOW geometry"]
 fn synthetic_low_grid_renders_without_high_blue_storage() {
     let mut source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     assert_eq!(source.storage(), SourceStorage::PackedRgbBluePhases);
-    let pixels = source
+    let pixels: Vec<f32> = source
         .samples()
         .as_chunks::<6>()
         .0
         .iter()
         .flat_map(|v| [v[0], v[1], ((v[2] + v[3]) + v[4] + v[5]) * 0.25])
         .collect();
-    source.pixels = pixels;
+    source.pixels = pixels.into();
     source.origin = Default::default();
     source.storage = SourceStorage::InterleavedRgb;
     let metadata = std::sync::Arc::make_mut(&mut source.metadata);
@@ -61,7 +141,7 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
         .insert("RESOLUTION".into(), "LOW".into());
     source.validate().unwrap();
     let original = source.samples().to_vec();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let exports = tempfile::tempdir().unwrap();
     let mut settings = Settings::new("Auto", "Standard");
     let mut controls = controls::default_noise_controls();
@@ -125,6 +205,11 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
             let bytes = engine.readback_image(&result).unwrap();
             let pixels: &[f32] = bytemuck::cast_slice(&bytes);
             assert!(pixels.iter().all(|v| v.is_finite()));
+            if !pixels.iter().any(|v| *v > 0.)
+                && std::env::var_os("FOVEONIC_QUATTRO_EXTREME_PROBE").is_some()
+            {
+                extreme_graph_probe(&engine, &source, &reduced, None).unwrap();
+            }
             assert!(
                 pixels.iter().any(|v| *v > 0.),
                 "{rendering:?} LOW divisor {divisor} has no positive output"
@@ -150,7 +235,7 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
 fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     assert!(calibration::is_interchangeable(&source.metadata));
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let cap = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = cap
         .editing_defaults(&source.metadata, Rendering::Color)
@@ -252,7 +337,7 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
 fn small_color_grids_preserve_native_histories_and_requested_controls() {
     let source =
         std::sync::Arc::new(Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = Settings::new("Auto", "Standard");
     settings.reconstruction = Some(controls::default_noise_controls());
     let mut native = None;
@@ -384,6 +469,11 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
         let bytes = engine.readback_image(&image).unwrap();
         let pixels: &[f32] = bytemuck::cast_slice(&bytes);
         assert!(pixels.iter().all(|v| v.is_finite()));
+        if !pixels.iter().any(|v| *v > 0.)
+            && std::env::var_os("FOVEONIC_QUATTRO_EXTREME_PROBE").is_some()
+        {
+            extreme_graph_probe(&engine, &source, &settings, None).unwrap();
+        }
         assert!(pixels.iter().any(|v| *v > 0.));
         let mut edited = settings.clone();
         let controls = edited.reconstruction.as_mut().unwrap();
@@ -433,6 +523,11 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
             .zip(bytemuck::cast_slice::<u8, f32>(&edited_bytes))
             .map(|(a, b)| (a - b).abs())
             .fold(0_f32, f32::max);
+        if retained_bytes != edited_bytes
+            && std::env::var_os("FOVEONIC_QUATTRO_EXTREME_PROBE").is_some()
+        {
+            extreme_graph_probe(&engine, &source, &edited, Some(&mut session.cache)).unwrap();
+        }
         assert!(
             retained_bytes == edited_bytes,
             "{quality:?} retained/fresh maximum difference {difference}"
@@ -446,7 +541,7 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
 #[ignore = "requires GPU and QUATTRO_X3F ordinary DP or sd HIGH original"]
 fn small_composition_preserves_native_metadata_and_full_inspection() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
         let mut settings = Settings::new("Auto", "Standard");
         settings.working_scale = quality;
@@ -494,7 +589,7 @@ fn small_composition_preserves_native_metadata_and_full_inspection() {
 fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention() {
     let source =
         std::sync::Arc::new(Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let native_cell_bytes = source.samples().len() as u64 * 4;
     for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
         for (noise_edit, combined_edit) in [(false, false), (true, false), (true, true)] {

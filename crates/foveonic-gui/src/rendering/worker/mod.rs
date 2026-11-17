@@ -634,7 +634,16 @@ impl Worker {
                                 photos.with_native(&pick.path, |session| pick_color(&engine, session, pick, cancel)).map(Some)
                             })()
                             .map_err(
-                                |error: Box<dyn std::error::Error + Send + Sync>| error.to_string(),
+                                |error: Box<dyn std::error::Error + Send + Sync>| {
+                                    if !cancel() {
+                                        foveonic::support::report_error("render.color_pick",error.as_ref(),foveonic::support::OperationContext {
+                                            component:Some("color selection".into()), source:Some(pick.path.to_string_lossy().into_owned()),
+                                            settings:Some(serde_json::json!({"tool":format!("{:?}",pick.tool),"uv":pick.uv,"settings":foveonic::support::settings_snapshot(&pick.settings)})),
+                                            ..Default::default()
+                                        });
+                                    }
+                                    error.to_string()
+                                },
                             );
                             let sample = match sample {
                                 Ok(Some(sample)) => Ok(sample),
@@ -849,7 +858,7 @@ impl Worker {
                         if let Some(export) = request.export.as_ref() {
                             let mut profile=Profile::new(crate::timing::mode());
                             let before=crate::timing::enabled().then(||engine.gpu_activity());
-                            photos.with_native(&request.path, |session| export::write(&engine, session, &settings, export, &mut profile, |stage| reporter.rendered(stage)))?;
+                            photos.with_native(&request.path, |session| export::write(&engine, session, &settings, &request.path, export, &mut profile, |stage| reporter.rendered(stage)))?;
                             if let Some(before)=before {crate::timing::emit("export",|| serde_json::json!({"revision":request.revision,"source":request.path,"destination":export.path,"format":export.format.extension(),"settings":settings,"activity":engine.gpu_activity().since(before)}));}
                             reporter.rendered(foveonic::render::RenderProgress::Stage { completed: 1, total: 1 });
                             return Ok(Execution::Complete(None));
@@ -1052,6 +1061,13 @@ auxiliary_preview: request.auxiliary_preview,
                     Err(error) => Err(error),
                 }
                 .map_err(|e| {
+                    foveonic::support::report_error("render.execute",e.as_ref(),foveonic::support::OperationContext {
+                        operation_id:Some(format!("render-{}",task.stamp.id.0)), component:Some("render worker".into()),
+                        source:Some(request.path.to_string_lossy().into_owned()), revision:Some(request.revision.to_string()),
+                        purpose:Some(format!("{:?}",request.purpose())),
+                        settings:Some(serde_json::json!({"requested":foveonic::support::settings_snapshot(&request.settings),"effective":foveonic::support::settings_snapshot(&settings),"output":request.output,"quality":request.processing_quality})),
+                        ..Default::default()
+                    });
                     if defaults_errors.is_empty() {
                         e.to_string()
                     } else {
@@ -1506,7 +1522,14 @@ fn analyze_scopes(
     let span = crate::timing::Span::new(request.key.revision, "scopes");
     let result = engine
         .scopes(&request.image, request.key.region, &mut profile)
-        .map_err(|error| error.to_string());
+        .map_err(|error| {
+            foveonic::support::report_error("render.scopes",error.as_ref(),foveonic::support::OperationContext {
+                component:Some("scopes".into()),revision:Some(request.key.revision.to_string()),
+                settings:Some(serde_json::json!({"region":request.key.region,"parent_render_revision":request.parent_render_revision})),
+                ..Default::default()
+            });
+            error.to_string()
+        });
     if let Some(before) = before {
         crate::timing::emit(
             "scopes",

@@ -219,7 +219,7 @@ fn gpu_scale_matched_thresholds_keep_marginal_detail_and_correct_strong_defects(
     let defect = (40 * 64 + 44) * 3;
     source[marginal] = 200.;
     source[defect] = 3000.;
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     {
         let original = &source;
         let input = gpu.upload("WB scale fixture", original).unwrap();
@@ -267,7 +267,7 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
     let root = std::env::var_os("FOVEONIC_FIXTURE_DIR").expect("fixture directory");
     let source =
         Source::open(std::path::PathBuf::from(root).join("blue-parking-sign.x3f")).unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let engine = Engine::from_device(
         gpu.device.clone(),
         gpu.queue.clone(),
@@ -348,7 +348,7 @@ fn known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent() 
 #[ignore = "requires a GPU"]
 fn compact_speckles_remove_small_clusters_and_preserve_lines_and_source() {
     use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut samples = vec![100_f32; 64 * 64 * 3];
     for y in 10..50 {
         for c in 0..3 {
@@ -406,7 +406,7 @@ fn compact_speckles_remove_small_clusters_and_preserve_lines_and_source() {
 #[ignore = "requires a GPU"]
 fn compact_repairs_white_speckles_when_only_one_layer_crosses_threshold() {
     use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut samples = vec![100_f32; 64 * 64 * 3];
     let center = (24 * 64 + 24) * 3;
     samples[center..center + 3].fill(200.);
@@ -453,7 +453,7 @@ fn compact_repairs_white_speckles_when_only_one_layer_crosses_threshold() {
 #[ignore = "requires a GPU"]
 fn compact_uses_shared_trimmed_donors_including_tied_extremes() {
     use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let center = (24 * 64 + 24) * 3;
     let offsets = [-65_isize, -64, -63, -1, 1, 63, 64, 65];
     for trigger in 0..3 {
@@ -532,7 +532,7 @@ fn compact_uses_shared_trimmed_donors_including_tied_extremes() {
 #[ignore = "requires a GPU"]
 fn compact_uses_smallest_detected_radius_for_every_layer() {
     use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut samples = vec![100_f32; 64 * 64 * 3];
     let center = (24 * 64 + 24) * 3;
     samples[center..center + 3].fill(200.);
@@ -571,7 +571,7 @@ fn compact_uses_smallest_detected_radius_for_every_layer() {
 #[ignore = "requires a GPU"]
 fn compact_uses_original_highlight_codes_after_calibration() {
     use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut original = vec![20_f32; 64 * 64 * 3];
     let mut calibrated = vec![8_f32; 64 * 64 * 3];
     let defect = (24 * 64 + 24) * 3;
@@ -629,7 +629,7 @@ fn compact_uses_original_highlight_codes_after_calibration() {
 #[ignore = "requires a GPU"]
 fn compact_repairs_isolated_clipped_layers_but_preserves_supported_highlights() {
     use crate::render::{MerrillSpeckleControls, MerrillSpeckleMethod};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut original = vec![79_f32; 64 * 64 * 3];
     let mut calibrated = vec![69_f32; 64 * 64 * 3];
     let defects = [
@@ -767,7 +767,7 @@ fn serial_replay(
 #[test]
 #[ignore = "requires a GPU"]
 fn parallel_speckle_rounds_match_serial_chains_capacity_and_empty_work() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let width = 64;
     let height = 64;
     let mut horizontal = vec![100_f32; width * height * 3];
@@ -931,7 +931,7 @@ fn parallel_speckle_originals_match_serial_and_measure_completed_work() {
 #[test]
 #[ignore = "requires a GPU"]
 fn unequal_speckle_banks_include_the_last_detector_block() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let (width, height) = (64, 72);
     let mut pixels = vec![1000_f32; width * height * 3];
     // Eighteen workgroups split unevenly across eight banks. Include a peak in
@@ -1048,7 +1048,7 @@ fn reduced_speaker_defects_are_removed_by_both_detectors() {
 #[ignore = "requires GPU"]
 fn reduced_detection_repairs_bright_masks_and_preserves_dark_structure() {
     use crate::render::{Scale, WorkingGrid};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut pixels = [100_f32; 3].repeat(64 * 64);
     for mask in 1..=7_u32 {
         let x = 8 + mask as usize * 6;

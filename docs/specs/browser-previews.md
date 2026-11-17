@@ -20,6 +20,8 @@ implementation: conforming
 - The application **must not** retain full-size decoded JPEGs for the whole directory. Larger in-memory previews **must** remain bounded.
 - A camera JPEG with different framing from the Raw **must not** supply the larger preview. The correctly framed small thumbnail remains until a photographic render supplies the missing pixels.
 
+- Preview reduction must avoid a complete floating-point source copy and must precede rotation of large embedded images. Preserve the existing linear-light sampling and color handling. Browser GPU upload allocation failures must reject the failed upload, preserve previously available content and report an error without waiting for the GPU on the UI thread.
+
 ## Implementation
 
 The thumbnail worker keeps a replaceable queue of paths and versions, prioritizing the current visible rows while finishing the folder pass without scrolling. Its priority reservation spans queued and active small requests and releases when they finish or are discarded. Selected-photo work remains ahead of this reservation. A separate worker loads larger cached previews only for visible or selected photographs, so larger preview reads cannot occupy the small-thumbnail worker. Each completed reply retains its kind and version. New photographic renders invalidate both kinds of older reply.

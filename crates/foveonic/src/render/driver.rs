@@ -3,7 +3,7 @@
 use super::{
     allocation::GpuAllocation,
     artifacts::ArtifactPlan,
-    execute::{Completion, GraphExecution, Input, SourceRequired, Value},
+    execute::{report_graph_failure, Completion, GraphExecution, Input, SourceRequired, Value},
     recipes::{self, PreparedRecipe, Recipe, RecipeInput},
     working_set::{ExecutionClaim, Session},
     Engine, ExecutionBudget, MemoryReservation, MemoryResources, NeedsOriginal,
@@ -97,9 +97,13 @@ impl Engine {
             graph_id,
             "graph.execute",
         );
-        let mut state = self.start_graph(context, graph, targets, profile, execution, graph_id)?;
-        while state.advance(self, context, graph, profile, execution, completion)? {}
-        state.finish(self, targets, profile)
+        (|| {
+            let mut state =
+                self.start_graph(context, graph, targets, profile, execution, graph_id)?;
+            while state.advance(self, context, graph, profile, execution, completion)? {}
+            state.finish(self, targets, profile)
+        })()
+        .map_err(|error| report_graph_failure(error, context.metadata(), graph, targets))
     }
 }
 
@@ -420,14 +424,23 @@ impl RenderExecution {
             };
             let context = session.source.context();
             let graph = job.graph.as_mut().unwrap();
-            graph.advance(
-                engine,
-                context,
-                &job.prepared.built.graph,
-                &mut job.profile,
-                &mut execution,
-                completion,
-            )
+            graph
+                .advance(
+                    engine,
+                    context,
+                    &job.prepared.built.graph,
+                    &mut job.profile,
+                    &mut execution,
+                    completion,
+                )
+                .map_err(|error| {
+                    report_graph_failure(
+                        error,
+                        session.source.metadata(),
+                        &job.prepared.built.graph,
+                        &job.plan.roots,
+                    )
+                })
         });
         if matches!(result, Ok(false)) {
             job.complete = true;
@@ -465,14 +478,25 @@ impl RenderExecution {
                 progress,
                 ..Default::default()
             };
-            job.graph = Some(engine.start_graph(
-                session.source.context(),
-                &job.prepared.built.graph,
-                &job.plan.roots,
-                &mut job.profile,
-                &mut execution,
-                job.graph_id,
-            )?);
+            job.graph = Some(
+                engine
+                    .start_graph(
+                        session.source.context(),
+                        &job.prepared.built.graph,
+                        &job.plan.roots,
+                        &mut job.profile,
+                        &mut execution,
+                        job.graph_id,
+                    )
+                    .map_err(|error| {
+                        report_graph_failure(
+                            error,
+                            session.source.metadata(),
+                            &job.prepared.built.graph,
+                            &job.plan.roots,
+                        )
+                    })?,
+            );
             job.reservation = estimate_job(job);
             Ok(())
         })
@@ -625,6 +649,15 @@ impl RenderExecution {
             graph
                 .expect("started execution")
                 .finish(engine, &plan.roots, &mut job_profile)
+                .map_err(|error| {
+                    let session = SessionInput::new(working.execution_mut(&claim));
+                    report_graph_failure(
+                        error,
+                        session.source.metadata(),
+                        &prepared.built.graph,
+                        &plan.roots,
+                    )
+                })
         });
         drop(graph_scope);
         let mut result = diagnostics::with_context(context, || -> Result<Vec<Artifact>> {

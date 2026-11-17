@@ -8,6 +8,20 @@ use crate::{
 };
 use std::sync::Arc;
 
+fn failure(
+    error: Box<dyn std::error::Error + Send + Sync>,
+    phase: &str,
+    metadata: &Metadata,
+    settings: &Settings,
+) -> Box<dyn std::error::Error + Send + Sync> {
+    super::execute::report_failure(
+        error,
+        phase,
+        metadata,
+        serde_json::json!({"settings":crate::support::settings_snapshot(settings)}),
+    )
+}
+
 /// The caller recovers authoritative native samples outside the processing core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NeedsOriginal {
@@ -130,8 +144,20 @@ impl Engine {
         profile: &mut Profile,
     ) -> Result<ReducedPreparation> {
         let source = source.into();
-        settings.validate_values()?;
-        profile.mode.check_gpu_features(self.device().features())?;
+        settings.validate_values().map_err(|error| {
+            failure(error, "validate-reduced-recipe", &source.metadata, settings)
+        })?;
+        profile
+            .mode
+            .check_gpu_features(self.device().features())
+            .map_err(|error| {
+                failure(
+                    error.into(),
+                    "validate-profile-features",
+                    &source.metadata,
+                    settings,
+                )
+            })?;
         let preparation = super::source_preparation::SourcePreparation::default();
         let mut cache = Cache::default();
         cache.bind(&self.owner);
@@ -171,9 +197,12 @@ impl Engine {
         let retained = cache.finish_seal();
         self.release_native_preparation(&source.metadata);
         match prepared {
-            Ok(()) if !retained => {
-                Err("required camera dependencies exceed the retained input budget".into())
-            }
+            Ok(()) if !retained => Err(failure(
+                "required camera dependencies exceed the retained input budget".into(),
+                "retain-camera-dependencies",
+                &source.metadata,
+                settings,
+            )),
             Ok(()) => Ok(ReducedPreparation::Prepared(Box::new(ReducedSession {
                 metadata_bytes: source.metadata.retained_bytes(),
                 metadata: source.metadata.clone(),
@@ -187,7 +216,12 @@ impl Engine {
             Err(error) if error.downcast_ref::<Superseded>().is_some() => {
                 Ok(ReducedPreparation::Superseded)
             }
-            Err(error) => Err(error),
+            Err(error) => Err(failure(
+                error,
+                "prepare-camera-dependencies",
+                &source.metadata,
+                settings,
+            )),
         }
     }
 
@@ -202,12 +236,24 @@ impl Engine {
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
     ) -> Result<Option<()>> {
-        settings.validate_values()?;
+        settings.validate_values().map_err(|error| {
+            failure(error, "validate-reduced-recipe", &source.metadata, settings)
+        })?;
         if !Arc::ptr_eq(&session.owner, &self.owner) {
-            return Err("camera dependencies belong to another engine".into());
+            return Err(failure(
+                "camera dependencies belong to another engine".into(),
+                "verify-engine",
+                &source.metadata,
+                settings,
+            ));
         }
         if session.origin != *source.origin() {
-            return Err("refreshed source is not the same verified original".into());
+            return Err(failure(
+                "refreshed source is not the same verified original".into(),
+                "verify-source",
+                &source.metadata,
+                settings,
+            ));
         }
         session.cache.bind(&self.owner);
         session.cache.bind_source(source.origin());
@@ -242,9 +288,12 @@ impl Engine {
         let retained = session.cache.finish_seal();
         self.release_native_preparation(&source.metadata);
         match prepared {
-            Ok(()) if !retained => {
-                Err("required camera dependencies exceed the retained input budget".into())
-            }
+            Ok(()) if !retained => Err(failure(
+                "required camera dependencies exceed the retained input budget".into(),
+                "retain-camera-dependencies",
+                &source.metadata,
+                settings,
+            )),
             Ok(()) => {
                 session.metadata_bytes = source.metadata.retained_bytes();
                 session.metadata = source.metadata.clone();
@@ -252,7 +301,12 @@ impl Engine {
                 Ok(Some(()))
             }
             Err(error) if error.downcast_ref::<Superseded>().is_some() => Ok(None),
-            Err(error) => Err(error),
+            Err(error) => Err(failure(
+                error,
+                "refresh-camera-dependencies",
+                &source.metadata,
+                settings,
+            )),
         }
     }
 
@@ -295,7 +349,14 @@ impl Engine {
         profile: &mut Profile,
         progress: Option<&dyn Fn(super::RenderProgress)>,
     ) -> Result<SessionRender> {
-        settings.validate_values()?;
+        settings.validate_values().map_err(|error| {
+            failure(
+                error,
+                "validate-reduced-recipe",
+                &session.metadata,
+                settings,
+            )
+        })?;
         if !Arc::ptr_eq(&session.owner, &self.owner) {
             return Ok(SessionRender::NeedsOriginal(NeedsOriginal::EngineChanged));
         }
@@ -339,7 +400,12 @@ impl Engine {
             Err(error) if error.downcast_ref::<Superseded>().is_some() => {
                 Ok(SessionRender::Superseded)
             }
-            Err(error) => Err(error),
+            Err(error) => Err(failure(
+                error,
+                "render-reduced",
+                &session.metadata,
+                settings,
+            )),
         }
     }
 }

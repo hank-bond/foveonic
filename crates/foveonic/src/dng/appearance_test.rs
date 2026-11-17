@@ -262,7 +262,7 @@ fn profile_curve_compensation_retains_highlights_before_reader_clipping() {
 fn classic_original_profile_appearance_residuals() {
     use crate::{dng, profile::Profile, render::Engine, source::Source};
     let source = Source::open(std::env::var_os("CLASSIC_X3F").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
     settings.sharpen_amount = Some(1.);

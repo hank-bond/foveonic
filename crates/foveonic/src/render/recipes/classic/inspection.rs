@@ -209,7 +209,7 @@ mod tests {
             .copied()
             .filter(|name| *name != "final")
             .collect();
-        let engine = crate::render::Engine::new().unwrap();
+        let engine = crate::render::Engine::test_executor();
         let artifacts = engine
             .render_artifacts(&source, &settings, &intermediate, &mut Default::default())
             .unwrap();

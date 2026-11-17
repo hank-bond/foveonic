@@ -10,12 +10,29 @@ pub(super) struct FieldKernels {
     pipelines: Vec<wgpu::ComputePipeline>,
     pub(super) bindings: Vec<(u32, u32)>,
 }
+
+/// Failed lazy compilation stays shared without losing its first typed report.
+#[derive(Clone, Debug)]
+pub(super) struct CompilationFailure(std::sync::Arc<dyn std::error::Error + Send + Sync>);
+impl std::fmt::Display for CompilationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for CompilationFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
 impl Gpu {
     pub(crate) fn prepare_color_field(&self) -> Result<()> {
         let result = self
             .field
-            .get_or_init(|| compile(&self.device).map_err(|e| e.to_string()));
-        result.as_ref().map(|_| ()).map_err(|e| e.clone().into())
+            .get_or_init(|| compile(&self.device).map_err(|e| CompilationFailure(e.into())));
+        result
+            .as_ref()
+            .map(|_| ())
+            .map_err(|e| Box::new(e.clone()) as _)
     }
     pub(super) fn field_data(&self) -> &FieldKernels {
         self.field
@@ -92,10 +109,28 @@ fn compile(device: &wgpu::Device) -> Result<FieldKernels> {
         bindings: Vec::new(),
     };
     for (code, entries) in groups {
-        let module = wgsl::parse_str(code).map_err(|e| e.emit_to_string(code))?;
+        let module = wgsl::parse_str(code).map_err(|error| {
+            super::failure(
+                "parse-color-field",
+                Box::new(super::DiagnosticError {
+                    message: error.emit_to_string(code),
+                    cause: error.into(),
+                }),
+                serde_json::json!({"entries":entries}),
+            )
+        })?;
         let info = Validator::new(ValidationFlags::all(), Capabilities::all())
             .validate(&module)
-            .map_err(|e| e.emit_to_string(code))?;
+            .map_err(|error| {
+                super::failure(
+                    "validate-color-field",
+                    Box::new(super::DiagnosticError {
+                        message: error.emit_to_string(code),
+                        cause: error.into(),
+                    }),
+                    serde_json::json!({"entries":entries}),
+                )
+            })?;
         device.push_error_scope(wgpu::ErrorFilter::Validation);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Color-field optional kernels"),
@@ -140,8 +175,37 @@ fn compile(device: &wgpu::Device) -> Result<FieldKernels> {
             ));
         }
         if let Some(error) = pollster::block_on(device.pop_error_scope()) {
-            return Err(error.into());
+            return Err(super::failure(
+                "compile-color-field",
+                error.into(),
+                serde_json::json!({"entries":entries}),
+            ));
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_compilation_failure_retains_the_original_typed_report() {
+        let error = super::super::failure(
+            "compile-color-field",
+            std::io::Error::from_raw_os_error(5).into(),
+            serde_json::Value::Null,
+        );
+        let original = error
+            .downcast_ref::<crate::support::ReportedError>()
+            .unwrap()
+            .report
+            .clone();
+        let cached = CompilationFailure(error.into());
+        let returned = cached.clone();
+        assert_eq!(returned.to_string(), original.message);
+        let later = crate::support::report_error("render", &returned, Default::default());
+        assert!(std::sync::Arc::ptr_eq(&original, &later));
+        assert!(later.causes.iter().any(|cause| cause.os_code == Some(5)));
+    }
 }

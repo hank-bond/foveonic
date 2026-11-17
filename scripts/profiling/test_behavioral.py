@@ -100,6 +100,22 @@ class BehavioralTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'distinct source paths'):
                 validate([{**fixture[0],'sources':[str(a),str(a)]}],[])
 
+    def test_invalid_case_memory_hint_fails_before_staging_even_with_global_guard(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first, second = root / 'first', root / 'second'
+            first.write_bytes(b'first'); second.write_bytes(b'second')
+            fixture = {'name': 'pair', 'family': 'classic', 'sources': [str(first), str(second)]}
+            for hints in ({'unknown': 8192}, {'quattro': True}, []):
+                case = {'name': 'x', 'pointer': '/exposure', 'section': 'Tone', 'recipes': [{}, {}],
+                        'worker_memory_mb_by_family': hints}
+                with self.subTest(hints=hints), patch('behavioral.subprocess.Popen') as launch:
+                    with self.assertRaises(ValueError):
+                        run(first, [fixture], [case], root / 'output', max_memory_mb=8192,
+                            reuse_session=True, compare_images=second, workers=2, memory_budget_mb=16384)
+                    launch.assert_not_called()
+                    self.assertFalse((root / 'output').exists())
+
     def test_command_requires_a_subset_or_full_and_list_does_not_launch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

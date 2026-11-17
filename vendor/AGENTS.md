@@ -1,5 +1,5 @@
 ---
-summary: "Pinned third-party sources retain their upstream licenses and isolate required presentation changes."
+summary: "Pinned third-party sources retain their upstream licenses and isolate required presentation and output fixes."
 ---
 
 # Vendored dependencies

@@ -4,6 +4,39 @@ use crate::profile::{Profile, Timing};
 use crate::source::Result;
 use wgpu::util::DeviceExt;
 
+#[derive(Debug)]
+struct DiagnosticError {
+    message: String,
+    cause: Box<dyn std::error::Error + Send + Sync>,
+}
+impl std::fmt::Display for DiagnosticError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for DiagnosticError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+fn failure(
+    phase: &str,
+    error: Box<dyn std::error::Error + Send + Sync>,
+    details: serde_json::Value,
+) -> Box<dyn std::error::Error + Send + Sync> {
+    crate::support::reported_error(
+        "gpu",
+        error,
+        crate::support::OperationContext {
+            component: Some("GPU".into()),
+            phase: Some(phase.into()),
+            settings: Some(details),
+            ..Default::default()
+        },
+    )
+}
+
 mod completion;
 mod diagnostics;
 mod field;
@@ -86,11 +119,49 @@ impl GpuTrace {
     }
 }
 
+/// Keep Windows GUI and headless processing on the packaged DX12 compiler.
+pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
+    #[cfg(target_os = "windows")]
+    {
+        wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::DX12,
+            backend_options: wgpu::BackendOptions {
+                dx12: wgpu::Dx12BackendOptions {
+                    shader_compiler: wgpu::Dx12Compiler::default_dynamic_dxc(),
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        wgpu::InstanceDescriptor::default()
+    }
+}
+
+// Opt-in test output survives a native crash before libtest reports the result.
+#[cfg(test)]
+fn test_trace(phase: &str, details: std::fmt::Arguments<'_>) {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ENABLED.get_or_init(|| {
+        std::env::var_os("FOVEONIC_GPU_TEST_TRACE").as_deref() == Some(std::ffi::OsStr::new("1"))
+    }) {
+        let thread = std::thread::current();
+        eprintln!(
+            "FOVEONIC_GPU_TEST_TRACE thread={:?} phase={phase} {details}",
+            thread.name().unwrap_or("unnamed")
+        );
+    }
+}
+
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pipelines: Vec<wgpu::ComputePipeline>,
-    field: std::sync::Arc<std::sync::OnceLock<std::result::Result<field::FieldKernels, String>>>,
+    field: std::sync::Arc<
+        std::sync::OnceLock<std::result::Result<field::FieldKernels, field::CompilationFailure>>,
+    >,
     #[cfg(test)]
     shader_writes: Vec<u32>,
     pub adapter_name: String,
@@ -105,6 +176,16 @@ impl Gpu {
             queue: self.queue.clone(),
         }
     }
+
+    // Numerical tests share immutable device/kernel resources, while each
+    // executor starts with private activity counters and fresh test-owned data.
+    #[cfg(test)]
+    pub(crate) fn test_executor() -> Self {
+        static SEED: std::sync::OnceLock<Gpu> = std::sync::OnceLock::new();
+        SEED.get_or_init(|| Self::new().expect("numerical test GPU initialization failed"))
+            .executor()
+    }
+
     pub fn executor(&self) -> Self {
         Self {
             device: self.device.clone(),
@@ -119,21 +200,62 @@ impl Gpu {
         }
     }
     pub fn new() -> Result<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        #[cfg(test)]
+        test_trace(
+            "instance-start",
+            format_args!("descriptor={:?}", instance_descriptor()),
+        );
+        let instance = wgpu::Instance::new(&instance_descriptor());
+        #[cfg(test)]
+        test_trace("adapter-start", format_args!(""));
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
         }))
-        .map_err(|error| format!("no compatible GPU adapter: {error}"))?;
-        let adapter_name = adapter.get_info().name;
+        .map_err(|error| {
+            failure(
+                "request-adapter",
+                Box::new(DiagnosticError {
+                    message: format!("no compatible GPU adapter: {error}"),
+                    cause: error.into(),
+                }),
+                serde_json::json!({"backends":format!("{:?}",instance_descriptor().backends)}),
+            )
+        })?;
+        let info = adapter.get_info();
+        #[cfg(test)]
+        test_trace("adapter-ready", format_args!("adapter={info:?}"));
+        let adapter_name = info.name.clone();
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Foveonic image engine"),
                 required_limits: adapter.limits(),
                 required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                 ..Default::default()
-            }))?;
+            })).map_err(|error| failure("request-device", error.into(), serde_json::json!({
+                "adapter":info.name,"vendor":info.vendor,"device":info.device,
+                "backend":format!("{:?}",info.backend),"driver":info.driver,"driver_info":info.driver_info,
+            })))?;
+        #[cfg(test)]
+        test_trace("device-ready", format_args!(""));
+        crate::support::update_context(
+            "gpu",
+            serde_json::json!({
+                "status":"selected","name":info.name,"vendor":info.vendor,"device":info.device,
+                "device_type":format!("{:?}",info.device_type),"backend":format!("{:?}",info.backend),
+                "driver":info.driver,"driver_info":info.driver_info,
+                "features":format!("{:?}",device.features()),"limits":format!("{:?}",device.limits()),
+                "capacity_source":"See system.gpu_inventory. API allocation limits are separate from physical capacity.",
+            }),
+        );
+        device.set_device_lost_callback(|reason, message| {
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                let _ = failure("device-lost-callback", message.into(), serde_json::json!({
+                    "reason":format!("{reason:?}"),"operation_attribution":"unavailable for asynchronous device loss",
+                }));
+            }
+        });
         Self::from_device(device, queue, adapter_name)
     }
 
@@ -240,6 +362,90 @@ impl Gpu {
         ))
     }
 
+    pub(crate) fn upload_sensor(
+        &self,
+        label: &str,
+        values: &crate::source::SensorSamples,
+    ) -> Result<ReadGuard> {
+        use crate::source::SensorSamples;
+        if let SensorSamples::Float(values) = values {
+            return self.upload(label, values);
+        }
+        let bytes = values
+            .len()
+            .checked_mul(std::mem::size_of::<f32>())
+            .ok_or("sensor upload size overflow")? as u64;
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Gpu,
+            "gpu.upload",
+            |fields| {
+                fields.str("label", label).u64("bytes", bytes);
+            },
+        );
+        crate::background::checkpoint_or_cancel()?;
+        self.check_size(bytes)?;
+        {
+            let mut activity = self.activity.lock().expect("GPU activity counter");
+            activity.upload_bytes += bytes;
+            activity.allocations += 1;
+        }
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        let result = (|| -> Result<()> {
+            let mut mapped = buffer.slice(..).get_mapped_range_mut();
+            match values {
+                SensorSamples::Unsigned(values) => {
+                    let values_per_chunk = crate::background::IO_CHUNK_BYTES / 4;
+                    for (output, input) in mapped
+                        .chunks_mut(values_per_chunk * 4)
+                        .zip(values.chunks(values_per_chunk))
+                    {
+                        crate::background::checkpoint_or_cancel()?;
+                        for (out, &value) in output.as_chunks_mut::<4>().0.iter_mut().zip(input) {
+                            out.copy_from_slice(&f32::from(value).to_ne_bytes());
+                        }
+                    }
+                }
+                SensorSamples::UnsignedPlanes(planes) => {
+                    let pixels_per_chunk = crate::background::IO_CHUNK_BYTES / 12;
+                    for (((output, red), green), blue) in mapped
+                        .chunks_mut(pixels_per_chunk * 12)
+                        .zip(planes[0].chunks(pixels_per_chunk))
+                        .zip(planes[1].chunks(pixels_per_chunk))
+                        .zip(planes[2].chunks(pixels_per_chunk))
+                    {
+                        crate::background::checkpoint_or_cancel()?;
+                        for (((out, &r), &g), &b) in output
+                            .as_chunks_mut::<12>()
+                            .0
+                            .iter_mut()
+                            .zip(red)
+                            .zip(green)
+                            .zip(blue)
+                        {
+                            for (channel, value) in
+                                out.as_chunks_mut::<4>().0.iter_mut().zip([r, g, b])
+                            {
+                                channel.copy_from_slice(&f32::from(value).to_ne_bytes());
+                            }
+                        }
+                    }
+                }
+                SensorSamples::Float(_) => unreachable!(),
+            }
+            Ok(())
+        })();
+        buffer.unmap();
+        result?;
+        Ok(ReadGuard::new(buffer, label))
+    }
+
     pub fn uniform<T: bytemuck::Pod>(&self, value: &T) -> ReadGuard {
         let _scope = crate::diagnostics::scope_with(
             crate::diagnostics::Category::Gpu,
@@ -333,10 +539,13 @@ impl Gpu {
             || size > limits.max_buffer_size
             || size > u64::from(limits.max_storage_buffer_binding_size)
         {
-            return Err(format!(
-                "GPU storage buffer requires {size} bytes, above the supported limit"
-            )
-            .into());
+            return Err(failure(
+                "validate-buffer-size",
+                format!("GPU storage buffer requires {size} bytes, above the supported limit")
+                    .into(),
+                serde_json::json!({"requested_bytes":size,"max_buffer_bytes":limits.max_buffer_size,
+                "max_storage_binding_bytes":limits.max_storage_buffer_binding_size}),
+            ));
         }
         Ok(())
     }
@@ -738,9 +947,17 @@ pub fn map_readback(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<()> 
                 .bool("blocking_poll", false);
         });
     let (tx, rx) = std::sync::mpsc::channel();
+    let buffer_bytes = buffer.size();
     buffer
         .slice(..)
         .map_async(wgpu::MapMode::Read, move |result| {
+            let result = result.map_err(|error| {
+                failure(
+                    "map-readback-callback",
+                    error.into(),
+                    serde_json::json!({"buffer_bytes":buffer_bytes}),
+                )
+            });
             let _ = tx.send(result);
         });
     completion::wait(device, rx, || {
@@ -759,6 +976,64 @@ mod scheduling_tests {
         sync::{mpsc, Arc},
         time::Duration,
     };
+
+    #[test]
+    #[ignore = "requires a working GPU adapter"]
+    fn compact_sensor_upload_preserves_every_unsigned_code() {
+        let gpu = Gpu::test_executor();
+        let count = crate::background::IO_CHUNK_BYTES / 4 + 17;
+        let codes: Vec<u16> = (0..count).map(|v| v as u16).collect();
+        let expected: Vec<f32> = codes.iter().map(|&v| f32::from(v)).collect();
+        let actual = gpu
+            .upload_sensor(
+                "Compact sensor fixture",
+                &crate::source::SensorSamples::Unsigned(codes),
+            )
+            .unwrap();
+        assert_eq!(
+            gpu.readback(&actual).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&expected)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a working GPU adapter"]
+    fn planar_sensor_upload_interleaves_channels_across_chunks() {
+        let gpu = Gpu::test_executor();
+        let count = crate::background::IO_CHUNK_BYTES / 12 + 7;
+        let planes: [Vec<u16>; 3] =
+            std::array::from_fn(|c| (0..count).map(|i| (i * 31 + c * 83) as u16).collect());
+        let expected: Vec<f32> = (0..count)
+            .flat_map(|i| [planes[0][i], planes[1][i], planes[2][i]].map(f32::from))
+            .collect();
+        let actual = gpu
+            .upload_sensor(
+                "Planar sensor fixture",
+                &crate::source::SensorSamples::UnsignedPlanes(planes),
+            )
+            .unwrap();
+        assert_eq!(
+            gpu.readback(&actual).unwrap(),
+            bytemuck::cast_slice::<f32, u8>(&expected)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a working GPU adapter"]
+    fn cancelled_compact_upload_does_not_allocate() {
+        let gpu = Gpu::new().unwrap();
+        let gate = Arc::new(crate::background::Gate::default());
+        let before = gpu.activity();
+        crate::background::interruptible(gate.clone(), || {
+            gate.interrupt_prefetch();
+            let result = gpu.upload_sensor(
+                "Cancelled compact sensor",
+                &crate::source::SensorSamples::Unsigned(vec![1; 16]),
+            );
+            assert!(result.unwrap_err().is::<crate::background::Interrupted>());
+        });
+        assert_eq!(gpu.activity().since(before).allocations, 0);
+    }
 
     #[test]
     #[ignore = "requires a working GPU adapter"]

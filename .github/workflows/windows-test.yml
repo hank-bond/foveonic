@@ -4,6 +4,12 @@ on:
   push:
     branches: ['release/0.8.0']
   workflow_dispatch:
+    inputs:
+      test_revision:
+        description: 'Optional trusted repository commit to test (full 40-character SHA)'
+        required: false
+        default: ''
+        type: string
   workflow_call:
 
 permissions:
@@ -15,11 +21,56 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     env:
+      CARGO_INCREMENTAL: '0'
       CC: clang-cl
       CXX: clang-cl
       CXXFLAGS: -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS
     steps:
+      - name: Resolve test revision
+        id: test_revision
+        shell: pwsh
+        env:
+          REQUESTED_TEST_REVISION: ${{ inputs.test_revision || '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $revision = $env:GITHUB_SHA
+          if ($env:REQUESTED_TEST_REVISION) {
+            if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+              throw 'A test revision override requires workflow_dispatch'
+            }
+            if ($env:REQUESTED_TEST_REVISION.Length -ne 40 -or $env:REQUESTED_TEST_REVISION -notmatch '^[0-9a-fA-F]{40}$') {
+              throw 'test_revision must be a full 40-character hexadecimal commit SHA'
+            }
+            $revision = $env:REQUESTED_TEST_REVISION.ToLowerInvariant()
+          }
+          "revision=$revision" | Add-Content $env:GITHUB_OUTPUT
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.test_revision.outputs.revision }}
+      - name: Record checked-out source
+        id: source
+        shell: pwsh
+        env:
+          EXPECTED_TEST_REVISION: ${{ steps.test_revision.outputs.revision }}
+          REQUESTED_TEST_REVISION: ${{ inputs.test_revision || '' }}
+          WORKFLOW_REVISION: ${{ github.workflow_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $revision = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $revision -cne $env:EXPECTED_TEST_REVISION) {
+            throw 'Checked-out source differs from the resolved test revision'
+          }
+          $identity = [ordered]@{
+            source_commit = $revision
+            workflow_commit = $env:WORKFLOW_REVISION
+            run_commit = $env:GITHUB_SHA
+            requested_revision = $env:REQUESTED_TEST_REVISION
+            image_os = $env:ImageOS
+            image_version = $env:ImageVersion
+          }
+          $identity | ConvertTo-Json | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'foveonic-windows-source.json')
+          "revision=$revision" | Add-Content $env:GITHUB_OUTPUT
+          "FOVEONIC_BUILD_REVISION=$revision" | Add-Content $env:GITHUB_ENV
       - name: Set up native build tools
         shell: pwsh
         run: |
@@ -28,21 +79,66 @@ jobs:
           rustc --version
           cmake --version
           clang-cl --version
+      - name: Fingerprint build tools and source
+        id: build_cache
+        if: ${{ hashFiles('scripts/build_cache.py') != '' }}
+        shell: pwsh
+        run: python scripts/build_cache.py
+
+      - name: Cache compatible Rust dependencies
+        if: ${{ steps.build_cache.outputs.fingerprint != '' }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug/deps/*
+            target/debug/build/*
+            target/debug/.fingerprint/*
+            target/release/deps/*
+            target/release/build/*
+            target/release/.fingerprint/*
+            !target/*/deps/*foveonic*
+            !target/*/deps/*docs_index*
+            !target/*/deps/*xtask*
+            !target/*/build/foveonic/**
+            !target/*/build/foveonic-gui/**
+            !target/*/build/docs-index/**
+            !target/*/build/xtask/**
+            !target/*/build/foveonic-*
+            !target/*/build/docs-index-*
+            !target/*/build/xtask-*
+            !target/*/.fingerprint/foveonic-*
+            !target/*/.fingerprint/docs-index-*
+            !target/*/.fingerprint/xtask-*
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-${{ steps.build_cache.outputs.revision }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-
       - name: Build Windows app
         run: cargo build --locked --release -p foveonic-gui
+      - name: Prepare Windows test shader compiler
+        run: python -c "import sys; sys.path.insert(0, 'scripts'); from setup_tests import prepare_dxc; prepare_dxc(install=True)"
       - name: Stage DirectX shader compiler
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $zip = Join-Path $env:RUNNER_TEMP 'dxc.zip'
+          $zip = Join-Path $PWD '.local/test-dependencies/dxc_2026_09_29.zip'
           $uri = 'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip'
-          Invoke-WebRequest $uri -OutFile $zip
+          if (!(Test-Path -LiteralPath $zip)) { Invoke-WebRequest $uri -OutFile $zip }
           $expected = 'AD31B1FC8443175D204F77A611FDB3EF2EC42759BDC2F1167368DE24A4A7E7F1'
           if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expected) { throw 'DXC archive checksum mismatch' }
           Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'dxc')
           $stage = Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64'
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item target/release/foveonic-gui.exe $stage
+          $pdb = Join-Path $PWD 'target/release/foveonic_gui.pdb'
+          if (!(Test-Path -LiteralPath $pdb)) { throw 'Matching application PDB was not produced' }
+          $symbols = Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64-symbols'
+          New-Item -ItemType Directory -Path $symbols | Out-Null
+          Copy-Item $pdb $symbols
+          Get-FileHash target/release/foveonic-gui.exe,$pdb -Algorithm SHA256 | ConvertTo-Json | Set-Content (Join-Path $symbols 'build-files.json')
+          Compress-Archive -Path $symbols -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64-symbols.zip')
           Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/bin/x64/dxcompiler.dll') $stage
           Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/bin/x64/dxil.dll') $stage
           Copy-Item LICENSE $stage
@@ -50,10 +146,110 @@ jobs:
           Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-MS.txt') $stage
           Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENCE-MIT.txt') $stage
           $process = Start-Process (Join-Path $stage 'foveonic-gui.exe') -ArgumentList '--help' -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Windows executable failed startup check: $($process.ExitCode)" }
+          if ($process.ExitCode -ne 0) { throw "Windows help-command check failed: $($process.ExitCode)" }
           Compress-Archive -Path $stage -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64.zip')
       - uses: actions/upload-artifact@v4
         with:
-          name: Foveonic-windows-x64-${{ github.sha }}
-          path: ${{ runner.temp }}/Foveonic-windows-x64.zip
+          name: Foveonic-windows-x64-${{ steps.source.outputs.revision }}
+          path: |
+            ${{ runner.temp }}/Foveonic-windows-x64.zip
+            ${{ runner.temp }}/Foveonic-windows-x64-symbols.zip
           if-no-files-found: error
+      - name: Test Windows workspace
+        id: windows_tests
+        env:
+          # Test threads need room for nested fixtures. The packaged app keeps its normal stack.
+          RUST_MIN_STACK: '8388608'
+        run: cargo test --locked --release --workspace -- --test-threads=1
+      - name: Diagnose a failed Windows test process
+        if: ${{ failure() && steps.windows_tests.outcome == 'failure' }}
+        shell: pwsh
+        env:
+          RUST_MIN_STACK: '8388608'
+          FOVEONIC_GPU_TEST_TRACE: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $diagnostics = Join-Path $env:RUNNER_TEMP 'foveonic-windows-test-failure'
+          New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+          $sourceIdentity = Join-Path $env:RUNNER_TEMP 'foveonic-windows-source.json'
+          Copy-Item $sourceIdentity $diagnostics
+          rustc -vV | Set-Content (Join-Path $diagnostics 'rustc.txt')
+          cargo -vV | Set-Content (Join-Path $diagnostics 'cargo.txt')
+          clang-cl --version | Set-Content (Join-Path $diagnostics 'clang.txt')
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber |
+            ConvertTo-Json | Set-Content (Join-Path $diagnostics 'os.json')
+          $env:PATH = "$(Join-Path $PWD 'target/release/deps');$(Join-Path $PWD 'target/release');$env:PATH"
+          $candidates = @(Get-ChildItem target/release -Recurse -File -Filter 'foveonic-*.exe' |
+            Where-Object { $_.Name -cmatch '^foveonic-[0-9a-f]+\.exe$' })
+          $coreTests = @($candidates | Where-Object {
+            $tests = & $_.FullName --list --format terse
+            $LASTEXITCODE -eq 0 -and ($tests -match '^diagnostics::tests::sdk_ring_buffer_bounds_capture_and_unsupported_configs_are_rejected: test$')
+          })
+          if ($coreTests.Count -ne 1) {
+            $candidates.FullName | Set-Content (Join-Path $diagnostics 'candidate-paths.txt')
+            throw "Expected exactly one built core test executable, found $($coreTests.Count)"
+          }
+          $binary = $coreTests[0]
+          Copy-Item $binary.FullName $diagnostics
+          $pdb = [IO.Path]::ChangeExtension($binary.FullName, '.pdb')
+          $pdbPresent = Test-Path -LiteralPath $pdb -PathType Leaf
+          if ($pdbPresent) { Copy-Item $pdb $diagnostics }
+          else { Write-Warning "Matching core-test PDB is missing: $pdb" }
+          Copy-Item .local/test-dependencies/dxc_2026_09_29.zip $diagnostics
+          Copy-Item LICENSE $diagnostics
+          $identity = [ordered]@{
+            source = (Get-Content -Raw $sourceIdentity | ConvertFrom-Json)
+            binary = $binary.FullName
+            binary_sha256 = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash
+            pdb = $pdb
+            pdb_present = $pdbPresent
+            pdb_sha256 = $(if ($pdbPresent) { (Get-FileHash $pdb -Algorithm SHA256).Hash } else { $null })
+            rust_min_stack = $env:RUST_MIN_STACK
+            arguments = @('--test-threads=1', '--nocapture')
+            timeout_seconds = 180
+            original_gate = 'cargo test --locked --release --workspace -- --test-threads=1'
+            original_workspace_gate = 'failed'
+          }
+          $modules = @{}
+          $moduleNames = @('dxcompiler.dll','dxil.dll','d3d12.dll','d3d12core.dll','d3d10warp.dll')
+          $process = Start-Process $binary.FullName -ArgumentList $identity.arguments -NoNewWindow -PassThru `
+            -RedirectStandardOutput (Join-Path $diagnostics 'stdout.log') `
+            -RedirectStandardError (Join-Path $diagnostics 'stderr.log')
+          $deadline = [DateTime]::UtcNow.AddSeconds(180)
+          try {
+            while (!$process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+              try {
+                foreach ($module in $process.Modules) {
+                  if ($module.ModuleName.ToLowerInvariant() -in $moduleNames -and !$modules.ContainsKey($module.FileName)) {
+                    $modules[$module.FileName] = [ordered]@{
+                      name = $module.ModuleName
+                      path = $module.FileName
+                      version = $module.FileVersionInfo.FileVersion
+                      sha256 = (Get-FileHash $module.FileName -Algorithm SHA256).Hash
+                    }
+                  }
+                }
+              } catch {
+                $_.Exception.Message | Add-Content (Join-Path $diagnostics 'module-observation-errors.txt')
+              }
+              Start-Sleep -Milliseconds 100
+              $process.Refresh()
+            }
+            $identity['timed_out'] = !$process.HasExited
+          } finally {
+            if (!$process.HasExited) { $process.Kill() }
+            $process.WaitForExit()
+            $identity['exit_code'] = $process.ExitCode
+            $identity | ConvertTo-Json | Set-Content (Join-Path $diagnostics 'identity.json')
+            @($modules.Values) | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $diagnostics 'loaded-graphics-modules.json')
+            Get-ChildItem $diagnostics -File | Get-FileHash -Algorithm SHA256 |
+              Select-Object Path,Hash | ConvertTo-Json | Set-Content (Join-Path $diagnostics 'SHA256SUMS.json')
+          }
+      - name: Retain failed Windows test evidence
+        if: ${{ failure() && steps.windows_tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Foveonic-windows-test-failure-${{ steps.source.outputs.revision }}
+          path: ${{ runner.temp }}/foveonic-windows-test-failure
+          if-no-files-found: error
+          retention-days: 14

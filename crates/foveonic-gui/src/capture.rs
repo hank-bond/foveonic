@@ -33,9 +33,17 @@ pub struct Loader {
 impl Loader {
     pub fn new(context: egui::Context, cache: Arc<foveonic::decode_cache::Cache>) -> Self {
         Self::with_reader(context, move |path| {
-            cache
-                .capture_properties(path)
-                .map_err(|error| error.to_string())
+            cache.capture_properties(path).map_err(|error| {
+                foveonic::support::report_error(
+                    "capture.metadata",
+                    error.as_ref(),
+                    foveonic::support::OperationContext {
+                        source: Some(path.to_string_lossy().into_owned()),
+                        ..Default::default()
+                    },
+                );
+                error.to_string()
+            })
         })
     }
 
