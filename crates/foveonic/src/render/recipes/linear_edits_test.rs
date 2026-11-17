@@ -16,7 +16,7 @@ use std::sync::Arc;
 fn original_dehaze_swatch_reports_auto_at_zero_and_freezes_without_an_image_change() {
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     for policy in [
         crate::render::ProcessingQuality::Quality,
@@ -91,7 +91,7 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
     use crate::interactive::Execution;
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = caps
         .editing_defaults(&source.metadata, Rendering::Color)
@@ -197,7 +197,7 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
 fn original_dehaze_matches_cached_edits_dng_and_full_preview() {
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     for rendering in [Rendering::Color, Rendering::Monochrome] {
         let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
@@ -353,7 +353,7 @@ fn original_dehaze_matches_cached_edits_dng_and_full_preview() {
 fn original_selected_lightness_match_dng_and_cached_color_and_monochrome() {
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     for rendering in [Rendering::Color, Rendering::Monochrome] {
         let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
@@ -459,7 +459,7 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let saved = std::env::var_os("FOVEONIC_EDIT_RECIPE")
         .map(|p| crate::sidecar::decode(&std::fs::read(p).unwrap()).unwrap());
     for rendering in [Rendering::Color, Rendering::Monochrome] {
@@ -625,7 +625,7 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
 fn original_output_sections_bypass_edits_without_changing_authored_settings() {
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for rendering in [Rendering::Color, Rendering::Monochrome] {
         let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
         settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
@@ -701,7 +701,7 @@ fn original_perceptual_neutral_and_cached_edits_keep_reconstruction_unchanged() 
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut s = caps
         .editing_defaults(&source.metadata, Rendering::Color)
         .unwrap();
@@ -767,7 +767,7 @@ fn original_perceptual_neutral_and_cached_edits_keep_reconstruction_unchanged() 
 #[ignore = "requires a GPU"]
 fn scope_normalization_follows_declared_linear_white() {
     use crate::image::{Description, RenderedImage, Space, View};
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let space = crate::color_space::ColorSpace::Srgb;
     let levels = [0.08_f32, 0.21, 0.53, 0.82];
     let mut expected = None;
@@ -816,7 +816,7 @@ fn scope_normalization_follows_declared_linear_white() {
 fn original_reference_sharpening_bypass_matches_neutral_universal() {
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for rendering in [Rendering::Color, Rendering::Monochrome] {
         let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
         settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
@@ -859,7 +859,7 @@ fn original_unlocked_saturation_dng_reprojects_global_basic_and_advanced() {
 
 fn check_chromatic_dng_reprojection(perceptual: bool, prevent: bool) {
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = caps
         .editing_defaults(&source.metadata, Rendering::Color)
@@ -968,7 +968,7 @@ fn check_chromatic_dng_reprojection(perceptual: bool, prevent: bool) {
 #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
 fn original_color_editor_bypass_is_independent_in_photos_and_dng() {
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = caps
         .editing_defaults(&source.metadata, Rendering::Color)
@@ -1029,7 +1029,7 @@ fn original_white_balance_bias_keeps_technical_dng_samples_and_changes_editable_
 
 fn check_white_balance_dng(custom: bool) {
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = caps
         .editing_defaults(&source.metadata, Rendering::Color)
@@ -1144,7 +1144,7 @@ fn original_advanced_color_builds_full_fast_and_regional_previews() {
             },
             ..Default::default()
         });
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for (quality, region) in [
         (Scale::NATIVE, None),
         (Scale::new(2).unwrap(), None),
@@ -1174,7 +1174,7 @@ fn original_auto_exposure_matches_manual_preview_cache_and_dng_appearance() {
     use crate::render::AutoExposureCompensation::{Both, Bracket, Dial};
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let compensation =
         crate::source::CaptureExposureCompensation::from_properties(&source.metadata.properties);
@@ -1303,7 +1303,7 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
         render::BaseResponse,
     };
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     for policy in [
         crate::render::ProcessingQuality::Quality,
@@ -1467,7 +1467,7 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR containing example photographs"]
 fn original_reference_saturation_policy_changes_all_families_and_invalidates_cached_output() {
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for name in ["sunlit-red-flower.x3f", "sd15.x3f", "dp3-quattro.x3f"] {
         let source = Arc::new(Source::open(root.join(name)).unwrap());
         let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
@@ -1588,7 +1588,7 @@ fn original_dynamic_range_guide_reuses_across_moving_sections() {
     let extent = crate::render::native_extent(&source.metadata).unwrap();
     assert!(extent[0] >= 1024 && extent[1] >= 512);
     let origin = [(extent[0] - 1024) / 2, (extent[1] - 512) / 2];
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for policy in [
         crate::render::ProcessingQuality::Quality,
         crate::render::ProcessingQuality::Speed,

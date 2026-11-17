@@ -65,7 +65,7 @@ fn session_image(
 fn gpu_tonal_ranges_match_cached_reduced_and_regional_rendering() {
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_TONAL_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
     settings.reconstruction = Some(Default::default());
@@ -180,7 +180,7 @@ fn gpu_tonal_ranges_match_cached_reduced_and_regional_rendering() {
 #[ignore = "requires GPU and FOVEONIC_TONAL_SOURCE pointing to a Merrill X3F"]
 fn gpu_tonal_ranges_keep_monochrome_neutral_and_expose_the_mask() {
     let source = Source::open(std::env::var_os("FOVEONIC_TONAL_SOURCE").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
     settings.rendering = crate::render::Rendering::Monochrome;

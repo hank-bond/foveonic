@@ -165,11 +165,12 @@ class SetupTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_missing_requirement_fails_without_installing(self):
-        versions = {tool.name: 'installed' for tool in setup.TOOLS if tool.name != 'ExifTool'}
-        with patch('setup_tests.subprocess.run') as run:
-            with self.assertRaisesRegex(ValueError, 'ExifTool'):
-                self.run_check(versions)
-            run.assert_not_called()
+        for missing in ('ExifTool', 'Git'):
+            versions = {tool.name: 'installed' for tool in setup.TOOLS if tool.name != missing}
+            with self.subTest(missing=missing), patch('setup_tests.subprocess.run') as run:
+                with self.assertRaisesRegex(ValueError, missing):
+                    self.run_check(versions)
+                run.assert_not_called()
 
     def test_install_only_missing_tools_then_recheck(self):
         seen = set()
@@ -188,7 +189,7 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(invoked.call_count, 1)
 
     def test_missing_bootstrap_or_unsupported_platform_does_not_install(self):
-        for missing, system in [('Rust 1.88+', 'Darwin'), ('ExifTool', 'Linux')]:
+        for missing, system in [('Rust 1.88+', 'Darwin'), ('Git', 'Darwin'), ('ExifTool', 'Linux')]:
             with self.subTest(missing=missing), \
                     patch('setup_tests.version', side_effect=lambda tool: None if tool.name == missing else 'ok'), \
                     patch('setup_tests.platform.system', return_value=system), \
@@ -255,6 +256,7 @@ class SetupTests(unittest.TestCase):
         with patch('setup_tests.shutil.which', return_value='/rustc'), \
                 patch('setup_tests.subprocess.run', return_value=subprocess.CompletedProcess([], 0, 'rustc 1.87.0', '')):
             self.assertIsNone(setup.version(setup.TOOLS[0]))
+
 
 
 if __name__ == '__main__':

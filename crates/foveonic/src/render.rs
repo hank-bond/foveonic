@@ -100,12 +100,27 @@ impl Engine {
     pub(crate) fn test_gpu(&self) -> &Gpu {
         &self.gpu
     }
+
+    // Selected serial artifact tests share device/kernel resources, with fresh
+    // preparation and ownership. Initialization, diagnostics and lifetime tests stay fresh.
+    pub(crate) fn test_executor() -> Self {
+        static SEED: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+        SEED.get_or_init(|| {
+            Self::from_gpu(Gpu::test_executor())
+                .expect("artifact test engine initialization failed")
+        })
+        .executor()
+    }
 }
 
 impl Engine {
     pub fn new() -> Result<Self> {
+        Self::from_gpu(Gpu::new()?)
+    }
+
+    fn from_gpu(gpu: Gpu) -> Result<Self> {
         Ok(Self {
-            gpu: Gpu::new()?,
+            gpu,
             noise_calibration: None,
             owner: Arc::new(()),
             calibration_statistics: Default::default(),

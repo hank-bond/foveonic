@@ -3,7 +3,7 @@ use super::*;
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_boundary_preserves_distant_samples_and_supported_luminance() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let width = 48usize;
     let height = 32usize;
     let neutral = [0.284206, 0.604436, 1.0];
@@ -133,7 +133,7 @@ fn gpu_color_field_boundary_preserves_distant_samples_and_supported_luminance() 
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_boundary_brightness_is_continuous_through_zero() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let width = 48usize;
     let height = 32usize;
     let neutral = [0.284206, 0.604436, 1.0];

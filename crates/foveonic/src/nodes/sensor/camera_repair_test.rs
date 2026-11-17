@@ -143,7 +143,7 @@ fn phases_preserve_neighbors_duplicates_anti_dependencies_and_skip_invalid_recor
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn capped_integer_prefixes_match_ordered_counts_across_blocks_and_partial_tails() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for n in [1_u32, 255, 256, 257, 777] {
         for capacity in [0_u32, 7, 999] {
             let p = Params {
@@ -281,7 +281,7 @@ fn preparation_preserves_full_low_badness_lists_and_cluster_quality_order() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn cooperative_cluster_search_preserves_first_tie_and_empty_search() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut pixels = [10_f32, 20., 30.].repeat(96);
     pixels[13 * 3..13 * 3 + 3].copy_from_slice(&[111., 222., 333.]);
     pixels[14 * 3..14 * 3 + 3].copy_from_slice(&[999., 888., 777.]);
@@ -325,7 +325,7 @@ fn cooperative_cluster_search_preserves_first_tie_and_empty_search() {
 fn gpu_complete_camera_matches_native_raw_detection_lists_and_clusters() {
     let (m, f) = fixture();
     let p = prepare(&m, Threshold::Manual(2)).unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let raw: Vec<_> = numbers(&f["original"])
         .into_iter()
         .map(|v| v as f32)
@@ -418,7 +418,7 @@ fn gpu_bad_red_detection_reserves_final_slot_and_preserves_exhausted_masks() {
         vec![],
     );
     let p = prepare(&m, Threshold::Manual(2)).unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let original = gpu
         .upload("Capacity raw signal", &[10_f32, 0., 0.].repeat(32 * 32))
         .unwrap();
@@ -479,7 +479,7 @@ fn gpu_jpeg_camera_list_repairs_reported_dark_block() {
         .collect();
     let m = metadata(9, 9, vec![], jpeg, vec![0.; 9], vec![]);
     let p = prepare(&m, Threshold::Manual(2)).unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let original = gpu
         .upload(
             "Original independent detector backing",
@@ -519,7 +519,7 @@ fn flower_dark_defect_is_restored_by_complete_camera_repair() {
     let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("sunlit-red-flower.x3f");
     let source = Source::open(path).unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let engine = Engine::from_device(
         gpu.device.clone(),
         gpu.queue.clone(),
@@ -611,7 +611,7 @@ fn independent_cluster_batches_keep_overlapping_searches_in_order() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn independent_cluster_batches_match_ordered_dispatches() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let width = 160usize;
     let height = 96usize;
     let mut p = Prepared {

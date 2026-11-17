@@ -14,7 +14,7 @@ fn rejects_invalid_parameters() {
 #[test]
 #[ignore = "requires a GPU"]
 fn signed_ramps_match_wide_integer_gain() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     // Complete signed input coverage includes fractional negatives, clipping
     // thresholds, and the extrema that overflow a direct i32 Q12 product.
     let extent = [256, 256];

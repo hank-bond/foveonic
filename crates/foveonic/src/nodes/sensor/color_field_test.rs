@@ -38,7 +38,7 @@ fn color_field_shaders_validate() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_matches_independent_cpu_recovery_equations() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let width = 48usize;
     let height = 32usize;
     let p = [0.284206, 0.604436, 1.0];
@@ -625,7 +625,7 @@ fn gpu_color_field_reports_cancellation_and_invalid_preconditioners() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_checkpoints_preserve_conjugacy_and_validate_true_residual() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     #[repr(C)]
     #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -737,7 +737,7 @@ fn gpu_color_field_checkpoints_preserve_conjugacy_and_validate_true_residual() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_compensated_iterates_retain_small_color_updates() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     #[repr(C)]
     #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -864,7 +864,7 @@ fn gpu_color_field_compensated_iterates_retain_small_color_updates() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_local_keeps_exactly_64_damped_sweeps_with_packed_scalars() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     #[repr(C)]
     #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -950,7 +950,7 @@ fn gpu_color_field_local_keeps_exactly_64_damped_sweeps_with_packed_scalars() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_compaction_is_stable_across_groups_and_reused_domains() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     let capacity = 257_u32 * 256 + 13;
     let mut resources = vec![
@@ -1045,7 +1045,7 @@ fn gpu_color_field_compaction_is_stable_across_groups_and_reused_domains() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_cutoff_changes_only_mixed_data_weights_not_original_neutral_weights() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     gpu.prepare_color_field().unwrap();
     let pixels: Vec<[f32; 3]> = (0..128)
         .map(|i| {
@@ -1149,7 +1149,7 @@ fn gpu_color_field_cutoff_changes_only_mixed_data_weights_not_original_neutral_w
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_color_field_cutoff_preserves_healthy_samples_brightness_and_consistent_regions() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let width = 40;
     let height = 16;
     let neutral = [0.284206, 0.604436, 1.0];

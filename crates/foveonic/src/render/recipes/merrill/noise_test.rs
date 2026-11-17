@@ -88,7 +88,7 @@ fn assert_same(label: &str, actual: &[u8], expected: &[u8]) {
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn multiscale_cached_switches_and_inactive_bypasses_match_fresh() {
     let source = fixture();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source.clone());
     let mut settings = settings();
     settings.output_size = Some([240, 160]);
@@ -166,7 +166,7 @@ fn monochrome_native_methods_keep_layer_order_and_shared_export_preparation() {
     use crate::nodes::monochrome::Stage;
     use crate::render::MerrillBandingMethod;
     let source = fixture();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = settings();
     settings.rendering = Rendering::Monochrome;
     for method in [MerrillNoiseMethod::Reference, METHODS[0], METHODS[1]] {
@@ -383,7 +383,7 @@ fn final_directional_banding(operation: &Operation) -> bool {
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn multiscale_uses_resized_layers_and_preserves_native_export_preparation() {
     let source = fixture();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = settings();
     for method in METHODS {
         settings.merrill_noise_method = method;
@@ -457,7 +457,7 @@ fn multiscale_uses_resized_layers_and_preserves_native_export_preparation() {
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn directional_banding_controls_share_native_exports_and_cached_results() {
     let source = fixture();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = settings();
     settings.merrill_noise_method = MerrillNoiseMethod::MultiscaleRows;
     settings.merrill_banding.enabled = true;
@@ -655,7 +655,7 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn multiscale_regional_views_match_whole_frame() {
     let source = fixture();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = settings();
     let rect = [600, 800, 900, 1100];
     for (method, banding) in METHODS
@@ -718,7 +718,7 @@ fn multiscale_regional_views_match_whole_frame() {
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn monochrome_regional_views_match_whole_frame() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for rotation in [0, 90, 180, 270] {
         let mut source = Source::open(
             PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
@@ -805,7 +805,7 @@ fn monochrome_regional_views_match_whole_frame() {
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn speckle_method_threshold_and_size_cached_results_match_fresh() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = fixture();
     let mut session = RenderSession::new(source.clone());
     let mut selected = settings();
@@ -838,7 +838,7 @@ fn speckle_method_threshold_and_size_cached_results_match_fresh() {
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with original Merrill files"]
 fn neutralize_shadows_cached_switches_and_neutral_bypass_match_fresh() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = fixture();
     let mut session = RenderSession::new(source.clone());
     let mut selected = settings();

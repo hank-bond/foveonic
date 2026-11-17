@@ -145,7 +145,7 @@ mod tests {
             nodes::sensor::calibration::ColorParams,
             profile::Profile,
         };
-        let gpu = Gpu::new().unwrap();
+        let gpu = Gpu::test_executor();
         let samples = [
             [0.7_f32, 0.3, 0.2],
             [0.99, 0.15, 0.05],

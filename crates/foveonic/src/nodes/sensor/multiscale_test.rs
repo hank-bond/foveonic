@@ -235,7 +235,7 @@ fn rejects_invalid_multiscale_metadata() {
 #[test]
 #[ignore = "requires a GPU"]
 fn guided_three_scales_match_independent_equations_and_preserve_sensor_contracts() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [100, 86];
     // The padded width of 80 leaves a partial horizontal workgroup at native scale.
     let area = [3, 3, 82, 80];
@@ -371,7 +371,7 @@ fn working_grid_projects_noise_support_and_calibration_identity() {
 #[test]
 #[ignore = "requires a GPU"]
 fn calibrated_filter_matches_sensor_basis_and_preserves_original_clipping() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [257, 193];
     let grid = WorkingGrid::new(extent, crate::render::Scale::new(2).unwrap(), 8).unwrap();
     let gains = [2., 3., 0.5];
@@ -443,7 +443,7 @@ fn calibrated_filter_matches_sensor_basis_and_preserves_original_clipping() {
 #[test]
 #[ignore = "requires a GPU"]
 fn calibrated_filter_handles_one_cell_and_replicated_padding() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for d in [4, 8, 64, 512] {
         let extent = [257, 193];
         let grid = WorkingGrid::new(extent, crate::render::Scale::new(d).unwrap(), 8)

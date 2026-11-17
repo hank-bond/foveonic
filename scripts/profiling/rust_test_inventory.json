@@ -1,0 +1,2028 @@
+{
+  "schema_version": 1,
+  "scope": "Ignored tests only. Ordinary workspace tests remain required separately. Classification is not execution or a release waiver.",
+  "classification_basis": "Retained 0.8.4 selection, reconciled with compiler-reported ignored names and corrected fixture assignments. Research exclusions remain visible dependencies, not passes.",
+  "fixture_policy": "Use disposable full file copies, not source originals, file symlinks or hard links. Directory-scanning sets are exact. All planned tests remain serial per adapter; SDK groups also use one test per process.",
+  "suites": [
+    {
+      "target": "foveonic",
+      "kind": "lib",
+      "id": "foveonic"
+    },
+    {
+      "target": "foveonic-gui",
+      "kind": "bin",
+      "id": "foveonic-gui"
+    },
+    {
+      "target": "capture_export",
+      "kind": "test",
+      "id": "capture_export"
+    }
+  ],
+  "input_sets": {
+    "standard": [
+      "blue-parking-sign.x3f",
+      "dp0-quattro.x3f",
+      "dp1-quattro-pblog.x3f",
+      "dp1.x3f",
+      "dp1s.x3f",
+      "dp2-dpreview.x3f",
+      "dp2-quattro.x3f",
+      "dp3-merrill-low.x3f",
+      "dp3-merrill-medium.x3f",
+      "dp3-quattro-iso800.x3f",
+      "dp3-quattro.x3f",
+      "glossy-leaves-and-buds.x3f",
+      "low-light-speaker-and-desk.x3f",
+      "low-light-spider-and-web.x3f",
+      "merrill-hazy-coast.x3f",
+      "paper-and-recycling-can.x3f",
+      "rocks-and-tree-shadows.x3f",
+      "sd-quattro-h.x3f",
+      "sd-quattro.x3f",
+      "sd10.x3f",
+      "sd14.x3f",
+      "sd15.x3f",
+      "sd9.x3f",
+      "sunlit-metal-latch.x3f",
+      "sunlit-red-flower.x3f",
+      "turquoise-still-life.x3f",
+      "yellow-flowers-and-stroller.x3f"
+    ],
+    "merrill_high_only": [
+      "merrill-hazy-coast.x3f"
+    ]
+  },
+  "additional_inputs": {
+    "dp1-quattro-pblog.x3f": {
+      "sha256": "90e343264675fd981ca85fe8e09261d8e0c84380c7ae0b659bf0c0d0033a563e",
+      "bytes": 52276616,
+      "origin": {
+        "status": "public_download",
+        "url": "https://img.photographyblog.com/reviews/sigma_dp1_quattro/sample_images/sigma_dp1_quattro_05.x3f",
+        "source_page": "https://www.photographyblog.com/reviews/sigma_dp1_quattro_review",
+        "license": "Public review RAW sample download; no redistribution license stated; original retained locally for research.",
+        "evidence": "Existing acquisition receipt and exact retained SHA-256"
+      }
+    },
+    "dp1.x3f": {
+      "sha256": "44508f7df4191aacaecb6461e1841dae002e5b71a4f95a00aa3f52d1c6d6bc5f",
+      "bytes": 10317264,
+      "origin": {
+        "status": "public_download",
+        "url": "https://raw.pixls.us/getfile.php/1116/nice/Sigma%20-%20DP1%20-%203:2.X3F",
+        "source_page": "https://raw.pixls.us/",
+        "license": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "evidence": "Existing acquisition receipt and exact retained SHA-256"
+      }
+    },
+    "dp2-dpreview.x3f": {
+      "sha256": "e70e3a16a0fa4378b5816f52cb5517fd7ee634a9e64ab0db38441ff411d69936",
+      "bytes": 14456840,
+      "origin": {
+        "status": "public_download",
+        "url": "https://download.dpreview.com/sigmadp2/SDIM0154.zip",
+        "source_page": "https://www.dpreview.com/reviews/4094628902/sigmadp2/",
+        "license": "Public review download; redistribution permission not established",
+        "archive_sha256": "d27c7126170bfb47871c17c3033c3a0cf85a724d66797b55054673f5c376d952",
+        "archive_bytes": 14329742,
+        "archive_member": "SDIM0154.X3F",
+        "evidence": "Published review link and independent in-memory ZIP extraction/hash match"
+      }
+    },
+    "dp3-quattro-iso800.x3f": {
+      "sha256": "5fb148e76631d7dea8a6de678dd1ef0de3168838dc20d4eb6ca0753000f424ed",
+      "bytes": 59837564,
+      "origin": {
+        "status": "provided_file",
+        "automatic_fetch": "unresolved",
+        "requirements": "Provide the exact pinned original. Do not substitute a different ISO800 sample.",
+        "note": "Retained byte identity only; publisher RAW retrieval403 prevented URL verification"
+      }
+    },
+    "dp3-quattro.x3f": {
+      "sha256": "88f95295d67aeb706905644272f44953549cb08f1238cc10caa27dcd894b1c3d",
+      "bytes": 61081548,
+      "origin": {
+        "status": "public_download",
+        "url": "https://img.photographyblog.com/reviews/sigma_dp3_quattro/sample_images/sigma_dp3_quattro_01.x3f",
+        "source_page": "https://www.photographyblog.com/reviews/sigma_dp3_quattro_review",
+        "license": "Public review sample; redistribution permission not established",
+        "evidence": "Existing acquisition receipt and exact retained SHA-256"
+      }
+    },
+    "glossy-leaves-and-buds.x3f": {
+      "sha256": "c5cce42fdf5826b6c202e5372898ac5b04d6f25a0d01dfce425f4fd48d68eedb",
+      "bytes": 48488964,
+      "origin": {
+        "status": "public_download",
+        "url": "https://github.com/hank-bond/foveonic/releases/download/example-photographs/glossy-leaves-and-buds.x3f",
+        "source_page": "https://github.com/hank-bond/foveonic/releases/tag/example-photographs",
+        "license": "CC-BY-NC-4.0 (existing example release)",
+        "evidence": "Published GitHub release asset digest and byte length match the pinned original"
+      }
+    },
+    "low-light-spider-and-web.x3f": {
+      "sha256": "e67449f05493ad0bc54dfa21a1d119467d0d50d9138fae2184d2f79a9ee8bf2a",
+      "bytes": 44465012,
+      "origin": {
+        "status": "public_download",
+        "url": "https://github.com/hank-bond/foveonic/releases/download/example-photographs/low-light-spider-and-web.x3f",
+        "source_page": "https://github.com/hank-bond/foveonic/releases/tag/example-photographs",
+        "license": "CC-BY-NC-4.0 (existing example release)",
+        "evidence": "Published GitHub release asset digest and byte length match the pinned original"
+      }
+    },
+    "paper-and-recycling-can.x3f": {
+      "sha256": "8276657823dcdbf1baf6d6d9e654f694ec4e9a185f05c8a9a2009936118cf299",
+      "bytes": 48458588,
+      "origin": {
+        "status": "public_download",
+        "url": "https://github.com/hank-bond/foveonic/releases/download/example-photographs/paper-and-recycling-can.x3f",
+        "source_page": "https://github.com/hank-bond/foveonic/releases/tag/example-photographs",
+        "license": "CC-BY-NC-4.0 (existing example release)",
+        "evidence": "Published GitHub release asset digest and byte length match the pinned original"
+      }
+    },
+    "rocks-and-tree-shadows.x3f": {
+      "sha256": "2cce73035afea1dd180b4215095f36e400183104ba8d296734d265b8e42a65ef",
+      "bytes": 47665712,
+      "origin": {
+        "status": "public_download",
+        "url": "https://github.com/hank-bond/foveonic/releases/download/example-photographs/rocks-and-tree-shadows.x3f",
+        "source_page": "https://github.com/hank-bond/foveonic/releases/tag/example-photographs",
+        "license": "CC-BY-NC-4.0 (existing example release)",
+        "evidence": "Published GitHub release asset digest and byte length match the pinned original"
+      }
+    },
+    "sunlit-metal-latch.x3f": {
+      "sha256": "0a5eb458f53f245c33e15209b4149b153ccfd178698899b73ef84b4a6dec8b02",
+      "bytes": 58054564,
+      "origin": {
+        "status": "public_download",
+        "url": "https://github.com/hank-bond/foveonic/releases/download/example-photographs/sunlit-metal-latch.x3f",
+        "source_page": "https://github.com/hank-bond/foveonic/releases/tag/example-photographs",
+        "license": "CC-BY-NC-4.0 (existing example release)",
+        "evidence": "Published GitHub release asset digest and byte length match the pinned original"
+      }
+    },
+    "turquoise-still-life.x3f": {
+      "sha256": "799f072bfcdeadd526762c58a7f76549210468ea29b1ddf830b87895025f7b97",
+      "bytes": 53691276,
+      "origin": {
+        "status": "public_download",
+        "url": "https://github.com/hank-bond/foveonic/releases/download/example-photographs/turquoise-still-life.x3f",
+        "source_page": "https://github.com/hank-bond/foveonic/releases/tag/example-photographs",
+        "license": "CC-BY-NC-4.0 (existing example release)",
+        "evidence": "Published GitHub release asset digest and byte length match the pinned original"
+      }
+    },
+    "yellow-flowers-and-stroller.x3f": {
+      "sha256": "3382efbed73525f6dc7ab4f2d41502f971370e00df9b959cae2f3bdd3a7dde33",
+      "bytes": 58543036,
+      "origin": {
+        "status": "public_download",
+        "url": "https://github.com/hank-bond/foveonic/releases/download/example-photographs/yellow-flowers-and-stroller.x3f",
+        "source_page": "https://github.com/hank-bond/foveonic/releases/tag/example-photographs",
+        "license": "CC-BY-NC-4.0 (existing example release)",
+        "evidence": "Published GitHub release asset digest and byte length match the pinned original"
+      }
+    }
+  },
+  "environments": {
+    "standard": {
+      "FOVEONIC_FIXTURE_DIR": {
+        "directory": "standard"
+      },
+      "MERRILL_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "QUATTRO_X3F": {
+        "file": "dp2-quattro.x3f"
+      },
+      "TIGER_X3F": {
+        "file": "sd-quattro-h.x3f"
+      },
+      "CLASSIC_X3F": {
+        "file": "sd9.x3f"
+      },
+      "FOVEONIC_FINISH_SOURCE": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "FOVEONIC_TONAL_SOURCE": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "SMALL_PREVIEW_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "FOVEONIC_CACHE_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "SESSION_SCALE_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "CLASSIC_SAMPLE_DIR": {
+        "directory": "standard"
+      },
+      "QUATTRO_SAMPLE_DIR": {
+        "directory": "standard"
+      },
+      "QUATTRO_FIXTURE_DIR": {
+        "directory": "standard"
+      }
+    },
+    "merrill_high_only": {
+      "FOVEONIC_FIXTURE_DIR": {
+        "directory": "merrill_high_only"
+      },
+      "MERRILL_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "QUATTRO_X3F": {
+        "file": "dp2-quattro.x3f"
+      },
+      "TIGER_X3F": {
+        "file": "sd-quattro-h.x3f"
+      },
+      "CLASSIC_X3F": {
+        "file": "sd9.x3f"
+      },
+      "FOVEONIC_FINISH_SOURCE": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "FOVEONIC_TONAL_SOURCE": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "SMALL_PREVIEW_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "FOVEONIC_CACHE_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "SESSION_SCALE_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "CLASSIC_SAMPLE_DIR": {
+        "directory": "standard"
+      },
+      "QUATTRO_SAMPLE_DIR": {
+        "directory": "standard"
+      },
+      "QUATTRO_FIXTURE_DIR": {
+        "directory": "standard"
+      }
+    },
+    "sd_quattro": {
+      "FOVEONIC_FIXTURE_DIR": {
+        "directory": "standard"
+      },
+      "MERRILL_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "QUATTRO_X3F": {
+        "file": "sd-quattro.x3f"
+      },
+      "TIGER_X3F": {
+        "file": "sd-quattro-h.x3f"
+      },
+      "CLASSIC_X3F": {
+        "file": "sd9.x3f"
+      },
+      "FOVEONIC_FINISH_SOURCE": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "FOVEONIC_TONAL_SOURCE": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "SMALL_PREVIEW_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "FOVEONIC_CACHE_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "SESSION_SCALE_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "CLASSIC_SAMPLE_DIR": {
+        "directory": "standard"
+      },
+      "QUATTRO_SAMPLE_DIR": {
+        "directory": "standard"
+      },
+      "QUATTRO_FIXTURE_DIR": {
+        "directory": "standard"
+      }
+    },
+    "classic_dp2": {
+      "FOVEONIC_FIXTURE_DIR": {
+        "directory": "standard"
+      },
+      "MERRILL_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "QUATTRO_X3F": {
+        "file": "dp2-quattro.x3f"
+      },
+      "TIGER_X3F": {
+        "file": "sd-quattro-h.x3f"
+      },
+      "CLASSIC_X3F": {
+        "file": "dp2-dpreview.x3f"
+      },
+      "FOVEONIC_FINISH_SOURCE": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "FOVEONIC_TONAL_SOURCE": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "SMALL_PREVIEW_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "FOVEONIC_CACHE_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "SESSION_SCALE_X3F": {
+        "file": "blue-parking-sign.x3f"
+      },
+      "CLASSIC_SAMPLE_DIR": {
+        "directory": "standard"
+      },
+      "QUATTRO_SAMPLE_DIR": {
+        "directory": "standard"
+      },
+      "QUATTRO_FIXTURE_DIR": {
+        "directory": "standard"
+      }
+    },
+    "none": {}
+  },
+  "unset_environment": {
+    "names": [
+      "CLASSIC_DNG_DIR",
+      "CLASSIC_DUMP_DIR",
+      "CLASSIC_REFERENCE_DIR",
+      "FOVEONIC_CHECKPOINT_TRACE_DIR",
+      "FOVEONIC_DNG_STAGE1",
+      "FOVEONIC_DNG_SYNTHETIC",
+      "FOVEONIC_EDIT_RECIPE",
+      "FOVEONIC_FINISH_SETTINGS",
+      "FOVEONIC_INTERACTION_EVIDENCE",
+      "FOVEONIC_PERFORMANCE_GOLDENS",
+      "QUATTRO_DNG_REPORT",
+      "QUATTRO_FULL_GOLDENS",
+      "QUATTRO_RESOURCE_DIRECTORY",
+      "SMALL_PREVIEW_OUT",
+      "WHITE_BALANCE_SCALES"
+    ],
+    "prefixes": [
+      "FOVEONIC_",
+      "CLASSIC_",
+      "QUATTRO_",
+      "MERRILL_",
+      "TIGER_",
+      "SMALL_PREVIEW_",
+      "SESSION_SCALE_"
+    ],
+    "suffixes": [
+      "_REFERENCE",
+      "_BOUNDARY",
+      "_GOLDENS",
+      "_OUTPUT"
+    ]
+  },
+  "groups": [
+    {
+      "id": "capture_exports",
+      "suite": "capture_export",
+      "environment": "standard",
+      "resource": "gpu_exiftool",
+      "one_test_per_process": false,
+      "tests": [
+        "all_formats_keep_descriptive_quattro_lens_names",
+        "all_formats_preserve_classic_capture_after_geometry_edits",
+        "all_formats_preserve_dp1s_standard_metering",
+        "all_formats_preserve_merrill_capture_after_geometry_edits",
+        "all_formats_preserve_quattro_capture_after_geometry_edits",
+        "all_formats_preserve_quattro_h_capture_after_geometry_edits",
+        "all_formats_reject_malformed_sd15_comment"
+      ]
+    },
+    {
+      "id": "core_added_gpu",
+      "suite": "foveonic",
+      "environment": "none",
+      "resource": "gpu",
+      "one_test_per_process": false,
+      "tests": [
+        "nodes::sensor::highlight::tests::donor_bins_keep_integer_boundaries_and_adjacent_floats_distinct",
+        "nodes::sensor::highlight_restoration::tests::full_quattro_extreme_evidence_keeps_original_peaks_and_halo",
+        "nodes::sensor::highlight_restoration::tests::large_evidence_cells_match_ordered_single_pass_with_partial_edges",
+        "nodes::sensor::phase_extraction::tests::channel_calibration_rounds_scaled_values_before_split_gain",
+        "nodes::sensor::pool::tests::full_quattro_extreme_partial_cell_is_replicated_into_halo",
+        "nodes::sensor::pool::tests::full_quattro_rgb_extreme_cell_preserves_balanced_mean_and_halo"
+      ]
+    },
+    {
+      "id": "core_public_original-classic_dp2",
+      "suite": "foveonic",
+      "environment": "classic_dp2",
+      "resource": "gpu",
+      "one_test_per_process": false,
+      "tests": [
+        "render::classic_tests::classic_calibration_inspection_defers_color_selection",
+        "render::recipes::classic::prepare::tests::calibration_preparation_defers_color_metadata",
+        "render::recipes::classic::prepare::tests::monochrome_color_mode_changes_sensor_mixture_like_reference"
+      ]
+    },
+    {
+      "id": "core_public_original-merrill_high_only",
+      "suite": "foveonic",
+      "environment": "merrill_high_only",
+      "resource": "gpu",
+      "one_test_per_process": false,
+      "tests": [
+        "preview::tests::original_merrill_previews_decode_at_thumbnail_size",
+        "render::tests::original_result_outlives_source_and_another_render",
+        "source::tests::decode_original_merrill_files"
+      ]
+    },
+    {
+      "id": "core_public_original-sd_quattro",
+      "suite": "foveonic",
+      "environment": "sd_quattro",
+      "resource": "gpu",
+      "one_test_per_process": false,
+      "tests": [
+        "render::recipes::quattro::preview_tests::interchangeable_native_phase_correction_precedes_reduced_reconstruction"
+      ]
+    },
+    {
+      "id": "core_public_original-standard",
+      "suite": "foveonic",
+      "environment": "standard",
+      "resource": "gpu",
+      "one_test_per_process": false,
+      "tests": [
+        "decode_cache::previews::tests::original_large_previews_keep_orientation_and_skip_cropped_camera_jpegs",
+        "decode_cache::tests::complete_selection_uses_only_local_cache_when_the_original_and_sidecar_are_unavailable",
+        "decode_cache::tests::foreground_open_interrupts_inflight_prefetch_then_resumes_browser_order",
+        "decode_cache::tests::navigation_keeps_nearest_decodes_when_the_window_exceeds_the_disk_budget",
+        "decode_cache::tests::original_families_roundtrip_exact_samples_metadata_and_camera_order",
+        "decode_cache::tests::original_folder_prefetch_waits_for_foreground_and_skips_disabled_families",
+        "diagnostics::tests::original_decoding_preserves_samples_and_metadata_while_recording",
+        "dng::appearance::tests::classic_original_profile_appearance_residuals",
+        "dng::tests::classic_dng_defers_appearance_and_preserves_editable_samples",
+        "dng::tests::classic_monochrome_dng_bakes_mixture_and_defers_response",
+        "dng::tests::technical_base_defers_presentation_and_bakes_spatial_and_signal_controls",
+        "dng::writer::tests::uncompressed_file_preserves_samples_and_selected_profile_metadata",
+        "interactive::scale_tests::session_scale_switch_diagnostic",
+        "nodes::color::noise::tests::camera_noise_parameters_match_reference",
+        "nodes::finish::adaptive_tone::tests::adaptive_sessions_reuse_guide_and_invalidate_limits_without_touching_camera",
+        "nodes::finish::adaptive_tone::tests::regional_app_response_bakes_exports_and_preserves_reference",
+        "nodes::sensor::camera_repair::tests::flower_dark_defect_is_restored_by_complete_camera_repair",
+        "nodes::sensor::camera_repair::tests::original_metadata_repair_dependency_phase_counts",
+        "nodes::sensor::despeckle::tests::known_unlisted_red_speckles_are_corrected_and_artifacts_remain_independent",
+        "nodes::sensor::despeckle::tests::original_presets_share_calibration_factors_with_despeckle_thresholds",
+        "nodes::sensor::despeckle::tests::reduced_flower_repair_preserves_yellow_detail",
+        "nodes::sensor::despeckle::tests::reduced_speaker_defects_are_removed_by_both_detectors",
+        "nodes::sensor::highlight::tests::highlight_density_inspection_skips_photographic_prefix_and_retains_original_provenance",
+        "nodes::sensor::repair::ordered_tests::leaf_camera_record_block_is_repaired_before_despeckle_with_independent_artifacts",
+        "nodes::sensor::repair::tests::camera_records_do_not_select_the_two_unlisted_red_speckles",
+        "nodes::sensor::repair::tests::originals_have_valid_camera_cutoffs_and_blue_sign_selects_two",
+        "noise_calibration::tests::learned_repairs_follow_serial_switches_bypasses_and_cached_rendering",
+        "preview::tests::original_bitmap_channels_match_same_file_jpeg",
+        "preview::tests::original_classic_previews_decode_without_sensor_processing",
+        "preview::tests::original_quattro_preview_rotation_matches_camera_orientation",
+        "preview::tests::original_quattro_thumbnails_preserve_raw_framing_and_orientation",
+        "profile::gpu_tests::gpu_profile_attaches_shared_passes_to_the_node_that_submitted_them",
+        "profile::gpu_tests::native_checkpoint_capture_preserves_warm_edit_work_and_pixels",
+        "profile::gpu_tests::node_observations_distinguish_executed_cached_and_pruned_outputs",
+        "profile::gpu_tests::session_node_phases_preserve_work_and_exact_pixels",
+        "profile::gpu_tests::wall_profile_keeps_original_output_without_timestamp_resolutions_or_historical_loading",
+        "render::classic_tests::classic_low_iso_filter_toggle_preserves_photographic_and_dng_brightness",
+        "render::classic_tests::classic_monochrome_original_matches_reference_and_ignores_color_wb",
+        "render::classic_tests::classic_original_inspection_session_and_tiff",
+        "render::classic_tests::synthetic_classic_reduced_grids_preserve_declared_photograph_shape",
+        "render::dng_gpu::tests::camera_encoding_uses_one_linear_range_and_rejects_invalid_samples",
+        "render::dng_gpu::tests::dng_dense_camera_encoding_full_frame",
+        "render::dng_gpu::tests::saved_rotation_uses_the_same_samples_for_dng_and_photographic_preview",
+        "render::export_tests::auto_sharpen_matches_manual_for_color_mono_cached_and_dng_recipes",
+        "render::interactive_tests::active_inputs_match_fresh_outputs_and_keep_retained_images_immutable",
+        "render::interactive_tests::bright_neutral_patches_above_nominal_white_remain_sampleable",
+        "render::interactive_tests::exposure_edits_reuse_both_smart_grids_and_match_fresh",
+        "render::interactive_tests::merrill_auto_zero_sharpen_session_matches_fresh_and_explicit_off",
+        "render::interactive_tests::noise_and_texture_inputs_match_fresh_outputs",
+        "render::interactive_tests::recovery_threshold_edits_match_fresh_outputs_and_keep_retained_images",
+        "render::interactive_tests::repair_preparation_session_matches_fresh_and_preserves_ownership",
+        "render::interactive_tests::sessions_bind_inputs_to_engine_and_selective_roots",
+        "render::interactive_tests::texture_edits_reuse_filtering_and_match_fresh_images",
+        "render::interactive_tests::white_balance_patch_samples_linear_input_and_rejects_invalid_samples",
+        "render::memory::tests::coordinated_budget_evicts_cold_history_before_actual_active_photos",
+        "render::memory::tests::native_fine_edits_keep_their_restart_frontier_under_memory_pressure",
+        "render::memory::tests::shared_reservations_and_processing_owners_are_counted_once",
+        "render::monochrome_tests::mono_inspection_stops_before_unrelated_processing_and_keeps_original_layers",
+        "render::monochrome_tests::mono_mix_noise_sharpen_and_mode_switches_match_fresh_and_retain_snapshots",
+        "render::monochrome_tests::mono_originals_keep_finite_neutral_samples_and_valid_metadata",
+        "render::monochrome_tests::mono_sensitivity_and_detail_preserve_mix_cache_and_dng_boundaries",
+        "render::monochrome_tests::mono_tiff_and_dng_keep_neutral_samples_and_defer_only_presentation",
+        "render::monochrome_tests::quattro_monochrome_regional_matches_full",
+        "render::monochrome_tests::tiger_monochrome_regional_matches_full",
+        "render::preparation::tests::gpu_preparation_invalidation_and_native_release_match_fresh_pixels",
+        "render::quattro_dng_tests::quattro_dng_base_separates_appearance_and_preserves_technical_controls",
+        "render::quattro_dng_tests::quattro_monochrome_dng_freezes_mix_and_defers_inactive_appearance",
+        "render::quattro_tests::every_camera_white_balance_renders_and_restores_defaults",
+        "render::quattro_tests::missing_white_balance_uses_the_recorded_file_choice",
+        "render::quattro_tests::noise_and_detail_keep_factory_corrections_and_exposure_independent",
+        "render::quattro_tests::original_fast_previews_match_fresh_renders_through_quality_and_edit_changes",
+        "render::quattro_tests::original_quattro_planes_have_independent_geometry",
+        "render::quattro_tests::photographic_edits_preserve_reconstruction_and_cached_defaults",
+        "render::quattro_tests::progress_observers_report_real_load_and_render_boundaries_without_changing_pixels",
+        "render::quattro_tests::regional_quattro_processing_matches_full_crops_after_fast_overview_and_panning",
+        "render::quattro_tests::selected_recorded_balance_keeps_identity_shading_inspectable",
+        "render::recipes::classic::inspection::tests::every_catalogued_output_renders",
+        "render::recipes::classic::preview::tests::classic_small_preview_originals_keep_controls_and_match_fresh_sessions",
+        "render::recipes::finishing::tests::gpu_adaptive_hdr_cold_regions_pan_and_continue_to_whole",
+        "render::recipes::finishing::tests::gpu_adaptive_regions_use_whole_analysis_and_match_whole_pixels",
+        "render::recipes::finishing::tests::gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent",
+        "render::recipes::finishing::tests::gpu_rotated_regions_match_sampled_whole_view",
+        "render::recipes::finishing::tests::gpu_shared_finishing_original_color_mono_cache_and_dng",
+        "render::recipes::finishing::tests::gpu_shared_spatial_finishing_matches_full_and_regional_views",
+        "render::recipes::finishing::tests::gpu_tone_method_ignores_inactive_edits_in_the_rendered_result",
+        "render::recipes::linear_edits::tests::original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid",
+        "render::recipes::linear_edits::tests::original_advanced_color_builds_full_fast_and_regional_previews",
+        "render::recipes::linear_edits::tests::original_auto_exposure_matches_manual_preview_cache_and_dng_appearance",
+        "render::recipes::linear_edits::tests::original_color_editor_bypass_is_independent_in_photos_and_dng",
+        "render::recipes::linear_edits::tests::original_dehaze_matches_cached_edits_dng_and_full_preview",
+        "render::recipes::linear_edits::tests::original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction",
+        "render::recipes::linear_edits::tests::original_dehaze_swatch_reports_auto_at_zero_and_freezes_without_an_image_change",
+        "render::recipes::linear_edits::tests::original_dynamic_range_guide_reuses_across_moving_sections",
+        "render::recipes::linear_edits::tests::original_hsl_dng_reprojects_to_the_same_pre_curve_rgb",
+        "render::recipes::linear_edits::tests::original_output_sections_bypass_edits_without_changing_authored_settings",
+        "render::recipes::linear_edits::tests::original_perceptual_dng_reprojects_to_the_same_pre_curve_rgb",
+        "render::recipes::linear_edits::tests::original_perceptual_neutral_and_cached_edits_keep_reconstruction_unchanged",
+        "render::recipes::linear_edits::tests::original_reference_saturation_policy_changes_all_families_and_invalidates_cached_output",
+        "render::recipes::linear_edits::tests::original_reference_sharpening_bypass_matches_neutral_universal",
+        "render::recipes::linear_edits::tests::original_selected_lightness_match_dng_and_cached_color_and_monochrome",
+        "render::recipes::linear_edits::tests::original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate",
+        "render::recipes::linear_edits::tests::original_unlocked_saturation_dng_reprojects_global_basic_and_advanced",
+        "render::recipes::linear_edits::tests::original_white_balance_bias_keeps_technical_dng_samples_and_changes_editable_neutral",
+        "render::recipes::merrill::noise_test::directional_banding_controls_share_native_exports_and_cached_results",
+        "render::recipes::merrill::noise_test::monochrome_native_methods_keep_layer_order_and_shared_export_preparation",
+        "render::recipes::merrill::noise_test::monochrome_regional_views_match_whole_frame",
+        "render::recipes::merrill::noise_test::multiscale_cached_switches_and_inactive_bypasses_match_fresh",
+        "render::recipes::merrill::noise_test::multiscale_regional_views_match_whole_frame",
+        "render::recipes::merrill::noise_test::multiscale_uses_resized_layers_and_preserves_native_export_preparation",
+        "render::recipes::merrill::noise_test::neutralize_shadows_cached_switches_and_neutral_bypass_match_fresh",
+        "render::recipes::merrill::noise_test::speckle_method_threshold_and_size_cached_results_match_fresh",
+        "render::recipes::merrill::preview::tests::color_field_recovery_inputs_share_the_sensor_working_grid",
+        "render::recipes::merrill::preview::tests::independent_groups_match_neutral_bypass_and_cached_refinement",
+        "render::recipes::merrill::preview::tests::reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_native",
+        "render::recipes::merrill::preview::tests::regional_detail_matches_full_and_continues_without_repeating_whole_sensor_inputs",
+        "render::recipes::merrill::preview::tests::row_correction_follows_sensor_pooling_for_color_and_monochrome",
+        "render::recipes::merrill::preview::tests::speckle_inputs_share_the_requested_working_grid",
+        "render::recipes::merrill::tonal_ranges_test::gpu_tonal_ranges_keep_monochrome_neutral_and_expose_the_mask",
+        "render::recipes::merrill::tonal_ranges_test::gpu_tonal_ranges_match_cached_reduced_and_regional_rendering",
+        "render::recipes::preview_tests::scaled_color_guides_match_fresh_edits_and_native_inspection_remains_explicit",
+        "render::recipes::preview_tests::small_overview_keeps_framing_through_exposure_and_reconstruction_edits",
+        "render::recipes::preview_tests::working_scale_survives_output_views_monochrome_and_inspection",
+        "render::recipes::quattro::dng::tests::original_camera_bases_prepare_for_every_balance",
+        "render::recipes::quattro::luma_repair::tests::fixed_catalogue_preparation_reuses_shared_payloads_without_source_samples",
+        "render::recipes::quattro::preview_tests::first_small_edits_restart_from_corrected_pools_without_native_gpu_retention",
+        "render::recipes::quattro::preview_tests::small_color_grids_preserve_native_histories_and_requested_controls",
+        "render::recipes::quattro::preview_tests::small_composition_preserves_native_metadata_and_full_inspection",
+        "render::recipes::quattro::preview_tests::synthetic_low_grid_renders_without_high_blue_storage",
+        "render::recipes::quattro::stage2::tests::every_camera_balance_prepares_gain_matrix_and_recorded_shading_compensation",
+        "render::recipes::quattro::tiger::tests::tiger_fast_blue_repairs_phase_detection_pairs_before_reduction",
+        "render::reduced::tests::every_camera_white_balance_matches_source_free_and_fresh_at_native_and_reduced_scales",
+        "render::reduced::tests::full_option_dependency_cuts_release_source_and_match_fresh",
+        "render::reduced::tests::per_output_scale_and_reduced_roi_hint_match_whole_grid",
+        "render::reduced::tests::reduced_active_cut_survives_shared_budget_pressure",
+        "render::reduced::tests::shared_working_set_orders_native_reduced_and_speculative_owners",
+        "render::reduced::tests::verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation",
+        "render::tests::automatic_color_dq_matches_native_gain_manual_override_and_preserves_source",
+        "render::tests::camera_repair_matches_manual_cutoff_and_sensor_inspection_skips_selection",
+        "render::tests::merrill_auto_zero_sharpen_skips_signal_for_final_but_keeps_inspection",
+        "render::tests::native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable",
+        "render::tests::reconstruction_inspection_is_selective_and_retains_signed_detail",
+        "render::tests::reconstruction_originals_stay_finite_across_noise_choices",
+        "render::tiger_tests::original_tiger_modes_masks_and_retained_results",
+        "render::tiger_tests::tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse",
+        "sidecar::tests::restored_recipe_replays_exact_photographic_pixels",
+        "source::tests::decode_quattro_files_preserves_storage_and_capture_contracts",
+        "x3f::adjustments::tests::original_header_choices_match_full_and_capture_readers",
+        "x3f::format31::tests::packed_sensor_matches_serial_planes"
+      ]
+    },
+    {
+      "id": "core_synthetic-none",
+      "suite": "foveonic",
+      "environment": "none",
+      "resource": "gpu",
+      "one_test_per_process": false,
+      "tests": [
+        "controls_test::shader_color_dq_matches_signed_lookup_math",
+        "controls_test::shader_native_high_pass_and_final_sharpen_match_reference_limits_and_packing",
+        "controls_test::shader_resize_preserves_crop_orientation_and_both_transfer_routes",
+        "controls_test::small_high_pass_preserves_native_quadratic_support_and_scaled_borders",
+        "gpu::completion::tests::completed_submission_preserves_copy_results_and_allows_later_work",
+        "gpu::diagnostics::tests::executor_clones_share_one_bounded_capture_query_budget",
+        "gpu::diagnostics::tests::manual_capture_resolves_on_normal_poll_without_a_foreground_gate_wait",
+        "gpu::scheduling_tests::background_executor_yields_submissions_and_keeps_activity_separate",
+        "gpu::scheduling_tests::background_readback_yields_to_foreground_and_preserves_samples",
+        "gpu::scheduling_tests::cancelled_compact_upload_does_not_allocate",
+        "gpu::scheduling_tests::compact_sensor_upload_preserves_every_unsigned_code",
+        "gpu::scheduling_tests::planar_sensor_upload_interleaves_channels_across_chunks",
+        "gpu::scratch::tests::completed_spares_keep_one_per_size_within_the_limit_and_remain_reusable",
+        "gpu::scratch::tests::trimming_spares_does_not_change_a_retained_readers_samples",
+        "gpu::storage::tests::queued_read_precedes_guarded_overwrite_without_completion_fences",
+        "gpu::storage::tests::readers_block_writes_and_recycling_until_the_last_owner",
+        "gpu::storage::tests::shader_write_cannot_be_mislabeled_as_a_read_binding",
+        "gpu_test::activity_counts_engine_owned_transfers_and_not_device_copies_as_readbacks",
+        "gpu_test::shader_black_calibration_and_orientation",
+        "image::composition_tests::composition_shares_samples_and_rejects_regional_or_resized_results",
+        "interactive::cache_tests::admission_counts_shared_protected_allocations_once",
+        "interactive::cache_tests::existing_version_admission_keeps_its_original_buffer",
+        "interactive::cache_tests::optional_frontier_history_recovers_an_older_geometry_without_a_quality_label",
+        "interactive::cache_tests::pressure_discards_old_cuts_and_uncached_descriptors_before_current_inputs",
+        "interactive::cache_tests::rejected_admission_preserves_existing_checkpoints",
+        "interactive::cache_tests::sealed_cut_matches_across_scopes_and_is_invalidated_by_upstream_parameters",
+        "interactive::cache_tests::successful_admission_preserves_eviction_priority_and_recency",
+        "interactive::tests::active_pressure_keeps_restart_inputs_and_the_complete_graph_identity",
+        "interactive::tests::cached_aliases_count_one_allocation",
+        "interactive::tests::cached_edit_boundary_does_not_refill_evicted_upstream_checkpoints",
+        "interactive::tests::exact_output_probe_preserves_planning_and_rejects_missing_or_changed_ancestry",
+        "nodes::color::blue_guided_reconstruct::tests::filtered_restoration_retains_the_original_blue_guide",
+        "nodes::color::blue_guided_reconstruct::tests::same_size_averages_each_cell_and_preserves_rgb_packing",
+        "nodes::color::chroma::tests::gpu_recursive_chroma_matches_native_callbacks",
+        "nodes::color::chroma::tests::gpu_signed_chroma_matches_native_composed_rows",
+        "nodes::color::chroma::tests::large_divisors_do_not_wrap_signed_chroma_stencil_weights",
+        "nodes::color::chroma::tests::reduced_chroma_contracts_spatial_support_without_changing_noise_tables",
+        "nodes::color::chroma::tests::reduced_chroma_preserves_native_response_on_signed_constants",
+        "nodes::color::chroma::tests::reduced_recursive_chroma_keeps_neutral_constants_and_channel_symmetry",
+        "nodes::color::code_gain::tests::signed_ramps_match_wide_integer_gain",
+        "nodes::color::directional_banding::tests::added_bands_exclude_shields_and_strength_scales_the_same_estimate",
+        "nodes::color::directional_banding::tests::compact_regions_retain_native_tile_phase_and_reflection",
+        "nodes::color::directional_banding::tests::fine_extra_strength_scales_bands_without_amplifying_clipping",
+        "nodes::color::directional_banding::tests::inactive_bands_preserve_source_and_directional_passes_reduce_matching_noise",
+        "nodes::color::directional_banding::tests::negative_layers_vary_continuously_near_zero_with_added_bands",
+        "nodes::color::directional_banding::tests::reduced_bands_preserve_flat_fields_at_small_and_padded_extents",
+        "nodes::color::directional_banding::tests::row_and_column_estimators_transpose_without_blending_a_real_edge",
+        "nodes::color::highlight_stream::gpu_stream_matches_independent_stateful_fixtures",
+        "nodes::color::histogram_bilateral::tests::parallel_filter_measures_native_histogram_accumulation_error",
+        "nodes::color::log_reconstruction::tests::gpu_log_reconstruction_matches_bounded_native_output",
+        "nodes::color::pattern::tests::gpu_pattern_matches_native_extents_seeded_edges_and_global_offset_order",
+        "nodes::color::pyramid_resample::tests::half_sampling_preserves_constants_and_filters_alternating_pixels",
+        "nodes::color::range_reconstruction::tests::disabled_filter_retains_spatial_samples_and_floating_color",
+        "nodes::color::range_reconstruction::tests::gpu_finalizer_applies_matrix_before_nonlinear_correction",
+        "nodes::color::range_reconstruction::tests::gpu_range_constant_and_deterministic_diffusion",
+        "nodes::color::range_reconstruction::tests::gpu_reconstruction_toggle_preserves_flat_signal_color_and_gain",
+        "nodes::color::range_reconstruction::tests::gpu_reduction_matches_recovered_finite_support",
+        "nodes::color::reconstruction::tests::all_column_banding_presets_match_native_windows_and_coefficients",
+        "nodes::color::reconstruction::tests::column_conditioning_matches_native_blocks_borders_gain_and_clamps",
+        "nodes::color::reconstruction::tests::compact_native_tiles_match_full_filters_and_projection_at_edges_and_seams",
+        "nodes::color::reconstruction::tests::compact_sensor_storage_preserves_tile_sampling_and_column_correction",
+        "nodes::color::reconstruction::tests::edge_map_covers_recursive_mean_outer_column",
+        "nodes::color::reconstruction::tests::noise_base_and_luminance_conditioning_match_synthetic_fixtures",
+        "nodes::color::reconstruction::tests::processing_tile_projection_matches_reference_overlap_ramps",
+        "nodes::color::reconstruction::tests::reduced_local_and_global_bases_match_native_filters_restore_and_transposed_seed",
+        "nodes::color::texture::tests::signed_layer_cancellation_cannot_explode_restored_color",
+        "nodes::color::texture::tests::texture_change_tracks_sizes_without_changing_layers",
+        "nodes::color::texture::tests::texture_preserves_shading_and_separates_noise_and_spatial_bands",
+        "nodes::color::texture::tests::weak_color_safeguard_repairs_false_color_and_preserves_supported_texture",
+        "nodes::color::two_scale_noise::tests::residual_half_integer_lut_decisions_match_native_power_rounding",
+        "nodes::finish::adaptive_tone::tests::adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure",
+        "nodes::finish::adaptive_tone::tests::blacks_rescue_only_structured_near_black_without_flattening_or_touching_visible_tones",
+        "nodes::finish::adaptive_tone::tests::bounded_dense_regions_keep_scheduled_support_and_thin_feature_phases",
+        "nodes::finish::adaptive_tone::tests::dense_analysis_counts_every_valid_pixel_carries_structure_and_summarizes_complete_windows",
+        "nodes::finish::adaptive_tone::tests::dense_large_windows_preserve_constant_and_weak_population_variance",
+        "nodes::finish::adaptive_tone::tests::mapped_application_guide_clamps_probes_to_photo_cells_inside_padding",
+        "nodes::finish::adaptive_tone::tests::mapped_application_guide_keeps_fit_and_overlapping_sections_aligned",
+        "nodes::finish::adaptive_tone::tests::reduced_analysis_keeps_structure_in_histogram_and_regional_samples",
+        "nodes::finish::advanced_color::tests::advanced_color_lightness_retains_chromatic_components_in_working_spaces",
+        "nodes::finish::advanced_color::tests::advanced_color_selects_guide_protects_neutrals_and_combines_lifts",
+        "nodes::finish::advanced_color::tests::advanced_color_wraps_hue_and_preview_preserves_lightness",
+        "nodes::finish::code_response::tests::all_codes_select_their_channel_table_without_mutating_input",
+        "nodes::finish::color_editor::tests::gpu_color_and_monochrome_share_the_same_chromaticity_preserving_gain",
+        "nodes::finish::color_editor::tests::gpu_color_picker_neighborhood_stays_inside_the_active_crop",
+        "nodes::finish::color_editor::tests::gpu_color_range_picker_shares_overlap_and_neutral_protection",
+        "nodes::finish::color_editor::tests::gpu_color_sensitivity_sectors_gray_and_signed_samples",
+        "nodes::finish::color_editor::tests::gpu_editor_eight_ranges_leave_unselected_color_centers_unchanged",
+        "nodes::finish::color_editor::tests::gpu_editor_hue_saturation_neutral_and_monochrome_contracts",
+        "nodes::finish::color_sharpen::tests::channel_sharpen_matches_native_wrapped_sum_fixtures",
+        "nodes::finish::dehaze::tests::camera_coordinate_response_matches_measured_points_and_retains_signed_samples",
+        "nodes::finish::dehaze::tests::camera_coordinates_control_candidate_selection_and_color_transport",
+        "nodes::finish::dehaze::tests::dehaze_candidate_heap_matches_independent_spatial_selection",
+        "nodes::finish::dehaze::tests::dehaze_estimates_patches_and_bypasses_empty_or_neutral_images_exactly",
+        "nodes::finish::dehaze::tests::dehaze_removes_or_adds_haze_preserves_headroom_and_monochrome",
+        "nodes::finish::dehaze::tests::dehaze_tiny_chromatic_gates_preserve_saturated_colors",
+        "nodes::finish::dehaze::tests::dense_quality_selection_matches_sorted_cpu_truth_beyond_the_old_heap_capacity",
+        "nodes::finish::dehaze::tests::dense_selection_accumulates_more_than_one_u32_of_channel_codes_without_overflow",
+        "nodes::finish::dehaze::tests::expanded_dark_minima_match_rectangular_cpu_truth_at_edges_and_partial_steps",
+        "nodes::finish::dehaze::tests::expanded_minima_preserve_complete_estimates_and_corrections_in_both_policies",
+        "nodes::finish::dehaze::tests::manual_dehaze_skips_color_selection_and_retains_identical_brightness_calibration",
+        "nodes::finish::dehaze::tests::partitioned_estimate_matches_serial_for_ties_empty_and_saturation",
+        "nodes::finish::dehaze::tests::partitioned_selection_resolves_equal_score_and_intensity_by_pixel_index",
+        "nodes::finish::dehaze::tests::quality_tail_average_matches_sorted_group_oracle_for_empty_and_extreme_bins",
+        "nodes::finish::dehaze::tests::quality_tail_boundary_intentionally_averages_fine_score_intensity_and_index_ranks",
+        "nodes::finish::dehaze::tests::quality_tail_integer_sums_carry_before_fractional_boundary_weighting",
+        "nodes::finish::dehaze::tests::quality_tail_partition_counts_preserve_all_estimate_bits_against_sixteen",
+        "nodes::finish::dehaze::tests::shadow_protector_eases_channel_loss_with_one_rgb_weight_and_preserves_bypasses",
+        "nodes::finish::dehaze::tests::shadow_protector_stays_continuous_when_an_input_channel_crosses_zero",
+        "nodes::finish::linear_gain::tests::gain_transfer_preserves_signed_samples_and_handles_zero_luminance",
+        "nodes::finish::perceptual_grade::tests::gpu_negative_saturation_reduces_vivid_colors_preferentially_and_reaches_gray",
+        "nodes::finish::perceptual_grade::tests::gpu_perceptual_boost_favors_muted_colors_and_combines_controls_once",
+        "nodes::finish::perceptual_grade::tests::gpu_perceptual_boost_stays_in_working_gamut_and_preserves_hue_and_lightness",
+        "nodes::finish::perceptual_grade::tests::gpu_perceptual_grading_preserves_neutral_and_normalized_overlaps",
+        "nodes::finish::perceptual_grade::tests::gpu_perceptual_monochrome_matches_color_editor_and_keeps_signed_values_finite",
+        "nodes::finish::perceptual_grade::tests::gpu_saturation_contrast_spreads_or_compresses_colorfulness_without_reviving_gray",
+        "nodes::finish::perceptual_grade::tests::gpu_saturation_policy_is_shared_by_global_basic_and_advanced_ranges",
+        "nodes::finish::perceptual_grade::tests::gpu_two_slider_curve_keeps_colorfulness_order_and_bounds_neutral_amplification",
+        "nodes::finish::photographic::tests::gpu_brightness_is_anchored_monotone_ratio_preserving_and_scale_independent",
+        "nodes::finish::photographic::tests::gpu_contrast_extremes_are_monotone_and_preserve_black_and_white",
+        "nodes::finish::photographic::tests::gpu_local_contrast_weights_fine_bands_above_broad_bands",
+        "nodes::finish::photographic::tests::gpu_photographic_tone_preserves_neutral_headroom_and_rgb_ratios",
+        "nodes::finish::photographic::tests::gpu_shared_spatial_operations_preserve_flats_and_keep_sources_immutable",
+        "nodes::finish::photographic::tests::gpu_sharpening_threshold_and_halo_controls_have_independent_effects",
+        "nodes::finish::resample::tests::gpu_polyphase_matches_native_down_restore_scalar_rows_and_tile_resets",
+        "nodes::finish::resize::tests::photographic_gpu_resize_matches_frozen_reference_float_samples",
+        "nodes::finish::resize::tests::photographic_gpu_resize_matches_scalar_crops_rotations_edges_and_singletons",
+        "nodes::finish::root_detail::tests::gpu_detail_axis_order_matches_native_quarter_turns",
+        "nodes::finish::root_detail::tests::gpu_root_and_detail_match_native_direct_crop",
+        "nodes::finish::saturation_guard::tests::gpu_reference_guard_matches_profile_samples_in_both_modes",
+        "nodes::finish::shadow_neutralize::tests::shadow_neutralization_preserves_brightness_and_protects_lights_and_strong_color",
+        "nodes::finish::signed_response::linear_detail_preserves_signed_codes_and_headroom_without_photographic_tone",
+        "nodes::finish::signed_response::pointwise_profile_response_matches_gpu_without_spatial_detail",
+        "nodes::finish::signed_response::response_tests::gpu_signed_response_matches_scalar_with_adjusted_tone_saturation_and_detail",
+        "nodes::finish::signed_response::response_tests::protected_classic_saturation_matches_profile_sampling_and_preserves_neutral_response",
+        "nodes::finish::signed_response::signed_response_gpu_generic_output_measures_captured_stage4_difference",
+        "nodes::finish::tone_equalizer::tests::gpu_compact_guide_expands_exactly_over_odd_edges",
+        "nodes::finish::tone_equalizer::tests::gpu_half_grid_cascade_matches_whole_with_an_aligned_crop_origin",
+        "nodes::finish::tone_equalizer::tests::gpu_half_grid_gain_interpolates_anchors_and_clamps_odd_edges",
+        "nodes::finish::tone_equalizer::tests::gpu_half_grid_guide_matches_direct_two_dimensional_moments",
+        "nodes::finish::tone_equalizer::tests::gpu_half_grid_mapped_guide_matches_pixel_center_affines_and_ignores_padding",
+        "nodes::finish::tone_equalizer::tests::gpu_hdr_matches_across_declared_linear_code_units",
+        "nodes::finish::tone_equalizer::tests::gpu_hdr_preserves_native_control_coupling_and_detail_direction",
+        "nodes::finish::tone_equalizer::tests::gpu_mapped_hdr_guide_preserves_identity_and_overlapping_sections",
+        "nodes::finish::tone_equalizer::tests::gpu_regional_mask_matches_full_with_aligned_support",
+        "nodes::finish::tone_equalizer::tests::gpu_scaled_hdr_guide_clamps_padding_and_keeps_fractional_phase",
+        "nodes::finish::tone_equalizer::tests::gpu_spatial_mask_smooths_texture_and_keeps_strong_edges",
+        "nodes::finish::tone_equalizer::tests::gpu_tonal_ranges_match_native_response_and_preserve_signed_samples",
+        "nodes::monochrome::tests::dedicated_filters_match_reference_arithmetic_fixture",
+        "nodes::monochrome::tests::histogram_preserves_highlight_headroom_and_matches_bounded_neighborhood_means",
+        "nodes::monochrome::tests::histogram_reuses_bins_across_strips_with_partial_groups_and_immutable_inputs",
+        "nodes::monochrome::tests::pure_layer_mixing_precedes_noise_and_color_conversion",
+        "nodes::sensor::banding::tests::gpu_row_patch_banks_match_native_biases_counts_and_bounds",
+        "nodes::sensor::banding::tests::parallel_patch_statistics_keep_bright_dark_and_correlated_rejection_decisions",
+        "nodes::sensor::banding::tests::regional_row_correction_matches_whole_at_edges_banks_and_reduced_grids",
+        "nodes::sensor::blue_despeckle::tests::physical_bottom_pairs_preserve_pixels_without_inventing_tail_context",
+        "nodes::sensor::blue_mismatch::tests::consecutive_runs_and_first_row_precondition",
+        "nodes::sensor::camera_repair::tests::capped_integer_prefixes_match_ordered_counts_across_blocks_and_partial_tails",
+        "nodes::sensor::camera_repair::tests::cooperative_cluster_search_preserves_first_tie_and_empty_search",
+        "nodes::sensor::camera_repair::tests::gpu_bad_red_detection_reserves_final_slot_and_preserves_exhausted_masks",
+        "nodes::sensor::camera_repair::tests::gpu_complete_camera_matches_native_raw_detection_lists_and_clusters",
+        "nodes::sensor::camera_repair::tests::gpu_jpeg_camera_list_repairs_reported_dark_block",
+        "nodes::sensor::camera_repair::tests::independent_cluster_batches_match_ordered_dispatches",
+        "nodes::sensor::chroma_clusters::tests::parallel_cluster_regions_match_serial_order_exactly",
+        "nodes::sensor::chroma_repair::tests::directional_contrast_reduces_channels_after_neighbor_terms",
+        "nodes::sensor::chroma_repair::tests::parallel_batches_match_serial_record_order_exactly",
+        "nodes::sensor::color_field::boundary_tests::gpu_color_field_boundary_brightness_is_continuous_through_zero",
+        "nodes::sensor::color_field::boundary_tests::gpu_color_field_boundary_preserves_distant_samples_and_supported_luminance",
+        "nodes::sensor::color_field::reliability_tests::filtered_numerical_input_does_not_become_repair_evidence",
+        "nodes::sensor::color_field::reliability_tests::pooled_original_clipping_overrides_below_threshold_means",
+        "nodes::sensor::color_field::tests::gpu_color_field_checkpoints_preserve_conjugacy_and_validate_true_residual",
+        "nodes::sensor::color_field::tests::gpu_color_field_compaction_is_stable_across_groups_and_reused_domains",
+        "nodes::sensor::color_field::tests::gpu_color_field_compensated_iterates_retain_small_color_updates",
+        "nodes::sensor::color_field::tests::gpu_color_field_cutoff_changes_only_mixed_data_weights_not_original_neutral_weights",
+        "nodes::sensor::color_field::tests::gpu_color_field_cutoff_preserves_healthy_samples_brightness_and_consistent_regions",
+        "nodes::sensor::color_field::tests::gpu_color_field_local_keeps_exactly_64_damped_sweeps_with_packed_scalars",
+        "nodes::sensor::color_field::tests::gpu_color_field_matches_independent_cpu_recovery_equations",
+        "nodes::sensor::color_field::tests::gpu_color_field_reports_cancellation_and_invalid_preconditioners",
+        "nodes::sensor::column_gain::tests::affine_column_correction_preserves_native_fused_rounding",
+        "nodes::sensor::column_gain::tests::rgb_column_correction_uses_three_coefficients_and_keeps_originals",
+        "nodes::sensor::despeckle::tests::compact_repairs_isolated_clipped_layers_but_preserves_supported_highlights",
+        "nodes::sensor::despeckle::tests::compact_repairs_white_speckles_when_only_one_layer_crosses_threshold",
+        "nodes::sensor::despeckle::tests::compact_speckles_remove_small_clusters_and_preserve_lines_and_source",
+        "nodes::sensor::despeckle::tests::compact_uses_original_highlight_codes_after_calibration",
+        "nodes::sensor::despeckle::tests::compact_uses_shared_trimmed_donors_including_tied_extremes",
+        "nodes::sensor::despeckle::tests::compact_uses_smallest_detected_radius_for_every_layer",
+        "nodes::sensor::despeckle::tests::gpu_despeckle_matches_ordered_reference_and_preserves_input",
+        "nodes::sensor::despeckle::tests::gpu_scale_matched_thresholds_keep_marginal_detail_and_correct_strong_defects",
+        "nodes::sensor::despeckle::tests::parallel_speckle_rounds_match_serial_chains_capacity_and_empty_work",
+        "nodes::sensor::despeckle::tests::reduced_detection_repairs_bright_masks_and_preserves_dark_structure",
+        "nodes::sensor::despeckle::tests::unequal_speckle_banks_include_the_last_detector_block",
+        "nodes::sensor::fixed_point::tests::disabled_scaling_matches_unit_multiplier_without_modifying_input",
+        "nodes::sensor::fixed_point::tests::drift_polynomial_and_fractional_knots_match_signed_scalar",
+        "nodes::sensor::fixed_point::tests::flare_tiles_preserve_sequential_float_rounding",
+        "nodes::sensor::fppd::tests::sparse_chroma_and_all_paired_luma_branches",
+        "nodes::sensor::highlight::tests::donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins",
+        "nodes::sensor::highlight::tests::gpu_highlight_restoration_matches_native_saturation_and_density",
+        "nodes::sensor::highlight::tests::gpu_threshold_changes_only_brightness_blend_and_keeps_density_and_input",
+        "nodes::sensor::highlight::tests::preview_original_clipping_survives_averaging",
+        "nodes::sensor::highlight_restoration::tests::partial_color_cells_keep_edge_recovery_and_original_samples",
+        "nodes::sensor::highlight_restoration::tests::pooled_detector_coverage_matches_native_classification",
+        "nodes::sensor::highlight_restoration::tests::pooled_evidence_preserves_partial_cell_peaks_and_native_control_coverage",
+        "nodes::sensor::highlight_restoration::tests::reduced_recovery_uses_original_clipping_below_the_averaged_threshold",
+        "nodes::sensor::highlight_restoration::tests::repaired_speckles_do_not_regain_original_highlight_damage",
+        "nodes::sensor::multiscale::tests::calibrated_filter_handles_one_cell_and_replicated_padding",
+        "nodes::sensor::multiscale::tests::calibrated_filter_matches_sensor_basis_and_preserves_original_clipping",
+        "nodes::sensor::multiscale::tests::guided_three_scales_match_independent_equations_and_preserve_sensor_contracts",
+        "nodes::sensor::phase_extraction::tests::calibrated_signed_values_and_mono_cap_match_scalar_equations",
+        "nodes::sensor::phase_extraction::tests::channel_calibration_preserves_native_rounding_gain_caps_and_source_samples",
+        "nodes::sensor::phase_extraction::tests::packed_cells_preserve_spatial_phases_and_rgb_average",
+        "nodes::sensor::phase_extraction::tests::triplets_preserve_signed_rgb_and_blue_without_phase_averaging_or_clipping",
+        "nodes::sensor::pool::tests::a_sensor_spike_reaches_one_logical_cell_with_one_dispatch",
+        "nodes::sensor::pool::tests::partial_cells_and_halos_replicate_completed_means_and_flag_unions",
+        "nodes::sensor::pool::tests::pooling_preserves_means_coverage_and_source",
+        "nodes::sensor::pool::tests::signed_area_means_round_once_without_negative_bias",
+        "nodes::sensor::repair::ordered_tests::gpu_camera_repair_matches_reference_masks_order_borders_and_sentinels",
+        "nodes::sensor::rgb_despeckle::tests::isolated_rgb_outlier_is_repaired_unless_masked",
+        "nodes::sensor::rgb_despeckle::tests::reduced_detection_repairs_bright_outliers_and_keeps_dark_details",
+        "nodes::sensor::row_guard::tests::resized_rows_handle_single_cells_and_short_spans_without_inventing_offsets",
+        "nodes::sensor::row_guard::tests::resized_rows_match_independent_equations_and_preserve_repairs",
+        "nodes::sensor::row_guard::tests::row_guard_matches_independent_confidence_and_preserves_sensor_contracts",
+        "nodes::sensor::shield_noise::tests::native_shield_predictions_match_robust_independent_profiles_in_both_states",
+        "nodes::sensor::signed_repair::tests::ordered_signed_repairs_match_native_complete_images",
+        "nodes::sensor::signed_repair::tests::signed_despeckle_preserves_history_across_tile_and_batch_boundaries",
+        "nodes::sensor::sparse_repair::tests::requested_outputs_preserve_complete_repairs_and_avoid_unused_blue_work",
+        "noise_calibration::training::tests::cap_moments_distinguish_persistent_defects_from_one_frame_outliers",
+        "render::execute::observation_tests::cached_main_and_missing_side_preserve_main_and_report_partial_publication",
+        "render::execute::observation_tests::cancelled_graph_never_publishes_unresolved_shared_trace_indices",
+        "render::export_tests::jxl_native_prophoto_encodes_shadows_with_its_declared_gamma",
+        "render::export_tests::regional_rotation_samples_match_the_whole_composed_view",
+        "render::export_tests::saved_crop_exports_the_same_oriented_pixels_without_changing_the_working_image",
+        "render::export_tests::saved_rotation_agrees_between_preview_export_and_picker_coordinates",
+        "render::export_tests::tiff_destinations_convert_pixels_match_profiles_and_preserve_working_image",
+        "render::export_tests::zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged",
+        "render::quattro_tests::planes_keep_their_extents_and_retained_siblings",
+        "render::quattro_tests::preparation_can_stop_before_later_calibration",
+        "render::recipes::linear_edits::tests::scope_normalization_follows_declared_linear_white",
+        "render::recipes::merrill::preview::tests::pooled_ramps_keep_native_registration_through_camera_framing",
+        "render::recipes::quattro::stage2::tests::identity_shading_keeps_rgb_history_and_blue_samples_exact",
+        "render::resize_export_tests::resized_tiff_defaults_to_reference_sampling_before_destination_conversion",
+        "render::tests::color_conversion_preserves_signed_calibrated_layers_and_headroom",
+        "render::tests::color_pick_uses_cropped_rotated_guide_coordinates_and_small_readback",
+        "render::tests::current_buffer_scopes_track_signed_values_and_oriented_columns",
+        "render::tests::gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export",
+        "render::tests::interpolated_waveforms_conserve_weight_reduce_column_beats_and_track_sub_bin_levels",
+        "render::tests::scalar_fields_preserve_geometry_and_values_without_rgb_storage",
+        "render::tests::viewport_scopes_use_oriented_region_and_crop_relative_columns"
+      ]
+    },
+    {
+      "id": "encoding_options",
+      "suite": "foveonic",
+      "environment": "none",
+      "resource": "exiftool",
+      "one_test_per_process": false,
+      "tests": [
+        "output::tests::encoding_options_have_clean_capture_exif"
+      ]
+    },
+    {
+      "id": "gui_correctness-standard",
+      "suite": "foveonic-gui",
+      "environment": "standard",
+      "resource": "gpu",
+      "one_test_per_process": false,
+      "tests": [
+        "batch::tests::copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_error",
+        "batch::tests::frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_source",
+        "display::tests::floating_egui_keeps_white_transparency_white",
+        "display::tests::photographic_shader_preserves_extended_colors_and_retains_the_srgb_fallback",
+        "display_image::tests::failed_browser_uploads_report_errors_release_registration_and_allow_other_photos",
+        "display_image::tests::native_previews_preserve_gamut_and_filter_in_linear_light",
+        "display_image::tests::thumbnail_quarter_turns_preserve_direction_and_linear_wide_colors",
+        "import_review::tests::browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_policy",
+        "import_review::tests::destination_probe_tracks_disconnect_reconnect_and_changed_paths_off_thread",
+        "navigator::draw_tests::romm_presentation_converts_and_clips_without_changing_float_source",
+        "navigator::draw_tests::rotation_presentation_preserves_quarter_turn_pixel_locations",
+        "navigator::draw_tests::signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral",
+        "navigator::gpu_tests::gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channels",
+        "previews::tests::cached_preview_keeps_wide_colors_while_srgb_viewing_is_selected",
+        "previews::tests::display_readback_preserves_color_and_removes_row_padding",
+        "rendering::worker::color_pick_tests::original_color_pick_reuses_loaded_photo_and_keeps_creative_hsl_out_of_the_guide",
+        "rendering::worker::presentation::completed_sampling_tests::completed_finer_snapshots_seed_new_sampling_tasks_without_changing_inflight_matching",
+        "rendering::worker::presentation::tests::a_new_full_zoom_pass_while_framing_is_active_is_numerical",
+        "rendering::worker::presentation::tests::composition_keeps_pending_exposure_and_explicit_quality_changes_are_numerical",
+        "rendering::worker::presentation::tests::crop_and_rotate_reuse_thumb_smart_fit_and_smart_full_without_numerical_dispatches",
+        "rendering::worker::presentation::tests::same_path_replacement_does_not_reactivate_old_reduced_metadata",
+        "rendering::worker::presentation::tests::smart_resolution_upgrades_cannot_reuse_coarser_unchanged_pixels",
+        "rendering::worker::presentation::tests::whole_detail_stays_native_after_reduced_composition_changes",
+        "rendering::worker::preview_tests::fast_preference_exports_full_files_and_returns_to_fast_preview",
+        "rendering::worker::preview_tests::merrill_smart_exports_full_files_and_returns_to_fast_preview",
+        "rendering::worker::processing::tests::native_photo_return_reuses_source_and_replacement_invalidates_both_grids",
+        "rendering::worker::processing::tests::reduced_photo_switches_reseal_and_native_promotion_match_fresh",
+        "rendering::worker::processing::tests::speculative_thumb_reuses_pixels_preserves_active_and_releases_source",
+        "rendering::worker::tests::comparison_frames_pair_operation_inputs_with_the_same_configuration",
+        "rendering::worker::tests::continuous_drag_makes_progress_then_settles_with_matching_scopes",
+        "rendering::worker::tests::detail_layers_keep_only_the_latest_section_and_preserve_compatible_overviews",
+        "rendering::worker::tests::latest_multi_edit_batch_delivers_every_target_at_thumb",
+        "rendering::worker::tests::mixed_native_and_reduced_edits_preserve_warm_native_work",
+        "rendering::worker::tests::multi_photo_details_keep_own_delivery_storage_order_and_bounded_retention",
+        "rendering::worker::tests::photo_selection_retains_native_and_reduced_history_until_explicit_clear",
+        "rendering::worker::tests::quattro_dng_export_uses_original_source_from_any_inspection_view",
+        "rendering::worker::tests::refinement_continues_without_ui_receipt_and_keeps_regional_admission",
+        "rendering::worker::tests::shared_source_consumption_resumes_current_before_and_pick",
+        "rendering::worker::tests::speculative_whole_yields_to_new_foreground_then_completes",
+        "rendering::worker::tests::viewport_scope_jobs_reuse_the_displayed_image_and_settle_on_latest_region",
+        "rendering::worker::tests::worker_coalesces_identical_requests_and_rejects_table_inspection",
+        "sidecars::tests::merrill_preview_scale_does_not_save_defaults_or_reenable_saved_off"
+      ]
+    },
+    {
+      "id": "gui_sdk_exact-none",
+      "suite": "foveonic-gui",
+      "environment": "none",
+      "resource": "gpu_sdk",
+      "one_test_per_process": true,
+      "tests": [
+        "diagnostics::inactive_controllers_never_own_another_controllers_capture",
+        "diagnostics::manual_exit_preserves_a_recording_in_its_owned_parent",
+        "diagnostics::review_exit_saves_active_and_starting_captures",
+        "diagnostics::smoke_panic_saves_active_sdk_capture",
+        "startup::tests::early_setup_intervals_survive_asynchronous_recorder_start"
+      ]
+    }
+  ],
+  "excluded": [
+    {
+      "suite": "foveonic",
+      "test": "decode_cache::tests::compare_active_and_speculative_decode_wall_time",
+      "reason": "Timing experiment, not correctness.",
+      "requirements": "requires QUATTRO_X3F",
+      "source": "crates/foveonic/src/decode_cache/tests.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "decode_cache::tests::parallel_prefetch_throughput_preserves_exact_samples_and_disk_budget",
+      "reason": "Throughput profiling with expensive storage workloads; inspect as supplementary correctness.",
+      "requirements": "requires QUATTRO_X3F",
+      "source": "crates/foveonic/src/decode_cache/tests.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "diagnostics::tests::disabled_and_enabled_recording_overhead",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "CPU-only diagnostic microbenchmark, run with --release --nocapture",
+      "source": "crates/foveonic/src/diagnostics_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "interactive::chroma_investigation::controls::local_reference_known_color_controls",
+      "reason": "Local chroma investigation with explicit research inputs and outputs; not part of the retained release correctness selection.",
+      "requirements": "GPU, FOVEONIC_CHROMA_CONTROLS new synthetic-results path; optional declared control grid",
+      "source": "crates/foveonic/examples/chroma_investigation/controls.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "interactive::chroma_investigation::inspect_green_outliers",
+      "reason": "Local chroma investigation with explicit research inputs and outputs; not part of the retained release correctness selection.",
+      "requirements": "GPU, FOVEONIC_CHROMA_SOURCE and FOVEONIC_CHROMA_OUTPUT new diagnostic directory",
+      "source": "crates/foveonic/examples/chroma_investigation/mod.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "interactive::chroma_investigation::neutralization::inspect_shadow_protection",
+      "reason": "Local chroma investigation with explicit research inputs and outputs; not part of the retained release correctness selection.",
+      "requirements": "GPU, FOVEONIC_CHROMA_SOURCE and FOVEONIC_SHADOW_DIAGNOSIS new diagnostic JSON path",
+      "source": "crates/foveonic/examples/chroma_investigation/neutralization.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "interactive::chroma_investigation::trials::compare_local_color",
+      "reason": "Local chroma investigation with explicit research inputs and outputs; not part of the retained release correctness selection.",
+      "requirements": "GPU and explicit FOVEONIC_CHROMA_TRIALS study configuration",
+      "source": "crates/foveonic/examples/chroma_investigation/trials.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::blue_guided_reconstruct::tests::bounded_native_reconstruction_matches",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: BLUE_GUIDED_REFERENCE",
+      "requirements": "requires BLUE_GUIDED_REFERENCE and GPU",
+      "source": "crates/foveonic/src/nodes/color/blue_guided_reconstruct_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::blue_guided_reconstruct::tests::selected_full_native_stage2b_rgb_matches",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: STAGE2B_NATIVE_BOUNDARY",
+      "requirements": "requires STAGE2B_NATIVE_BOUNDARY and GPU",
+      "source": "crates/foveonic/src/nodes/color/blue_guided_reconstruct_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::byte_mask_double::tests::bounded_native_byte_resize_matches",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: BLUE_GUIDED_REFERENCE",
+      "requirements": "requires BLUE_GUIDED_REFERENCE and GPU",
+      "source": "crates/foveonic/src/nodes/color/byte_mask_double_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::byte_mask_double::tests::full_actual_highlight_mask_matches_stage2b_input",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: HIGHLIGHT_NATIVE_BOUNDARY, STAGE2B_NATIVE_BOUNDARY",
+      "requirements": "requires HIGHLIGHT_NATIVE_BOUNDARY, STAGE2B_NATIVE_BOUNDARY and GPU",
+      "source": "crates/foveonic/src/nodes/color/byte_mask_double_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::cell_gain::tests::complete_native_cell_gains",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CELL_GAIN_REFERENCE",
+      "requirements": "requires a GPU and CELL_GAIN_REFERENCE native shading fixtures",
+      "source": "crates/foveonic/src/nodes/color/cell_gain_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::chromatic_ratio::tests::matches_native_ratio_worker",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CHROMATIC_RATIO_REFERENCE",
+      "requirements": "requires a GPU and CHROMATIC_RATIO_REFERENCE native fixture directory",
+      "source": "crates/foveonic/src/nodes/color/chromatic_ratio_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::chromatic_ratio::tests::original_stage1_ratio_worker_matches_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CHROMATIC_RATIO_BOUNDARY",
+      "requirements": "requires a GPU and CHROMATIC_RATIO_BOUNDARY owned original Stage1 CSR boundary",
+      "source": "crates/foveonic/src/nodes/color/chromatic_ratio_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::highlight_stream::gpu_stream_matches_full_sd15_stage",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_HIGHLIGHT_REFERENCE_DIR, SD15",
+      "requirements": "requires a GPU and CLASSIC_HIGHLIGHT_REFERENCE_DIR with captured SD15 stage buffers",
+      "source": "crates/foveonic/src/nodes/color/highlight_stream.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::histogram_bilateral::tests::acquired_blue_tile_measures_native_histogram_history",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: HISTOGRAM_CAPTURE",
+      "requirements": "requires HISTOGRAM_CAPTURE and GPU",
+      "source": "crates/foveonic/src/nodes/color/histogram_bilateral_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::histogram_bilateral::tests::full_size_quantized_filter_profile",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: requires GPU; measures a full physical blue plane",
+      "requirements": "requires GPU; measures a full physical blue plane",
+      "source": "crates/foveonic/src/nodes/color/histogram_bilateral_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::log_reconstruction::tests::gpu_log_reconstruction_matches_original_camera_boundary",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_LOG_CAPTURE",
+      "requirements": "requires a GPU and FOVEONIC_LOG_CAPTURE native boundary directory",
+      "source": "crates/foveonic/src/nodes/color/log_reconstruction_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::neighborhood_decorrelate::tests::ordered_updates_match_bounded_native_workers",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: NEIGHBORHOOD_NOISE_REFERENCE",
+      "requirements": "requires a GPU and NEIGHBORHOOD_NOISE_REFERENCE native callback fixtures",
+      "source": "crates/foveonic/src/nodes/color/neighborhood_decorrelate_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::packed_lab::tests::complete_native_callbacks",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: PACKED_LAB_REFERENCE",
+      "requirements": "requires a GPU and PACKED_LAB_REFERENCE fixtures",
+      "source": "crates/foveonic/src/nodes/color/packed_lab_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::purple_fringe::tests::complete_native_wrappers_preserve_immutable_pass_ownership",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: PURPLE_FRINGE_REFERENCE",
+      "requirements": "requires GPU and PURPLE_FRINGE_REFERENCE native three-pass fixtures",
+      "source": "crates/foveonic/src/nodes/color/purple_fringe_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::pyramid_resample::tests::native_separable_images_match",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: PYRAMID_REFERENCE",
+      "requirements": "requires PYRAMID_REFERENCE native fixtures and a GPU",
+      "source": "crates/foveonic/src/nodes/color/pyramid_resample_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::raw_color_blend::tests::complete_native_raw_color_helper",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: RAW_COLOR_BLEND_REFERENCE",
+      "requirements": "requires a GPU and RAW_COLOR_BLEND_REFERENCE guarded native helper fixtures",
+      "source": "crates/foveonic/src/nodes/color/raw_color_blend_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::residual_finish::tests::full_actual_residual_inputs_match_rgb_and_detail",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: STAGE2B_NATIVE_BOUNDARY",
+      "requirements": "requires STAGE2B_NATIVE_BOUNDARY with apply_inputs and GPU",
+      "source": "crates/foveonic/src/nodes/color/residual_finish_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::residual_finish::tests::independent_sharp_and_gain_fixtures_match",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: BLUE_GUIDED_REFERENCE",
+      "requirements": "requires BLUE_GUIDED_REFERENCE and GPU",
+      "source": "crates/foveonic/src/nodes/color/residual_finish_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::rgb_prefilter::tests::complete_fixed_radius_iterations_match_reference",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: RGB_PREFILTER_REFERENCE",
+      "requirements": "requires a GPU and RGB_PREFILTER_REFERENCE complete native helper fixtures",
+      "source": "crates/foveonic/src/nodes/color/rgb_prefilter_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::rgb_prefilter::tests::standalone_range_matches_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: RGB_RANGE_REFERENCE",
+      "requirements": "requires a GPU and RGB_RANGE_REFERENCE standalone native bilateral fixtures",
+      "source": "crates/foveonic/src/nodes/color/rgb_prefilter_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::scalar_bilateral::tests::continuous_variance_filter_matches_reference_workers",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: LOW_BILATERAL_REFERENCE",
+      "requirements": "requires GPU and LOW_BILATERAL_REFERENCE with scalar worker fixtures",
+      "source": "crates/foveonic/src/nodes/color/scalar_bilateral_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::sector_color::tests::complete_native_sector_selection",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: SECTOR_COLOR_REFERENCE",
+      "requirements": "requires a GPU and SECTOR_COLOR_REFERENCE guarded native callback fixtures",
+      "source": "crates/foveonic/src/nodes/color/sector_color_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::spatial_color_gain::tests::complete_native_spatial_color_gains",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: SPATIAL_COLOR_GAIN_REFERENCE",
+      "requirements": "requires a GPU and SPATIAL_COLOR_GAIN_REFERENCE native shading fixtures",
+      "source": "crates/foveonic/src/nodes/color/spatial_color_gain_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::two_scale_noise::tests::complete_native_protection_and_two_iteration_interiors",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: TWO_SCALE_NOISE_REFERENCE",
+      "requirements": "requires a GPU and TWO_SCALE_NOISE_REFERENCE native crop/protection fixtures",
+      "source": "crates/foveonic/src/nodes/color/two_scale_noise_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::two_scale_noise::tests::native_guidance_recursive_means_and_residual_blends",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: ADAPTIVE_NOISE_REFERENCE",
+      "requirements": "requires GPU and ADAPTIVE_NOISE_REFERENCE independently checked native guidance/blending fixtures",
+      "source": "crates/foveonic/src/nodes/color/two_scale_noise_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::color::uv_repair::tests::complete_reference_conversion_and_classification_fixtures",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: UV_REPAIR_REFERENCE",
+      "requirements": "requires a GPU and UV_REPAIR_REFERENCE guarded native callback fixtures",
+      "source": "crates/foveonic/src/nodes/color/uv_repair_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::finish::adaptive_tone::tests::photographic_shadow_limit_sweep",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_TONAL_OUTPUT",
+      "requirements": "requires GPU, FOVEONIC_TONAL_SOURCE and FOVEONIC_TONAL_OUTPUT for an isolated limit sweep",
+      "source": "crates/foveonic/src/nodes/finish/adaptive_tone_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::finish::box_contrast::tests::complete_native_two_average_passes_match_the_active_image",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: STAGE3_NATIVE",
+      "requirements": "requires GPU and STAGE3_NATIVE completed high-ISO main/sharpen boundaries",
+      "source": "crates/foveonic/src/nodes/finish/box_contrast_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::finish::code_channel_map::tests::normalized_channel_mixing_stays_within_one_native_code",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CODE_MIX_REFERENCE",
+      "requirements": "requires GPU and CODE_MIX_REFERENCE",
+      "source": "crates/foveonic/src/nodes/finish/code_channel_map_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::finish::code_crop::tests::actual_fullsize_mapping_and_patch_samples_match",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CODE_CROP_NATIVE_BOUNDARY",
+      "requirements": "requires CODE_CROP_NATIVE_BOUNDARY and GPU",
+      "source": "crates/foveonic/src/nodes/finish/code_crop_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::finish::code_crop::tests::kernel_tables_match_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CODE_CROP_REFERENCE",
+      "requirements": "requires CODE_CROP_REFERENCE",
+      "source": "crates/foveonic/src/nodes/finish/code_crop_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::finish::code_crop::tests::native_crop_resize_and_rotations_match",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CODE_CROP_REFERENCE",
+      "requirements": "requires CODE_CROP_REFERENCE and GPU",
+      "source": "crates/foveonic/src/nodes/finish/code_crop_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::finish::proportional_sharpen::tests::complete_original_sharpen_matches_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: STAGE3_NATIVE",
+      "requirements": "requires GPU and STAGE3_NATIVE",
+      "source": "crates/foveonic/src/nodes/finish/proportional_sharpen_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::finish::proportional_sharpen::tests::proportional_limits_and_overflow_match_independent_equations",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: SHARPEN_REFERENCE",
+      "requirements": "requires GPU and SHARPEN_REFERENCE",
+      "source": "crates/foveonic/src/nodes/finish/proportional_sharpen_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::finish::wavelet_contrast::tests::phase_preserving_contrast_matches_independent_equations",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: WAVELET_REFERENCE",
+      "requirements": "requires GPU and WAVELET_REFERENCE",
+      "source": "crates/foveonic/src/nodes/finish/wavelet_contrast_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::blue_despeckle::tests::complete_native_wrappers_match_immutable_gpu_filters",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: BLUE_DESPECKLE_REFERENCE",
+      "requirements": "requires a GPU and BLUE_DESPECKLE_REFERENCE",
+      "source": "crates/foveonic/src/nodes/sensor/blue_despeckle_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::blue_despeckle::tests::neighbor_range_matches_bounded_native_workers",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: NEIGHBOR_RANGE_REFERENCE",
+      "requirements": "requires a GPU and NEIGHBOR_RANGE_REFERENCE native fixture directory",
+      "source": "crates/foveonic/src/nodes/sensor/blue_despeckle_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::blue_despeckle::tests::original_neighbor_range_matches_monochrome_boundary",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: MONO_BLUE_BOUNDARY",
+      "requirements": "requires a GPU and MONO_BLUE_BOUNDARY parent directory",
+      "source": "crates/foveonic/src/nodes/sensor/blue_despeckle_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::blue_despeckle::tests::original_wrappers_match_captured_boundaries",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: LUMA_NATIVE_BOUNDARIES",
+      "requirements": "requires a GPU and LUMA_NATIVE_BOUNDARIES",
+      "source": "crates/foveonic/src/nodes/sensor/blue_despeckle_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::blue_pattern::tests::complete_native_blue_pattern_cases",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: BLUE_PATTERN_FIXTURES",
+      "requirements": "requires a GPU and BLUE_PATTERN_FIXTURES",
+      "source": "crates/foveonic/src/nodes/sensor/blue_pattern_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::blue_refresh::tests::original_and_bounded_refresh_match_native_logical_pixels",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: BLUE_REFRESH_REFERENCE",
+      "requirements": "requires a GPU and BLUE_REFRESH_REFERENCE containing native callback fixtures",
+      "source": "crates/foveonic/src/nodes/sensor/blue_refresh_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::chroma_repair::tests::benchmark_ordered_chroma_preparation",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CHROMA_NATIVE_BOUNDARY",
+      "requirements": "requires CHROMA_NATIVE_BOUNDARY; measures metadata preparation without GPU",
+      "source": "crates/foveonic/src/nodes/sensor/chroma_repair_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::chroma_repair::tests::full_ordered_passes_match_actual_native_boundary",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CHROMA_NATIVE_BOUNDARY",
+      "requirements": "requires GPU and CHROMA_NATIVE_BOUNDARY",
+      "source": "crates/foveonic/src/nodes/sensor/chroma_repair_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::chroma_repair::tests::single_and_general_match_independent_fixtures",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CHROMA_REFERENCE",
+      "requirements": "requires GPU and CHROMA_REFERENCE independent fixtures",
+      "source": "crates/foveonic/src/nodes/sensor/chroma_repair_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::color_field::integration_tests::gpu_color_field_corpus_is_exact_between_fresh_and_cached_solves",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_HIGHLIGHT_DIR",
+      "requirements": "requires GPU and the full FOVEONIC_HIGHLIGHT_DIR corpus",
+      "source": "crates/foveonic/src/nodes/sensor/color_field_integration_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::color_field::integration_tests::gpu_color_field_cutoff_updates_cached_layers_and_output_without_mutating_retained_images",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_HIGHLIGHT_DIR",
+      "requirements": "requires GPU and FOVEONIC_HIGHLIGHT_DIR",
+      "source": "crates/foveonic/src/nodes/sensor/color_field_integration_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::color_field::integration_tests::gpu_color_field_session_and_dng_preserve_saved_choices_and_owned_images",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_HIGHLIGHT_DIR",
+      "requirements": "requires GPU and FOVEONIC_HIGHLIGHT_DIR",
+      "source": "crates/foveonic/src/nodes/sensor/color_field_integration_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::color_field::reliability_tests::gpu_color_field_reliability_quantization_matches_original_sensor_codes",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_HIGHLIGHT_DIR",
+      "requirements": "requires GPU and FOVEONIC_HIGHLIGHT_DIR",
+      "source": "crates/foveonic/src/nodes/sensor/color_field_reliability_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::color_field::tests::gpu_color_field_full_rasters_match_identical_input_cpu_equations",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_HIGHLIGHT_DIR",
+      "requirements": "requires GPU, FOVEONIC_HIGHLIGHT_DIR, and time/memory for the full-corpus double-precision reference solves",
+      "source": "crates/foveonic/src/nodes/sensor/color_field_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::color_field::tests::gpu_color_field_real_crops_match_identical_input_cpu_equations",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_HIGHLIGHT_DIR",
+      "requirements": "requires GPU and FOVEONIC_HIGHLIGHT_DIR with the frozen highlight corpus",
+      "source": "crates/foveonic/src/nodes/sensor/color_field_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::column_gain::tests::composed_extraction_matches_native_column_wrapper",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: COLUMN_GAIN_FIXTURES",
+      "requirements": "requires a GPU and COLUMN_GAIN_FIXTURES",
+      "source": "crates/foveonic/src/nodes/sensor/column_gain_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::despeckle::tests::parallel_speckle_originals_match_serial_and_measure_completed_work",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "requires a GPU and FOVEONIC_FIXTURE_DIR; prints completed despeckle timings",
+      "source": "crates/foveonic/src/nodes/sensor/despeckle_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::fppd::tests::original_camera_diagonal_ties_match_native_wrapper",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FPPD_REAL_SITES",
+      "requirements": "requires a GPU and FPPD_REAL_SITES",
+      "source": "crates/foveonic/src/nodes/sensor/fppd_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::highlight_restoration::tests::channel_recovery_matches_independent_complete_highlight_equations",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: TIGER_HIGHLIGHT_REFERENCE",
+      "requirements": "requires GPU and TIGER_HIGHLIGHT_REFERENCE",
+      "source": "crates/foveonic/src/nodes/sensor/highlight_restoration_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::highlight_restoration::tests::enabled_restoration_matches_independent_equations",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: HIGHLIGHT_REFERENCE",
+      "requirements": "requires GPU and HIGHLIGHT_REFERENCE",
+      "source": "crates/foveonic/src/nodes/sensor/highlight_restoration_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::luma_cluster::tests::bounded_native_clusters_match",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: LUMA_CLUSTER_REFERENCE",
+      "requirements": "requires a GPU and LUMA_CLUSTER_REFERENCE",
+      "source": "crates/foveonic/src/nodes/sensor/luma_cluster_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::ordered_blue_repair::tests::original_record_stages_match_native_boundaries",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: LUMA_NATIVE_BOUNDARIES",
+      "requirements": "requires GPU, QUATTRO_X3F and LUMA_NATIVE_BOUNDARIES",
+      "source": "crates/foveonic/src/nodes/sensor/ordered_blue_repair_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::ordered_blue_repair::tests::record_stages_match_independent_native_fixtures",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: ORDERED_BLUE_REFERENCE",
+      "requirements": "requires a GPU and ORDERED_BLUE_REFERENCE",
+      "source": "crates/foveonic/src/nodes/sensor/ordered_blue_repair_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::phase_extraction::tests::complete_calibrated_original_matches_native_planes",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: PHASE_EXTRACTION_REFERENCE",
+      "requirements": "requires a GPU and PHASE_EXTRACTION_REFERENCE with native RGB/blue planes and receipt.json",
+      "source": "crates/foveonic/src/nodes/sensor/phase_extraction_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::phase_gain::tests::complete_phase_correction_matches_independent_fixtures",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: PHASE_GAIN_REFERENCE",
+      "requirements": "requires a GPU and PHASE_GAIN_REFERENCE containing independent correction fixtures",
+      "source": "crates/foveonic/src/nodes/sensor/phase_gain_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::phase_gain::tests::profile_original_cell_extraction_and_phase_gain",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "requires a GPU, PHASE_EXTRACTION_REFERENCE and PHASE_GAIN_REFERENCE for completed-operation timings",
+      "source": "crates/foveonic/src/nodes/sensor/phase_gain_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::red_detail::tests::complete_reference_red_pass_matches",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: RED_DETAIL_REFERENCE",
+      "requirements": "requires RED_DETAIL_REFERENCE containing input.i16, output.i16, entry.json",
+      "source": "crates/foveonic/src/nodes/sensor/red_detail_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::rgb_despeckle::tests::full_immutable_pass_matches_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: RGB_NATIVE_BOUNDARY",
+      "requirements": "requires GPU and RGB_NATIVE_BOUNDARY",
+      "source": "crates/foveonic/src/nodes/sensor/rgb_despeckle_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::row_guard::tests::row_guard_matches_frozen_native_photo_profiles",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_ROW_GUARD_FIXTURE",
+      "requirements": "requires a GPU and FOVEONIC_ROW_GUARD_FIXTURE native-layer equations",
+      "source": "crates/foveonic/src/nodes/sensor/row_guard_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::sparse_repair::tests::complete_ordinary_hi_wrapper_matches_native_planes_and_defects",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: SPARSE_REPAIR_REFERENCE",
+      "requirements": "requires a GPU and SPARSE_REPAIR_REFERENCE with native wrapper fixtures",
+      "source": "crates/foveonic/src/nodes/sensor/sparse_repair_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::sparse_repair::tests::complete_original_hi_wrapper_matches_native_boundary",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: SPARSE_REPAIR_ORIGINAL_REFERENCE",
+      "requirements": "requires a GPU and SPARSE_REPAIR_ORIGINAL_REFERENCE containing an actual native wrapper boundary",
+      "source": "crates/foveonic/src/nodes/sensor/sparse_repair_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "nodes::sensor::sparse_repair::tests::rgb_only_sparse_repair_matches_reference_workers",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: LOW_REPAIR_REFERENCE",
+      "requirements": "requires GPU and LOW_REPAIR_REFERENCE with bounded reference implementation RGB fixtures",
+      "source": "crates/foveonic/src/nodes/sensor/sparse_repair_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "preview::pixels::tests::profile_preview_reduction_allocations",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "explicit allocation probe, FOVEONIC_PREVIEW_ALLOCATION_PATH=materialized or streamed",
+      "source": "crates/foveonic/src/preview_pixels_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::classic_tests::classic_original_stage2_matches_reference",
+      "reason": "Additional data requirement is not explicitly optional: CLASSIC_REFERENCE_DIR",
+      "requirements": "requires CLASSIC_X3F and CLASSIC_REFERENCE_DIR original-file fixtures",
+      "source": "crates/foveonic/src/render/classic_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::quattro_dng_tests::quattro_dng_exports_native_oriented_review_pairs",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_DNG_DIR, TIFF",
+      "requirements": "requires GPU, QUATTRO_X3F and QUATTRO_DNG_DIR; retains DNG/TIFF pairs for independent SDK validation",
+      "source": "crates/foveonic/src/render/quattro_dng_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::quattro_tests::complete_color_photograph_and_tiff",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_PHOTOGRAPH, TIFF",
+      "requirements": "requires a Quattro original and a new QUATTRO_PHOTOGRAPH TIFF path",
+      "source": "crates/foveonic/src/render/quattro_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::quattro_tests::complete_high_iso_photograph_matches_native_export",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: requires the DP3 ISO800 original and its complete native diagnostic export",
+      "requirements": "requires the DP3 ISO800 original and its complete native diagnostic export",
+      "source": "crates/foveonic/src/render/quattro_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::quattro_tests::complete_photograph_matches_native_export",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: requires an ISO100 Quattro original and its complete native diagnostic export",
+      "requirements": "requires an ISO100 Quattro original and its complete native diagnostic export",
+      "source": "crates/foveonic/src/render/quattro_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::quattro_tests::composed_calibration_matches_stopped_native_boundaries",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_CALIBRATION_BOUNDARY, QUATTRO_RESOURCE_DIRECTORY",
+      "requirements": "requires DP2 QUATTRO_X3F, QUATTRO_RESOURCE_DIRECTORY and QUATTRO_CALIBRATION_BOUNDARY",
+      "source": "crates/foveonic/src/render/quattro_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::quattro_tests::composed_preprocess_and_noise_match_native_active_image",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: PREPROCESS",
+      "requirements": "requires DP2 original, explicit maps and stopped native PREPROCESS/Stage1 captures",
+      "source": "crates/foveonic/src/render/quattro_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::quattro_tests::composed_preprocess_matches_native_camera",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_PREPROCESS_BOUNDARY",
+      "requirements": "requires QUATTRO_X3F and QUATTRO_PREPROCESS_BOUNDARY native full planes",
+      "source": "crates/foveonic/src/render/quattro_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::quattro_tests::original_gain_stage_matches_independent_native_output",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: PHASE_GAIN_REFERENCE",
+      "requirements": "requires DP2 QUATTRO_X3F and PHASE_GAIN_REFERENCE",
+      "source": "crates/foveonic/src/render/quattro_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::classic::prepare::tests::actual_color_rows_match_reference",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_COLOR_REFERENCE",
+      "requirements": "requires CLASSIC_X3F and CLASSIC_COLOR_REFERENCE original-file fixtures",
+      "source": "crates/foveonic/src/render/recipes/classic/prepare_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::classic::prepare::tests::camera_calibration_matches_reference_matrix",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_COLOR_REFERENCE",
+      "requirements": "requires CLASSIC_X3F and CLASSIC_COLOR_REFERENCE original-file fixtures",
+      "source": "crates/foveonic/src/render/recipes/classic/prepare_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::classic::prepare::tests::complete_original_correction_matches_reference",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_CORRECTION_REFERENCE",
+      "requirements": "requires CLASSIC_X3F and CLASSIC_CORRECTION_REFERENCE original-file fixtures",
+      "source": "crates/foveonic/src/render/recipes/classic/prepare_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::classic::prepare::tests::original_decoded_samples_and_presets_match_reference",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_DECODED_REFERENCE",
+      "requirements": "requires CLASSIC_X3F and CLASSIC_DECODED_REFERENCE original-file fixtures",
+      "source": "crates/foveonic/src/render/recipes/classic/prepare_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::classic::range::tests::original_mixed_camera_matrix_matches_reference",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_MATRIX_REFERENCE",
+      "requirements": "requires CLASSIC_X3F and CLASSIC_MATRIX_REFERENCE original-file captures",
+      "source": "crates/foveonic/src/render/recipes/classic/range_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::classic::spatial_gain::original_auto_selects_overcast_grid",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_GRID_SOURCE",
+      "requirements": "requires CLASSIC_GRID_SOURCE original",
+      "source": "crates/foveonic/src/render/recipes/classic/spatial_gain.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::classic::white_balance::original_neutral_matches_reference",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_AWB_SOURCE",
+      "requirements": "requires CLASSIC_AWB_SOURCE original and reference receipt",
+      "source": "crates/foveonic/src/render/recipes/classic/white_balance.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::classic::white_balance::source_free_statistics_survive_engine_eviction_and_reject_changed_descriptors",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_AWB_SOURCE",
+      "requirements": "requires GPU and CLASSIC_AWB_SOURCE",
+      "source": "crates/foveonic/src/render/recipes/classic/white_balance.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::linear_edits::view_tests::original_adaptive_view_attribution",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_FINISH_OUTPUT",
+      "requirements": "requires GPU, FOVEONIC_FINISH_SOURCE, FOVEONIC_FINISH_SETTINGS snapshot and FOVEONIC_FINISH_OUTPUT new directory",
+      "source": "crates/foveonic/src/render/recipes/adaptive_views_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::linear_edits::view_tests::original_dynamic_range_view_attribution",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FOVEONIC_FINISH_OUTPUT",
+      "requirements": "requires GPU, FOVEONIC_FINISH_SOURCE, active Dynamic Range FOVEONIC_FINISH_SETTINGS snapshot and FOVEONIC_FINISH_OUTPUT new directory",
+      "source": "crates/foveonic/src/render/recipes/adaptive_views_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::appearance::tests::adjusted_modes_match_complete_native_tables",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_CONTROL_TONES",
+      "requirements": "requires QUATTRO_CONTROL_TONES with native tone cases and binary tables",
+      "source": "crates/foveonic/src/render/recipes/quattro/appearance.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::appearance::tests::monochrome_edits_match_complete_native_lookup",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_TONE_VARIANTS",
+      "requirements": "requires QUATTRO_MONO_TONE_VARIANTS native exposure and combined tone lookups",
+      "source": "crates/foveonic/src/render/recipes/quattro/appearance.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::appearance::tests::monochrome_lattice_matches_complete_native_lookup",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_TONE",
+      "requirements": "requires QUATTRO_MONO_TONE captured native monochrome lookup",
+      "source": "crates/foveonic/src/render/recipes/quattro/appearance.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::appearance::tests::neutral_standard_matches_complete_native_table",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_STANDARD_TONE",
+      "requirements": "requires QUATTRO_STANDARD_TONE containing an independently captured tone LUT",
+      "source": "crates/foveonic/src/render/recipes/quattro/appearance.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::color_shading::tests::all_recorded_alias_grids_match_native_tables",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: RECORDED_COLOR_SHADING_FIXTURES",
+      "requirements": "requires QUATTRO_X3F and RECORDED_COLOR_SHADING_FIXTURES",
+      "source": "crates/foveonic/src/render/recipes/quattro/color_shading_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::defects::tests::full_chroma_clusters_match_actual_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: RGB_NATIVE_BOUNDARY",
+      "requirements": "requires QUATTRO_X3F, RGB_NATIVE_BOUNDARY and GPU",
+      "source": "crates/foveonic/src/render/recipes/quattro/defects.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::defects::tests::source_controls_and_catalogue_match_actual_native_caller",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CHROMA_NATIVE_BOUNDARY",
+      "requirements": "requires QUATTRO_X3F and CHROMA_NATIVE_BOUNDARY",
+      "source": "crates/foveonic/src/render/recipes/quattro/defects.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::highlights::tests::complete_highlight_boundaries_match_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: HIGHLIGHT_NATIVE_BOUNDARY",
+      "requirements": "requires QUATTRO_X3F,HIGHLIGHT_NATIVE_BOUNDARY and GPU",
+      "source": "crates/foveonic/src/render/recipes/quattro/highlights.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::hlp::tests::complete_original_wrapper_matches_native_boundary",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: HLP_NATIVE_BOUNDARY",
+      "requirements": "requires GPU, HLP_NATIVE_BOUNDARY and QUATTRO_X3F DP2 original",
+      "source": "crates/foveonic/src/render/recipes/quattro/hlp.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::hlp::tests::complete_wrapper_matches_independent_fixtures",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: HLP_REFERENCE",
+      "requirements": "requires GPU, HLP_REFERENCE fixtures and QUATTRO_X3F DP2 original",
+      "source": "crates/foveonic/src/render/recipes/quattro/hlp.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::hlp::tests::low_calibration_matches_reference_rgb_blue_and_scratch",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: LOW_HLP_REFERENCE",
+      "requirements": "requires GPU, QUATTRO_X3F DP2 original and matching LOW_HLP_REFERENCE worker fixtures",
+      "source": "crates/foveonic/src/render/recipes/quattro/hlp.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::hlp::tests::nonunit_lut_and_complete_wrapper_match_native_boundaries",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: NONUNIT_HLP_REFERENCE",
+      "requirements": "requires GPU, QUATTRO_X3F DP3 original and NONUNIT_HLP_REFERENCE native LUT/wrapper fixtures",
+      "source": "crates/foveonic/src/render/recipes/quattro/hlp.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::luma_repair::tests::bounded_catalogue_matches_native_meaningful_prefix",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: LUMA_NATIVE_BOUNDARIES",
+      "requirements": "requires QUATTRO_X3F and LUMA_NATIVE_BOUNDARIES",
+      "source": "crates/foveonic/src/render/recipes/quattro/luma_repair.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::luma_repair::tests::full_luma_clusters_match_actual_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: LUMA_NATIVE_BOUNDARIES",
+      "requirements": "requires QUATTRO_X3F, LUMA_NATIVE_BOUNDARIES and GPU",
+      "source": "crates/foveonic/src/render/recipes/quattro/luma_repair.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::mcc::tests::standard_chroma_sectors_match_native_preparation",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_STAGE2_BOUNDARY",
+      "requirements": "requires QUATTRO_X3F and QUATTRO_STAGE2_BOUNDARY prepared native controls",
+      "source": "crates/foveonic/src/render/recipes/quattro/mcc_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::monochrome::tests::channel_mixed_residuals_match_native_default_controls",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_STAGE2B",
+      "requirements": "requires QUATTRO_MONO_STAGE2B captured native residual controls",
+      "source": "crates/foveonic/src/render/recipes/quattro/monochrome.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::monochrome::tests::channel_mixed_sharpening_matches_native_lookup",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_STAGE3",
+      "requirements": "requires QUATTRO_MONO_STAGE3 captured native adaptive sharpening table",
+      "source": "crates/foveonic/src/render/recipes/quattro/monochrome.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::monochrome::tests::generated_conditioning_matches_native_tables",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_CONTROLS",
+      "requirements": "requires QUATTRO_MONO_CONTROLS captured native lookup tables",
+      "source": "crates/foveonic/src/render/recipes/quattro/monochrome.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::monochrome::tests::neutral_mixing_matches_native_full_stage3_input",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_STAGE3_IMAGES",
+      "requirements": "requires GPU and QUATTRO_MONO_STAGE3_IMAGES actual full channel mixing boundary",
+      "source": "crates/foveonic/src/render/recipes/quattro/monochrome.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::monochrome::tests::neutralized_conversion_matches_native_monochrome_stage2",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_STAGE2",
+      "requirements": "requires GPU, QUATTRO_X3F and QUATTRO_MONO_STAGE2 native full return",
+      "source": "crates/foveonic/src/render/recipes/quattro/monochrome.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::monochrome::tests::original_channel_filter_matches_native_stage1",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_STAGE1",
+      "requirements": "requires a GPU, QUATTRO_X3F and QUATTRO_MONO_STAGE1 owned native boundary",
+      "source": "crates/foveonic/src/render/recipes/quattro/monochrome.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::monochrome::tests::original_decorrelation_and_range_boundaries_match_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_IMAGES",
+      "requirements": "requires a GPU, QUATTRO_X3F and QUATTRO_MONO_IMAGES owned native internal boundaries",
+      "source": "crates/foveonic/src/render/recipes/quattro/monochrome.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::monochrome::tests::reconstruction_matches_native_monochrome_stage2b",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_STAGE2B",
+      "requirements": "requires GPU, QUATTRO_X3F and QUATTRO_MONO_STAGE2B full native inputs",
+      "source": "crates/foveonic/src/render/recipes/quattro/monochrome.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::portability_tests::compare_portable_tiger_methods_on_ordinary_quattro",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "requires GPU, QUATTRO_X3F and QUATTRO_TIGER_EXPERIMENT_DIR; writes optional review TIFFs",
+      "source": "crates/foveonic/src/render/recipes/quattro/portability_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::repair::tests::caller_noise_literals_match_native_control_words",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: SPARSE_NATIVE_BOUNDARY",
+      "requirements": "requires SPARSE_NATIVE_BOUNDARY containing native control metadata",
+      "source": "crates/foveonic/src/render/recipes/quattro/repair.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::resources::tests::supplied_maps_and_blends_match_all_reference_words",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_BDATA_REFERENCE",
+      "requirements": "requires QUATTRO_BDATA_REFERENCE with native blended grids and manifest.json",
+      "source": "crates/foveonic/src/render/recipes/quattro/resources_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::sd::tests::original_camera_gain_tables_match_independent_oracle",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: FPPD_GAIN_FIXTURES",
+      "requirements": "requires QUATTRO_X3F and FPPD_GAIN_FIXTURES",
+      "source": "crates/foveonic/src/render/recipes/quattro/sd.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage1::numerical_tests::complete_native_stage1_return_from_calibrated_input",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_STAGE1_BOUNDARY",
+      "requirements": "requires a GPU, QUATTRO_X3F and QUATTRO_STAGE1_BOUNDARY immutable full-frame native capture",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage1_numerical_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage1::numerical_tests::generated_tables_match_reference_float32_bytes",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: TWO_SCALE_NOISE_REFERENCE",
+      "requirements": "requires TWO_SCALE_NOISE_REFERENCE native conditioning table fixtures",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage1_numerical_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage1::tests::original_tiger_stage1_preparation_and_two_pass_boundary_match",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: TIGER_STAGE1_REFERENCE",
+      "requirements": "requires GPU, TIGER_X3F and TIGER_STAGE1_REFERENCE",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage1_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage1::tests::prepares_original_dp2_controls_without_captured_request_fields",
+      "reason": "Asserts capture-specific exact white balance and ISO; public DP2 original identity was not established to be that capture.",
+      "requirements": "requires QUATTRO_X3F pointing to a DP2 Quattro original",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage1_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2::tests::complete_native_outer_stage2_from_stage1_return",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_STAGE2_BOUNDARY",
+      "requirements": "requires GPU, QUATTRO_X3F and QUATTRO_STAGE2_BOUNDARY successful full native Stage2 return",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2::tests::generated_raw_color_tables_match_reference_bytes",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: RAW_COLOR_BLEND_REFERENCE",
+      "requirements": "requires RAW_COLOR_BLEND_REFERENCE native table fixtures and QUATTRO_X3F metadata",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2::tests::interchangeable_lens_brightness_fit_matches_native_table",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_BRIGHTNESS_TABLE",
+      "requirements": "requires QUATTRO_BRIGHTNESS_TABLE containing native sd brightness entries",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2::tests::original_dp_metadata_prepares_all_shared_color_stages",
+      "reason": "May assume the original camera-specific captured values; inspect before selecting a particular DP2.",
+      "requirements": "requires QUATTRO_X3F pointing to an ordinary DP Quattro original",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2::tests::retained_calibration_history_matches_stage2b_entry",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_STAGE1_BOUNDARY, STAGE2B_NATIVE_BOUNDARY",
+      "requirements": "requires GPU, QUATTRO_X3F, QUATTRO_STAGE1_BOUNDARY and STAGE2B_NATIVE_BOUNDARY immutable histories",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2::tests::tiger_metadata_preparation_matches_original_native_helper",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: RAW_COLOR_BLEND_REFERENCE",
+      "requirements": "requires TIGER_X3F and RAW_COLOR_BLEND_REFERENCE original Tiger helper fixture",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2b::tests::color_mode_controls_match_native_setters_and_tables",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MODE_PARAMETERS",
+      "requirements": "requires QUATTRO_MODE_PARAMETERS with native color-mode preparation tables",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2b.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2b::tests::ordinary_defaults_match_native_controls",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: STAGE2B_NATIVE_BOUNDARY",
+      "requirements": "requires QUATTRO_X3F and STAGE2B_NATIVE_BOUNDARY with apply inputs",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2b.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2b::tests::original_high_iso_detail_controls_match_native_request",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_STAGE2B_CONTROLS",
+      "requirements": "requires QUATTRO_X3F ISO800 original and QUATTRO_STAGE2B_CONTROLS native metadata capture",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2b.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage2b::tests::selected_luminance_and_detail_match_native_controls",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_DETAIL, QUATTRO_LUMA, QUATTRO_STAGE2B_CONTROLS",
+      "requirements": "requires QUATTRO_X3F, QUATTRO_STAGE2B_CONTROLS and optional QUATTRO_LUMA/QUATTRO_DETAIL",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage2b.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage3::tests::color_mode_sharpening_tables_match_native",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MODE_PARAMETERS",
+      "requirements": "requires QUATTRO_MODE_PARAMETERS with native sharpening tables",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage3.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage3::tests::complete_original_local_contrast_boundary",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: STAGE3_NATIVE",
+      "requirements": "requires QUATTRO_X3F,STAGE3_NATIVE and GPU",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage3.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage3::tests::monochrome_spatial_controls_match_native_full_stage3",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_MONO_STAGE3_COMPLETE",
+      "requirements": "requires GPU, QUATTRO_X3F and QUATTRO_MONO_STAGE3_COMPLETE owned native physical boundary",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage3.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::stage3::tests::source_sharpen_table_matches_actual_caller",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: STAGE3_NATIVE",
+      "requirements": "requires STAGE3_NATIVE",
+      "source": "crates/foveonic/src/render/recipes/quattro/stage3.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "render::recipes::quattro::tiger::tests::original_phase_detection_tables_match_independent_camera_equations",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: TIGER_FPPD_REFERENCE",
+      "requirements": "requires TIGER_X3F and TIGER_FPPD_REFERENCE",
+      "source": "crates/foveonic/src/render/recipes/quattro/tiger.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "source::tests::original_merrill_resolutions_render_color_and_monochrome",
+      "reason": "Requires missing SD1 Merrill HI and LOW originals with model-specific expected geometry.",
+      "requirements": "requires GPU and FOVEONIC_MERRILL_FIXTURE_DIR with HI, MED and LOW originals",
+      "source": "crates/foveonic/src/source_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "x3f::camf::legacy_metadata_matches_reference_bytes",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: CLASSIC_CAMF_REFERENCE, CLASSIC_CAMF_X3F",
+      "requirements": "requires CLASSIC_CAMF_X3F and CLASSIC_CAMF_REFERENCE",
+      "source": "crates/foveonic/src/x3f/camf.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "x3f::format31::tests::packed_sensor_matches_every_reference_word",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: QUATTRO_NATIVE_SENSOR",
+      "requirements": "requires QUATTRO_X3F and QUATTRO_NATIVE_SENSOR",
+      "source": "crates/foveonic/src/x3f/format31_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "x3f::format6::parallel_tests::profile_bounded_classic_rows",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "requires DECODER_RESEARCH_FILES, optional DECODER_RESEARCH_REPEATS, serial test execution",
+      "source": "crates/foveonic/src/x3f/format6_parallel_test.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "x3f::format6::tests::original_samples_match_reference_capture",
+      "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: requires an original X3F and independently captured signed sensor words",
+      "requirements": "requires an original X3F and independently captured signed sensor words",
+      "source": "crates/foveonic/src/x3f/format6.rs"
+    },
+    {
+      "suite": "foveonic",
+      "test": "x3f::huffman::lookup_tests::profile_fused_original_loading",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "requires DECODER_RESEARCH_FILES, optional DECODER_RESEARCH_REPEATS, serial test execution",
+      "source": "crates/foveonic/src/x3f/huffman_lookup_test.rs"
+    },
+    {
+      "suite": "foveonic-gui",
+      "test": "batch::tests::batch_progress_profile",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "explicit batch progress CPU profiling",
+      "source": "crates/foveonic-gui/src/batch_test.rs"
+    },
+    {
+      "suite": "foveonic-gui",
+      "test": "browser::interaction_tests::browser_cpu_profile",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "explicit headless browser CPU profiling",
+      "source": "crates/foveonic-gui/src/browser/interaction_test.rs"
+    },
+    {
+      "suite": "foveonic-gui",
+      "test": "browser::interaction_tests::browser_discovery_profile",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "explicit local folder discovery profiling",
+      "source": "crates/foveonic-gui/src/browser/interaction_test.rs"
+    },
+    {
+      "suite": "foveonic-gui",
+      "test": "browser::interaction_tests::browser_snapshot_profile",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "explicit folder snapshot installation profiling",
+      "source": "crates/foveonic-gui/src/browser/interaction_test.rs"
+    },
+    {
+      "suite": "foveonic-gui",
+      "test": "browser::interaction_tests::organizer_view_cpu_timing",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "explicit CPU timing for organizer frames",
+      "source": "crates/foveonic-gui/src/browser/interaction_test.rs"
+    },
+    {
+      "suite": "foveonic-gui",
+      "test": "navigator::draw_tests::ordinary_navigator_drawing_cost",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "requires a GPU; reports completed old/new navigator drawing without profiling synchronization",
+      "source": "crates/foveonic-gui/src/navigator_draw_test.rs"
+    },
+    {
+      "suite": "foveonic-gui",
+      "test": "rendering::worker::tests::profile_cached_import_selection_and_warm_edits",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "requires GPU and CACHED_SELECTION_FILES with existing local decoded entries",
+      "source": "crates/foveonic-gui/src/rendering/worker/mod.rs"
+    },
+    {
+      "suite": "foveonic-gui",
+      "test": "rendering::worker::tests::slider_feedback_benchmark",
+      "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
+      "requirements": "requires a GPU and FOVEONIC_FIXTURE_DIR; prints completed slider feedback timings",
+      "source": "crates/foveonic-gui/src/rendering/worker/mod.rs"
+    }
+  ]
+}

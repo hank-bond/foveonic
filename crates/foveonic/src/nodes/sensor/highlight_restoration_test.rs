@@ -8,7 +8,7 @@ fn singular_source_inverse_is_rejected() {
 #[test]
 #[ignore = "requires GPU"]
 fn full_quattro_extreme_evidence_keeps_original_peaks_and_halo() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [2944, 1836];
     let source: Vec<f32> = (0..extent[1])
         .flat_map(|y| {
@@ -64,7 +64,7 @@ fn full_quattro_extreme_evidence_keeps_original_peaks_and_halo() {
 #[ignore = "requires GPU"]
 fn large_evidence_cells_match_ordered_single_pass_with_partial_edges() {
     use crate::nodes::sensor::pool::{Prepared as Grid, Signal};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [517_u32, 519_u32];
     let mut source = [1000_f32, 2000., 3000.].repeat((extent[0] * extent[1]) as usize);
     for [x, y] in [[200, 200], [516, 518]] {
@@ -144,7 +144,7 @@ fn large_evidence_cells_match_ordered_single_pass_with_partial_edges() {
 #[test]
 #[ignore = "requires GPU"]
 fn repaired_speckles_do_not_regain_original_highlight_damage() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let grid = crate::render::WorkingGrid::new([64, 64], crate::render::Scale::new(4).unwrap(), 8)
         .unwrap()
         .with_halo(4)
@@ -201,7 +201,7 @@ fn repaired_speckles_do_not_regain_original_highlight_damage() {
 #[test]
 #[ignore = "requires GPU"]
 fn pooled_detector_coverage_matches_native_classification() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [33, 25];
     let cells = extent[0] * extent[1];
     let values: Vec<f32> = (0..cells * 3)
@@ -330,7 +330,7 @@ fn evidence_rejects_grid_origins_outside_output() {
 #[test]
 #[ignore = "requires GPU"]
 fn pooled_evidence_preserves_partial_cell_peaks_and_native_control_coverage() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [17, 13];
     let mut pixels = [1000_f32, 2000., 3000.].repeat((extent[0] * extent[1]) as usize);
     pixels[..3].fill(14100.);
@@ -493,7 +493,7 @@ fn reduced_recovery_uses_original_clipping_below_the_averaged_threshold() {
 #[test]
 #[ignore = "requires GPU"]
 fn partial_color_cells_keep_edge_recovery_and_original_samples() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for [width, height] in [[35, 33], [50, 35]] {
         let mut source = [1000_f32, 2000., 3000.].repeat(width * height);
         for y in 0..height {

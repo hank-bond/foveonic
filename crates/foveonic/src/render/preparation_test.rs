@@ -385,7 +385,7 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let first = Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
     let second = Arc::new(Source::open(root.join("merrill-hazy-coast.x3f")).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(first.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.working_scale = Scale::new(8).unwrap();

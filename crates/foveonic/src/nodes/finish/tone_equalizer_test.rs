@@ -45,7 +45,7 @@ fn pivot_follows_the_camera_curve_and_exposure() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [40, 2];
     let levels = [-6_f32, -3., 0., 1., 2.];
     let data: Vec<f32> = (0..2)
@@ -185,7 +185,7 @@ fn gpu_tonal_ranges_match_native_response_and_preserve_signed_samples() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_hdr_preserves_native_control_coupling_and_detail_direction() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [24, 2];
     let levels = [-5.5_f32, -1., 0.5];
     let data: Vec<f32> = (0..2)
@@ -260,7 +260,7 @@ fn gpu_hdr_preserves_native_control_coupling_and_detail_direction() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_spatial_mask_smooths_texture_and_keeps_strong_edges() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [256, 128];
     let data: Vec<f32> = (0..extent[1])
         .flat_map(|y| {
@@ -297,7 +297,7 @@ fn gpu_spatial_mask_smooths_texture_and_keeps_strong_edges() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_regional_mask_matches_full_with_aligned_support() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [257, 193];
     let data: Vec<f32> = (0..extent[1])
         .flat_map(|y| {
@@ -340,7 +340,7 @@ fn gpu_regional_mask_matches_full_with_aligned_support() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_hdr_matches_across_declared_linear_code_units() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [40, 2];
     let normalized: Vec<f32> = (0..80).flat_map(|i| [0.01 + 0.02 * i as f32; 3]).collect();
     let a = gpu
@@ -417,7 +417,7 @@ fn gpu_hdr_matches_across_declared_linear_code_units() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_compact_guide_expands_exactly_over_odd_edges() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for extent in [[24, 2], [257, 193], [25, 3], [1, 1]] {
         let [width, height] = extent;
         let data: Vec<f32> = (0..width * height)
@@ -448,7 +448,7 @@ fn gpu_compact_guide_expands_exactly_over_odd_edges() {
 #[ignore = "requires a GPU"]
 fn gpu_mapped_hdr_guide_preserves_identity_and_overlapping_sections() {
     use crate::nodes::finish::image_region;
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [80, 64];
     let data: Vec<f32> = (0..extent[0] * extent[1])
         .flat_map(|p| {
@@ -534,7 +534,7 @@ fn gpu_mapped_hdr_guide_preserves_identity_and_overlapping_sections() {
 #[ignore = "requires a GPU"]
 fn gpu_scaled_hdr_guide_clamps_padding_and_keeps_fractional_phase() {
     use crate::nodes::finish::image_region;
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [24, 20];
     let input: Vec<f32> = (0..extent[0] * extent[1])
         .flat_map(|p| [20. + (p * 37 % 4095) as f32; 3])
@@ -679,7 +679,7 @@ fn half_grid_guide_preserves_radii_odd_edges_and_crop_lattice() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_half_grid_guide_matches_direct_two_dimensional_moments() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [7, 5];
     let ev: Vec<f64> = (0..35)
         .map(|i| -6. + f64::from((i * 17) % 23) / 8.)
@@ -757,7 +757,7 @@ fn gpu_half_grid_guide_matches_direct_two_dimensional_moments() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_half_grid_gain_interpolates_anchors_and_clamps_odd_edges() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [9, 3];
     let levels = [-6_f32, -3., 0., 1., 2.];
     let input: Vec<f32> = (0..3)
@@ -814,7 +814,7 @@ fn gpu_half_grid_gain_interpolates_anchors_and_clamps_odd_edges() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_half_grid_mapped_guide_matches_pixel_center_affines_and_ignores_padding() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [9, 7];
     let input: Vec<f32> = (0..63)
         .flat_map(|p| [30. + (p * 37 % 4095) as f32; 3])
@@ -904,7 +904,7 @@ fn gpu_half_grid_mapped_guide_matches_pixel_center_affines_and_ignores_padding()
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_half_grid_cascade_matches_whole_with_an_aligned_crop_origin() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [513_u32, 481];
     let bounds = [16_u32, 24, 504, 472];
     let values: Vec<f32> = (0..extent[1])

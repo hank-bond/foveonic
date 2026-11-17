@@ -28,6 +28,8 @@ implementation: incomplete
 
 ## Release scope
 
+Builds and validation may run concurrently against one frozen candidate source identity. Each platform's verified package may be exposed as an Actions artifact before its job finishes so local package checks can start early. Artifact availability does not establish validation success. Draft release uploads must retain their existing check gates. Before publication, reconcile all required job results and the exact tested package hashes. Performance requires an exclusive test host, while independent work on another host may continue. Report total wall time from dependencies and overlapping host lanes rather than summing every task duration.
+
 Release assets include Apple Silicon ZIP archives targeting macOS 15 Sequoia or later and unsigned Windows x64 ZIP archives. Building uses Xcode 26 or later, independently of the application's deployment target. The owner approved including Sequoia-targeted builds in 0.3.0 for a user trial. Interactive GUI, Metal rendering and icon checks on macOS 15 remain outstanding and must not be described as completed by the CI process-startup check. Intel builds and installers are outside the current scope. Creating or pushing a tag and publishing its release remain separate owner-approved actions. Previously published releases remain unchanged.
 
 ## Validation

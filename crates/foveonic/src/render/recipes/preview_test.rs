@@ -20,7 +20,7 @@ fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
     settings.reconstruction = Some(crate::noise::Controls::default());
     settings.rendering = Rendering::Color;
     let mut session = RenderSession::new(source);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let output = std::env::var_os("SMALL_PREVIEW_OUT").map(std::path::PathBuf::from);
     if let Some(path) = &output {
         std::fs::create_dir(path).unwrap();
@@ -85,7 +85,7 @@ fn working_scale_survives_output_views_monochrome_and_inspection() {
         cap.default_color_mode(&source.metadata).unwrap(),
     );
     let mut session = RenderSession::new(source);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for case in 0..4 {
         let mut settings = base.clone();
         settings.working_scale = Scale::new(4).unwrap();
@@ -131,7 +131,7 @@ fn scaled_color_guides_match_fresh_edits_and_native_inspection_remains_explicit(
     use std::{path::PathBuf, sync::Arc};
 
     let directory = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let verifier = engine.executor();
     for (name, family) in [
         ("blue-parking-sign.x3f", ProcessingFamily::Merrill),

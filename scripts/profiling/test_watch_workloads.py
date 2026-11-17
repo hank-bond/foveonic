@@ -25,6 +25,11 @@ class WorkloadTests(unittest.TestCase):
         self.assertFalse(is_workload('python3 scripts/profiling/watch_workloads.py output.jsonl'))
         self.assertFalse(is_workload('cargo --version'))
 
+    def test_compiler_reported_build_directory_tests_are_workloads(self):
+        self.assertTrue(is_workload('/tmp/target/release/build/foveonic/hash/out/foveonic-ef1b7166103d7e92 --ignored'))
+        self.assertTrue(is_workload('/tmp/tests/foveonic_gui-1234567890abcdef'))
+        self.assertFalse(is_workload('/tmp/foveonic-report-1234567890abcdef'))
+
     def test_preflight_uses_executables_and_preserves_paths_with_spaces(self):
         rows = '10 /tmp/another tree/Foveonic.app/Contents/MacOS/foveonic-gui\n11 /toolchain/rustc\n12 /bin/zsh\n'
         with patch('watch_workloads.subprocess.check_output', return_value=rows):

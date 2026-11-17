@@ -15,7 +15,7 @@ fn cell_extents_preserve_odd_sizes_and_reject_overflow() {
 #[test]
 #[ignore = "requires a GPU"]
 fn triplets_preserve_signed_rgb_and_blue_without_phase_averaging_or_clipping() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let samples = [-4., 12., 17001., 41., 36., -9., 1024., 2048., 3072.];
     let input = gpu.upload("RGB extraction fixture", &samples).unwrap();
     for calibrated in [false, true] {
@@ -153,7 +153,7 @@ fn complete_calibrated_original_matches_native_planes() {
 #[test]
 #[ignore = "requires a GPU"]
 fn calibrated_signed_values_and_mono_cap_match_scalar_equations() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let samples = [
         0., 65535., -100., 1000., 14300., 40000., 1024., 2048., 20000., 20000., 20000., 20000.,
     ];
@@ -203,7 +203,7 @@ fn channel_gains_require_finite_positive_values() {
 #[test]
 #[ignore = "requires a GPU"]
 fn channel_calibration_preserves_native_rounding_gain_caps_and_source_samples() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for [width, height] in [[3, 5], [18, 9]] {
         let values = (0..width * height * 6)
             .map(|i| (((i * 71 + i * i * 3) % 12007) as f32) * 19.25 - 1000.)
@@ -266,7 +266,7 @@ fn channel_calibration_preserves_native_rounding_gain_caps_and_source_samples() 
 #[test]
 #[ignore = "requires a GPU"]
 fn channel_calibration_rounds_scaled_values_before_split_gain() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let values = [
         -1000., 424.5, 1964.5, 3620., 5391., 7277.5, 9279.5, 11397., 13630., 15978.5, 18442.5,
         21022.,

@@ -1,6 +1,7 @@
-"""Run selected acceptance evidence and report the maintained user-path inventory."""
+"""Run or merge selected acceptance evidence and report maintained user-path coverage."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,90 @@ from process_memory import wait_guarded
 
 HERE = Path(__file__).resolve().parent
 CATALOG = HERE / 'acceptance_cases.json'
+
+
+def contract_identity():
+    """Pin the maintained top-level drivers and declarations, excluding tests/baselines."""
+    files = sorted(p for p in HERE.iterdir() if p.is_file()
+                   and (p.suffix == '.json' or p.suffix == '.py' and not p.name.startswith('test_')))
+    contract = hashlib.sha256()
+    for path in files:
+        contract.update(path.name.encode() + b'\0' + digest(path).encode() + b'\n')
+    return {'catalog_sha256':digest(CATALOG), 'runner_sha256':digest(__file__),
+            'test_inputs_sha256':digest(HERE/'test_inputs.json'),
+            'external_inputs_sha256':digest(HERE/'external_raw_samples.json'),
+            'profiling_contract_sha256':contract.hexdigest()}
+
+
+def execution_identity(args):
+    return {**contract_identity(), 'platform':sys.platform,
+            'binary_sha256':digest(args.binary) if args.binary else None,
+            'renderer_sha256':digest(args.renderer) if args.renderer else None}
+
+
+def _sha(value):
+    return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+
+def merge_reports(reports, catalog, jobs, paths):
+    """Combine complete disjoint job selections without reopening remote artifacts."""
+    known = {job['id']:job for job in catalog['jobs']}
+    expected = [job['id'] for job in jobs]
+    contract = contract_identity()
+    identity, combined, origins = None, {}, []
+    for path in reports:
+        raw = Path(path).read_bytes()
+        report = json.loads(raw)
+        if not isinstance(report, dict) or report.get('schema_version') != 1:
+            raise ValueError('merge requires an acceptance report')
+        current = report.get('execution_identity')
+        if (not isinstance(current, dict)
+                or set(current) != set(contract) | {'platform', 'binary_sha256', 'renderer_sha256'}
+                or not isinstance(current.get('platform'), str) or not current['platform']
+                or not _sha(current.get('binary_sha256'))
+                or current.get('renderer_sha256') is not None and not _sha(current['renderer_sha256'])
+                or any(current.get(key) != value for key, value in contract.items())):
+            raise ValueError('merge requires complete identities from the current frozen contract')
+        if identity is not None and current != identity:
+            raise ValueError('merge execution identities differ')
+        identity = current
+        selected, results = report.get('selected_job_ids'), report.get('jobs')
+        if (report.get('jobs_passed') is not True or not isinstance(selected, list) or not selected
+                or any(not isinstance(item, str) or item not in known for item in selected)
+                or len(set(selected)) != len(selected) or not isinstance(results, list)
+                or len(results) != len(selected)):
+            raise ValueError('merge requires nonempty complete successful selections')
+        seen = set()
+        for result in results:
+            if not isinstance(result, dict):
+                raise ValueError('malformed merged job')
+            job_id = result.get('id')
+            if not isinstance(job_id, str) or job_id not in selected or job_id in seen:
+                raise ValueError('merged jobs differ from their declared selection')
+            if job_id not in expected or job_id in combined:
+                raise ValueError('merge has an unknown, unselected or duplicate job: ' + job_id)
+            if (result.get('outcome') not in ('passed', 'observed')
+                    or result['outcome'] == 'observed' and result.get('driver') != 'latency'
+                    or type(result.get('returncode')) is not int or result['returncode'] != 0
+                    or result.get('driver') != known[job_id]['driver']
+                    or not isinstance(result.get('command'), list) or not result['command']
+                    or not all(isinstance(arg, str) for arg in result['command'])
+                    or not isinstance(result.get('evidence'), str) or not result['evidence']
+                    or not isinstance(result.get('log'), str) or not result['log']
+                    or not _sha(result.get('completion_sha256'))):
+                raise ValueError('merged job lacks successful completion provenance: ' + job_id)
+            seen.add(job_id)
+            combined[job_id] = result
+        if seen != set(selected):
+            raise ValueError('merge selection is incomplete')
+        origins.append({'path':str(Path(path).resolve()), 'sha256':hashlib.sha256(raw).hexdigest(),
+                        'selected_job_ids':selected})
+    if not origins or set(combined) != set(expected):
+        raise ValueError('merge does not cover the exact selected jobs')
+    report = build_report(paths, [combined[job_id] for job_id in expected], len(expected))
+    report.update(execution_identity=identity, selected_job_ids=expected, merged_from=origins)
+    report['limits'].append('Merged completion hashes retain remote evidence identities; raw host artifacts were not reopened.')
+    return report
 
 
 def select(catalog, domains, jobs, full):
@@ -104,6 +189,9 @@ def command(job, args, out):
         if job['scenario'] in ('selection-journey', 'selection-pressure', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'background-edit', 'choice-journey'):
             require('renderer')
             cmd += ['--compare-images', str(args.renderer.resolve())]
+        if (getattr(args, 'batch_image_verification', False)
+                and job.get('mode', 'off') == 'off' and '--compare-images' in cmd):
+            cmd.append('--batch-image-verification')
         if not args.foreground:
             cmd.append('--background')
         if job['scenario'] == 'transition-journey':
@@ -134,14 +222,26 @@ def command(job, args, out):
                '--disk-cache-bytes', str(job.get('disk_cache_bytes', 0))]
         if args.foreground:
             cmd.append('--foreground')
+        if getattr(args, 'prune_verified_images', False):
+            cmd.append('--prune-verified-images')
+        if getattr(args, 'batch_image_verification', False):
+            cmd.append('--batch-image-verification')
         if getattr(args, 'reuse_slider_sessions', False):
             cmd.append('--reuse-session')
+        if getattr(args, 'slider_workers', 1) != 1:
+            cmd += ['--workers', str(args.slider_workers)]
+        if getattr(args, 'slider_memory_budget_mb', None) is not None:
+            cmd += ['--memory-budget-mb', str(args.slider_memory_budget_mb)]
         return cmd, None, out / 'behavioral-report.json'
     if driver == 'matrix':
         require('renderer', 'render_cases', 'baseline')
-        return [sys.executable, str(HERE / 'render_matrix.py'), '--binary', str(Path(args.renderer).resolve()),
+        cmd = [sys.executable, str(HERE / 'render_matrix.py'), '--binary', str(Path(args.renderer).resolve()),
                 '--cases', str(Path(args.render_cases).resolve()), '--baseline', str(Path(args.baseline).resolve()),
-                '--directory', str(out)], None, out / 'manifest.json'
+                '--directory', str(out)]
+        if getattr(args, 'sample_comparator', None):
+            require('sample_comparator')
+            cmd += ['--sample-comparator', str(args.sample_comparator.resolve())]
+        return cmd, None, out / 'manifest.json'
     raise ValueError('unknown driver: ' + driver)
 
 
@@ -188,7 +288,9 @@ def execute(job, args, root):
             result.update(outcome='failed', reason='expected completion evidence is missing')
         elif required.suffix == '.json' and not json.loads(required.read_text()).get('passed', False):
             result.update(outcome='failed', reason='completion report did not pass')
-        elif job['driver'] == 'latency':
+        else:
+            result['completion_sha256'] = digest(required)
+        if code == 0 and 'completion_sha256' in result and job['driver'] == 'latency':
             if json.loads(required.read_text()).get('timing_valid') is not True:
                 result.update(outcome='unverified', reason='latency observations are incomplete or contaminated')
                 return result
@@ -214,7 +316,7 @@ def execute(job, args, root):
                     result.update(outcome='failed', reason='latency budget was not met or verified')
                 else:
                     result['outcome'] = 'passed' if decision is True else 'observed'
-        else:
+        elif 'completion_sha256' in result:
             result['outcome'] = 'passed'
         if job['driver'] in ('behavioral', 'matrix') and required.is_file():
             coverage = json.loads(required.read_text()).get('coverage', {})
@@ -256,6 +358,7 @@ def main():
     p.add_argument('--job', action='append', default=[])
     p.add_argument('--full', action='store_true')
     p.add_argument('--list', action='store_true')
+    p.add_argument('--merge', type=Path, action='append', default=[], help='merge complete disjoint acceptance reports from the same frozen execution contract')
     p.add_argument('--directory', type=Path)
     p.add_argument('--binary', type=Path)
     p.add_argument('--source', type=Path, action='append', default=[])
@@ -272,7 +375,12 @@ def main():
     p.add_argument('--seed', type=int, default=1)
     p.add_argument('--action-count', type=int, default=12)
     p.add_argument('--foreground', action='store_true')
+    p.add_argument('--sample-comparator',type=Path,help='current renderer for bounded numerical statistics when the matrix renderer is older')
+    p.add_argument('--prune-verified-images',action='store_true',help='prune independently verified successful slider raw samples while retaining JSON proofs')
+    p.add_argument('--batch-image-verification',action='store_true',help='verify each checked case in a finite independent fresh-graph batch')
     p.add_argument('--reuse-slider-sessions', action='store_true', help='opt-in session reuse for the slider correctness matrix; other jobs keep their process boundaries')
+    p.add_argument('--slider-workers', type=int, default=1, help='maximum concurrent isolated slider correctness groups')
+    p.add_argument('--slider-memory-budget-mb', type=int, help='guarded-child admission budget for concurrent slider groups')
     p.add_argument('--timeout', type=int, default=600)
     p.add_argument('--max-memory-mb', type=int, help='guard each owned app or renderer physical footprint on macOS')
     args = p.parse_args()
@@ -283,11 +391,28 @@ def main():
             raise ValueError('choose latency baseline recording or comparison')
         catalog = json.loads(CATALOG.read_text())
         jobs, paths = select(catalog, args.domain, args.job, args.full)
+        if args.merge and args.list:
+            raise ValueError('--merge cannot be combined with --list')
+        if args.slider_workers < 1:
+            raise ValueError('slider workers must be positive')
+        if args.slider_workers > 1 or args.slider_memory_budget_mb is not None:
+            if (args.slider_workers <= 1 or not args.reuse_slider_sessions or args.foreground
+                    or args.slider_memory_budget_mb is None or args.slider_memory_budget_mb <= 0
+                    or not any(job['driver'] == 'behavioral' for job in jobs)):
+                raise ValueError('concurrent sliders require a slider job, background reused sessions and a positive memory budget')
         if args.list:
             print(json.dumps({'jobs':jobs, 'paths':paths}, indent=2))
             return
         if args.directory is None or args.timeout < 1 or args.latency_trials < 3 or args.action_count < 1:
             raise ValueError('a run needs a new --directory and a positive timeout')
+        if args.merge:
+            report = merge_reports(args.merge, catalog, jobs, paths)
+            root = args.directory.resolve()
+            root.mkdir(parents=True, exist_ok=False)
+            (root/'acceptance.json').write_text(json.dumps(report, indent=2) + '\n')
+            return
+        identity = execution_identity(args)
+        selected_ids = [job['id'] for job in jobs]
         root = args.directory.resolve()
         root.mkdir(parents=True, exist_ok=False)
         results = []
@@ -295,9 +420,11 @@ def main():
             for job in jobs:
                 results.append(execute(job, args, root))
                 report = build_report(paths, results, len(jobs))
+                report.update(execution_identity=identity, selected_job_ids=selected_ids)
                 (root / 'acceptance.json').write_text(json.dumps(report, indent=2) + '\n')
         finally:
             report = build_report(paths, results, len(jobs))
+            report.update(execution_identity=identity, selected_job_ids=selected_ids)
             (root / 'acceptance.json').write_text(json.dumps(report, indent=2) + '\n')
         if not report['jobs_passed']:
             raise SystemExit(1)

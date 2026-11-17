@@ -5,7 +5,7 @@ use wgpu::util::DeviceExt;
 #[test]
 #[ignore = "requires a GPU, run serialized"]
 fn completed_submission_preserves_copy_results_and_allows_later_work() {
-    let gpu = crate::gpu::Gpu::new().unwrap();
+    let gpu = crate::gpu::Gpu::test_executor();
     let values = [17_u32, 42, 65535, 1];
     let expected: &[u8] = bytemuck::cast_slice(&values);
     let source = gpu

@@ -1325,7 +1325,7 @@ mod tests {
     #[test]
     #[ignore = "requires a working GPU adapter"]
     fn exact_output_probe_preserves_planning_and_rejects_missing_or_changed_ancestry() {
-        let gpu = crate::gpu::Gpu::new().unwrap();
+        let gpu = crate::gpu::Gpu::test_executor();
         let (graph, root) = graph_for_detail(1.);
         let mut cache = Cache::default();
         cache.bind_source(&crate::source::SourceOrigin::default());
@@ -1646,7 +1646,7 @@ mod tests {
     #[test]
     #[ignore = "requires a GPU"]
     fn active_pressure_keeps_restart_inputs_and_the_complete_graph_identity() {
-        let gpu = crate::gpu::Gpu::new().unwrap();
+        let gpu = crate::gpu::Gpu::test_executor();
         let (mut graph, root) = graph_for_detail(1.);
         let original = graph.nodes[0].outputs[0];
         graph.retain_for_session(original);
@@ -1995,7 +1995,7 @@ mod tests {
     #[test]
     #[ignore = "requires a GPU"]
     fn cached_aliases_count_one_allocation() {
-        let gpu = crate::gpu::Gpu::new().unwrap();
+        let gpu = crate::gpu::Gpu::test_executor();
         let buffer = gpu.upload("cache alias", &[0_f32; 16]).unwrap();
         let value = Value {
             view_baked: false,
@@ -2032,7 +2032,7 @@ mod tests {
         use crate::{
             color_space::ColorSpace, graph::Operation, nodes::finish::photographic::Params,
         };
-        let gpu = crate::gpu::Gpu::new().unwrap();
+        let gpu = crate::gpu::Gpu::test_executor();
         let recipe = |amount| {
             let mut graph = Graph::default();
             let input = graph

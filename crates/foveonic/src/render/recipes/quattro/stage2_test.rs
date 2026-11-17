@@ -301,7 +301,7 @@ fn identity_shading_keeps_rgb_history_and_blue_samples_exact() {
         gpu::Gpu,
         nodes::color::{cell_gain, spatial_color_gain},
     };
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let grid = || spatial_color_gain::Grid {
         extent: [3, 3],
         values: vec![1.; 9],

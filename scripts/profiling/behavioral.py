@@ -9,8 +9,8 @@ import subprocess
 import sys
 
 from file_hash import digest
+from worker_resources import FAMILIES, validate_case_memory
 
-FAMILIES = ('classic', 'merrill', 'quattro', 'tiger')
 SECTIONS = ('WhiteBalance', 'Mix', 'Tone', 'Saturation', 'ColorEditor', 'Noise', 'Detail', 'Sharpening', 'Corrections')
 
 
@@ -70,6 +70,7 @@ def validate(fixtures, cases):
     names.clear()
     for case in cases:
         name = case['name']
+        validate_case_memory(case)
         if re.fullmatch(r'[A-Za-z0-9_-]+', name) is None or name in names:
             raise ValueError('case names must be unique simple filenames')
         if not case['pointer'].startswith('/') or case.get('initial_values', 'mixed') not in ('mixed', 'equal'):
@@ -148,7 +149,8 @@ def run_scenario(command, log):
         raise
 
 
-def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, disk_cache_bytes=0, background=True, selection=None, provenance=None, compare_images=None, max_memory_mb=None, reuse_session=False):
+def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, disk_cache_bytes=0, background=True, selection=None, provenance=None, compare_images=None, max_memory_mb=None, reuse_session=False,
+        *, workers=1, memory_budget_mb=None, cohort=None, batch_image_verification=False, prune_verified_images=False):
     binary = binary.resolve(strict=True)
     validate(fixtures, cases)
     if not fixtures or not cases:
@@ -161,13 +163,35 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
         raise ValueError('physical-footprint limit must be positive')
     if compare_images is not None:
         compare_images = compare_images.resolve(strict=True)
+    if batch_image_verification and (mode != 'off' or compare_images is None):
+        raise ValueError('batch image verification requires Off correctness mode and a fresh renderer')
+    if prune_verified_images and (mode != 'off' or compare_images is None):
+        raise ValueError('verified-image pruning requires Off mode and independent image verification')
     if reuse_session and (mode != 'off' or compare_images is None):
         raise ValueError('session reuse requires Off correctness mode and a fresh image renderer')
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError('workers must be a positive integer')
+    groups, guards = None, None
+    if workers > 1:
+        if cohort is not None:
+            raise ValueError('nested correctness worker pools are not supported')
+        from slider_sessions import group_jobs
+        from correctness_workers import validate_options
+        groups = group_jobs(select(fixtures, cases)[2], concurrent=True, guard_mb=max_memory_mb)
+        guards = validate_options(groups, workers, memory_budget_mb, max_memory_mb,
+                                  mode, reuse_session, compare_images, background)
+    elif memory_budget_mb is not None:
+        raise ValueError('a guarded-child memory budget requires concurrent workers')
+    directory = directory.resolve()
     directory.mkdir(parents=True, exist_ok=False)
     report = {'schema_version':1, 'kind':'slider-behavior-matrix', 'mode':mode,
-              'binary':str(binary), 'disk_cache_bytes':disk_cache_bytes, 'background':background,
+              'binary':str(binary), 'disk_cache_bytes':disk_cache_bytes, 'background':background, 'batch_image_verification':batch_image_verification,
               'selection':selection, 'provenance':provenance, 'passed':False, 'results':[],
               'limits':['Passed describes the declared selected cases; inspect coverage for untested controls and configurations.']}
+    if workers > 1:
+        from correctness_workers import run_parallel
+        return run_parallel(binary, compare_images, groups, guards, directory, workers,
+                            memory_budget_mb, report, disk_cache_bytes, batch_image_verification=batch_image_verification, prune_verified_images=prune_verified_images)
     def prepare_case(fixture, case, theme):
         recipes = case['recipes']
         name = fixture['name']+'--'+case['name']+'--'+theme+'--'+case['processing_quality']
@@ -182,6 +206,10 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
                '--quality',case.get('processing_quality', 'quality'), '--mode',mode, '--trials','1', '--disk-cache-bytes',str(disk_cache_bytes)]
         if compare_images:
             cmd += ['--compare-images',str(compare_images)]
+        if prune_verified_images:
+            cmd.append('--prune-verified-images')
+        if batch_image_verification:
+            cmd.append('--batch-image-verification')
         if max_memory_mb is not None:
             cmd += ['--max-memory-mb',str(max_memory_mb)]
         if trace_processor:
@@ -206,6 +234,9 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
             'pointer':case['pointer'], 'processing_quality':case['processing_quality'], 'directory':str(out), 'passed':returncode==0 and native.get('passed') is True,
             'failure':failure})
         row = report['results'][-1]
+        if row['passed'] and prune_verified_images:
+            receipt = out/'sample-retention.json'
+            row['sample_retention'] = {'path': str(receipt), 'sha256': digest(receipt)}
         if reuse_session:
             row['session'] = native.get('session')
             report['results'].sort(key=lambda r: case_order[(r['fixture'], r['case'], r['theme'], r['processing_quality'])])
@@ -234,7 +265,8 @@ def run(binary, fixtures, cases, directory, mode='off', trace_processor=None, di
                 group_directory = directory/'session-groups'/f"{fixture['name']}--{theme}--{case['processing_quality']}"
                 entry = {'directory': str(group_directory), 'cases': len(group), 'passed': False}
                 report['session_groups'].append(entry)
-                session = run_group(requests, group_directory, fixture['name'])
+                session = run_group(requests, group_directory, fixture['name'],
+                                    **({} if cohort is None else {'cohort': cohort}))
                 entry.update(id=session['id'], passed=session['passed'], status=session['status'], pid=session.get('pid'))
                 for (fixture, case, theme, name, out, _), outcome in zip(prepared, session['cases']):
                     append_result(fixture, case, theme, name, out, 0 if outcome['passed'] else 1)
@@ -274,6 +306,10 @@ def main():
     parser.add_argument('--disk-cache-bytes',type=int,default=0,help='optional owned decoded-cache budget; disabled by default')
     parser.add_argument('--foreground',action='store_true',help='show scenario windows in the foreground')
     parser.add_argument('--max-memory-mb',type=int,help='guard each owned app and fresh renderer physical footprint on macOS')
+    parser.add_argument('--prune-verified-images',action='store_true',help='keep JSON proofs while pruning only independently checked successful raw samples')
+    parser.add_argument('--batch-image-verification',action='store_true',help='verify each case in a finite fresh-graph renderer batch')
+    parser.add_argument('--workers',type=int,default=1,help='maximum isolated slider correctness groups; default one')
+    parser.add_argument('--memory-budget-mb',type=int,help='admission budget for guarded child processes; leave OS/Python headroom')
     args=parser.parse_args()
     try:
         filters={'fixtures':args.fixture, 'families':args.family, 'cases':args.case, 'themes':args.theme}
@@ -291,7 +327,8 @@ def main():
         selection={'full':args.full, **filters}
         provenance={name:{'path':str(path.resolve()),'sha256':digest(path)} for name,path in
                     (('fixtures',args.fixtures),('cases',args.cases),('runner',Path(__file__)),('scenario_runner',Path(__file__).with_name('scenarios.py')))}
-        result=run(args.binary,fixtures,cases,args.directory,args.mode,args.trace_processor,args.disk_cache_bytes,not args.foreground,selection,provenance,args.compare_images,args.max_memory_mb,args.reuse_session)
+        result=run(args.binary,fixtures,cases,args.directory,args.mode,args.trace_processor,args.disk_cache_bytes,not args.foreground,selection,provenance,args.compare_images,args.max_memory_mb,args.reuse_session,
+                   workers=args.workers,memory_budget_mb=args.memory_budget_mb,batch_image_verification=args.batch_image_verification,prune_verified_images=args.prune_verified_images)
     except (OSError,ValueError,KeyError,RuntimeError,json.JSONDecodeError,subprocess.TimeoutExpired) as error:
         parser.exit(1,str(error)+'\n')
     if not result['passed']:

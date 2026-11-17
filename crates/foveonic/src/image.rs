@@ -370,7 +370,7 @@ mod composition_tests {
     #[test]
     #[ignore = "requires a GPU"]
     fn composition_shares_samples_and_rejects_regional_or_resized_results() {
-        let engine = crate::render::Engine::new().unwrap();
+        let engine = crate::render::Engine::test_executor();
         let mut image = RenderedImage {
             buffer: engine
                 .test_gpu()

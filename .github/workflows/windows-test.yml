@@ -21,6 +21,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     env:
+      CARGO_INCREMENTAL: '0'
       CC: clang-cl
       CXX: clang-cl
       CXXFLAGS: -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS
@@ -69,6 +70,7 @@ jobs:
           }
           $identity | ConvertTo-Json | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'foveonic-windows-source.json')
           "revision=$revision" | Add-Content $env:GITHUB_OUTPUT
+          "FOVEONIC_BUILD_REVISION=$revision" | Add-Content $env:GITHUB_ENV
       - name: Set up native build tools
         shell: pwsh
         run: |
@@ -77,10 +79,82 @@ jobs:
           rustc --version
           cmake --version
           clang-cl --version
+      - name: Fingerprint build tools and source
+        id: build_cache
+        if: ${{ hashFiles('scripts/build_cache.py') != '' }}
+        shell: pwsh
+        run: python scripts/build_cache.py
+
+      - name: Cache compatible Rust dependencies
+        if: ${{ steps.build_cache.outputs.fingerprint != '' }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug/deps/*
+            target/debug/build/*
+            target/debug/.fingerprint/*
+            target/release/deps/*
+            target/release/build/*
+            target/release/.fingerprint/*
+            !target/*/deps/*foveonic*
+            !target/*/deps/*docs_index*
+            !target/*/deps/*xtask*
+            !target/*/build/foveonic/**
+            !target/*/build/foveonic-gui/**
+            !target/*/build/docs-index/**
+            !target/*/build/xtask/**
+            !target/*/build/foveonic-*
+            !target/*/build/docs-index-*
+            !target/*/build/xtask-*
+            !target/*/.fingerprint/foveonic-*
+            !target/*/.fingerprint/docs-index-*
+            !target/*/.fingerprint/xtask-*
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-${{ steps.build_cache.outputs.revision }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-
       - name: Build Windows app
         run: cargo build --locked --release -p foveonic-gui
       - name: Prepare Windows test shader compiler
         run: python -c "import sys; sys.path.insert(0, 'scripts'); from setup_tests import prepare_dxc; prepare_dxc(install=True)"
+      - name: Stage DirectX shader compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $PWD '.local/test-dependencies/dxc_2026_09_29.zip'
+          $uri = 'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip'
+          if (!(Test-Path -LiteralPath $zip)) { Invoke-WebRequest $uri -OutFile $zip }
+          $expected = 'AD31B1FC8443175D204F77A611FDB3EF2EC42759BDC2F1167368DE24A4A7E7F1'
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expected) { throw 'DXC archive checksum mismatch' }
+          Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'dxc')
+          $stage = Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64'
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item target/release/foveonic-gui.exe $stage
+          $pdb = Join-Path $PWD 'target/release/foveonic_gui.pdb'
+          if (!(Test-Path -LiteralPath $pdb)) { throw 'Matching application PDB was not produced' }
+          $symbols = Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64-symbols'
+          New-Item -ItemType Directory -Path $symbols | Out-Null
+          Copy-Item $pdb $symbols
+          Get-FileHash target/release/foveonic-gui.exe,$pdb -Algorithm SHA256 | ConvertTo-Json | Set-Content (Join-Path $symbols 'build-files.json')
+          Compress-Archive -Path $symbols -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64-symbols.zip')
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/bin/x64/dxcompiler.dll') $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/bin/x64/dxil.dll') $stage
+          Copy-Item LICENSE $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-LLVM.txt') $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-MS.txt') $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENCE-MIT.txt') $stage
+          $process = Start-Process (Join-Path $stage 'foveonic-gui.exe') -ArgumentList '--help' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Windows help-command check failed: $($process.ExitCode)" }
+          Compress-Archive -Path $stage -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64.zip')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Foveonic-windows-x64-${{ steps.source.outputs.revision }}
+          path: |
+            ${{ runner.temp }}/Foveonic-windows-x64.zip
+            ${{ runner.temp }}/Foveonic-windows-x64-symbols.zip
+          if-no-files-found: error
       - name: Test Windows workspace
         id: windows_tests
         env:
@@ -179,39 +253,3 @@ jobs:
           path: ${{ runner.temp }}/foveonic-windows-test-failure
           if-no-files-found: error
           retention-days: 14
-      - name: Stage DirectX shader compiler
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $zip = Join-Path $PWD '.local/test-dependencies/dxc_2026_09_29.zip'
-          $uri = 'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip'
-          if (!(Test-Path -LiteralPath $zip)) { Invoke-WebRequest $uri -OutFile $zip }
-          $expected = 'AD31B1FC8443175D204F77A611FDB3EF2EC42759BDC2F1167368DE24A4A7E7F1'
-          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $expected) { throw 'DXC archive checksum mismatch' }
-          Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'dxc')
-          $stage = Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64'
-          New-Item -ItemType Directory -Path $stage | Out-Null
-          Copy-Item target/release/foveonic-gui.exe $stage
-          $pdb = Join-Path $PWD 'target/release/foveonic_gui.pdb'
-          if (!(Test-Path -LiteralPath $pdb)) { throw 'Matching application PDB was not produced' }
-          $symbols = Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64-symbols'
-          New-Item -ItemType Directory -Path $symbols | Out-Null
-          Copy-Item $pdb $symbols
-          Get-FileHash target/release/foveonic-gui.exe,$pdb -Algorithm SHA256 | ConvertTo-Json | Set-Content (Join-Path $symbols 'build-files.json')
-          Compress-Archive -Path $symbols -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64-symbols.zip')
-          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/bin/x64/dxcompiler.dll') $stage
-          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/bin/x64/dxil.dll') $stage
-          Copy-Item LICENSE $stage
-          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-LLVM.txt') $stage
-          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENSE-MS.txt') $stage
-          Copy-Item (Join-Path $env:RUNNER_TEMP 'dxc/LICENCE-MIT.txt') $stage
-          $process = Start-Process (Join-Path $stage 'foveonic-gui.exe') -ArgumentList '--help' -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Windows help-command check failed: $($process.ExitCode)" }
-          Compress-Archive -Path $stage -DestinationPath (Join-Path $env:RUNNER_TEMP 'Foveonic-windows-x64.zip')
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Foveonic-windows-x64-${{ steps.source.outputs.revision }}
-          path: |
-            ${{ runner.temp }}/Foveonic-windows-x64.zip
-            ${{ runner.temp }}/Foveonic-windows-x64-symbols.zip
-          if-no-files-found: error

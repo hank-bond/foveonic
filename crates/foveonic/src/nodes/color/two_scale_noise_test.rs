@@ -365,7 +365,7 @@ fn residual_half_integer_lut_decisions_match_native_power_rounding() {
         0x43aeaa95, 0x4388dab2,
     ]
     .map(f32::from_bits);
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let current_buffer = gpu.upload("Residual decision source", &current).unwrap();
     let candidate_buffer = gpu
         .upload("Residual decision candidate", &candidate)

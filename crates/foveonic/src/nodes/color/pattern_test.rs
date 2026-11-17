@@ -31,7 +31,7 @@ fn gpu_pattern_matches_native_extents_seeded_edges_and_global_offset_order() {
     let f = fixture();
     let source = array(&f["input"]);
     let edges = array(&f["edges"]);
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     // Two independently initialized tiles must each restart both native offset sequences.
     let input: Vec<f32> = source.iter().chain(&source).copied().collect();
     let seed: Vec<f32> = edges.iter().chain(&edges).copied().collect();

@@ -15,6 +15,7 @@ enum Phase {
     Prepare,
     Create,
     Failure,
+    ReportedFailure,
     Acknowledge,
     Recovery,
     Done,
@@ -92,14 +93,22 @@ impl DamagedRecovery {
                 );
                 self.phase = Phase::Failure;
             }
-            Phase::Failure => {
+            Phase::Failure | Phase::ReportedFailure => {
                 let broken = self.broken.as_ref().unwrap();
                 if app.folder_loader.loading()
                     || app.selected.as_deref() != Some(broken.as_path())
                     || !app.sidecars.ready()
                     || app.worker.busy()
+                    || !app.import.smoke_ready(false)
                     || !app.activity.unread_errors()
                 {
+                    self.phase = Phase::Failure;
+                    return Ok(false);
+                }
+                if matches!(self.phase, Phase::Failure) {
+                    // Import results arrive before this tick; the toolbar publishes
+                    // their errors afterward. Allow that UI pass before acknowledging.
+                    self.phase = Phase::ReportedFailure;
                     return Ok(false);
                 }
                 let has_image = app
@@ -173,7 +182,8 @@ impl DamagedRecovery {
     }
 
     pub(super) fn expects_failure(&self, path: &Path) -> bool {
-        matches!(self.phase, Phase::Failure) && self.broken.as_deref() == Some(path)
+        matches!(self.phase, Phase::Failure | Phase::ReportedFailure)
+            && self.broken.as_deref() == Some(path)
     }
 }
 
@@ -188,6 +198,9 @@ fn expected_failure_is_limited_to_the_truncated_source_and_failure_phase() {
     recovery.broken = Some(PathBuf::from("truncated.x3f"));
     assert!(!recovery.expects_failure(Path::new("truncated.x3f")));
     recovery.phase = Phase::Failure;
+    assert!(recovery.expects_failure(Path::new("truncated.x3f")));
+    assert!(!recovery.expects_failure(Path::new("good.x3f")));
+    recovery.phase = Phase::ReportedFailure;
     assert!(recovery.expects_failure(Path::new("truncated.x3f")));
     assert!(!recovery.expects_failure(Path::new("good.x3f")));
     recovery.phase = Phase::Recovery;

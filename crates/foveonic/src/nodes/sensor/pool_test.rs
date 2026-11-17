@@ -17,7 +17,7 @@ fn pooling_covers_partial_cells_at_every_power_of_two() {
 #[test]
 #[ignore = "requires GPU"]
 fn pooling_preserves_means_coverage_and_source() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for divisor in [2, 4, 8] {
         for signal in [Signal::Rgb, Signal::Blue, Signal::Mask, Signal::Flags] {
             let p = Prepared::new([16, 16], divisor, signal).unwrap();
@@ -80,7 +80,7 @@ fn pooling_preserves_means_coverage_and_source() {
 #[test]
 #[ignore = "requires GPU"]
 fn partial_cells_and_halos_replicate_completed_means_and_flag_unions() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for extent in [[1, 1], [17, 13]] {
         for divisor in [1, 2, 4, 16, 64, 1 << 31] {
             for signal in [Signal::Rgb, Signal::Blue, Signal::Mask, Signal::Flags] {
@@ -185,7 +185,7 @@ fn partial_cells_and_halos_replicate_completed_means_and_flag_unions() {
 #[test]
 #[ignore = "requires a GPU"]
 fn full_quattro_extreme_partial_cell_is_replicated_into_halo() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [2944, 1836];
     for split in [false, true] {
         let source: Vec<f32> = (0..extent[1])
@@ -222,7 +222,7 @@ fn full_quattro_extreme_partial_cell_is_replicated_into_halo() {
 #[test]
 #[ignore = "requires GPU"]
 fn full_quattro_rgb_extreme_cell_preserves_balanced_mean_and_halo() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [2944, 1836];
     let source: Vec<f32> = (0..extent[1])
         .flat_map(|y| {
@@ -290,7 +290,7 @@ fn area_noise_and_signed_rounding_follow_the_working_grid() {
 #[test]
 #[ignore = "requires GPU"]
 fn signed_area_means_round_once_without_negative_bias() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for extent in [[8, 8], [9, 7]] {
         let pixels: Vec<f32> = (0..extent[1])
             .flat_map(|y| {
@@ -322,7 +322,7 @@ fn signed_area_means_round_once_without_negative_bias() {
 #[test]
 #[ignore = "requires GPU"]
 fn a_sensor_spike_reaches_one_logical_cell_with_one_dispatch() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [17_u32, 13];
     for point in [[0, 0], [7, 5], [16, 12]] {
         let mut pixels = vec![100_f32; (extent[0] * extent[1] * 3) as usize];

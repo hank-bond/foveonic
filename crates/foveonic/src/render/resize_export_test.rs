@@ -49,7 +49,7 @@ fn resized_tiff_defaults_to_reference_sampling_before_destination_conversion() {
             .collect()
     };
     let pixels = floats(&fixture["input"]);
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let directory = Directory::new();
     let metadata = Arc::new(crate::source::Metadata {
         processing_version: None,

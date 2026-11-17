@@ -73,9 +73,12 @@ def source_tree_hash(root):
 
 
 @contextmanager
-def workload_monitor(output, cancelled=lambda: False):
+def workload_monitor(output, cancelled=lambda: False, *, cohort=None):
     tool = Path(__file__).with_name('watch_workloads.py').resolve()
-    process = subprocess.Popen([sys.executable, str(tool), str(output)], start_new_session=True)
+    if cohort is not None:
+        cohort.check_alive()
+    process = subprocess.Popen([sys.executable, str(tool), str(output)],
+                               start_new_session=cohort is None)
     try:
         deadline = time.monotonic() + 5.
         while not output.exists() or output.stat().st_size == 0:

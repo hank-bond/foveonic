@@ -1585,6 +1585,8 @@ impl Scenario {
     }
     fn ready(&self, app: &App, minimum: u64) -> bool {
         !app.worker.busy()
+            // Coordinator idleness can become visible before the UI settles progress.
+            && app.worker.progress.snapshot().is_none_or(|progress| !progress.running())
             && app.sidecars.ready()
             && (self.targets.len() == 1 || app.multi_edit.editable_ready())
             && self.targets.iter().all(|path| {

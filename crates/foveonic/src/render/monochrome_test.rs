@@ -79,7 +79,7 @@ fn neutral(bytes: &[u8]) {
 }
 
 fn mixed_resolution_regional_matches_full(path: &Path) {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for rotation in [0, 90, 180, 270] {
         let mut source = Source::open(path).unwrap();
         Arc::make_mut(&mut source.metadata).rotation = rotation;
@@ -207,7 +207,7 @@ fn mono_inspection_stops_before_unrelated_processing_and_keeps_original_layers()
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn mono_mix_noise_sharpen_and_mode_switches_match_fresh_and_retain_snapshots() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source());
     let mut s = settings();
     s.rendering = Rendering::Color;
@@ -328,7 +328,7 @@ fn dng_samples(bytes: &[u8]) -> Vec<u16> {
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn mono_originals_keep_finite_neutral_samples_and_valid_metadata() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     for name in [
         "blue-parking-sign",
@@ -357,7 +357,7 @@ fn mono_originals_keep_finite_neutral_samples_and_valid_metadata() {
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn mono_tiff_and_dng_keep_neutral_samples_and_defer_only_presentation() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = source();
     let mut s = settings();
     s.sharpen_amount = Some(0.75);
@@ -480,7 +480,7 @@ fn mono_sensitivity_and_detail_preserve_mix_cache_and_dng_boundaries() {
     let source = std::sync::Arc::new(
         Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap(),
     );
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut s = caps
         .editing_defaults(&source.metadata, Rendering::Monochrome)

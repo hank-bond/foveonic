@@ -45,7 +45,7 @@ fn parallel_cluster_regions_match_serial_order_exactly() {
     let values: Vec<f32> = (0..64 * 64 * 3)
         .map(|i| ((i * 73 + i * i * 7) % 4093) as f32 * 0.125)
         .collect();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let input = gpu.upload("Cluster dependency input", &values).unwrap();
     let mask = gpu
         .upload("Cluster dependency mask", &vec![0u32; 4096])

@@ -60,7 +60,7 @@ fn retain_admission_value(cache: &mut Cache, name: &str, value: &Value, pinned: 
 #[test]
 #[ignore = "requires GPU"]
 fn rejected_admission_preserves_existing_checkpoints() {
-    let gpu = crate::gpu::Gpu::new().unwrap();
+    let gpu = crate::gpu::Gpu::test_executor();
     let mut cache = admission_cache();
     let sealed = admission_value(&gpu, 64);
     let higher = admission_value(&gpu, 64);
@@ -105,7 +105,7 @@ fn rejected_admission_preserves_existing_checkpoints() {
 #[test]
 #[ignore = "requires GPU"]
 fn successful_admission_preserves_eviction_priority_and_recency() {
-    let gpu = crate::gpu::Gpu::new().unwrap();
+    let gpu = crate::gpu::Gpu::test_executor();
     for incoming_bytes in [32, 64] {
         let mut cache = admission_cache();
         let sealed = admission_value(&gpu, 64);
@@ -149,7 +149,7 @@ fn successful_admission_preserves_eviction_priority_and_recency() {
 #[test]
 #[ignore = "requires GPU"]
 fn admission_counts_shared_protected_allocations_once() {
-    let gpu = crate::gpu::Gpu::new().unwrap();
+    let gpu = crate::gpu::Gpu::test_executor();
     let mut cache = admission_cache();
     let protected = admission_value(&gpu, 64);
     let dehaze = admission_value(&gpu, 32);
@@ -179,7 +179,7 @@ fn admission_counts_shared_protected_allocations_once() {
 #[test]
 #[ignore = "requires GPU"]
 fn existing_version_admission_keeps_its_original_buffer() {
-    let gpu = crate::gpu::Gpu::new().unwrap();
+    let gpu = crate::gpu::Gpu::test_executor();
     let mut cache = admission_cache();
     let sealed = admission_value(&gpu, 64);
     let original = admission_value(&gpu, 32);
@@ -223,7 +223,7 @@ fn parameter_resource_attribution_matches_the_unique_inventory() {
 #[test]
 #[ignore = "requires GPU"]
 fn pressure_discards_old_cuts_and_uncached_descriptors_before_current_inputs() {
-    let gpu = crate::gpu::Gpu::new().unwrap();
+    let gpu = crate::gpu::Gpu::test_executor();
     let mut cache = Cache::default();
     for width in [16, 15] {
         let (graph, _, cut, _) = source_graph("cut", width);
@@ -362,7 +362,7 @@ fn structural_hash_collision_still_checks_exact_parameters_and_output_roles() {
 #[test]
 #[ignore = "requires GPU"]
 fn sealed_cut_matches_across_scopes_and_is_invalidated_by_upstream_parameters() {
-    let gpu = crate::gpu::Gpu::new().unwrap();
+    let gpu = crate::gpu::Gpu::test_executor();
     let mut cache = Cache::default();
     let (graph, source, cut, target) = source_graph("main", 16);
     cache.plan_for(&graph, &[cut], true).unwrap();
@@ -474,7 +474,7 @@ fn verified_source_reload_reuses_identity_but_memory_and_engine_changes_do_not()
 #[test]
 #[ignore = "requires GPU"]
 fn optional_frontier_history_recovers_an_older_geometry_without_a_quality_label() {
-    let gpu = crate::gpu::Gpu::new().unwrap();
+    let gpu = crate::gpu::Gpu::test_executor();
     let mut cache = Cache::default();
     let mut held = Vec::new();
     for width in [16, 15] {

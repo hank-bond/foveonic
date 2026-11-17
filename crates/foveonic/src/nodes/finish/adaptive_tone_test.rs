@@ -16,7 +16,7 @@ use std::sync::Arc;
 #[test]
 #[ignore = "requires GPU"]
 fn reduced_analysis_keeps_structure_in_histogram_and_regional_samples() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [64, 64];
     let values: Vec<f32> = (0..64)
         .flat_map(|_| (0..64).flat_map(|x| [4095. * (-13. + x as f32 / 16.).exp2(); 3]))
@@ -416,7 +416,7 @@ fn adaptive_sessions_reuse_guide_and_invalidate_limits_without_touching_camera()
 #[ignore = "requires GPU"]
 fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
     use crate::color_space::ColorSpace;
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [256, 256];
     let mut values = vec![0.01 * 4095.; 256 * 256 * 3];
     for y in 100..130 {
@@ -561,7 +561,7 @@ fn adaptive_response_preserves_signed_input_and_zero_caps_apply_no_exposure() {
 #[ignore = "requires GPU"]
 fn blacks_rescue_only_structured_near_black_without_flattening_or_touching_visible_tones() {
     use crate::color_space::ColorSpace;
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [512, 512];
     let mut values = vec![0_f32; 512 * 512 * 3];
     for y in 32..224 {
@@ -669,7 +669,7 @@ fn blacks_rescue_only_structured_near_black_without_flattening_or_touching_visib
 #[test]
 #[ignore = "requires GPU"]
 fn mapped_application_guide_keeps_fit_and_overlapping_sections_aligned() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [64, 64];
     let values: Vec<f32> = (0..64)
         .flat_map(|y| {
@@ -854,7 +854,7 @@ fn mapped_application_guide_keeps_fit_and_overlapping_sections_aligned() {
 #[test]
 #[ignore = "requires GPU"]
 fn mapped_application_guide_clamps_probes_to_photo_cells_inside_padding() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let values: Vec<f32> = (0..32)
         .flat_map(|y| (0..32).flat_map(move |x| [4095. * (-13. + (x + y) as f32 / 5.).exp2(); 3]))
         .collect();
@@ -966,7 +966,7 @@ fn quality_analysis_covers_valid_pixels_with_half_grid_gains() {
 #[test]
 #[ignore = "requires GPU"]
 fn dense_analysis_counts_every_valid_pixel_carries_structure_and_summarizes_complete_windows() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [303_u32, 269];
     let bounds = [5_u32, 3, 298, 264];
     let valid = [bounds[2] - bounds[0], bounds[3] - bounds[1]];
@@ -1129,7 +1129,7 @@ fn dense_analysis_counts_every_valid_pixel_carries_structure_and_summarizes_comp
 #[test]
 #[ignore = "requires GPU"]
 fn dense_large_windows_preserve_constant_and_weak_population_variance() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
     let curve_buffer = gpu.upload("Large-window analytical curve", &curve).unwrap();
     for (extent, textured) in [
@@ -1295,7 +1295,7 @@ fn bounded_region_midpoints_are_distinct_and_inside_odd_narrow_windows() {
 #[test]
 #[ignore = "requires GPU"]
 fn bounded_dense_regions_keep_scheduled_support_and_thin_feature_phases() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let curve: Vec<_> = (0..65536).map(|v| (v as f32 / 4095.).min(1.)).collect();
     let curve_buffer = gpu
         .upload("Bounded-summary analytical curve", &curve)

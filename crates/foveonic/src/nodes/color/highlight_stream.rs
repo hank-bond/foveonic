@@ -135,7 +135,7 @@ fn gpu_stream_matches_independent_stateful_fixtures() {
         "../../../tests/data/highlight-stream-reference.json"
     ))
     .unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for case in cases.as_array().unwrap() {
         let p = Prepared {
             extent: std::array::from_fn(|i| case["extent"][i].as_u64().unwrap() as u32),

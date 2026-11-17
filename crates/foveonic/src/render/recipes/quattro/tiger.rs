@@ -213,7 +213,7 @@ mod tests {
         };
         use std::sync::Arc;
 
-        let engine = Engine::new().unwrap();
+        let engine = Engine::test_executor();
         let mut source = Source::open(std::env::var_os("TIGER_X3F").unwrap()).unwrap();
         source.origin = Default::default();
         // Isolate phase-detection sites from unrelated factory defects in a flat field.

@@ -38,7 +38,7 @@ fn assert_same_pixels(label: &str, actual: &[u8], expected: &[u8]) {
 #[ignore = "requires GPU and FOVEONIC_CACHE_X3F"]
 fn white_balance_patch_samples_linear_input_and_rejects_invalid_samples() {
     let source = Source::open(std::env::var_os("FOVEONIC_CACHE_X3F").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let settings = Settings::new("Sunlight", "Standard");
     let mut artifacts = engine
         .render_artifacts(
@@ -97,7 +97,7 @@ fn white_balance_patch_samples_linear_input_and_rejects_invalid_samples() {
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
 fn bright_neutral_patches_above_nominal_white_remain_sampleable() {
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for (file, preset) in [
         ("blue-parking-sign.x3f", "Incandescent"),
         ("sd10.x3f", "Sunlight"),
@@ -200,7 +200,7 @@ fn recovery_threshold_changes_have_a_distinct_parameter_identity() {
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn recovery_threshold_edits_match_fresh_outputs_and_keep_retained_images() {
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(Source::open(dir.join("sunlit-red-flower.x3f")).unwrap());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([313, 470]);
@@ -286,7 +286,7 @@ fn session_image_profiled(
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn merrill_auto_zero_sharpen_session_matches_fresh_and_explicit_off() {
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(Source::open(dir.join("blue-parking-sign.x3f")).unwrap());
     let mut settings = Settings::new("Sunlight", "Standard");
     let fresh = engine
@@ -314,7 +314,7 @@ fn merrill_auto_zero_sharpen_session_matches_fresh_and_explicit_off() {
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR; checks all six full-resolution originals"]
 fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for name in [
         "blue-parking-sign",
         "glossy-leaves-and-buds",
@@ -497,7 +497,7 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
 fn noise_and_texture_inputs_match_fresh_outputs() {
     let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(Source::open(path).unwrap());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
@@ -554,10 +554,10 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
         .join("blue-parking-sign.x3f");
     let mut session = RenderSession::new(Source::open(path).unwrap());
     let settings = Settings::new("Sunlight", "Standard");
-    let first = Engine::new().unwrap();
+    let first = Engine::test_executor();
     let retained = session_image(&first, &mut session, &settings);
     let original = first.gpu.readback(&retained.buffer).unwrap();
-    let second = Engine::new().unwrap();
+    let second = Engine::test_executor();
     let rebound = session_image(&second, &mut session, &settings);
     assert_same_pixels(
         "engine rebound",
@@ -708,7 +708,7 @@ fn texture_edits_reuse_filtering_and_match_fresh_images() {
     let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
     let source = std::sync::Arc::new(Source::open(path).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     let c = crate::noise::Controls::default();
@@ -830,7 +830,7 @@ fn repair_preparation_session_matches_fresh_and_preserves_ownership() {
     use crate::nodes::sensor::repair::Threshold;
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = Arc::new(Source::open(dir.join("blue-parking-sign.x3f")).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     let early = engine
@@ -907,7 +907,7 @@ fn repair_preparation_session_matches_fresh_and_preserves_ownership() {
     drop(execution);
     assert_eq!(cancelled_session.cached_preparation_bytes(), 0);
 
-    let second = Engine::new().unwrap();
+    let second = Engine::test_executor();
     let rerender = session_image(&second, &mut session, &settings);
     let second_fresh = second
         .render(&source, &settings, &mut Profile::default())

@@ -35,6 +35,7 @@ class Tool:
 TOOLS = (
     Tool('Rust 1.88+', ('rustc', '--version')),
     Tool('Cargo', ('cargo', '--version')),
+    Tool('Git', ('git', '--version')),
     Tool('rustfmt', ('cargo', 'fmt', '--version'), component='rustfmt'),
     Tool('Clippy', ('cargo', 'clippy', '--version'), component='clippy'),
     Tool('C/C++ compiler', ('cc', '--version')),

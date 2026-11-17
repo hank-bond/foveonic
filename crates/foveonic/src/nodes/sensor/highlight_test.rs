@@ -82,7 +82,7 @@ fn threshold_offsets_scale_only_camera_threshold_and_preserve_reference_defaults
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn gpu_threshold_changes_only_brightness_blend_and_keeps_density_and_input() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let count = 64 * 128;
     let mut prepared = Prepared {
         grid: None,
@@ -137,7 +137,7 @@ fn gpu_threshold_changes_only_brightness_blend_and_keeps_density_and_input() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn donor_bins_keep_integer_boundaries_and_adjacent_floats_distinct() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let around = |value: f32| {
         [
             f32::from_bits(value.to_bits() - 1),
@@ -214,7 +214,7 @@ fn donor_bins_keep_integer_boundaries_and_adjacent_floats_distinct() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let rgb: Vec<f32> = (0..8192)
         .flat_map(|i| {
             let red = if i % 16 != 0 {
@@ -460,7 +460,7 @@ fn gpu_highlight_restoration_matches_native_saturation_and_density() {
         },
         flags: Some(flags.into()),
     };
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     {
         let samples: Vec<_> = values(&f["input"]).into_iter().map(|v| v as f32).collect();
         let input = gpu.upload("Immutable highlight fixture", &samples).unwrap();
@@ -510,7 +510,7 @@ fn preview_original_clipping_survives_averaging() {
         nodes::sensor::pool,
         render::{Scale, WorkingGrid},
     };
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [64u32, 64u32];
     let count = 64 * 64;
     for divisor in [2, 4, 8, 16] {

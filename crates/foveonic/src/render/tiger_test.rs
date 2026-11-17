@@ -24,7 +24,7 @@ fn original_tiger_modes_masks_and_retained_results() {
         .collect();
     assert_eq!(modes.len(), 10);
     let source_hash = fingerprint(bytemuck::cast_slice(source.samples().as_ref()));
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut session = RenderSession::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([600, 400]);
@@ -112,7 +112,7 @@ fn session_image(
 #[test]
 #[ignore = "requires GPU and TIGER_X3F original"]
 fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for rotation in [0, 90] {
         let mut source = Source::open(std::env::var_os("TIGER_X3F").unwrap()).unwrap();
         Arc::make_mut(&mut source.metadata).rotation = rotation;

@@ -88,7 +88,7 @@ fn photographic_gpu_resize_matches_frozen_reference_float_samples() {
             .map(|v| v.as_f64().unwrap() as f32)
             .collect()
     };
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let pixels = floats(&fixture["input"]);
     let input = gpu
         .upload("Frozen reference photographic RGB", &pixels)
@@ -228,7 +228,7 @@ fn expected(pixels: &[f32], params: &EncodeParams) -> Vec<f32> {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn photographic_gpu_resize_matches_scalar_crops_rotations_edges_and_singletons() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for (size, crop) in [
         ([12, 10], [3, 3, 9, 8]),
         ([4, 3], [0, 0, 4, 3]),

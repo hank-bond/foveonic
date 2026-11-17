@@ -42,7 +42,7 @@ fn texture_color_coordinates_validate_neutrality_and_cache_identity() {
 #[test]
 #[ignore = "requires a GPU"]
 fn weak_color_safeguard_repairs_false_color_and_preserves_supported_texture() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut p = parameters();
     p.model[0] = [16., 16., 16., 0.];
     let n = p.atlas_pixels() as usize;
@@ -264,7 +264,7 @@ fn parameters() -> Parameters {
 #[test]
 #[ignore = "requires a GPU"]
 fn signed_layer_cancellation_cannot_explode_restored_color() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let params = parameters();
     let count = params.atlas_pixels() as usize;
     let cases = [
@@ -337,7 +337,7 @@ fn signed_layer_cancellation_cannot_explode_restored_color() {
 #[test]
 #[ignore = "requires a GPU"]
 fn texture_preserves_shading_and_separates_noise_and_spatial_bands() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let p = parameters();
     let n = p.atlas_pixels() as usize;
     let base = vec![100_f32; n * 3];

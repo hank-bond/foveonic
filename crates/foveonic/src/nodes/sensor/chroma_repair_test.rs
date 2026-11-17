@@ -259,7 +259,7 @@ fn directional_contrast_reduces_channels_after_neighbor_terms() {
         false,
     )
     .unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let input = gpu.upload("Directional tie patch", &values).unwrap();
     let mask = gpu
         .upload("Directional tie mask", &vec![0_u32; 144])
@@ -303,7 +303,7 @@ fn batches_preserve_neighbor_and_duplicate_dependencies() {
 #[ignore = "requires GPU"]
 fn parallel_batches_match_serial_record_order_exactly() {
     let extent = [40, 40];
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let values: Vec<f32> = (0..40 * 40 * 3)
         .map(|i| ((i * 73 + i * i * 7) % 4093) as f32 * 0.125)
         .collect();

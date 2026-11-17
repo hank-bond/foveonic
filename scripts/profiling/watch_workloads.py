@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import time
 
@@ -23,7 +24,8 @@ def is_workload_executable(executable):
                     'foveonic', 'foveonic-gui', 'Foveonic', 'vmmap', 'footprint',
                     'profile_pipeline', 'profile_editing', 'profile_checkpoints',
                     'profile_noise_resources', 'profile_smart_preview', 'browser_pipeline'}
-            or ('/deps/' in executable and name.startswith(('foveonic-', 'foveonic_gui-'))))
+            or ('/deps/' in executable and name.startswith(('foveonic-', 'foveonic_gui-')))
+            or re.fullmatch(r'(?:foveonic|foveonic_gui)-[0-9a-f]{16}', name) is not None)
 
 
 def running_workloads(exclude_pids=()):

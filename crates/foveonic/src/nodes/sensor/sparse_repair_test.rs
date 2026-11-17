@@ -15,7 +15,7 @@ fn validates_sparse_context_and_finite_controls() {
 #[test]
 #[ignore = "requires GPU"]
 fn requested_outputs_preserve_complete_repairs_and_avoid_unused_blue_work() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent: [u32; 2] = [256, 128];
     let n = (extent[0] * extent[1]) as usize;
     let noise = [1., 0., 0., 1., 0., 0., 1., 0., 0.];

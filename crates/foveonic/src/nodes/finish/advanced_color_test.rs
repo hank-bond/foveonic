@@ -104,7 +104,7 @@ fn run(
 #[test]
 #[ignore = "requires a GPU"]
 fn advanced_color_selects_guide_protects_neutrals_and_combines_lifts() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let range = Range {
         adjustment: Adjustment {
             lightness: 0.5,
@@ -147,7 +147,7 @@ fn advanced_color_selects_guide_protects_neutrals_and_combines_lifts() {
 #[test]
 #[ignore = "requires a GPU"]
 fn advanced_color_wraps_hue_and_preview_preserves_lightness() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let range = Range {
         hue: 0.,
         width: 40.,
@@ -183,7 +183,7 @@ fn advanced_color_wraps_hue_and_preview_preserves_lightness() {
 #[test]
 #[ignore = "requires a GPU"]
 fn advanced_color_lightness_retains_chromatic_components_in_working_spaces() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let lab = |rgb: [f32; 3]| {
         let [r, g, b] = rgb.map(f64::from);
         let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();

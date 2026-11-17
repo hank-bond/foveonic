@@ -36,7 +36,7 @@ fn every_power_of_two_preserves_finite_physical_chroma_support() {
 #[test]
 #[ignore = "requires a GPU"]
 fn large_divisors_do_not_wrap_signed_chroma_stencil_weights() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let pixels: Vec<_> = (0..64)
         .flat_map(|i| [1000. + (i % 2) as f32 * 32., 1000., 1000.])
         .collect();
@@ -73,7 +73,7 @@ fn gpu_signed_chroma_matches_native_composed_rows() {
         .iter()
         .map(|v| v.as_i64().unwrap() as f32)
         .collect();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let source = gpu.upload("Signed chroma native fixture", &input).unwrap();
     for case in fixture["cases"].as_array().unwrap() {
         let triplet = |name: &str| std::array::from_fn(|i| case[name][i].as_f64().unwrap());
@@ -115,7 +115,7 @@ fn gpu_recursive_chroma_matches_native_callbacks() {
         "../../../tests/data/chroma-recursive-reference.json"
     ))
     .unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for case in fixture["cases"].as_array().unwrap() {
         let width = case["width"].as_u64().unwrap() as u32;
         let height = case["height"].as_u64().unwrap() as u32;
@@ -173,7 +173,7 @@ fn reduced_chroma_changes_geometry_and_spatial_identity_only() {
 #[test]
 #[ignore = "requires a GPU"]
 fn reduced_chroma_preserves_native_response_on_signed_constants() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let pixels: Vec<f32> = vec![-100.; 16 * 12 * 3];
     let input = gpu.upload("Reduced neutral signed codes", &pixels).unwrap();
     for divisor in [4, 8] {
@@ -194,7 +194,7 @@ fn reduced_chroma_preserves_native_response_on_signed_constants() {
 #[test]
 #[ignore = "requires a GPU"]
 fn reduced_chroma_contracts_spatial_support_without_changing_noise_tables() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let pixels: Vec<f32> = (0..16 * 12)
         .flat_map(|i| [1000. + if i % 2 == 0 { 64. } else { -64. }, 1000., 1000.])
         .collect();
@@ -239,7 +239,7 @@ fn recursive_decay_retains_physical_distances_and_sixteen_sample_units() {
 #[test]
 #[ignore = "requires a GPU"]
 fn reduced_recursive_chroma_keeps_neutral_constants_and_channel_symmetry() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let native = Prepared::new([136, 88], [16.; 3], [0.8; 3], 128, 3, Support::Recursive).unwrap();
     for divisor in [4, 8] {
         let prepared = native.clone().on_grid([17, 11], divisor).unwrap();

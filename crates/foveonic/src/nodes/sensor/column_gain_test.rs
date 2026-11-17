@@ -8,7 +8,7 @@ fn rejects_incomplete_coefficients() {
 #[test]
 #[ignore = "requires a GPU"]
 fn rgb_column_correction_uses_three_coefficients_and_keeps_originals() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let values: Vec<f32> = (0..16 * 3 * 3).map(|i| i as f32 * 123.25 - 45.).collect();
     let gains: Vec<f32> = (0..16 * 3).map(|i| (i as f32 - 12.) * 0.001).collect();
     let prepared = Prepared::triplets([16, 3], 2048, gains.clone()).unwrap();
@@ -31,7 +31,7 @@ fn rgb_column_correction_uses_three_coefficients_and_keeps_originals() {
 #[test]
 #[ignore = "requires a GPU"]
 fn affine_column_correction_preserves_native_fused_rounding() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [16, 3];
     let gains = (0..96)
         .map(|i| (i as f32 * 0.001 - 0.05) / (1.04 + i as f32 * 0.0001))

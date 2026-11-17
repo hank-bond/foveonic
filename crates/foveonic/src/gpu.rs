@@ -147,6 +147,15 @@ pub struct Gpu {
 }
 
 impl Gpu {
+    // Numerical tests share immutable device/kernel resources, while each
+    // executor starts with private activity counters and fresh test-owned data.
+    #[cfg(test)]
+    pub(crate) fn test_executor() -> Self {
+        static SEED: std::sync::OnceLock<Gpu> = std::sync::OnceLock::new();
+        SEED.get_or_init(|| Self::new().expect("numerical test GPU initialization failed"))
+            .executor()
+    }
+
     pub fn executor(&self) -> Self {
         Self {
             device: self.device.clone(),
@@ -941,7 +950,7 @@ mod scheduling_tests {
     #[test]
     #[ignore = "requires a working GPU adapter"]
     fn compact_sensor_upload_preserves_every_unsigned_code() {
-        let gpu = Gpu::new().unwrap();
+        let gpu = Gpu::test_executor();
         let count = crate::background::IO_CHUNK_BYTES / 4 + 17;
         let codes: Vec<u16> = (0..count).map(|v| v as u16).collect();
         let expected: Vec<f32> = codes.iter().map(|&v| f32::from(v)).collect();
@@ -960,7 +969,7 @@ mod scheduling_tests {
     #[test]
     #[ignore = "requires a working GPU adapter"]
     fn planar_sensor_upload_interleaves_channels_across_chunks() {
-        let gpu = Gpu::new().unwrap();
+        let gpu = Gpu::test_executor();
         let count = crate::background::IO_CHUNK_BYTES / 12 + 7;
         let planes: [Vec<u16>; 3] =
             std::array::from_fn(|c| (0..count).map(|i| (i * 31 + c * 83) as u16).collect());

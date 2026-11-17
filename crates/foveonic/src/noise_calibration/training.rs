@@ -348,7 +348,7 @@ mod tests {
     #[test]
     #[ignore = "requires a GPU"]
     fn cap_moments_distinguish_persistent_defects_from_one_frame_outliers() {
-        let gpu = Gpu::new().unwrap();
+        let gpu = Gpu::test_executor();
         let extent = [40u32, 32u32];
         let length = (extent[0] * extent[1]) as usize;
         let bytes = length as u64 * 12;

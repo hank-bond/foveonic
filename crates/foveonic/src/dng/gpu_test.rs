@@ -10,7 +10,7 @@ use crate::{
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = Source::open(
         std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f"),
@@ -77,7 +77,7 @@ fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
     assert!(engine
         .encode_dng_base(&invalid, &prepared, &mut Profile::default())
         .is_err());
-    let other = Engine::new().unwrap();
+    let other = Engine::test_executor();
     assert_eq!(
         other
             .encode_dng_base(&base, &prepared, &mut Profile::default())
@@ -90,7 +90,7 @@ fn camera_encoding_uses_one_linear_range_and_rejects_invalid_samples() {
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn saved_rotation_uses_the_same_samples_for_dng_and_photographic_preview() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = Source::open(
         std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f"),
@@ -168,7 +168,7 @@ fn saved_rotation_uses_the_same_samples_for_dng_and_photographic_preview() {
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn dng_dense_camera_encoding_full_frame() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let source = Source::open(
         std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f"),

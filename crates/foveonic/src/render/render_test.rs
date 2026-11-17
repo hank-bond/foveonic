@@ -30,7 +30,7 @@ fn saturation_matrices_preserve_gray() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn color_conversion_preserves_signed_calibrated_layers_and_headroom() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let original = [
         -0.25_f32, 2., 1., 0.5, -0.5, 3., 1., 0., -1., 0., 0.25, 0.75, 2., 1., 0., -2., -1., -0.5,
     ];
@@ -223,7 +223,7 @@ fn original_result_outlives_source_and_another_render() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn scalar_fields_preserve_geometry_and_values_without_rgb_storage() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut scalar = image(&engine, &[0.; 18]);
     scalar.buffer = engine
         .gpu
@@ -270,7 +270,7 @@ fn scalar_fields_preserve_geometry_and_values_without_rgb_storage() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut buffer = image(
         &engine,
         &[
@@ -436,7 +436,7 @@ fn current_buffer_scopes_track_signed_values_and_oriented_columns() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn viewport_scopes_use_oriented_region_and_crop_relative_columns() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut buffer = image(
         &engine,
         &[
@@ -513,7 +513,7 @@ fn viewport_scopes_use_oriented_region_and_crop_relative_columns() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn interpolated_waveforms_conserve_weight_reduce_column_beats_and_track_sub_bin_levels() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let scale = crate::scopes::DENSITY_SCALE;
     let mut buffer = image(&engine, &[0.5; 18]);
     for width in [341, 490, 512] {
@@ -1087,7 +1087,7 @@ fn native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn camera_repair_matches_manual_cutoff_and_sensor_inspection_skips_selection() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
     let mut source = Source::open(path).unwrap();
@@ -1142,7 +1142,7 @@ fn camera_repair_matches_manual_cutoff_and_sensor_inspection_skips_selection() {
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn reconstruction_originals_stay_finite_across_noise_choices() {
     let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for file in [
         "blue-parking-sign",
         "glossy-leaves-and-buds",
@@ -1188,7 +1188,7 @@ fn reconstruction_originals_stay_finite_across_noise_choices() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn color_pick_uses_cropped_rotated_guide_coordinates_and_small_readback() {
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let pixels: Vec<f32> = (0..12)
         .flat_map(|y| {
             (0..16).flat_map(move |x| match (x < 8, y < 6) {

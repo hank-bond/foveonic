@@ -30,7 +30,7 @@ fn samples(gpu: &crate::gpu::Gpu, buffer: &crate::gpu::ReadGuard) -> Vec<f32> {
 #[ignore = "requires a GPU"]
 fn gpu_photographic_tone_preserves_neutral_headroom_and_rgb_ratios() {
     use crate::{gpu::Gpu, profile::Profile};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [6, 1];
     let values = [
         -0.1, 0.3, 1.4, 0., 0., 0., 0.2, 0.2, 0.2, 0.3, 0.25, 0.2, 0.8, 0.1, 0.05, 2., 2., 2.,
@@ -117,7 +117,7 @@ fn gpu_shared_spatial_operations_preserve_flats_and_keep_sources_immutable() {
 #[ignore = "requires a GPU"]
 fn gpu_local_contrast_weights_fine_bands_above_broad_bands() {
     use crate::{gpu::Gpu, profile::Profile};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [1024, 1];
     let gains = super::super::wavelet_contrast::photographic_gains();
     let mut responses = Vec::new();
@@ -162,7 +162,7 @@ fn gpu_local_contrast_weights_fine_bands_above_broad_bands() {
 #[ignore = "requires a GPU"]
 fn gpu_contrast_extremes_are_monotone_and_preserve_black_and_white() {
     use crate::{gpu::Gpu, profile::Profile};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [1024, 1];
     let data: Vec<f32> = (0..1024).flat_map(|i| [i as f32 / 1023.; 3]).collect();
     let input = gpu.upload("grayscale ramp", &data).unwrap();
@@ -188,7 +188,7 @@ fn gpu_contrast_extremes_are_monotone_and_preserve_black_and_white() {
 #[ignore = "requires a GPU"]
 fn gpu_sharpening_threshold_and_halo_controls_have_independent_effects() {
     use crate::{gpu::Gpu, profile::Profile};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [48, 24];
     let values: Vec<f32> = (0..extent[1])
         .flat_map(|y| {
@@ -247,7 +247,7 @@ fn brightness_validates_persists_and_defaults_to_neutral() {
 #[ignore = "requires a GPU"]
 fn gpu_brightness_is_anchored_monotone_ratio_preserving_and_scale_independent() {
     use crate::{gpu::Gpu, profile::Profile};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [4097, 1];
     let ramp: Vec<f32> = (0..extent[0]).flat_map(|i| [i as f32 / 4096.; 3]).collect();
     for white in [1., 4095.] {

@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CARGO_INCREMENTAL: '0'
       MACOSX_DEPLOYMENT_TARGET: '15.0'
     steps:
       - uses: actions/checkout@v4
@@ -31,23 +32,42 @@ jobs:
           xcrun --find actool
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
+      - name: Fingerprint build tools and source
+        id: build_cache
+        run: python3 scripts/build_cache.py
+
+      - name: Cache compatible Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug/deps/*
+            target/debug/build/*
+            target/debug/.fingerprint/*
+            target/release/deps/*
+            target/release/build/*
+            target/release/.fingerprint/*
+            !target/*/deps/*foveonic*
+            !target/*/deps/*docs_index*
+            !target/*/deps/*xtask*
+            !target/*/build/foveonic/**
+            !target/*/build/foveonic-gui/**
+            !target/*/build/docs-index/**
+            !target/*/build/xtask/**
+            !target/*/build/foveonic-*
+            !target/*/build/docs-index-*
+            !target/*/build/xtask-*
+            !target/*/.fingerprint/foveonic-*
+            !target/*/.fingerprint/docs-index-*
+            !target/*/.fingerprint/xtask-*
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-${{ steps.build_cache.outputs.revision }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-
+
       - name: Check formatting
         run: cargo fmt --all -- --check
-
-      - name: Test workspace and supporting tools
-        env:
-          RUST_MIN_STACK: '8388608'
-        run: |
-          cargo test --locked --workspace -- --test-threads=1
-          python3 scripts/setup_tests.py --install
-          .local/test-python/bin/python -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
-          .local/test-python/bin/python -m unittest discover -s scripts/profiling -p 'test_*.py'
-          .local/test-python/bin/python -m unittest discover -s scripts -p 'test_*.py'
-
-      - name: Check Clippy and documentation
-        run: |
-          cargo clippy --locked --workspace --all-targets -- -D warnings
-          cargo run --locked -p docs-index -- --check
 
       - name: Build native test bundle
         run: |
@@ -89,3 +109,18 @@ jobs:
           path: ${{ runner.temp }}/foveonic-macos-test
           if-no-files-found: error
           retention-days: 14
+
+      - name: Test workspace and supporting tools
+        env:
+          RUST_MIN_STACK: '8388608'
+        run: |
+          cargo test --locked --workspace -- --test-threads=1
+          python3 scripts/setup_tests.py --install
+          .local/test-python/bin/python -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
+          .local/test-python/bin/python -m unittest discover -s scripts/profiling -p 'test_*.py'
+          .local/test-python/bin/python -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Check Clippy and documentation
+        run: |
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo run --locked -p docs-index -- --check

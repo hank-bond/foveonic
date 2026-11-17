@@ -56,7 +56,7 @@ fn flare_tiles_preserve_sequential_float_rounding() {
             controls: [0; 4],
             ..Default::default()
         };
-        let gpu = Gpu::new().unwrap();
+        let gpu = Gpu::test_executor();
         let input = gpu.upload("Ordered flare fixture", &values).unwrap();
         let uniform = gpu.uniform(&params);
         let mut output = gpu.storage("Measured flare offsets", 12).unwrap();
@@ -78,7 +78,7 @@ fn flare_tiles_preserve_sequential_float_rounding() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn disabled_scaling_matches_unit_multiplier_without_modifying_input() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let values: Vec<f32> = (0..7 * 5 * 3).map(|i| (i - 60) as f32).collect();
     let input = gpu.upload("Integral correction samples", &values).unwrap();
     let mut prepared = Correction {
@@ -111,7 +111,7 @@ fn disabled_scaling_matches_unit_multiplier_without_modifying_input() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn drift_polynomial_and_fractional_knots_match_signed_scalar() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let width = 17_u32;
     let height = 13_u32;
     let source: Vec<f32> = (0..width * height * 3)

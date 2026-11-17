@@ -599,7 +599,7 @@ fn signed_response_gpu_generic_output_measures_captured_stage4_difference() {
             .map(|x| x.as_f64().unwrap() as f32)
             .collect()
     };
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let source = gpu
         .upload("Captured signed Stage3 RGB", &values("source"))
         .unwrap();
@@ -674,7 +674,7 @@ mod response_tests;
 #[ignore = "requires a working GPU adapter"]
 fn linear_detail_preserves_signed_codes_and_headroom_without_photographic_tone() {
     use crate::{gpu::Gpu, profile::Profile};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let source = gpu
         .upload("Root samples", &[4096_f32, 0., -4096., 8192., 4096., 0.])
         .unwrap();
@@ -715,7 +715,7 @@ fn linear_detail_preserves_signed_codes_and_headroom_without_photographic_tone()
 #[ignore = "requires a working GPU adapter"]
 fn pointwise_profile_response_matches_gpu_without_spatial_detail() {
     use crate::{gpu::Gpu, profile::Profile};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let prepared = prepare(
         Controls {
             exposure: 0.3,

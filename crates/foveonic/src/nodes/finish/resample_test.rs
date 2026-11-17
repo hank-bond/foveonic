@@ -51,7 +51,7 @@ fn native_polyphase_metadata_matches_all_reduced_and_restore_scales() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_polyphase_matches_native_down_restore_scalar_rows_and_tile_resets() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let f = fixture();
     let source = floats(&f["input"]);
     for row in f["results"].as_array().unwrap() {

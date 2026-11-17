@@ -32,7 +32,7 @@ fn samples(gpu: &Gpu, image: &ReadGuard) -> Vec<f32> {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_perceptual_grading_preserves_neutral_and_normalized_overlaps() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [129, 1];
     let mut values: Vec<f32> = (0..128)
         .flat_map(|index| {
@@ -70,7 +70,7 @@ fn gpu_perceptual_grading_preserves_neutral_and_normalized_overlaps() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_perceptual_monochrome_matches_color_editor_and_keeps_signed_values_finite() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [16, 8];
     let values = [0.3_f32, 0.12, 0.05].repeat(128);
     let input = gpu.upload("flat colorful patch", &values).unwrap();
@@ -184,7 +184,7 @@ fn lab(rgb: &[f32], space: ColorSpace) -> [f64; 3] {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_perceptual_boost_stays_in_working_gamut_and_preserves_hue_and_lightness() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut patches = Vec::new();
     for r in [0., 0.001, 0.01, 0.1, 0.4, 0.8, 1.] {
         for g in [0., 0.001, 0.01, 0.1, 0.4, 0.8, 1.] {
@@ -268,7 +268,7 @@ fn gpu_perceptual_boost_stays_in_working_gamut_and_preserves_hue_and_lightness()
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_perceptual_boost_favors_muted_colors_and_combines_controls_once() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let space = ColorSpace::Srgb;
     let patches = [0.3, 0.2, 0.2, 0.6, 0.01, 0.01, 0.6, 0., 0.];
     let mut previous = [0.; 3];
@@ -361,7 +361,7 @@ fn gpu_perceptual_boost_favors_muted_colors_and_combines_controls_once() {
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_saturation_contrast_spreads_or_compresses_colorfulness_without_reviving_gray() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let patches = [0.3, 0.2, 0.2, 0.6, 0.01, 0.01, 0.2, 0.2, 0.2];
     let chroma = |v: &[f32]| {
         let v = lab(v, ColorSpace::Srgb);
@@ -410,7 +410,7 @@ fn gpu_saturation_contrast_spreads_or_compresses_colorfulness_without_reviving_g
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_negative_saturation_reduces_vivid_colors_preferentially_and_reaches_gray() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let patches = [0.3, 0.2, 0.2, 0.6, 0.01, 0.01, 0.6, 0., 0.];
     let mut previous = [1.; 3];
     for saturation in [-0.1, -0.5, -0.9, -1.] {
@@ -460,7 +460,7 @@ fn gpu_negative_saturation_reduces_vivid_colors_preferentially_and_reaches_gray(
 #[test]
 #[ignore = "requires a GPU"]
 fn gpu_two_slider_curve_keeps_colorfulness_order_and_bounds_neutral_amplification() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut patches = Vec::new();
     // Independent inverse Oklab reference creates one fixed-lightness red ray.
     // Vary only chroma so brightness or hue cannot conceal a curve reversal.
@@ -513,7 +513,7 @@ fn gpu_two_slider_curve_keeps_colorfulness_order_and_bounds_neutral_amplificatio
 #[ignore = "requires a GPU"]
 fn gpu_saturation_policy_is_shared_by_global_basic_and_advanced_ranges() {
     use super::super::{advanced_color, color_editor};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let patches = [
         0.3, 0.2, 0.2, 0.7, 0.05, 0.02, 0.6, 0., 0., 0.8, 0.6, -0.01, -0.03, 0.1, 2., 0.2, 0.2,
         0.2, 0., 0., 0.,

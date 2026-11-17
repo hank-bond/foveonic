@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CARGO_INCREMENTAL: '0'
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
@@ -33,27 +34,45 @@ jobs:
           test "$(uname -m)" = arm64
           xcrun --find actool
 
+      - name: Fingerprint build tools and source
+        id: build_cache
+        run: python3 scripts/build_cache.py
+
+      - name: Cache compatible Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug/deps/*
+            target/debug/build/*
+            target/debug/.fingerprint/*
+            target/release/deps/*
+            target/release/build/*
+            target/release/.fingerprint/*
+            !target/*/deps/*foveonic*
+            !target/*/deps/*docs_index*
+            !target/*/deps/*xtask*
+            !target/*/build/foveonic/**
+            !target/*/build/foveonic-gui/**
+            !target/*/build/docs-index/**
+            !target/*/build/xtask/**
+            !target/*/build/foveonic-*
+            !target/*/build/docs-index-*
+            !target/*/build/xtask-*
+            !target/*/.fingerprint/foveonic-*
+            !target/*/.fingerprint/docs-index-*
+            !target/*/.fingerprint/xtask-*
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-${{ steps.build_cache.outputs.revision }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**') }}-
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_cache.outputs.fingerprint }}-
+
       - name: Validate version and prepare changelog notes
         run: cargo xtask release-notes --tag "$RELEASE_TAG" > "$RUNNER_TEMP/release-notes.md"
 
       - name: Check formatting
         run: cargo fmt --all -- --check
-
-      - name: Test workspace and artwork
-        env:
-          # Debug-mode GUI fixtures have large nested stack frames.
-          RUST_MIN_STACK: '8388608'
-        run: |
-          cargo test --locked --workspace -- --test-threads=1
-          python3 scripts/setup_tests.py --install
-          .local/test-python/bin/python -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
-          .local/test-python/bin/python -m unittest discover -s scripts/profiling -p 'test_*.py'
-          .local/test-python/bin/python -m unittest discover -s scripts -p 'test_*.py'
-
-      - name: Check Clippy and documentation
-        run: |
-          cargo clippy --locked --workspace --all-targets -- -D warnings
-          cargo run --locked -p docs-index -- --check
 
       - name: Build native app bundle
         run: cargo xtask bundle --tag "$RELEASE_TAG"
@@ -146,6 +165,32 @@ jobs:
             target/release/symbols-SHA256SUMS
           if-no-files-found: error
           retention-days: 90
+
+      - name: Retain signed macOS app for validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: Foveonic-macos-arm64-${{ github.sha }}
+          path: |
+            target/release/Foveonic-${{ github.ref_name }}-macos-arm64.zip
+            target/release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Test workspace and artwork
+        env:
+          # Debug-mode GUI fixtures have large nested stack frames.
+          RUST_MIN_STACK: '8388608'
+        run: |
+          cargo test --locked --workspace -- --test-threads=1
+          python3 scripts/setup_tests.py --install
+          .local/test-python/bin/python -m unittest discover -s crates/foveonic-gui/assets -p 'test_*.py'
+          .local/test-python/bin/python -m unittest discover -s scripts/profiling -p 'test_*.py'
+          .local/test-python/bin/python -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Check Clippy and documentation
+        run: |
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo run --locked -p docs-index -- --check
 
       - name: Upload to draft GitHub Release
         env:

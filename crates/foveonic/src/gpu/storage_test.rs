@@ -48,7 +48,7 @@ fn readers_block_writes_and_recycling_until_the_last_owner() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn queued_read_precedes_guarded_overwrite_without_completion_fences() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut source = gpu.upload("original", &[1_u32, 2, 3, 4]).unwrap();
     let replacement = gpu.upload("replacement", &[5_u32, 6, 7, 8]).unwrap();
     let mut retained = gpu.storage("retained copy", 16).unwrap();

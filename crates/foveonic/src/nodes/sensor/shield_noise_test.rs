@@ -157,7 +157,7 @@ fn shield_shader_and_metadata_validate() {
 #[test]
 #[ignore = "requires a GPU"]
 fn native_shield_predictions_match_robust_independent_profiles_in_both_states() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [4712, 26];
     let active = [2, 2, 4706, 18];
     let bottom = [2, 20, 4706, 24];

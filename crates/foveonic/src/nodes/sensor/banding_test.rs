@@ -181,7 +181,7 @@ fn gpu_row_patch_banks_match_native_biases_counts_and_bounds() {
             }
         }
     }
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let gains = [4.6, 2.2, 1.6];
     {
         let samples = source;
@@ -241,7 +241,7 @@ fn gpu_row_patch_banks_match_native_biases_counts_and_bounds() {
 #[ignore = "requires a working GPU adapter"]
 fn parallel_patch_statistics_keep_bright_dark_and_correlated_rejection_decisions() {
     use crate::gpu::Kernel;
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for side in [31_u32, 73, 151] {
         for level in [500_f32, 700.] {
             for correlation in [0_f32, 0.059, 0.061, 0.099, 0.101, 0.8, 1.] {
@@ -359,7 +359,7 @@ fn regional_patch_selection_keeps_physical_phase_and_rejects_invalid_storage() {
 #[ignore = "requires a working GPU adapter"]
 fn regional_row_correction_matches_whole_at_edges_banks_and_reduced_grids() {
     use crate::render::{Scale, WorkingGrid};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let metadata = metadata(1600, 640);
     for divisor in [1, 2, 8] {
         let grid = WorkingGrid::new([1600, 640], Scale::new(divisor).unwrap(), 8)

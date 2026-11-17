@@ -139,7 +139,7 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
         .insert("RESOLUTION".into(), "LOW".into());
     source.validate().unwrap();
     let original = source.samples().to_vec();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let exports = tempfile::tempdir().unwrap();
     let mut settings = Settings::new("Auto", "Standard");
     let mut controls = controls::default_noise_controls();
@@ -233,7 +233,7 @@ fn synthetic_low_grid_renders_without_high_blue_storage() {
 fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     assert!(calibration::is_interchangeable(&source.metadata));
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let cap = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = cap
         .editing_defaults(&source.metadata, Rendering::Color)
@@ -321,7 +321,7 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
 fn small_color_grids_preserve_native_histories_and_requested_controls() {
     let source =
         std::sync::Arc::new(Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = Settings::new("Auto", "Standard");
     settings.reconstruction = Some(controls::default_noise_controls());
     let mut native = None;
@@ -523,7 +523,7 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
 #[ignore = "requires GPU and QUATTRO_X3F ordinary DP or sd HIGH original"]
 fn small_composition_preserves_native_metadata_and_full_inspection() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
         let mut settings = Settings::new("Auto", "Standard");
         settings.working_scale = quality;
@@ -571,7 +571,7 @@ fn small_composition_preserves_native_metadata_and_full_inspection() {
 fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention() {
     let source =
         std::sync::Arc::new(Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let native_cell_bytes = source.samples().len() as u64 * 4;
     for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
         for (noise_edit, combined_edit) in [(false, false), (true, false), (true, true)] {

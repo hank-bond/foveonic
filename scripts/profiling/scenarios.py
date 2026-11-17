@@ -21,7 +21,8 @@ from inputs import stage_inputs
 from scenario_checks import checked_scenario_images, pointer_value, same_numeric, validate_choice_recipes, check_cache_workflow
 from image_replay import replay_images
 from cache_workflow import associate_trace
-from process_memory import wait_guarded
+from process_memory import MemoryGuardExceeded, wait_guarded
+from correctness_cohort import CohortStopped
 
 NAMES = ('initial', 'warm-disk', 'prefetched-selection', 'warm-edit', 'cached-switch', 'rapid-supersession', 'memory-pressure', 'slider-drag', 'selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'collection-journey', 'choice-journey', 'source-loading', 'cache-workflow')
 
@@ -272,10 +273,14 @@ def shutdown_assertions(native_result, inputs):
     return assertions
 
 
-def compare_scenario_images(native_result, inputs, binary, directory, control_pointer='/exposure', native_photo_count=1, max_memory_mb=None):
+def compare_scenario_images(native_result, inputs, binary, directory, control_pointer='/exposure',
+                            native_photo_count=1, max_memory_mb=None, *, cohort=None, batch=False):
     """Check the scenario's intended edits, then replay its captured final images."""
     action, photos = checked_scenario_images(native_result, inputs, directory, control_pointer, native_photo_count)
-    return replay_images(native_result, inputs, photos, action, binary, directory, max_memory_mb)
+    options = {} if cohort is None else {'cohort': cohort}
+    if batch:
+        options['batch'] = True
+    return replay_images(native_result, inputs, photos, action, binary, directory, max_memory_mb, **options)
 
 
 def prepare_trial(args, selected, directory, source_hash):
@@ -367,7 +372,7 @@ def run_trial(args, selected, directory, source_hash):
     return collect_trial(args, prepared, contention, timing_valid)
 
 
-def collect_trial(args, prepared, contention, timing_valid, session=None):
+def collect_trial(args, prepared, contention, timing_valid, session=None, *, cohort=None):
     directory, evidence = prepared['directory'], prepared['evidence']
     inputs, manifest, launch = prepared['inputs'], prepared['manifest'], prepared['launch']
     if session is not None:
@@ -437,11 +442,18 @@ def collect_trial(args, prepared, contention, timing_valid, session=None):
         manifest['fresh_renderer'] = {'path':str(fresh_binary), 'sha256':digest(fresh_binary)}
         test_result['environment']['fresh_binary_sha256'] = manifest['fresh_renderer']['sha256']
         try:
+            options = {} if cohort is None else {'cohort': cohort}
+            if getattr(args, 'batch_image_verification', False):
+                options['batch'] = True
+                manifest['batch_image_verification'] = True
             comparisons = compare_scenario_images(native_result, inputs, fresh_binary, directory, getattr(args, 'control_pointer', '/exposure'),
-                                                  manifest['scenario'].get('native_photo_count', 1), getattr(args,'max_memory_mb',None))
+                                                  manifest['scenario'].get('native_photo_count', 1), getattr(args,'max_memory_mb',None), **options)
+        except CohortStopped:
+            raise
         except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
             comparisons = [{'name':'image_samples', 'step':'slider-drag', 'source':None,
-                            'outcome':'failed', 'failure':str(error)}]
+                            'outcome':'failed', 'failure':str(error),
+                            'failure_kind':'memory_guard' if isinstance(error, MemoryGuardExceeded) else 'verification'}]
         include_assertions(test_result, comparisons)
     test_result_path = evidence/'test-result.json'
     test_result_path.write_text(json.dumps(test_result, indent=2)+'\n')
@@ -462,6 +474,10 @@ def collect_trial(args, prepared, contention, timing_valid, session=None):
                              'source_tree_sha256':manifest['source_tree_sha256']})
     if 'fresh_renderer' in manifest:
         result['artifacts']['fresh_renderer'] = manifest['fresh_renderer']
+    if manifest.get('batch_image_verification'):
+        files = [directory/'fresh-batch.json', *sorted(directory.glob('fresh-*-terminal.json'))]
+        result['artifacts']['fresh_verification_batch'] = [
+            {'path': str(path), 'sha256': digest(path)} for path in files if path.is_file()]
     for name in ('slider-drag.json', 'slider-observation.json', 'slider-failure.png'):
         path=evidence/name
         if path.exists():
@@ -480,6 +496,10 @@ def collect_trial(args, prepared, contention, timing_valid, session=None):
 
 
 def validated_inputs(args):
+    if getattr(args, 'prune_verified_images', False) and (args.scenario != 'slider-drag' or args.mode != 'off' or args.compare_images is None):
+        raise ValueError('verified-image pruning requires an Off slider case and independent image verification')
+    if getattr(args, 'batch_image_verification', False) and (args.mode != 'off' or args.compare_images is None):
+        raise ValueError('batch image verification requires Off correctness mode and an independent renderer')
     if getattr(args, 'max_memory_mb', None) is not None and args.max_memory_mb <= 0:
         raise ValueError('physical-footprint limit must be positive')
     args.binary = args.binary.resolve(strict=True)
@@ -563,7 +583,7 @@ def run(args):
     return report
 
 
-def write_trial_report(args, directory, results):
+def write_trial_report(args, directory, results, *, session=None, failure=None):
     metrics = {}
     for result in results:
         if not result['timing_valid']:
@@ -583,7 +603,23 @@ def write_trial_report(args, directory, results):
               'limits':['Off baseline elapsed values and detailed trace attribution remain separate datasets.',
                         'Native scenarios do not measure physical screen presentation.',
                         'Fresh numerical equality is checked only when image comparison is requested.']}
+    if session is not None:
+        report.update(session_reuse=session, timing_valid=False)
+        report['limits'].append('Reused application sessions are correctness evidence. Their timings are not fresh-launch latency baselines.')
+        if not report['passed'] and failure is None:
+            failure = next((result['test_result'].get('failure') for result in results
+                            if result['test_result'].get('failure')), 'case assertions did not pass')
+    if failure:
+        report['failure'] = failure
     (directory/'regression.json').write_text(json.dumps(report, indent=2)+'\n')
+    if report['passed'] and getattr(args, 'prune_verified_images', False):
+        from verified_images import prune
+        try:
+            prune(directory)
+        except (OSError, ValueError) as error:
+            report.update(passed=False, retention_failure=f'{type(error).__name__}: {error}')
+            report['failure'] = report['retention_failure']
+            (directory/'regression.json').write_text(json.dumps(report, indent=2)+'\n')
     return report
 
 
@@ -620,6 +656,8 @@ def argument_parser():
     parser.add_argument('--initial-values',choices=['mixed','equal'],default='mixed',help='expected relation of staged values for slider-drag')
     parser.add_argument('--background',action='store_true',help='run the scenario window behind normal windows without requesting foreground activation')
     parser.add_argument('--editing-section',choices=['WhiteBalance','Mix','Tone','Saturation','ColorEditor','Noise','Detail','Sharpening','Corrections'],default='Tone',help='move this editing section into view for slider-drag')
+    parser.add_argument('--prune-verified-images',action='store_true',help='retain checked proofs and remove only complete successful slider raw samples')
+    parser.add_argument('--batch-image-verification', action='store_true', help='verify all photos of a correctness case with one independent device and fresh graphs')
     parser.add_argument('--compare-images',type=Path,metavar='RENDERER',help='compare final slider or journey frames with fresh renders from this profile_pipeline binary')
     parser.add_argument('--max-ui-gap-ms',type=float,help='optional caller-selected maximum UI update gap during measured scenario actions')
     parser.add_argument('--pressure-mib',type=int,default=128)

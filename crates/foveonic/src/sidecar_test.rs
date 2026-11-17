@@ -405,7 +405,7 @@ fn restored_recipe_replays_exact_photographic_pixels() {
     let input = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
     let source = Source::open(input).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let mut settings = edited();
     settings.white_balance = "Sunlight".into();
     settings.color_mode = "Standard".into();

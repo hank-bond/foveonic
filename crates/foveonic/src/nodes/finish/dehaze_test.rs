@@ -105,7 +105,7 @@ fn floats(gpu: &Gpu, buffer: &ReadGuard) -> Vec<f32> {
 #[test]
 #[ignore = "requires a GPU"]
 fn dehaze_estimates_patches_and_bypasses_empty_or_neutral_images_exactly() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [64, 48];
     for rgb in [[0.; 3], [0.08, 0.1, 0.12], [0.7, 0.8, 0.9]] {
         let values: Vec<f32> = (0..extent[0] * extent[1]).flat_map(|_| rgb).collect();
@@ -173,7 +173,7 @@ fn dehaze_estimates_patches_and_bypasses_empty_or_neutral_images_exactly() {
 #[test]
 #[ignore = "requires a GPU"]
 fn dehaze_removes_or_adds_haze_preserves_headroom_and_monochrome() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let values = [
         0.08, 0.1, 0.12, 0.25, 0.3, 0.35, 1.5, 1.5, 1.5, -0.01, -0.01, -0.01,
     ];
@@ -267,7 +267,7 @@ fn dehaze_removes_or_adds_haze_preserves_headroom_and_monochrome() {
 #[test]
 #[ignore = "requires a GPU"]
 fn dehaze_candidate_heap_matches_independent_spatial_selection() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let [width, height] = [96usize, 80usize];
     let mut seed = 1031u32;
     let pixels: Vec<[u32; 3]> = (0..width * height)
@@ -326,7 +326,7 @@ fn dehaze_candidate_heap_matches_independent_spatial_selection() {
 #[test]
 #[ignore = "requires a GPU"]
 fn dehaze_tiny_chromatic_gates_preserve_saturated_colors() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let input = gpu
         .upload(
             "Saturated haze fixture",
@@ -473,7 +473,7 @@ fn camera_basis_normalizes_gain_and_rejects_invalid_calibration() {
 #[test]
 #[ignore = "requires a GPU"]
 fn camera_coordinates_control_candidate_selection_and_color_transport() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let matrix = [2., -1., 0., -1., 2., 0., 0., -1., 2.];
     let basis = Basis::new(ColorSpace::Srgb, matrix, [0.299, 0.587, 0.114]).unwrap();
     // The neutral half has the larger minimum in working RGB. The other half
@@ -559,7 +559,7 @@ fn camera_coordinates_control_candidate_selection_and_color_transport() {
 #[test]
 #[ignore = "requires a GPU"]
 fn camera_coordinate_response_matches_measured_points_and_retains_signed_samples() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let basis = Basis::new(
         ColorSpace::Srgb,
         [2., -1., 0., -1., 2., 0., 0., -1., 2.],
@@ -650,7 +650,7 @@ fn camera_coordinate_response_matches_measured_points_and_retains_signed_samples
 #[test]
 #[ignore = "requires a GPU"]
 fn manual_dehaze_skips_color_selection_and_retains_identical_brightness_calibration() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [64, 48];
     let pixels: Vec<f32> = (0..extent[0] * extent[1])
         .flat_map(|i| {
@@ -683,7 +683,7 @@ fn manual_dehaze_skips_color_selection_and_retains_identical_brightness_calibrat
 #[test]
 #[ignore = "requires a GPU"]
 fn shadow_protector_eases_channel_loss_with_one_rgb_weight_and_preserves_bypasses() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let samples = [
         [0.015_f32, 0.025, 0.01],
         [0.08, 0.1, 0.12],
@@ -836,7 +836,7 @@ fn shadow_protector_eases_channel_loss_with_one_rgb_weight_and_preserves_bypasse
 #[test]
 #[ignore = "requires a GPU"]
 fn shadow_protector_stays_continuous_when_an_input_channel_crosses_zero() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let basis = Basis::new(
         ColorSpace::AdobeRgb,
         [1.4, -0.2, -0.2, -0.1, 1.2, -0.1, -0.2, -0.3, 1.5],
@@ -880,7 +880,7 @@ fn shadow_protector_stays_continuous_when_an_input_channel_crosses_zero() {
 #[test]
 #[ignore = "requires a GPU"]
 fn partitioned_estimate_matches_serial_for_ties_empty_and_saturation() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     // Tiny overviews leave some partitions empty. The uneven overview checks
     // partition boundaries; 512 squared reaches the largest analysis and K.
     for extent in [[1, 1], [7, 3], [257, 193], [512, 512]] {
@@ -946,7 +946,7 @@ fn partitioned_estimate_matches_serial_for_ties_empty_and_saturation() {
 #[test]
 #[ignore = "requires a GPU"]
 fn partitioned_selection_resolves_equal_score_and_intensity_by_pixel_index() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [33, 5];
     let k = 37;
     // Both colors have minimum 4096 and intensity 8192. Only their indices differ.
@@ -1126,7 +1126,7 @@ fn scalar_estimate_truth(
 #[test]
 #[ignore = "requires a GPU"]
 fn dense_quality_selection_matches_sorted_cpu_truth_beyond_the_old_heap_capacity() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [128, 96];
     // This formula is the complete fixture. It exercises exact ties and mixed candidate ranks.
     let samples: Vec<u32> = (0..extent[1])
@@ -1172,7 +1172,7 @@ fn dense_quality_selection_matches_sorted_cpu_truth_beyond_the_old_heap_capacity
 #[test]
 #[ignore = "requires a GPU"]
 fn dense_selection_accumulates_more_than_one_u32_of_channel_codes_without_overflow() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [512, 256];
     let values = vec![1_f32; (extent[0] * extent[1] * 3) as usize];
     let input = gpu.upload("haze sum carry fixture", &values).unwrap();
@@ -1242,7 +1242,7 @@ fn scalar_tail_color(samples: &[[u32; 3]], params: Estimate) -> [f64; 4] {
 #[test]
 #[ignore = "requires a GPU"]
 fn quality_tail_average_matches_sorted_group_oracle_for_empty_and_extreme_bins() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [33, 7];
     for mode in 0..3 {
         let samples: Vec<[u32; 3]> = (0..extent[0] * extent[1])
@@ -1305,7 +1305,7 @@ fn quality_tail_average_matches_sorted_group_oracle_for_empty_and_extreme_bins()
 #[test]
 #[ignore = "requires a GPU"]
 fn quality_tail_boundary_intentionally_averages_fine_score_intensity_and_index_ranks() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [33, 5];
     // Every pixel lands in dark bin 16. Fine scores, intensity and index would
     // choose different exact subsets, while this experiment averages the bin.
@@ -1350,7 +1350,7 @@ fn quality_tail_boundary_intentionally_averages_fine_score_intensity_and_index_r
 #[test]
 #[ignore = "requires a GPU"]
 fn quality_tail_integer_sums_carry_before_fractional_boundary_weighting() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [512, 256];
     let values = vec![1_f32; (extent[0] * extent[1] * 3) as usize];
     let input = gpu.upload("haze tail carry fixture", &values).unwrap();
@@ -1457,7 +1457,7 @@ fn quality_tail_partition_boundaries_cover_large_inputs_without_overflow() {
 #[test]
 #[ignore = "requires a GPU"]
 fn quality_tail_partition_counts_preserve_all_estimate_bits_against_sixteen() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [33, 7];
     let values: Vec<f32> = (0..extent[0] * extent[1])
         .flat_map(|i| {
@@ -1520,7 +1520,7 @@ fn square_minimum_truth(pixels: &[[u32; 4]], extent: [u32; 2], radius: u32) -> V
 #[test]
 #[ignore = "requires a GPU"]
 fn expanded_dark_minima_match_rectangular_cpu_truth_at_edges_and_partial_steps() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for (extent, radii) in [
         ([1, 1], &[0, 1, 17, 384][..]),
         ([7, 3], &[0, 1, 2, 3, 4, 17, 121, 122, 384][..]),
@@ -1591,7 +1591,7 @@ fn expanded_dark_minima_match_rectangular_cpu_truth_at_edges_and_partial_steps()
 #[test]
 #[ignore = "requires a GPU"]
 fn expanded_minima_preserve_complete_estimates_and_corrections_in_both_policies() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let extent = [561, 153];
     let crop = [7, 5, 552, 148];
     let values: Vec<f32> = (0..extent[1])

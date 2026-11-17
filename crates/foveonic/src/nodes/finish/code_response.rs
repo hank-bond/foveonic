@@ -91,7 +91,7 @@ mod tests {
     #[test]
     #[ignore = "requires a GPU"]
     fn all_codes_select_their_channel_table_without_mutating_input() {
-        let gpu = Gpu::new().unwrap();
+        let gpu = Gpu::test_executor();
         let tables: Vec<f32> = (0..3 * TABLE_LENGTH).map(|v| v as f32 / 65536.).collect();
         let prepared = Prepared::new(tables).unwrap();
         let values: Vec<f32> = (0..TABLE_LENGTH).flat_map(|v| [v as f32; 3]).collect();

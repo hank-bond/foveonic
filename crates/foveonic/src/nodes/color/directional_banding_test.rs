@@ -270,7 +270,7 @@ fn reference_fine_axis(input: &[f32], p: Parameters, axis: usize) -> Vec<f32> {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn inactive_bands_preserve_source_and_directional_passes_reduce_matching_noise() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let p = parameters();
     let area = [4, 4, 124, 92];
     let source: Vec<f32> = (0..96)
@@ -328,7 +328,7 @@ fn inactive_bands_preserve_source_and_directional_passes_reduce_matching_noise()
 #[ignore = "requires a working GPU adapter"]
 fn reduced_bands_preserve_flat_fields_at_small_and_padded_extents() {
     use crate::render::{Scale, WorkingGrid};
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     for divisor in [2, 4, 8, 64, 1024] {
         let scale = Scale::new(divisor).unwrap();
         let grid = WorkingGrid::new([128, 96], scale, 8)
@@ -373,7 +373,7 @@ fn reduced_bands_preserve_flat_fields_at_small_and_padded_extents() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn added_bands_exclude_shields_and_strength_scales_the_same_estimate() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let p = parameters();
     let area = [12, 12, 116, 84];
     let source = |shield: f32| -> Vec<f32> {
@@ -444,7 +444,7 @@ fn added_bands_exclude_shields_and_strength_scales_the_same_estimate() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn row_and_column_estimators_transpose_without_blending_a_real_edge() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let p = parameters();
     let area = [4, 4, 124, 92];
     let source: Vec<f32> = (0..96)
@@ -532,7 +532,7 @@ fn row_and_column_estimators_transpose_without_blending_a_real_edge() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn compact_regions_retain_native_tile_phase_and_reflection() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let mut p = parameters();
     p.source = [256, 192, 2, 2];
     p.input_bounds = [0, 0, p.source[0], p.source[1]];
@@ -582,7 +582,7 @@ fn compact_regions_retain_native_tile_phase_and_reflection() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn negative_layers_vary_continuously_near_zero_with_added_bands() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let p = parameters();
     let area = [4, 4, 124, 92];
     let source: Vec<f32> = (0..96)
@@ -648,7 +648,7 @@ fn negative_layers_vary_continuously_near_zero_with_added_bands() {
 #[test]
 #[ignore = "requires a working GPU adapter"]
 fn fine_extra_strength_scales_bands_without_amplifying_clipping() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let p = parameters();
     let render = |values: &[f32], columns: f32, rows: f32| {
         let input = gpu

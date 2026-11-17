@@ -91,7 +91,7 @@ fn filtered_restoration_retains_the_original_blue_guide() {
     )
     .unwrap();
     let prepared = Prepared::new([w / 2, h / 2], 0.3, BLUE_VARIANCE, Some(filter)).unwrap();
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let output = apply(
         &gpu,
         &gpu.upload("Guide", &guide).unwrap(),
@@ -339,7 +339,7 @@ fn selected_full_native_stage2b_rgb_matches() {
 #[test]
 #[ignore = "requires GPU"]
 fn same_size_averages_each_cell_and_preserves_rgb_packing() {
-    let gpu = Gpu::new().unwrap();
+    let gpu = Gpu::test_executor();
     let [w, h] = [8_u32, 8_u32];
     let mut source = vec![0_f32; (w * h * 3) as usize];
     let mut color = source.clone();

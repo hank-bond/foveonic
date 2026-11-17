@@ -191,7 +191,7 @@ fn learned_repairs_follow_serial_switches_bypasses_and_cached_rendering() {
     trained.validate().unwrap();
     let trained = Arc::new(trained);
     let source = Arc::new(source);
-    let mut engine = Engine::new().unwrap();
+    let mut engine = Engine::test_executor();
     let mut session = RenderSession::new(source.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.repair = None;

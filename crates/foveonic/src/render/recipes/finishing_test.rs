@@ -41,7 +41,7 @@ fn tone_selection_bypasses_inactive_controls_without_overwriting_them() {
 #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE pointing to a supported X3F"]
 fn gpu_tone_method_ignores_inactive_edits_in_the_rendered_result() {
     let source = Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap();
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     for rendering in [Rendering::Color, Rendering::Monochrome] {
         let mut settings = caps.editing_defaults(&source.metadata, rendering).unwrap();
@@ -93,7 +93,7 @@ fn gpu_adaptive_regions_use_whole_analysis_and_match_whole_pixels() {
     use crate::render::BaseResponse;
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = caps
         .editing_defaults(&source.metadata, Rendering::Color)
@@ -157,7 +157,7 @@ fn gpu_adaptive_regions_use_whole_analysis_and_match_whole_pixels() {
 fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let capabilities = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     for rendering in [Rendering::Color, Rendering::Monochrome] {
         let mut settings = capabilities
@@ -304,7 +304,7 @@ fn view_pixel(image: &crate::image::RenderedImage, bytes: &[u8], x: u32, y: u32)
 fn gpu_adaptive_hdr_cold_regions_pan_and_continue_to_whole() {
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     for policy in [
         crate::render::ProcessingQuality::Quality,
@@ -398,7 +398,7 @@ fn gpu_adaptive_hdr_cold_regions_pan_and_continue_to_whole() {
 fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let capabilities = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = capabilities
         .editing_defaults(&source.metadata, Rendering::Color)
@@ -533,7 +533,7 @@ fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
 fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent() {
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut canonical_guide = None;
     for rendering in [Rendering::Color, Rendering::Monochrome] {
@@ -668,7 +668,7 @@ fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent()
 fn gpu_rotated_regions_match_sampled_whole_view() {
     let source =
         Arc::new(Source::open(std::env::var_os("FOVEONIC_FINISH_SOURCE").unwrap()).unwrap());
-    let engine = Engine::new().unwrap();
+    let engine = Engine::test_executor();
     let capabilities = ControlCapabilities::from_metadata(&source.metadata).unwrap();
     let mut settings = capabilities
         .editing_defaults(&source.metadata, Rendering::Color)
