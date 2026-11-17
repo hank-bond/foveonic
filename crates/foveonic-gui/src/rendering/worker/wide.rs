@@ -1,4 +1,4 @@
-//! Interleaves opt-in warm photo executions while ordinary worker code owns delivery.
+//! Interleaves warm photo executions while ordinary worker code owns delivery.
 
 #[path = "admission.rs"]
 mod admission;

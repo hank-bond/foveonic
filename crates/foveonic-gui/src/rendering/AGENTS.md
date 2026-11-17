@@ -14,7 +14,7 @@ Authored edits remain with the application, multi-edit runtime and sidecar sessi
 
 ### Directories
 
-- **[worker/](./worker/AGENTS.md)** The render worker consumes ready sources, coordinates opt-in grouped execution and owns presentation reuse, processing sessions and idle preparation.
+- **[worker/](./worker/AGENTS.md)** The render worker consumes ready sources, coordinates grouped execution and owns presentation reuse, processing sessions and idle preparation.
 
 ### Source files
 

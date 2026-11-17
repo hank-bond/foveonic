@@ -1,5 +1,5 @@
 ---
-summary: "The render worker consumes ready sources, coordinates opt-in grouped execution and owns presentation reuse, processing sessions and idle preparation."
+summary: "The render worker consumes ready sources, coordinates grouped execution and owns presentation reuse, processing sessions and idle preparation."
 ---
 
 # Render execution
@@ -20,6 +20,6 @@ Presentation snapshots are shared with the coordinator and inventoried by borrow
 - **[preparation.rs](./preparation.rs)** Prepares ready decoded neighbors during idle time using the render worker's existing owners.
 - **[presentation.rs](./presentation.rs)** Reframes one immutable whole-image result without reopening sources or running photographic nodes.
 - **[processing.rs](./processing.rs)** Owns verified per-photo native and reduced sessions under the shared processing budget.
-- **[wide.rs](./wide.rs)** Interleaves opt-in warm photo executions while ordinary worker code owns delivery.
+- **[wide.rs](./wide.rs)** Interleaves warm photo executions while ordinary worker code owns delivery.
 
 <!-- INDEX:END -->

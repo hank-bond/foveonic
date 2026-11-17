@@ -12,15 +12,15 @@ Requirements: [release specification](../docs/specs/releases.md), [release guide
 
 Ship memory-aware wide rendering through the shared execution lifecycle, priority for viewport and auxiliary work over browser previews and idle continuation, compatible preview reuse, optional idle full-image completion, group Before/After and linked Shift gestures. The release build enables the previously explicit wide feature. Preserve subsequent main changes through 0.8.4, including capture metadata, encoder compatibility, Windows startup and the new test process.
 
-The Shift-zoom fix passes all 639 ordinary GUI checks after reproducing both the visible mixed-aspect bug and a known-hidden Fit regression. The Shift-pan case independently reproduces unequal on-screen displacement before its fix. These intermediate checks do not replace the final candidate run.
+The Shift-zoom fix passes all 639 ordinary GUI checks after reproducing both the visible mixed-aspect bug and a known-hidden Fit regression. The Shift-pan case independently reproduces unequal on-screen displacement before its fix. The final combined GUI suite passes all 642 ordinary tests, including mixed aspect ratios, both source orders, different zooms, display densities, Space/tool isolation and hidden/carry behavior. Independent reviews have no outstanding findings. These intermediate checks do not replace the final candidate run.
 
 The release process uses one frozen source/configuration, independent Mac and Windows lanes, maintained required-test classification, bounded concurrent slider sessions with independent numerical verification, exact packaged startup/rendering checks and separate exclusive performance. Published 0.8.4 is the performance baseline. A conditional parallel-host schedule is not a release duration guarantee.
 
 ## Work
 
-- [ ] Resolve and independently review the merge against current main. Preserve unrelated 0.8.4 release records in the main checkout.
-- [ ] Reproduce and fix Shift-zoom anchoring with behavioral mixed-aspect, pan, wheel/pinch, selection and tool checks.
-- [ ] Enable the tested wide release configuration, set 0.9.0 and prepare reviewed changelog/draft notes.
+- [x] Resolve and independently review the merge against current main. Preserve unrelated 0.8.4 release records in the main checkout.
+- [x] Reproduce and fix Shift-zoom anchoring with behavioral mixed-aspect, pan, wheel/pinch, selection and tool checks.
+- [x] Enable the tested wide release configuration, set 0.9.0 and prepare reviewed changelog/draft notes.
 - [ ] Freeze matching app, renderer, tests and inputs. Reconcile every ignored test with the maintained capability inventory.
 - [ ] Run ordinary workspace/renderer, lint, Python, documentation and all required GPU/original-file checks on both backends.
 - [ ] Run the complete native catalog, all slider cases and approved numerical comparisons using independent host lanes and exact-union report checks.
