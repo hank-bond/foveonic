@@ -266,6 +266,79 @@ fn sdk_ring_buffer_bounds_capture_and_unsupported_configs_are_rejected() {
 }
 
 #[test]
+fn stop_closes_admission_before_draining_accepted_emission() {
+    use std::{sync::mpsc, time::Duration};
+
+    let _serial = TEST.lock().unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let recorder = Recorder::new();
+    recorder
+        .start(CaptureConfig {
+            mode: Mode::Wall,
+            buffer_kib: 64,
+        })
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    let (entered, observed) = mpsc::channel();
+    let (release, held) = mpsc::channel::<()>();
+    let producer = std::thread::spawn(move || {
+        event(Category::Cpu, "boundary.accepted", |fields| {
+            let _ = entered.send(());
+            let _ = held.recv();
+            fields.bool("accepted_before_stop", true);
+        });
+    });
+    let entered = observed.recv_timeout(Duration::from_secs(5)).is_ok();
+    let saving = recorder
+        .stop_save(
+            temporary.path().join("boundary"),
+            serde_json::json!({"scenario":"capture-stop-boundary"}),
+        )
+        .unwrap();
+
+    // The accepted emitter still owns the read guard. Closing admission must
+    // not wait for it to finish, while saving must preserve its eventual event.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while active_mode() != Mode::Off && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let closed_while_held = active_mode() == Mode::Off;
+    let drops_before = TRANSITION_DROPS.load(Ordering::Relaxed);
+    let mut post_stop_fields = false;
+    event(Category::Cpu, "boundary.after_stop", |_| {
+        post_stop_fields = true;
+    });
+    let drops_after = TRANSITION_DROPS.load(Ordering::Relaxed);
+
+    // Clean up the held emitter and control thread before any red assertion.
+    drop(release);
+    let producer = producer.join();
+    let saved = saving.recv_timeout(Duration::from_secs(5));
+    assert!(entered, "accepted emitter did not reach its fields");
+    assert!(producer.is_ok(), "accepted emitter failed");
+    let saved = saved.unwrap().unwrap();
+    let trace = std::fs::read(&saved.trace).unwrap();
+    assert!(trace
+        .windows(b"boundary.accepted".len())
+        .any(|bytes| bytes == b"boundary.accepted"));
+    assert!(
+        closed_while_held,
+        "stop waited for an accepted emitter before closing admission: fields={post_stop_fields}, drops={drops_before}->{drops_after}"
+    );
+    assert!(!post_stop_fields, "closed admission evaluated event fields");
+    assert_eq!(drops_after, drops_before);
+    assert!(!trace
+        .windows(b"boundary.after_stop".len())
+        .any(|bytes| bytes == b"boundary.after_stop"));
+    let summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&saved.summary).unwrap()).unwrap();
+    assert_eq!(summary["complete"], true);
+    assert_eq!(summary["emission_transition_drops"], 0);
+}
+
+#[test]
 fn capture_transition_never_blocks_emission_or_accepts_an_old_generation() {
     let _serial = TEST.lock().unwrap();
     let temporary = tempfile::tempdir().unwrap();

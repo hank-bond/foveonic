@@ -1,9 +1,9 @@
 //! Runs replayable transitions through the existing native scenario.
 
-use crate::App;
+use crate::{rendering::worker::Frame, App};
 use eframe::egui;
 use foveonic::render::ProcessingQuality;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 enum Step {
@@ -325,30 +325,60 @@ impl TransitionJourney {
         }
         result
     }
+    /// Current regional feedback is complete without optional Whole continuation.
+    pub(super) fn smart_feedback<'a>(app: &'a App, path: &Path, native: bool) -> Option<&'a Frame> {
+        let settings = if app.selected.as_deref() == Some(path) {
+            &app.settings
+        } else {
+            app.multi_edit.settings(path)?
+        };
+        let base = app.current_photo_frame(path)?;
+        let current = |frame: &Frame| {
+            crate::rendering::matching::same_authored_edits(&frame.requested, settings)
+                && app.worker.is_settled_and_admitted(frame)
+                && app
+                    .worker
+                    .cache
+                    .source_origin(path)
+                    .is_none_or(|origin| origin == frame.origin)
+        };
+        app.photo_detail(
+            path,
+            Some(base),
+            settings,
+            crate::editor::Rendition::Current,
+        )
+        .filter(|detail| {
+            let Some(visible) = app.viewports.view(Some(path)).visible_pixels() else {
+                return false;
+            };
+            let window = base.display_window(false);
+            let visible = [
+                visible.top_left[0] + window[0],
+                visible.top_left[1] + window[1],
+                visible.bottom_right[0] + 1 + window[0],
+                visible.bottom_right[1] + 1 + window[1],
+            ];
+            current(detail)
+                && detail.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
+                && crate::rendering::smart::contains(detail.detail_region(), visible)
+        })
+        .or_else(|| {
+            (current(base)
+                && (!native
+                    || base.artifact.settings.working_scale == foveonic::render::Scale::NATIVE))
+                .then_some(base)
+        })
+    }
+
     fn observe_smart_edit(&mut self, app: &App, _paths: &[PathBuf]) -> Result<(), String> {
         for path in app.edit_selection.paths() {
             if self.smart_observed.contains(path) {
                 continue;
             }
-            let frame = app
-                .multi_edit
-                .detail(path)
-                .filter(|detail| {
-                    app.multi_edit.settings(path).is_some_and(|settings| {
-                        crate::rendering::matching::same_authored_edits(&detail.requested, settings)
-                    })
-                })
-                .or_else(|| app.current_photo_frame(path));
-            let settings = if app.selected.as_ref() == Some(path) {
-                Some(&app.settings)
-            } else {
-                app.multi_edit.settings(path)
-            };
-            if let Some(frame) = frame.filter(|frame| {
-                settings.is_some_and(|settings| {
-                    crate::rendering::matching::same_authored_edits(&frame.requested, settings)
-                })
-            }) {
+            if let Some(frame) =
+                Self::smart_feedback(app, path, self.smart_zoomed_paths.contains(path))
+            {
                 if self.smart_zoomed {
                     let expected = if self.smart_zoomed_paths.contains(path) {
                         foveonic::render::Scale::NATIVE
@@ -1261,27 +1291,15 @@ impl TransitionJourney {
                     .smart_zoomed_paths
                     .last()
                     .ok_or("missing zoomed Smart photo")?;
-                let frame = if app.selected.as_ref() == Some(path) {
-                    app.frame.as_ref()
-                } else {
-                    app.multi_edit.frame(path)
-                };
-                if frame.is_none_or(|frame| {
-                    frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
-                }) {
+                if Self::smart_feedback(app, path, true).is_none() {
                     return Ok(false);
                 }
             }
             if step == Step::SmartGroupSelectPending {
                 for path in paths {
-                    if app.current_photo_frame(path).is_none_or(|frame| {
-                        app.multi_edit.settings(path).is_none_or(|settings| {
-                            !crate::rendering::matching::same_authored_edits(
-                                &frame.requested,
-                                settings,
-                            )
-                        })
-                    }) {
+                    if Self::smart_feedback(app, path, self.smart_zoomed_paths.contains(path))
+                        .is_none()
+                    {
                         return Ok(false);
                     }
                 }

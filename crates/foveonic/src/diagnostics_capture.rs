@@ -269,11 +269,11 @@ fn start(config: CaptureConfig) -> Result<TracingSession> {
         session.start_blocking();
         GENERATION.fetch_add(1, Ordering::AcqRel);
         TRANSITION_DROPS.store(0, Ordering::Relaxed);
+        drop(transition);
         MODE.store(
             if config.mode == Mode::Gpu { 2 } else { 1 },
             Ordering::Release,
         );
-        drop(transition);
         event(Category::Scenario, "capture.start", |fields| {
             fields
                 .u64("capture_id", capture_id().unwrap())
@@ -288,8 +288,9 @@ fn start(config: CaptureConfig) -> Result<TracingSession> {
 }
 
 fn stop(session: &mut TracingSession) {
-    let _transition = EMISSION.write().expect("capture emission gate");
+    // Close admission before draining emitters already accepted by this capture.
     MODE.store(0, Ordering::Release);
+    let _transition = EMISSION.write().expect("capture emission gate");
     session.stop_blocking();
 }
 

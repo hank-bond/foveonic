@@ -1,4 +1,4 @@
-//! Checks GPU navigator transfer mapping and completed preparation cost using synthetic floating textures.
+//! Checks navigator mapping, preparation cost and restoration of cached photographic sources.
 
 use super::*;
 pub(crate) fn state() -> egui_wgpu::RenderState {
@@ -12,7 +12,7 @@ pub(crate) fn state_for(format: wgpu::TextureFormat) -> egui_wgpu::RenderState {
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Navigator test"),
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
+        required_limits: adapter.limits(),
         memory_hints: Default::default(),
         trace: wgpu::Trace::Off,
     }))
@@ -203,4 +203,206 @@ fn gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channe
         "NAVIGATOR-PREP completed_average_ms={:.3}",
         start.elapsed().as_secs_f64() * 1000. / 25.
     );
+}
+
+/// A retained photograph remains a valid navigator source after newer alternate views.
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR with pinned originals"]
+fn cached_current_sources_restore_after_newer_views_and_photo_switches() {
+    use crate::{
+        editor::Rendition,
+        rendering::{
+            delivery::ViewState,
+            request::Request,
+            worker::{Frame, Update, Worker},
+        },
+    };
+    use foveonic::render::{Engine, ProcessingQuality, Scale, Settings};
+    use sha2::{Digest, Sha256};
+    use std::path::Path;
+
+    fn pinned(name: &str) -> PathBuf {
+        let directory = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let path = directory.join(name);
+        let inputs: serde_json::Value =
+            serde_json::from_str(include_str!("../../../scripts/profiling/test_inputs.json"))
+                .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&bytes)),
+            inputs["sample_hashes"][name].as_str().unwrap(),
+            "pinned navigator original: {}",
+            path.display()
+        );
+        path
+    }
+
+    fn render(
+        worker: &Worker,
+        path: &Path,
+        revision: u64,
+        rendition: Rendition,
+        output: &str,
+    ) -> Frame {
+        let settings = Settings {
+            exposure: if rendition == Rendition::Current {
+                if revision == 1 {
+                    0.2
+                } else {
+                    0.7
+                }
+            } else {
+                0.
+            },
+            output_size: Some([32, 48]),
+            ..Default::default()
+        };
+        worker.set_view(ViewState {
+            processing_quality: ProcessingQuality::Quality,
+            active: Some(path.to_owned()),
+            rendition,
+            output: output.into(),
+            comparison: false,
+            framing_preview: false,
+            exporting: false,
+            calibration: None,
+            settings: settings.clone(),
+            overviews: Vec::new(),
+            displayed_revision: None,
+            detail_revision: None,
+        });
+        worker.submit(Request {
+            auxiliary_preview: false,
+            detail: false,
+            framing_preview: false,
+            calibration: None,
+            rendition,
+            revision,
+            path: path.to_owned(),
+            settings,
+            preview_scale: Scale::new(8).unwrap(),
+            processing_quality: ProcessingQuality::Quality,
+            output: output.into(),
+            comparison: false,
+            export: None,
+        });
+        let frame = loop {
+            if let Update::Image(reply) = worker
+                .replies
+                .recv_timeout(Duration::from_secs(30))
+                .unwrap()
+            {
+                assert_eq!(reply.revision, revision);
+                break reply.result.unwrap().expect("navigator source pixels");
+            }
+        };
+        worker.progress.finish(revision, false);
+        worker.delivered(revision);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while worker.busy() {
+            assert!(Instant::now() < deadline, "source render did not settle");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        frame
+    }
+
+    fn settle(navigator: &mut Navigator, frame: &Frame, context: &egui::Context) -> bool {
+        let mapping = viewport::Mapping::normal(-1);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            navigator.update(Some(frame), mapping, false, context);
+            if navigator.ready(frame, mapping) {
+                assert!(navigator.image(frame, mapping).id.is_some());
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    let rs = state();
+    let context = egui::Context::default();
+    let engine = Engine::from_device(
+        rs.device.clone(),
+        rs.queue.clone(),
+        rs.adapter.get_info().name,
+    )
+    .unwrap();
+    let worker = Worker::new(engine, context.clone());
+    worker.cache.configure(foveonic::decode_cache::Settings {
+        enabled: false,
+        ..Default::default()
+    });
+    let first = pinned("blue-parking-sign.x3f");
+    let second = pinned("merrill-hazy-coast.x3f");
+    let older_current = render(&worker, &first, 1, Rendition::Current, "final");
+    let current = render(&worker, &first, 6, Rendition::Current, "final");
+    let camera = render(&worker, &first, 10, Rendition::Camera, "final");
+    let inspection = render(&worker, &first, 11, Rendition::Current, "sensor.layers");
+    let other = render(&worker, &second, 12, Rendition::Current, "final");
+    let mapping = viewport::Mapping::normal(-1);
+    let mut failures = Vec::new();
+    let mut navigator = Navigator::new(rs.clone(), context.clone(), worker.cache.clone());
+    for (label, frame) in [
+        ("Current", &current),
+        ("Camera", &camera),
+        ("cached Current after Camera", &current),
+        ("inspection", &inspection),
+        ("cached Current after inspection", &current),
+        ("another photograph", &other),
+        ("cached Current after another photograph", &current),
+    ] {
+        if !settle(&mut navigator, frame, &context) {
+            failures.push(format!(
+                "{label}: {}",
+                navigator.smoke_state(Some(frame), mapping)
+            ));
+        }
+    }
+    drop(navigator);
+
+    // A completed obsolete reply must not replace the currently requested image.
+    let mut navigator = Navigator::new(rs.clone(), context.clone(), worker.cache.clone());
+    assert!(settle(&mut navigator, &current, &context));
+    let (late, controlled) = mpsc::channel();
+    let original_replies = std::mem::replace(&mut navigator.replies, controlled);
+    let current_id = navigator.image(&current, mapping).id;
+    for frame in [&older_current, &camera, &inspection, &other] {
+        let key = Key::new(frame, mapping);
+        let tile = texture(
+            &rs,
+            tile_extent(key.extent),
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        viewport::prepare_preview(
+            &rs,
+            frame.texture.texture(),
+            key.space,
+            &tile,
+            mapping,
+            None,
+            None,
+        );
+        late.send(Tile {
+            key,
+            texture: tile,
+            memory: None,
+        })
+        .unwrap();
+        navigator.update(Some(&current), mapping, false, &context);
+        assert!(
+            navigator.ready(&current, mapping),
+            "obsolete reply replaced cached Current"
+        );
+        assert_eq!(
+            navigator.image(&current, mapping).id,
+            current_id,
+            "obsolete reply replaced the retained Current texture"
+        );
+    }
+    drop(original_replies);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

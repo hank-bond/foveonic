@@ -736,6 +736,19 @@ impl Scenario {
                 smoke.multi_paths = self.paths.clone();
                 self.targets = self.paths.clone();
                 self.actions.push_back(Action::Initial);
+                // Traced warm-reuse checks prime the settled demand grid.
+                // Off retains its natural first-edit workload for matched latency.
+                if self.config.mode != Mode::Off
+                    && matches!(
+                        self.config.name,
+                        Case::WarmEdit
+                            | Case::CachedSwitch
+                            | Case::RapidSupersession
+                            | Case::SourceLoading
+                    )
+                {
+                    self.actions.push_back(Action::PrepareGrid);
+                }
                 match self.config.name {
                     Case::Initial | Case::WarmDisk => {}
                     Case::PrefetchedSelection => {
@@ -1214,7 +1227,9 @@ impl Scenario {
                 if matches!(
                     self.action,
                     Some(Action::Initial | Action::SelectionJourney)
-                ) {
+                ) || (matches!(self.action, Some(Action::PrepareGrid))
+                    && self.config.name == Case::CachedSwitch)
+                {
                     for path in &self.paths {
                         self.cached.insert(
                             path.clone(),
@@ -1546,6 +1561,9 @@ impl Scenario {
         app: &'a App,
         path: &PathBuf,
     ) -> Option<&'a crate::rendering::worker::Frame> {
+        if matches!(self.action, Some(Action::TransitionJourney)) {
+            return super::transitions::TransitionJourney::smart_feedback(app, path, false);
+        }
         app.frame
             .as_ref()
             .filter(|frame| frame.path == *path)
@@ -1602,8 +1620,14 @@ impl Scenario {
         if let Some(journey) = &mut self.journey {
             journey.model.adjust_exposure(delta as f32);
         }
+        if let Some(journey) = &mut self.source_loading {
+            journey.model.adjust_exposure(delta as f32);
+        }
         apply_exposure(app, delta);
-        if self.prefetched_exposure.is_some() || self.journey.is_some() {
+        if self.prefetched_exposure.is_some()
+            || self.journey.is_some()
+            || self.source_loading.is_some()
+        {
             self.update_journey_expectations();
         } else {
             for path in changed {

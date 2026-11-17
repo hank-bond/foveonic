@@ -59,6 +59,57 @@ fn automatic_scale_bound(
     }
 }
 
+/// Scope coordinates belong to the complete visible source, not its retained overview.
+fn covers_visible(region: [u32; 4], visible: Option<[u32; 4]>) -> bool {
+    visible.is_some_and(|visible| {
+        region[0] <= visible[0]
+            && region[1] <= visible[1]
+            && region[2] >= visible[2]
+            && region[3] >= visible[3]
+    })
+}
+
+fn scope_frame<'a>(
+    detail: Option<&'a crate::rendering::worker::Frame>,
+    navigator: Option<&'a crate::rendering::worker::Frame>,
+    visible: Option<[u32; 4]>,
+    viewport: bool,
+) -> Option<&'a crate::rendering::worker::Frame> {
+    detail
+        .filter(|frame| viewport && covers_visible(frame.detail_region(), visible))
+        .or(navigator)
+}
+
+fn scope_region(
+    frame: &crate::rendering::worker::Frame,
+    view: &crate::viewport::Viewport,
+    visible: Option<[u32; 4]>,
+    viewport: bool,
+) -> Option<[u32; 4]> {
+    if !viewport {
+        return None;
+    }
+    if let Some(region) = frame.artifact.settings.preview_region {
+        let visible = visible.expect("visible native bounds for regional scopes");
+        assert!(covers_visible(region, Some(visible)));
+        return Some([
+            visible[0] - region[0],
+            visible[1] - region[1],
+            visible[2] - region[0],
+            visible[3] - region[1],
+        ]);
+    }
+    // Keep this rounding oracle independent of the production pixel-region helper.
+    let uv = view.visible_uv();
+    let [width, height] = frame.texture.description().extent;
+    Some([
+        (uv.min.x.clamp(0., 1.) * width as f32).floor() as u32,
+        (uv.min.y.clamp(0., 1.) * height as f32).floor() as u32,
+        (uv.max.x.clamp(0., 1.) * width as f32).ceil() as u32,
+        (uv.max.y.clamp(0., 1.) * height as f32).ceil() as u32,
+    ])
+}
+
 const CROP_TARGETS: &[&str] = &[
     "preview",
     "final",
@@ -130,6 +181,9 @@ const WORKFLOW_TARGETS: &[&str] = &[
     "workflow-current",
     "workflow-camera",
     "workflow-restored",
+    "workflow-navigator-open",
+    "workflow-camera-open",
+    "workflow-restored-open",
     "workflow-defaults",
     "workflow-restored-again",
     "workflow-wb",
@@ -403,6 +457,7 @@ pub struct Smoke {
     index: usize,
     step_started: Option<(usize, std::time::Instant)>,
     awaiting: bool,
+    scope_capture: Option<(crate::rendering::worker::ScopeKey, [usize; 2])>,
     direct_events: std::collections::VecDeque<Vec<egui::Event>>,
     pointer_motion: Option<motion::Motion>,
     close_at: Option<std::time::Instant>,
@@ -539,6 +594,7 @@ impl Smoke {
             index: 0,
             step_started: None,
             awaiting: false,
+            scope_capture: None,
             direct_events: Default::default(),
             pointer_motion: None,
             close_at: None,
@@ -613,6 +669,7 @@ impl App {
             "sidecars_ready":self.sidecars.ready(),
             "scope_key":self.scope_key.map(|key|(key.revision,key.region)),
             "scope_snapshot":self.scope_snapshot.as_ref().map(|snapshot|(snapshot.key.revision,snapshot.key.region)),
+            "navigator":self.navigator.smoke_state(self.navigator_source(),self.displayed_mapping()),
             "frame":self.frame.as_ref().map(|frame|serde_json::json!({
                 "matches_settings":crate::rendering::matching::same_authored_edits(&frame.requested,&self.settings),
                 "admitted":self.worker.is_settled_and_admitted(frame),
@@ -789,6 +846,91 @@ impl App {
         let navigator_ready = self
             .navigator_source()
             .is_some_and(|source| self.navigator.ready(source, mapping));
+        let navigator_uses_preview = self.navigator_uses_preview();
+        let visible_native = self.viewport().visible_pixels().map(|pixels| {
+            let window = self
+                .frame
+                .as_ref()
+                .map_or([0; 4], |frame| frame.display_window(false));
+            [
+                pixels.top_left[0] + window[0],
+                pixels.top_left[1] + window[1],
+                pixels.bottom_right[0] + 1 + window[0],
+                pixels.bottom_right[1] + 1 + window[1],
+            ]
+        });
+        let fast_feedback_ready = scope_frame(
+            self.smart_detail(),
+            self.navigator_source(),
+            visible_native,
+            self.preferences.scope_viewport,
+        )
+        .is_some_and(|frame| {
+            frame.processing_quality == self.preferences.processing_quality
+                && crate::rendering::matching::same_authored_edits(&frame.requested, &self.settings)
+                && self.worker.is_settled_and_admitted(frame)
+                && automatic_scale_bound(
+                    frame,
+                    self.viewport(),
+                    self.preferences.processing_quality,
+                    ctx.pixels_per_point(),
+                )
+                .is_ok_and(|demand| {
+                    frame.artifact.settings.working_scale.divisor() <= demand.divisor()
+                })
+        });
+        let comparison_stage = self
+            .smoke
+            .as_ref()
+            .is_some_and(|smoke| smoke.targets == COMPARISON_TARGETS && smoke.index >= 2);
+        let comparison_tiles = comparison_stage.then(|| {
+            let rows = self.displayed_paths.iter().map(|path| {
+                let frame = self.frame.as_ref().filter(|frame| &frame.path == path)
+                    .or_else(|| self.multi_edit_frame(path));
+                let expected = if self.selected.as_ref() == Some(path) {
+                    Some(&self.settings)
+                } else {
+                    self.multi_edit.settings(path)
+                };
+                let demand = frame.and_then(|frame| automatic_scale_bound(
+                    frame, self.viewports.view(Some(path)), self.preferences.processing_quality,
+                    ctx.pixels_per_point(),
+                ).ok());
+                let ready = frame.zip(expected).zip(demand).is_some_and(|((frame, expected), demand)| {
+                    frame.rendition == crate::editor::Rendition::Current
+                        && frame.output == "final"
+                        && frame.is_photographic()
+                        && frame.processing_quality == self.preferences.processing_quality
+                        && crate::rendering::matching::same_authored_edits(&frame.requested, expected)
+                        && frame.artifact.settings.working_scale.divisor() <= demand.divisor()
+                        && self.worker.is_settled_and_admitted(frame)
+                        && self.worker.cache.source_origin(path)
+                            .is_none_or(|origin| origin == frame.origin)
+                        && self.browser.rendered_revision(path) == Some(frame.content_revision()
+                            .max(self.multi_edit.preview(path).map_or(0, |preview| preview.content_revision())))
+                });
+                (ready, serde_json::json!({"source":path,"ready":ready,
+                    "expected_scale_divisor":demand.map(|scale|scale.divisor()),
+                    "frame":frame.map(|frame|serde_json::json!({"revision":frame.revision,
+                        "content_revision":frame.content_revision(),"scale_divisor":frame.artifact.settings.working_scale.divisor(),
+                        "quality":frame.quality_label(),"exposure":frame.requested.exposure})),
+                }))
+            }).collect::<Vec<_>>();
+            let complete = rows.len() > 1
+                && self.edit_selection.paths().iter().all(|path|self.displayed_paths.contains(path))
+                && rows.iter().all(|(ready,_)|*ready);
+            (complete, rows.into_iter().map(|(_,row)|row).collect::<Vec<_>>())
+        });
+        let comparison_auxiliary_disabled =
+            comparison_stage && self.multi_edit.multiple() && self.scope_key.is_none() && {
+                let state = self.navigator.smoke_state(None, mapping);
+                ["displayed", "wanted", "sent", "queued", "active"]
+                    .iter()
+                    .all(|name| state[*name].is_null())
+                    && state["ready"]
+                        .as_array()
+                        .is_some_and(|ready| ready.is_empty())
+            };
         let Some(smoke) = &mut self.smoke else {
             return;
         };
@@ -853,6 +995,30 @@ impl App {
                 }
             })
         });
+        if let Some(image) = screenshot
+            .as_ref()
+            .filter(|_| smoke.targets == VIEWPORT_SCOPE_TARGETS && !smoke.preview_pending())
+        {
+            let requested_capture = smoke.scope_capture.is_some_and(|(key, pixels)| {
+                self.scope_key == Some(key)
+                    && self
+                        .scope_snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.key == key)
+                    && image.size == pixels
+            });
+            if !requested_capture
+                || (smoke.targets[smoke.index] == "viewport-resize"
+                    && ctx.screen_rect().size() != egui::vec2(1200., 800.))
+            {
+                // The scope request and native size can change while capture is pending.
+                // Do not pair an old screenshot with a newer scope report.
+                smoke.awaiting = false;
+                smoke.scope_capture = None;
+                ctx.request_repaint();
+                return;
+            }
+        }
         if let Some(image) = screenshot {
             if smoke.targets == STATUS_TARGETS {
                 match smoke.targets[smoke.index] {
@@ -956,6 +1122,23 @@ impl App {
                     .unwrap();
                 }
             }
+            if let Some((ready, tiles)) = &comparison_tiles {
+                assert!(*ready, "comparison images changed before capture");
+                assert!(
+                    !self.multi_edit.multiple() || comparison_auxiliary_disabled,
+                    "multi-edit auxiliaries were not disabled"
+                );
+                std::fs::write(
+                    smoke
+                        .directory
+                        .join(format!("{}.json", smoke.targets[smoke.index])),
+                    serde_json::to_vec_pretty(&serde_json::json!({"tiles":tiles,
+                        "multiple_editing_targets":self.multi_edit.multiple(),
+                        "auxiliary_disabled":comparison_auxiliary_disabled}))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
             if smoke.targets == COMPARISON_TARGETS
                 && smoke.targets[smoke.index] == "comparison-switch"
             {
@@ -966,6 +1149,19 @@ impl App {
             if smoke.targets == WORKFLOW_TARGETS {
                 let frame = self.frame.as_ref();
                 let target = smoke.targets[smoke.index];
+                let evidence = frame.map(|frame| serde_json::json!({
+                    "target":target,"path":frame.path,"rendition":format!("{:?}",frame.rendition),
+                    "presentation_revision":frame.revision,"content_revision":frame.content_revision(),
+                    "scale":frame.artifact.settings.working_scale.divisor(),"region":frame.artifact.settings.preview_region,
+                    "exposure":frame.requested.exposure,"authored_exposure":self.settings.exposure,
+                    "matches_authored":crate::rendering::matching::same_authored_edits(&frame.requested,&self.settings),
+                    "admitted":self.worker.is_settled_and_admitted(frame),
+                }));
+                std::fs::write(
+                    smoke.directory.join(format!("{target}.json")),
+                    serde_json::to_vec_pretty(&evidence).unwrap(),
+                )
+                .unwrap();
                 if target == "workflow-current" {
                     smoke.authored = Some(self.settings.clone());
                     smoke.fast_region = self
@@ -978,6 +1174,8 @@ impl App {
                 if matches!(
                     target,
                     "workflow-camera"
+                        | "workflow-camera-open"
+                        | "workflow-restored-open"
                         | "workflow-defaults"
                         | "workflow-restored"
                         | "workflow-restored-again"
@@ -1085,26 +1283,37 @@ impl App {
                 .unwrap();
             }
             if smoke.targets == VIEWPORT_SCOPE_TARGETS && !smoke.preview_pending() {
-                let frame = self.frame.as_ref().unwrap();
+                let frame = scope_frame(
+                    shown_detail.and_then(|_| {
+                        crate::rendering::smart::detail_frame(
+                            &self.before,
+                            &self.multi_edit,
+                            self.selected.as_deref(),
+                        )
+                    }),
+                    if navigator_uses_preview {
+                        self.selected
+                            .as_deref()
+                            .and_then(|path| self.multi_edit.preview(path))
+                    } else {
+                        self.frame.as_ref()
+                    },
+                    visible_native,
+                    self.preferences.scope_viewport,
+                )
+                .expect("current scope source");
                 let snapshot = self.scope_snapshot.as_ref().unwrap();
                 let key = snapshot.key;
                 assert_eq!(self.scope_key, Some(key));
                 let data = &snapshot.data;
                 assert_eq!(key.revision, frame.revision);
                 assert!(!frame.framing_preview);
-                assert!(frame.artifact.settings.preview_region.is_none());
-                let expected_region = self.preferences.scope_viewport.then(|| {
-                    let uv = self.viewports.view(self.selected.as_deref()).visible_uv();
-                    let [width, height] = frame.texture.description().extent;
-                    // Scopes sample the displayed buffer, while the photographic
-                    // readout uses native coordinates. Include partial edge pixels.
-                    [
-                        (uv.min.x.clamp(0., 1.) * width as f32).floor() as u32,
-                        (uv.min.y.clamp(0., 1.) * height as f32).floor() as u32,
-                        (uv.max.x.clamp(0., 1.) * width as f32).ceil() as u32,
-                        (uv.max.y.clamp(0., 1.) * height as f32).ceil() as u32,
-                    ]
-                });
+                let expected_region = scope_region(
+                    frame,
+                    self.viewports.view(self.selected.as_deref()),
+                    visible_native,
+                    self.preferences.scope_viewport,
+                );
                 assert_eq!(key.region, expected_region);
                 assert_eq!(
                     data.histogram(0).iter().sum::<u32>(),
@@ -1115,7 +1324,10 @@ impl App {
                     density_weight,
                     data.histogram(0).iter().sum::<u32>() * foveonic::scopes::DENSITY_SCALE
                 );
-                let report = serde_json::json!({"revision":key.revision,"region":key.region,"samples":data.samples,"histogram":data.histogram(0),"density_weight":density_weight,"density_scale":foveonic::scopes::DENSITY_SCALE});
+                let report = serde_json::json!({"revision":key.revision,"region":key.region,"samples":data.samples,"histogram":data.histogram(0),"density_weight":density_weight,"density_scale":foveonic::scopes::DENSITY_SCALE,
+                    "capture_request":smoke.scope_capture.map(|(key,pixels)|serde_json::json!({
+                        "revision":key.revision,"region":key.region,"image_pixels":pixels})),
+                    "captured_image_pixels":image.size});
                 std::fs::write(
                     smoke
                         .directory
@@ -1125,7 +1337,25 @@ impl App {
                 .unwrap();
             }
             if smoke.targets == FAST_PREVIEW_TARGETS && !smoke.preview_pending() {
-                let frame = self.frame.as_ref().unwrap();
+                let frame = scope_frame(
+                    shown_detail.and_then(|_| {
+                        crate::rendering::smart::detail_frame(
+                            &self.before,
+                            &self.multi_edit,
+                            self.selected.as_deref(),
+                        )
+                    }),
+                    if navigator_uses_preview {
+                        self.selected
+                            .as_deref()
+                            .and_then(|path| self.multi_edit.preview(path))
+                    } else {
+                        self.frame.as_ref()
+                    },
+                    visible_native,
+                    self.preferences.scope_viewport,
+                )
+                .expect("current scope source");
                 let target = smoke.targets[smoke.index];
                 assert_eq!(
                     frame.processing_quality,
@@ -1152,26 +1382,31 @@ impl App {
                         "quality switch moved the viewport"
                     );
                 }
-                let actual = self
-                    .viewports
-                    .view(self.selected.as_deref())
-                    .visible_pixels_for(frame.texture.description().extent)
-                    .unwrap();
-                let expected_scope = [
-                    actual.top_left[0],
-                    actual.top_left[1],
-                    actual.bottom_right[0] + 1,
-                    actual.bottom_right[1] + 1,
-                ];
                 if target != "final" {
-                    assert_eq!(self.scope_key.unwrap().region, Some(expected_scope));
+                    assert_eq!(self.scope_key.unwrap().revision, frame.revision);
+                    assert_eq!(
+                        self.scope_key.unwrap().region,
+                        scope_region(
+                            frame,
+                            self.viewports.view(self.selected.as_deref()),
+                            visible_native,
+                            self.preferences.scope_viewport,
+                        )
+                    );
                 }
                 let progress = self.worker.progress.snapshot().unwrap();
-                assert_eq!(progress.revision, frame.revision);
+                assert_eq!(Some(&frame.path), self.selected.as_ref());
+                assert_eq!(frame.rendition, crate::editor::Rendition::Current);
+                assert_eq!(frame.output, "final");
                 assert_eq!(progress.fraction, 1.);
                 assert!(!progress.running());
-                assert!(progress.milliseconds() >= frame.milliseconds);
-                let report = serde_json::json!({"total_ms":progress.milliseconds(),"progress":progress.fraction,"target":target,"quality":frame.quality_label(),"rendered_extent":frame.texture.description().extent,"native_extent":native,"visible_native":[visible.top_left,visible.bottom_right],"scope_region":self.scope_key.unwrap().region,"thumbnail_revision":self.browser.rendered_revision(&frame.path),"processing_ms":frame.milliseconds});
+                assert!(!progress.failed);
+                assert!(progress.revision <= self.revision);
+                // Auxiliary previews and idle Whole completion do not own foreground progress.
+                if progress.revision == frame.content_revision() {
+                    assert!(progress.milliseconds() >= frame.milliseconds);
+                }
+                let report = serde_json::json!({"foreground_progress_revision":progress.revision,"source_revision":frame.revision,"source_preview_region":frame.artifact.settings.preview_region,"total_ms":progress.milliseconds(),"progress":progress.fraction,"target":target,"quality":frame.quality_label(),"rendered_extent":frame.texture.description().extent,"native_extent":native,"visible_native":[visible.top_left,visible.bottom_right],"scope_region":self.scope_key.unwrap().region,"thumbnail_revision":self.browser.rendered_revision(&frame.path),"processing_ms":frame.milliseconds});
                 std::fs::write(
                     smoke.directory.join(format!("{target}.json")),
                     serde_json::to_vec_pretty(&report).unwrap(),
@@ -1424,6 +1659,7 @@ impl App {
             smoke.diagnostic_checked(self.frame.as_ref(), self.worker.busy());
             smoke.index += 1;
             smoke.awaiting = false;
+            smoke.scope_capture = None;
             if smoke.index == smoke.targets.len() {
                 if smoke.targets == screenshot::TARGETS {
                     smoke.capture.request_close(ctx);
@@ -1448,6 +1684,24 @@ impl App {
                 return;
             }
             smoke.diagnostic_begin();
+            if smoke.targets == WORKFLOW_TARGETS {
+                let target = smoke.targets[smoke.index];
+                let source = if navigator_uses_preview {
+                    self.selected
+                        .as_deref()
+                        .and_then(|path| self.multi_edit.preview(path))
+                } else {
+                    self.frame.as_ref()
+                };
+                std::fs::write(
+                    smoke
+                        .directory
+                        .join(format!("{target}-navigator-before.json")),
+                    serde_json::to_vec_pretty(&self.navigator.smoke_state(source, mapping))
+                        .unwrap(),
+                )
+                .unwrap();
+            }
             match smoke.targets[smoke.index] {
                 "status-error" | "status-new-error" => {
                     let path = smoke.directory.join(smoke.targets[smoke.index]);
@@ -1986,9 +2240,13 @@ impl App {
                         .pan_to(egui::vec2(0.55, 0.4));
                     self.submit(None);
                 }
-                "workflow-camera" | "workflow-restored" => {
-                    self.toggle_before(crate::editor::Rendition::Camera)
+                "workflow-navigator-open" => {
+                    self.preferences.collapsed.remove(&Section::Navigator);
                 }
+                "workflow-camera"
+                | "workflow-restored"
+                | "workflow-camera-open"
+                | "workflow-restored-open" => self.toggle_before(crate::editor::Rendition::Camera),
                 "workflow-defaults" => {
                     let mut defaults = self.settings.clone();
                     defaults.exposure = 0.2;
@@ -2488,6 +2746,13 @@ impl App {
                     .is_some_and(|p| self.browser.thumbnail(p).is_some())
             } else if smoke.targets == CROP_TARGETS && smoke.targets[smoke.index] == "crop-tile" {
                 current_native_feedback
+            } else if smoke.targets == COMPARISON_TARGETS && self.multi_edit.multiple() {
+                !self.busy
+                    && !self.worker.busy()
+                    && self.sidecars.ready()
+                    && self.multi_edit.editable_ready()
+                    && comparison_auxiliary_disabled
+                    && comparison_tiles.as_ref().is_some_and(|(ready, _)| *ready)
             } else if smoke.targets == DEHAZE_TARGETS {
                 // These controls require the current photo, independently of ancillary panels.
                 !self.busy
@@ -2520,6 +2785,26 @@ impl App {
                                     == Some(frame.content_revision().max(self.multi_edit.preview(&frame.path).map_or(0, |preview| preview.content_revision()))))
                     })
             };
+            let ready = ready
+                && comparison_tiles.as_ref().is_none_or(|(ready, _)| *ready)
+                && (smoke.targets != COMPARISON_TARGETS
+                    || smoke.targets[smoke.index] != "comparison-switch"
+                    || self
+                        .browser
+                        .processing_selection(self.selected.as_deref())
+                        .get(1)
+                        == self.selected.as_ref());
+            let ready = ready
+                && (smoke.targets != WORKFLOW_TARGETS
+                    || smoke.targets[smoke.index] != "workflow-current"
+                    || current_native_whole)
+                && (smoke.targets != VIEWPORT_SCOPE_TARGETS
+                    || smoke.targets[smoke.index] != "viewport-resize"
+                    || ctx.screen_rect().size() == egui::vec2(1200., 800.));
+            let ready = ready
+                && (smoke.targets != FAST_PREVIEW_TARGETS
+                    || smoke.preview_pending()
+                    || fast_feedback_ready);
             let ready =
                 ready && (smoke.targets != screenshot::TARGETS || self.browser.thumbnails_ready());
             let ready = ready
@@ -2554,9 +2839,7 @@ impl App {
                                         == (smoke.targets[smoke.index] == "smart-crop-enter")
                             })
                         }
-                        "smart-full" | "smart-edit" => self.frame.as_ref().is_some_and(|f| {
-                            f.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
-                        }),
+                        "smart-full" | "smart-edit" => current_native_whole,
                         "cache-settings" => self
                             .worker
                             .cache
@@ -2705,6 +2988,14 @@ impl App {
                         return;
                     }
                 }
+                smoke.scope_capture =
+                    if smoke.targets == VIEWPORT_SCOPE_TARGETS && !smoke.preview_pending() {
+                        let key = self.scope_key.expect("ready scope capture key");
+                        let pixels = ctx.screen_rect().size() * ctx.pixels_per_point();
+                        Some((key, [pixels.x.round() as usize, pixels.y.round() as usize]))
+                    } else {
+                        None
+                    };
                 smoke.awaiting = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
             } else {

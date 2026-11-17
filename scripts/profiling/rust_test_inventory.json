@@ -1007,6 +1007,7 @@
         "navigator::draw_tests::romm_presentation_converts_and_clips_without_changing_float_source",
         "navigator::draw_tests::rotation_presentation_preserves_quarter_turn_pixel_locations",
         "navigator::draw_tests::signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral",
+        "navigator::gpu_tests::cached_current_sources_restore_after_newer_views_and_photo_switches",
         "navigator::gpu_tests::gpu_mapping_matches_main_presentation_for_layers_rgb_ratios_signed_and_channels",
         "previews::tests::cached_preview_keeps_wide_colors_while_srgb_viewing_is_selected",
         "previews::tests::display_readback_preserves_color_and_removes_row_padding",

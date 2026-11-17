@@ -306,11 +306,14 @@ impl Navigator {
             if self.sent.as_ref() == Some(&tile.key) {
                 self.sent = None;
             }
+            // Returning to cached content can request an older source revision.
+            // Other compatible replies must still advance the displayed content.
             if tile.key.compatible(&key)
-                && self
-                    .displayed
-                    .as_ref()
-                    .is_none_or(|(old, _)| old.key.revision <= tile.key.revision)
+                && (tile.key == key
+                    || self
+                        .displayed
+                        .as_ref()
+                        .is_none_or(|(old, _)| old.key.revision <= tile.key.revision))
             {
                 self.free();
                 let id = self.rs.renderer.write().register_native_texture(
@@ -417,6 +420,30 @@ impl Navigator {
                 .filter(|(tile, _)| tile.key.compatible(&key))
                 .map(|(_, id)| *id),
         }
+    }
+    /// Reports navigator request state for opt-in smoke evidence.
+    pub(crate) fn smoke_state(
+        &self,
+        frame: Option<&Frame>,
+        mapping: viewport::Mapping,
+    ) -> serde_json::Value {
+        let key = |key: &Key| {
+            serde_json::json!({
+                "revision":key.revision,"path":key.path,"output":key.root,
+                "extent":key.extent,"channel":key.mapping.channel,"input":key.mapping.input,
+            })
+        };
+        let pending = self.pending.0.lock().unwrap();
+        serde_json::json!({
+            "target":frame.map(|frame| key(&Key::new(frame,mapping))),
+            "wanted":self.wanted.as_ref().map(|(job,_)| key(&job.key)),
+            "sent":self.sent.as_ref().map(key),
+            "displayed":self.displayed.as_ref().map(|(tile,_)| key(&tile.key)),
+            "queued":pending.job.as_ref().map(|job| key(&job.key)),
+            "active":pending.active.as_ref().map(|job| key(&job.key)),
+            "ready":pending.ready.iter().map(key).collect::<Vec<_>>(),
+            "auxiliary_allowed":self.cache.auxiliary_ready(),
+        })
     }
     pub fn ready(&self, frame: &Frame, mapping: viewport::Mapping) -> bool {
         self.displayed

@@ -225,7 +225,7 @@ fn emit(
         return false;
     }
     let Ok(_emission) = EMISSION.try_read() else {
-        if expected.is_none() || expected == capture_id() {
+        if recording(category) && (expected.is_none() || expected == capture_id()) {
             TRANSITION_DROPS.fetch_add(1, Ordering::Relaxed);
         }
         return false;

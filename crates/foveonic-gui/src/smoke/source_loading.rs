@@ -1,9 +1,7 @@
 //! Proves a ready photo can be edited and rendered while another source load is held.
 
 use super::{journey::ExposureJourney, scenarios::apply_exposure, App, Smoke};
-use crate::{editor::Rendition, rendering::request::Request};
 use eframe::egui;
-use foveonic::render::ProcessingQuality;
 use std::path::PathBuf;
 
 pub(super) struct SourceLoading {
@@ -73,35 +71,15 @@ impl SourceLoading {
                 if !control.enabled {
                     return Err("ready photo's Exposure control is disabled before loading".into());
                 }
+                if !app.displayed_paths.contains(&paths[0]) || !app.multi_edit.rendering(&paths[0])
+                {
+                    return Err("loading photo A must remain visible and admitted".into());
+                }
                 self.hold = Some(app.worker.hold_source(paths[0].clone()));
-                app.revision += 1;
-                // Native Camera demand isolates this diagnostic source request
-                // from ordinary Current snapshots. This is not a Before UI test.
-                // B keeps its reduced session and active controls.
-                app.worker.submit(Request {
-                    auxiliary_preview: false,
-
-                    detail: false,
-                    path: paths[0].clone(),
-                    revision: app.revision,
-                    settings: app
-                        .multi_edit
-                        .settings(&paths[0])
-                        .ok_or("missing photo A recipe")?
-                        .clone(),
-                    rendition: Rendition::Camera,
-                    output: "final".into(),
-                    comparison: false,
-                    framing_preview: false,
-                    calibration: app
-                        .noise_calibration
-                        .selected(app.preferences.noise_profile),
-                    preview_scale: foveonic::render::Scale::NATIVE,
-                    processing_quality: ProcessingQuality::Quality,
-                    export: None,
-                });
-                self.events
-                    .push(serde_json::json!({"action":"request_native_source","photo":0}));
+                // Native viewing keeps A wanted independently of B's editing selection.
+                app.viewports.view_mut(Some(&paths[0])).one_to_one = true;
+                app.submit_photos();
+                self.events.push(serde_json::json!({"action":"request_native_source","photo":0,"consumer":"visible-current","editing_target":false,"zoom_percent":100.}));
             }
             2 => {
                 match self.hold.as_ref().unwrap().reached.try_recv() {
