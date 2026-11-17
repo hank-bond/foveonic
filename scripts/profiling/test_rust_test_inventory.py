@@ -206,11 +206,11 @@ class InventoryTests(unittest.TestCase):
             self.assertTrue({'WHITE_BALANCE_SCALES', 'SMALL_PREVIEW_SCALES', 'SMALL_PREVIEW_CASE'}
                             .isdisjoint(command['environment']))
             self.assertNotIn('PATH', command['unset_environment'])
-        self.assertEqual(plan['counts']['required'], 499)
+        self.assertEqual(plan['counts']['required'], sum(len(group['tests']) for group in document['groups']))
 
     def test_maintained_inventory_keeps_release_selection_and_corrected_variants(self):
         document = json.loads(MANIFEST.read_text()); validate_inventory(document)
-        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 499)
+        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 500)
         self.assertEqual(len(document['excluded']), 158)
         self.assertEqual(len(document['input_sets']['standard']), 27)
         groups = {name: g for g in document['groups'] for name in g['tests']}
