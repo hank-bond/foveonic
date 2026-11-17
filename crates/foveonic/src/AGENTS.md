@@ -27,7 +27,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 
 ### Source files
 
-- **[background.rs](./background.rs)** Prioritizes selected photos and thumbnails over batches and interruptible speculative work.
+- **[background.rs](./background.rs)** Prioritizes viewport, navigator/scopes and thumbnails over batches and interruptible idle work.
 - **[capture_metadata.rs](./capture_metadata.rs)** Translates source capture details into shared EXIF directories for all exports.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 - **[crop.rs](./crop.rs)** Composes saved oriented crop coordinates with camera framing and final output sizing.

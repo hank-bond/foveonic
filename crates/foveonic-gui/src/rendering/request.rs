@@ -10,6 +10,8 @@ use std::{path::PathBuf, sync::Arc};
 
 #[derive(Clone)]
 pub struct Request {
+    /// A reduced whole-photo result shared by navigator and browser consumers.
+    pub auxiliary_preview: bool,
     /// Native inspection pixels are independent of the main preview, including Whole fallback.
     pub detail: bool,
     pub framing_preview: bool,
@@ -26,20 +28,43 @@ pub struct Request {
     pub export: Option<Export>,
 }
 
-/// Frozen refinement intent. The UI reserves both presentation revisions, while
-/// the coordinator decides when the optional whole-image request becomes runnable.
+/// Frozen regional, reduced-preview and optional native completion requests.
+/// The coordinator owns their independent admission and settlement.
 #[derive(Clone)]
 pub struct Refinement {
     pub first: Request,
+    /// Visible native image bounds, before overscan, with exclusive right/bottom edges.
+    /// When absent, the requested processing region is also the required coverage.
+    pub visible_region: Option<[u32; 4]>,
+    pub preview: Option<Request>,
     pub whole: Option<Request>,
 }
 impl Refinement {
-    /// Panning does not restart the initial region for unchanged photo edits.
+    /// Edit identity is independent of the viewport's required native coverage.
     pub fn same_sequence(&self, other: &Self) -> bool {
         super::matching::same_request_context(&self.first, &other.first)
             && super::matching::same_authored_edits(&self.first.settings, &other.first.settings)
             && self.first.processing_quality == other.first.processing_quality
+            && self.first.nominal_working_scale() == other.first.nominal_working_scale()
+            && match (&self.preview, &other.preview) {
+                (Some(a), Some(b)) => super::matching::same_delivery_request(a, b),
+                (None, None) => true,
+                _ => false,
+            }
             && self.whole.is_some() == other.whole.is_some()
+    }
+
+    /// Reuse the overscan margin until newly visible pixels leave this patch.
+    /// A whole-image request covers every visible region.
+    pub fn covers(&self, other: &Self) -> bool {
+        match (
+            self.first.settings.preview_region,
+            other.visible_region.or(other.first.settings.preview_region),
+        ) {
+            (None, _) => true,
+            (Some(outer), Some(inner)) => super::smart::contains(outer, inner),
+            (Some(_), None) => false,
+        }
     }
 }
 
@@ -49,6 +74,7 @@ pub enum Purpose {
     Camera,
     Defaults,
     Detail,
+    Preview,
     Inspection(String, bool),
     Export,
 }
@@ -57,6 +83,8 @@ impl Request {
     pub fn purpose(&self) -> Purpose {
         if self.export.is_some() {
             Purpose::Export
+        } else if self.auxiliary_preview {
+            Purpose::Preview
         } else {
             match self.rendition {
                 Rendition::Camera => Purpose::Camera,
@@ -100,6 +128,10 @@ impl Request {
             ProcessingQuality::Quality
         };
         settings.working_scale = self.nominal_working_scale();
+        if self.auxiliary_preview {
+            settings.output_size = None;
+            settings.preview_region = None;
+        }
         if settings.working_scale.is_reduced() {
             settings.working_scale = camera_preview_scale(self.preview_scale, metadata)?;
         }

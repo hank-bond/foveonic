@@ -306,6 +306,44 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// Retained observation heaps remain owned even after collection is disabled.
+    /// The containing owner accounts for the inline Profile value.
+    pub(crate) fn account(&self, retained: &mut crate::recipe::RetainedBytes) {
+        retained.add_bytes(
+            self.host.capacity() * size_of::<Timing>()
+                + self.gpu.capacity() * size_of::<Timing>()
+                + self.nodes.capacity() * size_of::<NodeObservation>()
+                + self.graphs.capacity() * size_of::<GraphObservation>(),
+        );
+        for node in &self.nodes {
+            retained.add_bytes(node.outputs.capacity() * size_of::<NodeOutput>());
+            for output in &node.outputs {
+                retained.add_bytes(output.name.capacity());
+                if let Some(description) = output
+                    .resource
+                    .as_ref()
+                    .and_then(|r| r.description.as_ref())
+                {
+                    retained
+                        .add_bytes(description.layout.capacity() + description.space.capacity());
+                }
+            }
+        }
+        for graph in &self.graphs {
+            retained.add_bytes(
+                graph.requested_roots.capacity() * size_of::<usize>()
+                    + graph.outputs.capacity() * size_of::<GraphOutput>(),
+            );
+            for output in &graph.outputs {
+                retained.add_bytes(
+                    output.name.capacity()
+                        + output.data_type.capacity()
+                        + output.dependencies.capacity() * size_of::<usize>(),
+                );
+            }
+        }
+    }
+
     pub fn new(mode: Mode) -> Self {
         Self {
             mode,

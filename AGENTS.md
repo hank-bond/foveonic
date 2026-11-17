@@ -11,7 +11,8 @@ read_when: "Read first when entering the repository."
 - Implement agreed decisions. Ask when requirements are unclear or work encounters a blocker.
 - Do not assume access to the owner's files outside this repository, other checkouts, or private projects. Ask for required external inputs.
 - Keep changes within approved scope. Do not commit, publish, install, or make generated output the default without explicit approval. Work is reviewed before commit.
-- At the end of each implementation slice, kick off a review subagent using the largest model accessible in the current harness to review code design, cleanliness and idiomatic Rust. Address its findings before closing the slice. Make each functional change available for owner testing before proceeding to the next slice.
+- At the end of each implementation slice, kick off an independent review subagent to review code design, cleanliness and idiomatic Rust. Address its findings before closing the slice. Make each functional change available for owner testing before proceeding to the next slice.
+- Give independent review and stress-test agents the agreed behavior, code and evidence without steering them toward a preferred design. Favor simplicity and coherent ownership. Reproduce suspected problems with behavioral tests before adding defensive production logic.
 - Keep responses concise. Use plain language and include contrasts only when needed to prevent significant confusion.
 - Reserve "Reference" and "reference implementation" for each camera architecture's original processing approach in repository prose, source summaries, and filenames. Label other approaches by their function.
 

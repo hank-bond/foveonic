@@ -64,6 +64,8 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[family-controls](./family-controls.md)** _(archived)._ Separate family editing panels and centralize processing control constraints before reviewing broader organization.
 - **[fast-preview-controls](./fast-preview-controls.md)** _(archived)._ Separate quarter-resolution Fast controls from Smart's reconstruction-bypassing Draft recipe and publish the verified release.
 - **[finishing-optimization](./finishing-optimization.md)** _(archived)._ Restored practical brightness guides and optimized finishing bottlenecks with reproducible comparisons.
+- **[group-before-and-layout](./group-before-and-layout.md)** _(archived)._ Apply transient Before to the editing group, simplify tile outlines and keep pane resizing live.
+- **[group-viewing](./group-viewing.md)** _(archived)._ Link Shift viewing gestures across viewport editing targets while retaining independent photo views.
 - **[guarded-gpu-storage](./guarded-gpu-storage.md)** _(archived)._ Replace raw processing-buffer handles and recycling flags with guarded ownership, explicit bindings and allocation diagnostics.
 - **[guarded-rows-working-grid](./guarded-rows-working-grid.md)** _(archived)._ Moves Merrill guarded-row estimation onto resized evidence with shared calibration, projected noise and bounded native rounding differences.
 - **[gui-screenshot](./gui-screenshot.md)** _(archived)._ Share example-photo syncing through Cargo and explicitly refresh a lossless WebP GUI screenshot for the README.
@@ -160,6 +162,9 @@ Keep active follow-ups in the [plans index](../AGENTS.md). Preserve findings whe
 - **[viewport-scopes](./viewport-scopes.md)** _(archived)._ Viewport scopes follow the visible crop, keep plots visible during updates, and use smooth waveform placement.
 - **[visibility-tone-experiment](./visibility-tone-experiment.md)** _(archived)._ Historical visibility-tone experiments led to the selected regional Adaptive tone response.
 - **[white-balance-picker](./white-balance-picker.md)** _(archived)._ Implement and verify a shared neutral-patch white-balance eyedropper and saved Custom balance.
+- **[wide-rendering](./wide-rendering.md)** _(archived)._ Compare serial, threaded and stage-interleaved rendering in an isolated probe with exact outputs and bounded resource ownership.
+- **[wide-rendering-cleanup](./wide-rendering-cleanup.md)** _(archived)._ Finish shared execution migration, remove redundant work and validate the simplified rendering paths.
+- **[wide-rendering-integration](./wide-rendering-integration.md)** _(archived)._ Experiment with wide execution through the real worker, measure latency and memory, then review a shared execution lifecycle and production admission.
 - **[workspace-status](./workspace-status.md)** _(archived)._ Separate browser-footer progress, concise live activity and acknowledged session history.
 
 <!-- INDEX:END -->

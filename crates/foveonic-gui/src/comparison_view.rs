@@ -40,7 +40,18 @@ impl App {
             .collect();
         // Keep the release frame on the gesture's geometry so its click cannot
         // land on another photograph when dimensions arrive during a drag.
-        let freeze = ui.input(|input| input.pointer.any_down() || input.pointer.any_released());
+        let freeze = layout::pointer_gesture(
+            ui.ctx(),
+            paths
+                .iter()
+                .take(shown.max(self.comparison_layout.shown()))
+                .flat_map(|path| {
+                    [
+                        self.viewports.view(Some(path)).id(),
+                        egui::Id::new(("comparison photo caption", path)),
+                    ]
+                }),
+        );
         let layout = self
             .comparison_layout
             .get(paths, &aspects, paths.len(), available, freeze)
@@ -85,66 +96,79 @@ impl App {
                 changed |= self.show_photo(&mut child, mapping);
                 self.before_badge(&child, image_rect);
             } else {
+                let rendition = self.photo_rendition(path);
+                let frame = self
+                    .rendition_frame(path, rendition)
+                    .or_else(|| self.current_photo_frame(path));
                 let detail = self
-                    .multi_edit
-                    .settings(path)
-                    .and_then(|settings| {
-                        self.photo_detail(
-                            path,
-                            self.multi_edit.frame(path),
-                            settings,
-                            crate::editor::Rendition::Current,
-                        )
-                    })
+                    .photo_view_settings(path)
+                    .and_then(|settings| self.photo_detail(path, frame, &settings, rendition))
                     .map(|detail| viewport::ImageLayer {
                         texture: detail.texture.clone(),
                         coverage: detail.detail_region(),
                         identity: detail.diagnostic_identity(false),
                     });
+                let content = frame.map(|frame| {
+                    (
+                        frame.view(false).clone(),
+                        frame.display_extent(false),
+                        frame.diagnostic_identity(false),
+                        frame.display_window(false),
+                        frame.native_display_extent(),
+                        frame.rendition,
+                    )
+                });
+                let group_target = target && self.edit_selection.paths().len() > 1;
                 let view = self.viewports.view_mut(Some(path));
+                view.group_target = group_target;
                 view.editing = crate::photo_tools::takes_pointer(ui.ctx());
                 view.framing = None;
                 view.zoom_snap = self.preferences.zoom_snap;
-                let native_extent = if let Some(frame) = self.multi_edit.frame(path) {
-                    view.show(
-                        &mut child,
-                        frame.view(false).clone(),
-                        frame.display_extent(false),
-                        None,
-                        crate::viewport::Mapping::normal(-1),
-                        self.srgb_target,
-                        frame.diagnostic_identity(false),
-                    );
-                    if let Some(layer) = detail {
-                        view.show_region(
+                let native_extent =
+                    if let Some((texture, extent, identity, window, native, actual_rendition)) =
+                        content
+                    {
+                        view.show(
                             &mut child,
-                            layer,
-                            frame.display_window(false),
+                            texture,
+                            extent,
+                            None,
                             crate::viewport::Mapping::normal(-1),
                             self.srgb_target,
+                            identity,
                         );
-                    }
-                    Some(frame.native_display_extent())
-                } else {
-                    let preview = if target {
-                        self.browser.preview(path)
+                        if let Some(layer) = detail {
+                            view.show_region(
+                                &mut child,
+                                layer,
+                                window,
+                                crate::viewport::Mapping::normal(-1),
+                                self.srgb_target,
+                            );
+                        }
+                        if actual_rendition != crate::editor::Rendition::Current {
+                            crate::widgets::overlay_badge(&child, image_rect, "Before");
+                        }
+                        Some(native)
                     } else {
-                        self.browser.thumbnail(path)
+                        let preview = if target {
+                            self.browser.preview(path)
+                        } else {
+                            self.browser.thumbnail(path)
+                        };
+                        if let Some(preview) = preview {
+                            view.show_preview(
+                                &mut child,
+                                &preview.texture,
+                                preview.native_extent,
+                                Default::default(),
+                            );
+                            Some(preview.native_extent)
+                        } else {
+                            view.show_empty(&mut child);
+                            None
+                        }
                     };
-                    if let Some(preview) = preview {
-                        // Browser previews already include their prepared composition.
-                        view.show_preview(
-                            &mut child,
-                            &preview.texture,
-                            preview.native_extent,
-                            Default::default(),
-                        );
-                        Some(preview.native_extent)
-                    } else {
-                        view.show_empty(&mut child);
-                        None
-                    }
-                };
                 if let Some((extent, (_, image))) = native_extent.zip(view.image_rectangles()) {
                     let density = crate::rendering::quality::display_density(
                         [image.width(), image.height()],
@@ -160,7 +184,7 @@ impl App {
                 egui::Rect::from_min_max(egui::pos2(rect.left(), image_rect.bottom()), rect.max),
                 egui::Id::new(("comparison photo caption", path)),
                 if selecting {
-                    egui::Sense::click()
+                    egui::Sense::click_and_drag()
                 } else {
                     egui::Sense::hover()
                 },
@@ -172,7 +196,7 @@ impl App {
                 .unwrap_or_else(|| caption.clone());
             let clicked = response.clicked() || caption.clicked();
             let response = response.on_hover_text(if selecting {
-                "Click to edit this photo. Drag to pan without changing editing selection. Option-click toggles editing. Shift-click selects a range up to the editing limit."
+                "Click to edit this photo. Drag to pan without changing editing selection. Option-click toggles editing. Shift links viewing on blue photos. Shift-click a white photo or caption to select a range."
             } else { "Photo tools preserve the viewport editing selection. Press V to select photographs." });
             if crate::timing::enabled()
                 && ui.input(|input| {
@@ -191,8 +215,13 @@ impl App {
                     "rect":[rect.min.x,rect.min.y,rect.max.x,rect.max.y]})
                 });
             }
-            if let Some(gesture) = crate::photo_tools::selection_gesture(&response, selecting)
-                .or_else(|| crate::photo_tools::selection_gesture(&caption, selecting))
+            if let Some(gesture) = crate::photo_tools::selection_gesture(
+                &response,
+                self.viewports
+                    .view(Some(path))
+                    .selection_eligible(selecting),
+            )
+            .or_else(|| crate::photo_tools::selection_gesture(&caption, selecting))
             {
                 self.comparison_selection = Some(Request {
                     path: path.clone(),
@@ -203,23 +232,15 @@ impl App {
                 rect,
                 2.,
                 egui::Stroke::new(
-                    if active { 3_f32 } else { 1_f32 },
-                    if active {
-                        egui::Color32::LIGHT_GRAY
+                    if target { 3_f32 } else { 1_f32 },
+                    if target {
+                        ui.visuals().selection.stroke.color
                     } else {
-                        egui::Color32::GRAY
+                        egui::Color32::WHITE
                     },
                 ),
                 egui::StrokeKind::Inside,
             );
-            if target {
-                ui.painter().rect_stroke(
-                    rect.shrink(4.),
-                    1.,
-                    egui::Stroke::new(2_f32, ui.visuals().selection.stroke.color),
-                    egui::StrokeKind::Inside,
-                );
-            }
             ui.painter().with_clip_rect(rect).text(
                 egui::pos2(rect.center().x, rect.bottom() - 11.),
                 egui::Align2::CENTER_CENTER,
@@ -273,6 +294,19 @@ impl App {
                 egui::Sense::hover(),
             )
             .on_hover_text("Use the browser to choose which photographs appear here.");
+        }
+        if self.viewports.apply_group_input(
+            self.edit_selection.paths(),
+            &self.displayed_paths,
+            ui.ctx().pixels_per_point(),
+        ) {
+            // Publish the new sampling demand even for peers already drawn this frame.
+            for path in self.edit_selection.paths().to_vec() {
+                if self.displayed_paths.contains(&path) {
+                    self.observe_photo_view_density(&path, ui.ctx().pixels_per_point());
+                }
+            }
+            ui.ctx().request_repaint();
         }
         changed
     }

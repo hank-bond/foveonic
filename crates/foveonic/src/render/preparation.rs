@@ -151,6 +151,7 @@ impl Cache {
         Ok(prepared)
     }
     fn account(&self, retained: &mut RetainedBytes) {
+        retained.add_bytes(self.tones.capacity() * size_of::<Tone>());
         for entry in &self.tones {
             entry.key.account(retained);
             entry.table.account(retained);

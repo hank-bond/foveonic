@@ -108,17 +108,31 @@ fn compare_portable_tiger_methods_on_ordinary_quattro() {
         .unwrap();
         let mut built = experiment(built, normalization, recovery, adaptive);
         let mut profile = Profile::new(Mode::Gpu);
-        let artifacts = engine
-            .collect_artifacts(
-                crate::render::recipes::RecipeInput::Original(&source),
-                &settings,
-                &mut built.graph,
-                built.final_id,
-                &["final"],
-                &mut profile,
-                &mut execution,
-            )
-            .unwrap();
+        let artifacts = {
+            let input = crate::render::recipes::RecipeInput::Original(&source);
+            let plan = engine
+                .plan_artifacts(
+                    &settings,
+                    &mut built.graph,
+                    built.final_id,
+                    &["final"],
+                    &mut profile,
+                    &mut execution,
+                )
+                .unwrap();
+            let values = engine
+                .run_graph(
+                    input.context(),
+                    &built.graph,
+                    &plan.roots,
+                    &mut profile,
+                    &mut execution,
+                    crate::render::execute::Completion::Queued,
+                )
+                .unwrap();
+            engine.package_artifacts(input, &settings, &built.graph, plan, values)
+        }
+        .unwrap();
         let Content::Image(image) = &artifacts[0].content else {
             panic!("photograph")
         };

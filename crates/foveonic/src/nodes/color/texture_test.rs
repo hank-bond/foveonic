@@ -657,3 +657,67 @@ fn disabled_and_neutral_detail_share_one_effective_recipe() {
         .unwrap()
         .needs_base());
 }
+
+#[test]
+fn allocation_contract_distinguishes_identity_cleanup_and_spatial_work() {
+    let params = parameters();
+    let layers = || Requested {
+        layers: true,
+        change: false,
+    };
+    let identity = Prepared::new(
+        Controls {
+            noise_enabled: false,
+            ..Default::default()
+        },
+        1.,
+        Color::default(),
+    )
+    .unwrap();
+    let identity_bound = identity.allocation(params, layers()).unwrap();
+    assert_eq!(identity_bound.output_bytes, 0);
+    assert!(identity_bound.temporary_bytes > 0);
+    let mut oversized = params;
+    oversized.source = [u32::MAX, u32::MAX, 1, 1];
+    oversized.tile[..2].fill(u32::MAX);
+    oversized.region = [0, 0, u32::MAX, u32::MAX];
+    assert!(identity.allocation(oversized, layers()).is_none());
+    let cleanup = Prepared::new(Controls::default(), 1., Color::default()).unwrap();
+    let cleanup_bound = cleanup.allocation(params, layers()).unwrap();
+    assert_eq!(cleanup_bound.output_bytes, params.atlas_pixels() * 12);
+    assert_eq!(
+        cleanup_bound.temporary_bytes,
+        identity_bound.temporary_bytes
+    );
+    assert!(cleanup
+        .allocation(
+            params,
+            Requested {
+                layers: true,
+                change: true
+            }
+        )
+        .is_none());
+    assert!(cleanup
+        .allocation(
+            params,
+            Requested {
+                layers: false,
+                change: true
+            }
+        )
+        .is_none());
+    let spatial = Prepared::new(
+        Controls {
+            texture: TextureControls {
+                fine: 1.5,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        1.,
+        Color::default(),
+    )
+    .unwrap();
+    assert!(spatial.allocation(params, layers()).is_none());
+}

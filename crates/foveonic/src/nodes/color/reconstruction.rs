@@ -35,6 +35,31 @@ fn bilateral_groups(params: Parameters) -> [u32; 2] {
     [width.div_ceil(32), height.div_ceil(8)]
 }
 
+/// Whole-frame contracts use checked geometry before calling the ordinary
+/// atlas helpers, whose products assume validated camera parameters.
+pub(crate) fn whole_atlas_extent(params: Parameters) -> Option<[u32; 2]> {
+    if params.source.contains(&0)
+        || params.tile[..2].contains(&0)
+        || params.window != [0, 0, params.source[2], params.source[3]]
+        || params.region != [0, 0, params.source[0], params.source[1]]
+    {
+        return None;
+    }
+    let count = params.window[2].checked_mul(params.window[3])?;
+    Some([params.tile[0], params.tile[1].checked_mul(count)?])
+}
+
+pub(crate) fn project_color_allocation(
+    params: Parameters,
+) -> Option<crate::render::allocation::GpuAllocation> {
+    use crate::render::allocation::{image_bytes, uploaded_bytes, GpuAllocation};
+    whole_atlas_extent(params)?;
+    GpuAllocation::new(
+        image_bytes([params.source[0], params.source[1]], 3)?,
+        uploaded_bytes::<Parameters>(1)?,
+    )
+}
+
 pub(crate) fn project(
     gpu: &Gpu,
     tiles: &crate::gpu::ReadGuard,
@@ -595,6 +620,16 @@ pub(crate) fn ratio(
     Ok(a)
 }
 
+pub(crate) fn color_allocation(
+    params: Parameters,
+) -> Option<crate::render::allocation::GpuAllocation> {
+    use crate::render::allocation::{image_bytes, uploaded_bytes, GpuAllocation};
+    GpuAllocation::new(
+        image_bytes(whole_atlas_extent(params)?, 3)?,
+        uploaded_bytes::<ColorParams>(1)?,
+    )
+}
+
 pub(crate) fn color(
     gpu: &Gpu,
     input: &crate::gpu::ReadGuard,
@@ -619,6 +654,17 @@ pub(crate) fn color(
     gpu.finish_trace(&trace, profile)?;
     Ok(output)
 }
+pub(crate) fn color_dq_allocation(
+    params: Parameters,
+    table: &Table,
+) -> Option<crate::render::allocation::GpuAllocation> {
+    use crate::render::allocation::{image_bytes, uploaded_bytes, GpuAllocation};
+    GpuAllocation::new(
+        image_bytes(whole_atlas_extent(params)?, 3)?,
+        uploaded_bytes::<[u32; 4]>(1)?.checked_add(uploaded_bytes::<i32>(table.values.len())?)?,
+    )
+}
+
 pub(crate) fn color_dq(
     gpu: &Gpu,
     input: &crate::gpu::ReadGuard,

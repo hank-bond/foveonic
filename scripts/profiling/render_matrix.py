@@ -11,7 +11,7 @@ import subprocess
 from file_hash import digest
 from image_replay import events
 from results import IMAGE_GEOMETRY_FIELDS, RESOLUTIONS, PROCESSING_QUALITIES, compare_images, expected_resolution_scale, include_assertions, render_result
-from watch_workloads import require_quiet
+from watch_workloads import require_quiet, running_workloads
 from process_memory import run_captured
 
 REQUIRED_SOURCES_BY_FAMILY = {'classic': 3, 'merrill': 3, 'quattro': 3, 'tiger': 1}
@@ -137,7 +137,8 @@ def processing_mode_difference(quality_file, speed_file, geometry, *, comparator
             'limits':'Differences are descriptive evidence. They do not approve dense output or replace immutable exact baselines.'}
 
 
-def run(binary, cases, directory, baseline=None, require_coverage=False, max_memory_mb=None, *, sample_comparator=None):
+def run(binary, cases, directory, baseline=None, require_coverage=False, max_memory_mb=None,
+        allow_contended_correctness=False, *, sample_comparator=None):
     if max_memory_mb is not None and max_memory_mb <= 0:
         raise ValueError('physical-footprint limit must be positive')
     binary = binary.resolve(strict=True)
@@ -164,6 +165,7 @@ def run(binary, cases, directory, baseline=None, require_coverage=False, max_mem
               'binary': str(binary), 'binary_sha256': digest(binary),
               'sample_comparator': {'path': str(sample_comparator), 'sha256': digest(sample_comparator)}, 'baseline': str(baseline) if baseline else None,
               'coverage': coverage, 'cases': [], 'processing_mode_comparisons': [],
+              'allow_contended_correctness': allow_contended_correctness,
               'limits': ['Camera family and RAW size are supplied by the fixture manifest, not independently verified.',
                          'Exact samples and image geometry are checked outside latency measurements.',
                          'GPU/backend changes can affect bit-exact output. This is not a visual quality test.']}
@@ -182,7 +184,11 @@ def run(binary, cases, directory, baseline=None, require_coverage=False, max_mem
                     baseline_image = baseline/'goldens'/name/golden.name
                     if not baseline_image.is_file() or digest(baseline_image) != expected['pixels_sha256']:
                         raise ValueError('baseline samples are missing or modified')
-                require_quiet()
+                if allow_contended_correctness:
+                    row['concurrent_workloads_before_render'] = running_workloads()
+                    row['timing_validity'] = 'not evaluated; correctness-only run permits concurrent workloads'
+                else:
+                    require_quiet()
                 command = [str(binary), case['source'], str(out), '--warm', '0', '--goldens', str(golden_dir),
                            *render_arguments(case, directory/(name+'.settings.json'))]
                 result = run_captured(command,
@@ -269,9 +275,13 @@ def main():
     parser.add_argument('--baseline', type=Path, help='compare against a previously recorded matrix instead of recording')
     parser.add_argument('--require-coverage', action='store_true', help='require three Classic, Merrill and Quattro inputs, one Tiger input, and all resolutions and both processing modes')
     parser.add_argument('--max-memory-mb', type=int, help='sample and guard each renderer child physical footprint on macOS')
+    parser.add_argument('--allow-contended-correctness', action='store_true',
+                        help='permit and record other workloads for numerical checks only; timings are not performance evidence')
     args = parser.parse_args()
     try:
-        report = run(args.binary, json.loads(args.cases.read_text()), args.directory, args.baseline, args.require_coverage, args.max_memory_mb, sample_comparator=args.sample_comparator)
+        report = run(args.binary, json.loads(args.cases.read_text()), args.directory, args.baseline,
+                     args.require_coverage, args.max_memory_mb, args.allow_contended_correctness,
+                     sample_comparator=args.sample_comparator)
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
         parser.exit(1, str(error)+'\n')
     if not report['passed']:

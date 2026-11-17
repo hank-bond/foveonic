@@ -31,7 +31,7 @@ The owner approved completing the remaining functional workflow in chunks with t
 
 Only start this after the functional slices are complete. The owner authorized research and experimental probing, rather than making an unproven engine approach the application's default.
 
-- [x] Ask the largest available research/review agent to inspect the existing engine and primary sources for stage interleaving, submission grouping and completion-wait grouping. Update [wide rendering](./wide-rendering.md) with the concrete proposed experiments.
+- [x] Ask the largest available research/review agent to inspect the existing engine and primary sources for stage interleaving, submission grouping and completion-wait grouping. Update [wide rendering](archived/wide-rendering.md) with the concrete proposed experiments.
 - [x] Build the smallest isolated harness/prototype needed to compare widths 1/2/4/8. Keep per-photo recipes, cache identity, output equality and independent settlement. Distinguish scheduling changes from node arithmetic and shader batching.
 - [x] Measure first useful result, complete-group latency, CPU coordination, submissions/waits, sampled memory and submitted-work cancellation/recovery. Compare mixed cameras/options only after the simplest warm Thumb case works. Actual foreground/background priority remains unmeasured and deferred.
 - [x] Record what works, what fails and why. Retain useful profiling additions when clean. Keep unproven execution changes isolated and document a recommendation instead of forcing adoption.

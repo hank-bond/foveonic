@@ -2,8 +2,11 @@
 
 use crate::{rendering::worker::Frame, viewport};
 use eframe::{egui, egui_wgpu, wgpu};
-use foveonic::diagnostics as trace;
 use foveonic::image::{ImageTexture, Space};
+use foveonic::{
+    decode_cache::{Activity, Cache},
+    diagnostics as trace,
+};
 use std::{
     path::PathBuf,
     sync::{mpsc, Arc, Condvar, Mutex},
@@ -68,8 +71,22 @@ impl Key {
             && self.revision <= new.revision
     }
 }
+// Job snapshots share one reservation. Releasing it also cancels a queued worker wait.
+struct Demand(Mutex<Option<Activity>>);
+impl Demand {
+    fn new(cache: &Cache) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(Some(cache.auxiliary_demand()))))
+    }
+    fn release(&self) {
+        self.0.lock().unwrap().take();
+    }
+    fn cancelled(&self) -> bool {
+        self.0.lock().unwrap().is_none()
+    }
+}
 #[derive(Clone)]
 struct Job {
+    demand: Arc<Demand>,
     diagnostic_task: crate::timing::DeliveredTask,
     key: Key,
     source: Arc<ImageTexture>,
@@ -90,6 +107,7 @@ struct Tile {
 }
 /// One pending job and one small retained texture. No processing samples ever visit the CPU.
 pub struct Navigator {
+    cache: Arc<Cache>,
     rs: egui_wgpu::RenderState,
     pending: Arc<(Mutex<Pending>, Condvar)>,
     replies: mpsc::Receiver<Tile>,
@@ -100,13 +118,14 @@ pub struct Navigator {
     resource_revision: u64,
 }
 impl Navigator {
-    pub fn new(rs: egui_wgpu::RenderState, context: egui::Context) -> Self {
+    pub fn new(rs: egui_wgpu::RenderState, context: egui::Context, cache: Arc<Cache>) -> Self {
         let pending = Arc::new((Mutex::new(Pending::default()), Condvar::new()));
         let slot = pending.clone();
         let gpu = rs.clone();
         let (tx, replies) = mpsc::sync_channel(1);
         let staging = crate::display_image::Staging::default();
         let worker_staging = staging.clone();
+        let worker_cache = cache.clone();
         let builder = std::thread::Builder::new().name("navigator".into());
         let spawned = builder.spawn(move || loop {
             let job = {
@@ -139,38 +158,48 @@ impl Navigator {
                         .str("image_purpose", job.diagnostic_task.purpose);
                 });
             let started = Instant::now();
-            let size = tile_extent(job.key.extent);
-            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Small display-ready navigator"),
-                size: wgpu::Extent3d {
-                    width: size[0],
-                    height: size[1],
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba16Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
+            let prepared = worker_cache.auxiliary(&|| job.demand.cancelled(), || {
+                let size = tile_extent(job.key.extent);
+                let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Small display-ready navigator"),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
+                let memory = worker_staging.track(crate::memory::texture_bytes(&texture));
+                viewport::prepare_preview(
+                    &gpu,
+                    job.source.texture(),
+                    job.key.space,
+                    &texture,
+                    job.key.mapping,
+                    job.input.as_ref().map(|image| image.texture()),
+                    job.key
+                        .rotation
+                        .map(|rotation| crate::framing::Presentation {
+                            rotation,
+                            native_extent: job.source.description().extent,
+                        }),
+                );
+                (texture, memory, size)
             });
-            let memory = worker_staging.track(crate::memory::texture_bytes(&texture));
-            viewport::prepare_preview(
-                &gpu,
-                job.source.texture(),
-                job.key.space,
-                &texture,
-                job.key.mapping,
-                job.input.as_ref().map(|image| image.texture()),
-                job.key
-                    .rotation
-                    .map(|rotation| crate::framing::Presentation {
-                        rotation,
-                        native_extent: job.source.description().extent,
-                    }),
-            );
+            job.demand.release();
+            let Some((texture, memory, size)) = prepared else {
+                let mut state = slot.0.lock().unwrap();
+                state.active = None;
+                state.revision = state.revision.wrapping_add(1);
+                continue;
+            };
             // Presentation uses the same ordered queue. Its later draw observes
             // this texture after the submitted preparation without a CPU wait.
             if crate::timing::enabled() {
@@ -214,6 +243,7 @@ impl Navigator {
         });
         spawned.expect("start navigator thread");
         Self {
+            cache,
             rs,
             pending,
             replies,
@@ -228,15 +258,22 @@ impl Navigator {
         if self.wanted.is_some() || self.sent.is_some() || self.displayed.is_some() {
             self.resource_revision = self.resource_revision.wrapping_add(1);
         }
-        self.wanted = None;
-        self.sent = None;
-        {
-            let mut state = self.pending.0.lock().unwrap();
-            if state.job.take().is_some() {
-                state.revision = state.revision.wrapping_add(1);
-            }
-        }
+        self.cancel_work();
         self.free();
+    }
+    fn cancel_work(&mut self) {
+        if let Some((job, _)) = self.wanted.take() {
+            job.demand.release();
+        }
+        self.sent = None;
+        let mut state = self.pending.0.lock().unwrap();
+        if let Some(job) = state.job.take() {
+            job.demand.release();
+            state.revision = state.revision.wrapping_add(1);
+        }
+        if let Some(job) = &state.active {
+            job.demand.release();
+        }
     }
     fn free(&mut self) {
         if let Some((_, id)) = self.displayed.take() {
@@ -292,16 +329,18 @@ impl Navigator {
             if self.wanted.is_some() {
                 self.resource_revision = self.resource_revision.wrapping_add(1);
             }
-            self.wanted = None;
+            self.cancel_work();
             return;
         }
         if self.sent.as_ref() == Some(&key) {
             return;
         }
         if self.wanted.as_ref().is_none_or(|(job, _)| job.key != key) {
+            self.cancel_work();
             self.resource_revision = self.resource_revision.wrapping_add(1);
             self.wanted = Some((
                 Job {
+                    demand: Demand::new(&self.cache),
                     diagnostic_task: frame.diagnostic_task,
                     key: key.clone(),
                     source: frame.view(mapping.input).clone(),
@@ -405,6 +444,24 @@ pub(crate) mod gpu_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reservation_release_cancels_all_job_snapshots_without_releasing_replacement() {
+        let cache = Cache::new();
+        let wanted = Demand::new(&cache);
+        let active = wanted.clone();
+        assert!(!cache.idle_ready());
+        let replacement = Demand::new(&cache);
+        wanted.release();
+        assert!(active.cancelled());
+        drop(wanted);
+        drop(active);
+        assert!(!cache.idle_ready());
+        replacement.release();
+        assert!(cache.idle_ready());
+        replacement.release();
+        assert!(cache.idle_ready());
+    }
+
     #[test]
     fn revision_pairing_allows_only_same_photo_root_mapping_and_geometry() {
         let a = Key {

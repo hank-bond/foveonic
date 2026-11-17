@@ -5,6 +5,21 @@ kind: reference
 
 # Changelog
 
+## 0.9.0
+
+Edit groups of photographs faster and keep their views in sync.
+
+### Changes
+
+- Render photographs together when cache memory allows, while preserving useful cached inputs.
+- Reuse fitted-image output for browser previews and refresh previews behind active editing.
+- Prioritize visible images, navigator and scopes, then browser thumbnails. Make full-image completion while idle optional.
+- Apply Before/After to every actively edited photograph, using its own Camera or Defaults settings.
+- Use Shift-drag, Shift-scroll or pinch, and Shift-double-click to move and zoom the editing group together.
+- Keep group zoom anchored within each photograph's displayed view and group panning at the same on-screen distance across different aspect ratios.
+- Simplify editing outlines, disable navigator and scopes during multi-edit, and resize image tiles continuously with either side panel.
+- Preserve useful native detail while a new zoomed area renders.
+
 ## 0.8.4
 
 Improve capture metadata and exported-file compatibility across supported cameras.

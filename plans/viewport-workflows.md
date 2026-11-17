@@ -4,7 +4,7 @@ summary: "Review small ownership and quality-policy changes supporting Smart com
 
 # Viewport workflow architecture
 
-The owner approved the remaining functional queue and subsequent isolated wide-execution investigation in the [overnight run](./viewport-overnight.md). The functional slices are complete. The isolated execution findings belong to the [wide-rendering investigation](./wide-rendering.md).
+The owner approved the remaining functional queue and subsequent isolated wide-execution investigation in the [overnight run](./viewport-overnight.md). The functional slices are complete. The isolated execution findings belong to the [wide-rendering investigation](archived/wide-rendering.md).
 
 Requirements under review: [viewport workflows](../docs/specs/viewport-workflows.md), [Smart preview](../docs/specs/smart-preview.md), [multi-edit](../docs/specs/multi-edit.md), [small previews](../docs/specs/small-previews.md) and [render orchestration](../docs/specs/render-orchestration.md). Apply the [three architecture goals](../docs/specs/render-orchestration.md#agreed-goals) to each slice. The owner approved the functional slices through the overnight queue. Their implementation and acceptance are recorded below.
 
@@ -12,7 +12,7 @@ Requirements under review: [viewport workflows](../docs/specs/viewport-workflows
 
 `02104b4` groups browser sources mechanically. `33453b3` separates requested source loading from serial rendering. Their validation is recorded in the [runtime plan](./render-runtime.md#source-loading-checks-and-lessons). The owner requested an Astra review devoted to architecture before implementing the next viewport features. The review inspected current sources and documentation and introduced no runtime changes.
 
-The existing coordinator, source loader, processing sessions and immutable presentation resources are useful boundaries. This roadmap does not require a new scheduler framework, a universal cache manager or stage-wide engine execution. Wide rendering remains a [separate future experiment](./wide-rendering.md).
+The existing coordinator, source loader, processing sessions and immutable presentation resources are useful boundaries. This roadmap does not require a new scheduler framework, a universal cache manager or stage-wide engine execution. Wide rendering remains a [separate future experiment](archived/wide-rendering.md).
 
 The owner approved separating [viewport, visible region and requested render region](../docs/architecture/concepts.md#viewport-and-image-coordinates). Use those meanings consistently. Zoom and pan derive an image-space visible region from UI-space viewport geometry. Follow the [working instructions](../AGENTS.md#work-with-the-owner) for the required review subagent and owner testing at each functional change.
 

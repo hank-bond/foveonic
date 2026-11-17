@@ -63,7 +63,7 @@ Layout supplies viewport geometry. A photo-keyed UI owner retains each photograp
 
 Do not equate a job finishing, its request settling, its pixels being retained, its image being admitted to a view and the UI applying that image. Names for the smallest observable operations should preserve their different effects. The [first migration unit](../../plans/render-runtime.md#result-handler-review-unit) defines the result handler's ownership and behavior before introducing replacement runtime types.
 
-Wide execution is a [separate future engine investigation](../../plans/wide-rendering.md): advancing ready graph work across photographs rather than finishing each graph serially. It does not imply one shader dispatch or a barrier across all images. It is outside this ownership migration.
+Wide execution is a [separate future engine investigation](../../plans/archived/wide-rendering.md): advancing ready graph work across photographs rather than finishing each graph serially. It does not imply one shader dispatch or a barrier across all images. It is outside this ownership migration.
 
 ## Refinement requests
 

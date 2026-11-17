@@ -123,6 +123,23 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual([c['tests'] for c in plan['commands'][1:]], [['sdk::one'], ['sdk::two']])
         self.assertEqual(plan['excluded'][0]['requirements'], 'STUDY_INPUT')
 
+    def test_literal_variants_replace_inherited_controls_after_environment_removal(self):
+        document = manifest()
+        document['environments']['original']['FOVEONIC_WIDE_RENDER_WIDTH'] = {'value': '2'}
+        plan = command_plan(document, discovered(),
+                            {'standard': {'directory': '/owned/all'},
+                             'merrill_high_only': {'directory': '/owned/merrill'}},
+                            {'FOVEONIC_WIDE_RENDER_WIDTH': 'serial'})
+        command = plan['commands'][0]
+        self.assertIn('FOVEONIC_WIDE_RENDER_WIDTH', command['unset_environment'])
+        self.assertEqual(command['environment']['FOVEONIC_WIDE_RENDER_WIDTH'], '2')
+        self.assertEqual(command['environment']['SOURCE'], '/owned/all/a.x3f')
+        for value in ['', 2, None, {'file': 'a.x3f'}]:
+            with self.subTest(value=value):
+                document['environments']['original']['FOVEONIC_WIDE_RENDER_WIDTH'] = {'value': value}
+                with self.assertRaises(ValueError):
+                    validate_inventory(document)
+
     def test_truncated_or_merged_compiler_builds_cannot_establish_discovery(self):
         with tempfile.TemporaryDirectory() as tmp:
             exe = Path(tmp) / 'tests'; exe.write_bytes(b'tests')
@@ -189,18 +206,51 @@ class InventoryTests(unittest.TestCase):
             self.assertTrue({'WHITE_BALANCE_SCALES', 'SMALL_PREVIEW_SCALES', 'SMALL_PREVIEW_CASE'}
                             .isdisjoint(command['environment']))
             self.assertNotIn('PATH', command['unset_environment'])
-        self.assertEqual(plan['counts']['required'], 462)
+        self.assertEqual(plan['counts']['required'], 499)
 
     def test_maintained_inventory_keeps_release_selection_and_corrected_variants(self):
         document = json.loads(MANIFEST.read_text()); validate_inventory(document)
-        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 462)
-        self.assertEqual(len(document['excluded']), 154)
+        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 499)
+        self.assertEqual(len(document['excluded']), 158)
         self.assertEqual(len(document['input_sets']['standard']), 27)
         groups = {name: g for g in document['groups'] for name in g['tests']}
         self.assertEqual(groups['source::tests::decode_original_merrill_files']['environment'], 'merrill_high_only')
         for suffix in ['classic_calibration_inspection_defers_color_selection', 'calibration_preparation_defers_color_metadata']:
             self.assertEqual(next(g for n, g in groups.items() if n.endswith('::' + suffix))['environment'], 'classic_dp2')
-        self.assertEqual(sum(len(g['tests']) for g in document['groups'] if g['one_test_per_process']), 5)
+        self.assertEqual(sum(len(g['tests']) for g in document['groups'] if g['resource'] == 'gpu_sdk'), 5)
+
+    def test_maintained_wide_controls_have_exact_widths_isolated_processes_and_pinned_inputs(self):
+        document = json.loads(MANIFEST.read_text())
+        suites = validate_inventory(document)
+        found = [{'kind': suite['key'][0], 'target': suite['key'][1],
+                  'executable': '/owned/' + name, 'binary_sha256': 'a' * 64,
+                  'ignored': sorted(suite['tests'])} for name, suite in suites.items()]
+        plan = command_plan(document, found,
+                            {'standard': {'directory': '/owned/all'},
+                             'merrill_high_only': {'directory': '/owned/merrill'}},
+                            {'FOVEONIC_WIDE_RENDER_WIDTH': 'serial', 'FOVEONIC_WIDE_CAPTURE_DIR': '/foreign'})
+        wide = [command for command in plan['commands'] if command['group'].startswith('gui_wide_')]
+        self.assertEqual(len(wide), 11)
+        self.assertTrue(all(len(command['tests']) == 1 for command in wide))
+        self.assertEqual([command['environment'].get('FOVEONIC_WIDE_RENDER_WIDTH') for command in wide],
+                         [None] * 6 + ['2'] + ['8'] * 4)
+        for command in wide:
+            self.assertEqual(command['environment']['FOVEONIC_FIXTURE_DIR'], '/owned/all')
+            self.assertTrue({'FOVEONIC_WIDE_RENDER_WIDTH', 'FOVEONIC_WIDE_CAPTURE_DIR'}
+                            <= set(command['unset_environment']))
+        measurements = {row['test'].split('::')[-1] for row in plan['excluded']
+                        if 'wide_tests::' in row['test']}
+        self.assertEqual(measurements, {'real_worker_warm_edit_experiment',
+                                       'wide_profiled_edit_attribution',
+                                       'wide_native_profiled_edit_attribution',
+                                       'warm_browser_preview_cohort_experiment'})
+        definitions = json.loads((MANIFEST.parent / 'test_inputs.json').read_text())
+        external = json.loads((MANIFEST.parent / 'external_raw_samples.json').read_text())
+        hashes = input_hashes(document, definitions, external)
+        wide_inputs = json.loads((MANIFEST.parent / 'wide_inputs.json').read_text())
+        for row in wide_inputs['files']:
+            self.assertIn(row['file'], document['input_sets']['standard'])
+            self.assertEqual(hashes[row['file']], row['sha256'])
 
 
 if __name__ == '__main__':

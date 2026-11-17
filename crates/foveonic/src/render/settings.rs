@@ -218,6 +218,13 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Accounts heap storage only. All remaining controls use inline storage,
+    /// including the bounded color range names and adjustment tables.
+    pub(crate) fn account(&self, retained: &mut crate::recipe::RetainedBytes) {
+        retained.add_bytes(self.white_balance.capacity());
+        retained.add_bytes(self.color_mode.capacity());
+    }
+
     /// Effective requests use manual EV so nested DNG/reference recipes cannot resolve Auto twice.
     pub(crate) fn resolved_exposure(
         &self,

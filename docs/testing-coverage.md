@@ -76,8 +76,8 @@ Prepare the cached originals in a new output directory, then capture clean Cargo
 ```sh
 python3 scripts/profiling/prepare_inputs.py --offline --rust-fixtures \
   --directory .local/release-test-inputs
-cargo test --offline --locked --release --workspace --no-run \
-  --message-format=json > .local/compiler-tests.jsonl
+cargo test --offline --locked --release --workspace \
+  --features foveonic-gui/wide-experiment --no-run --message-format=json > .local/compiler-tests.jsonl
 python3 scripts/profiling/rust_test_inventory.py \
   --compiler-json .local/compiler-tests.jsonl \
   --fixture-dir .local/release-test-inputs/rust-fixtures/standard \

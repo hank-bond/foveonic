@@ -2,7 +2,7 @@
 summary: "Smart overview sizing, persistent photograph views and a native-detail loupe share explicit viewport requirements."
 kind: reference
 status: accepted
-implementation: conforming
+implementation: incomplete
 ---
 
 # Viewport workflows
@@ -23,7 +23,7 @@ Automatic layout should maximize useful photograph area in the available viewpor
 
 Viewport Shift ranges must follow displayed visual order from top to bottom and then left to right, with the existing editing limit and nearest-to-anchor behavior. If the anchor is outside the displayed set, the clicked photograph becomes the whole range. Browser order still initializes editing targets and orders their storage. Captions remain attached to their photograph.
 
-An ongoing pointer gesture must retain its layout through the release frame. New dimensions and viewport resizing may reflow on the following frame. Changing displayed photograph membership may replace the layout immediately. Before renditions and temporary framing presentations must not change the saved-composition aspect ratio used for layout.
+An ongoing photo or caption gesture must retain its layout through the release frame. Newly discovered dimensions may reflow on the following frame. Side panel divider gestures must resize tile bounds continuously on both sides, independently of photo gesture freezing. Changing displayed photograph membership may replace the layout immediately. Before renditions and temporary framing presentations must not change the saved-composition aspect ratio used for layout.
 
 The owner approved combining Pointer selection and panning. Its click, drag, modifier and tool-isolation contract belongs to [multi-edit](./multi-edit.md#selection-and-tools).
 
@@ -37,9 +37,11 @@ Render the currently needed native-detail region first where the processing reci
 
 Loupe and persistent detail viewing must share layered presentation: draw the available whole-photo overview, then overlay the latest compatible native section at its image coordinates. Moving beyond the section must retain sharp detail wherever it still overlaps, with the overview filling uncovered areas until replacement detail arrives. Display overlap must not count as complete render coverage. Keep one latest section per photograph, without accumulating a tile history or merging numerical buffers. Both layers must follow the same viewing transform, physical-pixel alignment and clipping shape. Replacing a section must not shift its registration with the overview or previous section. Older edits must not cover a newer overview, while newer detail may continue the existing progressive feedback over an older overview. An unchanged reduced overview must not discard useful native detail merely because it arrived later.
 
+Persistent native zoom must request replacement detail when newly visible pixels leave available native coverage. The overscan margin should absorb small pans without another render. Movement must preserve useful in-flight work and retain only the latest uncovered demand, so continuous panning can make progress without accumulating requests. Returning inside the running patch must withdraw an unnecessary pending replacement. Region movement must preserve compatible reduced previews and optional whole-image completion independently of the detail overlay.
+
 The native loupe latency target is 400 ms from the user's request to usable native-detail pixels when the decoded source is cached. Measurements must distinguish first native processing from reuse of an already rendered region, and include source acquisition, queuing and delivery when reporting application latency. Engine-only measurements with an already resident source are useful attribution, but do not establish this application target. Record the source, settings, region, memory budget and competing workload with latency results.
 
-The coordinator must own sequencing between region and whole-image requests. The engine executes requested processing and owns numerical reuse, alignment and required support. Completion of a region is not itself a request to render the whole image. Region-only rendering is a complete useful outcome. A whole-image continuation is chosen only when current view needs or useful preparation justify it, and must remain subordinate to immediate interaction. Loupe movement must not unconditionally start a whole-image render.
+The coordinator must own sequencing between region and whole-image requests. The engine executes requested processing and owns numerical reuse, alignment and required support. Completion of a region is not itself a request to render the whole image. Region-only rendering is a complete useful outcome. Full-image continuation is an optional idle-compute optimization governed by the [render-priority and background-completion setting](./render-orchestration.md#foreground-and-speculative-execution). It must yield to viewport, navigator/scope and browser-thumbnail work. Disabling background completion must preserve useful regional delivery. Whole-image work required for a requested viewport remains distinct from speculative continuation. Loupe movement must not unconditionally start a whole-image render.
 
 Worker completion waits must park outside the shared GPU device locks so window submission can continue. They must preserve completed-stage, cancellation, publication and resource-retirement boundaries. Completion must cover a finite submitted prefix rather than waiting for a globally idle queue while the UI keeps submitting frames.
 

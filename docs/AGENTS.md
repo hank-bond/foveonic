@@ -27,5 +27,6 @@ Give each requirement or fact one home and link to it from related documents. Re
 - **[support-logs](./support-logs.md)** _(how-to)._ Find, review and copy local support logs when reporting a Foveonic problem.
 - **[testing-coverage](./testing-coverage.md)** _(reference)._ The acceptance inventory connects user paths to available behavioral, smoke and numerical evidence and records gaps.
 - **[visibility-tone-research](./visibility-tone-research.md)** _(reference)._ Visibility-oriented tone research separates useful contrast, spatial compression, noise and color appearance for an isolated Auto HDR experiment.
+- **[wide-rendering-experiments](./wide-rendering-experiments.md)** _(explanation)._ GPU probes and real-worker experiments separate rendering width, completion waits, latency, memory and task attribution.
 
 <!-- INDEX:END -->

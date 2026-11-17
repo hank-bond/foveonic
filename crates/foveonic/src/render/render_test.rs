@@ -60,11 +60,13 @@ fn color_conversion_preserves_signed_calibrated_layers_and_headroom() {
             )
             .unwrap();
         let outputs = engine
-            .execute(
+            .run_graph(
                 Input::Rendered(&input),
                 &graph,
                 &[root, color],
                 &mut Profile::default(),
+                &mut crate::interactive::Execution::default(),
+                crate::render::execute::Completion::Queued,
             )
             .unwrap();
         assert_eq!(
@@ -242,11 +244,13 @@ fn scalar_fields_preserve_geometry_and_values_without_rgb_storage() {
         )
         .unwrap();
     let imported = engine
-        .execute(
+        .run_graph(
             Input::Rendered(&scalar),
             &graph,
             &[input],
             &mut Profile::default(),
+            &mut crate::interactive::Execution::default(),
+            crate::render::execute::Completion::Queued,
         )
         .unwrap();
     assert_eq!(imported[0].description, Some(scalar.description));
@@ -667,7 +671,14 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
     let mut profile = Profile::new(crate::profile::Mode::Gpu);
     // Retain two roots while later nodes execute, preserving a while c is written.
     let mut outputs = engine
-        .execute(Input::Rendered(&input), &graph, &[a, c], &mut profile)
+        .run_graph(
+            Input::Rendered(&input),
+            &graph,
+            &[a, c],
+            &mut profile,
+            &mut crate::interactive::Execution::default(),
+            crate::render::execute::Completion::Queued,
+        )
         .unwrap();
     let _other = outputs.pop().unwrap();
     let retained = outputs.pop().unwrap();
@@ -679,7 +690,14 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
         assert!((actual - expected * 2.).abs() < 1e-6);
     }
     let latest = engine
-        .execute(Input::Rendered(&input), &graph, &[c], &mut profile)
+        .run_graph(
+            Input::Rendered(&input),
+            &graph,
+            &[c],
+            &mut profile,
+            &mut crate::interactive::Execution::default(),
+            crate::render::execute::Completion::Queued,
+        )
         .unwrap()
         .pop()
         .unwrap();

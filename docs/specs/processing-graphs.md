@@ -40,3 +40,29 @@ Native sectional results **should** match samples from the same region of a Whol
 ## Implementation latitude
 
 Execution may begin with straightforward dependency-order scheduling. Add caching and scheduling machinery when concrete responsiveness needs justify it.
+
+### Resumable serial execution
+
+Graph execution may own traversal state between operations while borrowing the prepared graph, immutable input context, execution cache and profile for each advancement. The ordinary render APIs must drive that same dispatcher to completion at width one. This extraction must preserve output samples and geometry, dependency selection, retained-input validity, cancellation checks, completion waits, progress, scratch retirement and diagnostics. It must not enable concurrent photographs or change application scheduling by itself.
+
+An execution error is terminal. Successful cache commit and unconditional session finalization retain their existing caller-owned boundaries. Pausing between operations must not commit an incomplete recipe. Diagnostic context and background completion guards must remain scoped to the advancement performing the work.
+
+### Execution session protection
+
+An execution using a retained processing session must protect that exact session until its submitted work and cache finalization have completed. Foreground recency and execution protection are separate. Several different photographs may be protected without changing the foreground selection. Within a working set, only one execution may mutate either representation of the same photo identity at a time.
+
+Automatic maintenance must not park, trim or evict an executing session, and shared preparation trimming must protect its metadata and source origin. Existing accounting must continue counting the retained resources once. A protection claim is not a second reservation or a completion fence. Within-operation temporary admission remains a separate concern.
+
+Removal, replacement and explicit clearing must reject live executions before changing retained owners or verified source mappings. Compound changes must leave existing owners intact when rejected. After execution retirement, deferred parking and ordinary maintenance may proceed. The execution owner must drain submitted work before releasing protection or clearing its sessions.
+
+### Private execution driver
+
+The driver owns prepared native/reduced jobs, resumable traversal, immutable request context, profiling and execution settlement. Sessions remain in the shared working set and are borrowed only during preparation, advancement and finalization. The application coordinator retains authority over wanted work, source identity, replacement and request settlement. The worker chooses admitted work and priority without duplicating the numerical graph. Fresh and borrowed inputs use synchronous adapters to the same numerical lifecycle.
+
+Width one must use the shared lifecycle and preserve its explicit completion policy. Successful jobs commit independently; every terminal outcome finalizes its cache and releases protection after submitted work retires. Early rejection without submitted work must not introduce a queue wait. Diagnostic context must be applied per advancement.
+
+Live graph values, job CPU containers and scratch must join the existing deduplicated memory inventory. Resolved operation forecasts may reserve conservative GPU headroom for additional admission. Temporary CPU allocations and driver overhead remain outside a complete peak bound. Unknown estimates must deny additional admission. One mandatory render may exceed the existing soft target, with that known overage reported explicitly.
+
+### Opt-in wide experiment
+
+The disposable `wide-experiment` build may advance several independently claimed warm Merrill reduced or native-region executions through one bounded GPU submission window to evaluate speed. Defaults remain serial. Experimental widths and external process-footprint guards provide coarse safeguards; this does not establish production memory admission. Completed progress and image publication must follow the shared completion fence. Failure or cancellation must drain submitted work before releasing session protection, while successful peers settle independently through existing application result handling.

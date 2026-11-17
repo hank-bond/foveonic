@@ -59,6 +59,7 @@ pub fn show(
                     preferences.memory_cache_bytes = mb * preferences::MIB;
                 }
             }).response.on_hover_text("Target for retained image and browser caches. Temporary processing uses additional memory.");
+
             ui.label(format!("Retained data: {:.0} MB", memory.resources.total_bytes as f64 / preferences::MIB as f64))
                 .on_hover_text("Known photo samples, display images and caches. Temporary processing and graphics-driver allocations are additional.");
             if memory.over_budget_bytes > 0 {
@@ -70,6 +71,11 @@ pub fn show(
                     .range(1..=usize::MAX).speed(1.));
             }).response.on_hover_text("The maximum number of viewport-selected photographs that receive editor changes. Browser selection remains unlimited.");
             ui.weak("The editing count is independent of cache memory.");
+            ui.separator();
+            ui.heading("Background processing");
+            widgets::checkbox(ui, &mut preferences.background_full_image_completion,
+                "Complete full images while idle")
+                .on_hover_text("Prepare the rest of a zoomed photograph only after viewport, navigator, scopes and browser thumbnails finish. Turn this off to reduce battery use.");
             ui.separator();
             ui.heading("Disk");
             widgets::checkbox(ui, &mut settings.enabled, "Enable disk cache");

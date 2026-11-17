@@ -1,6 +1,6 @@
 //! Acquires decoded sources off the renderer and hands bounded results through coordination.
 
-use super::worker::Pending;
+use super::{coordinator::TaskPriority, worker::Pending};
 use crate::progress::{Reporter, Tracker};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 #[cfg(test)]
@@ -9,20 +9,33 @@ use foveonic::{decode_cache::Cache, diagnostics as trace, source::Source};
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Condvar, Mutex,
+    },
+    time::Duration,
 };
 
 type Slot = Arc<(Mutex<Pending>, Condvar)>;
 
+#[derive(Clone)]
 pub(super) struct Request {
     path: PathBuf,
     revision: u64,
     context: Option<trace::Context>,
+    priority: TaskPriority,
+    cancelled: Arc<AtomicBool>,
 }
 
 pub(super) struct Loaded {
     pub path: PathBuf,
     pub result: foveonic::source::Result<Arc<Source>>,
+}
+
+/// A yielded acquisition remains wanted and never becomes a photographic error.
+pub(super) enum Completion {
+    Loaded(Loaded),
+    Retry(Request),
 }
 
 struct Hold {
@@ -68,13 +81,13 @@ pub(super) struct Handle {
 /// Coordination owns the wanted loads and admits one extra source at a time.
 pub(super) struct Service {
     pub signals: Receiver<Signal>,
-    pub results: Receiver<Loaded>,
+    pub results: Receiver<Completion>,
     jobs: Sender<Request>,
     queue: VecDeque<Request>,
     active: Option<PathBuf>,
     wanted: Vec<PathBuf>,
-    foreground: Vec<PathBuf>,
-    speculative: Vec<PathBuf>,
+    priorities: Vec<(PathBuf, TaskPriority)>,
+    active_request: Option<Request>,
     slot: Slot,
 }
 
@@ -93,39 +106,92 @@ pub(super) fn start(
             let mut hold = None;
             while let Ok(request) = work.recv() {
                 let _context = request.context.map(trace::enter);
-                let _activity = cache.foreground();
+                let _activity = match request.priority {
+                    TaskPriority::Viewport => Some(cache.foreground()),
+                    TaskPriority::Auxiliary => Some(cache.auxiliary_demand()),
+                    TaskPriority::Thumbnail => Some(cache.thumbnail_demand()),
+                    TaskPriority::Idle => None,
+                };
                 let _scope = trace::scope(trace::Category::Cpu, "source.load");
                 let _span = crate::timing::Span::new(request.revision, "source_open");
                 let reporter = Reporter::new(progress.clone(), request.revision);
                 if hold.is_none() {
                     hold = holds.try_recv().ok();
                 }
-                if hold.as_ref().is_some_and(|hold| hold.path == request.path) {
-                    let hold = hold.take().unwrap();
-                    let _pause = trace::scope(trace::Category::Scenario, "scenario.source_pause");
-                    let _ = hold.reached.try_send(());
-                    let _ = hold.release.recv();
-                }
-                // Cache I/O stays on this thread. Decoding and conversion retain
-                // their existing shared host-sized processing pool.
-                let operation_id=crate::support::operation_id("source");
-                let _support_context=tracing::info_span!("source",source=%request.path.display(),operation_id=%operation_id).entered();
-                foveonic::support::event(foveonic::support::Level::Info,"source.open","Opening photograph",serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.revision}));
-                let result = cache
-                    .open(&request.path, |stage| reporter.loaded(stage))
-                    .map_err(|error| foveonic::support::reported_error("source.open",error,foveonic::support::OperationContext {
-                        operation_id:Some(operation_id.clone()),component:Some("source loader".into()),phase:Some("open and decode".into()),
-                        source:Some(request.path.to_string_lossy().into_owned()), revision:Some(request.revision.to_string()),
-                        ..Default::default()
-                    }));
-                if result.is_ok() {foveonic::support::event(foveonic::support::Level::Info,"source.ready","Photograph opened",serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.revision}));}
-                if completed
-                    .send(Loaded {
-                        path: request.path,
-                        result,
-                    })
-                    .is_err()
-                {
+                // A denied gate parks only this source thread. Plan changes cancel
+                // the request; timed rechecks also notice gate-only demand release.
+                let completion = loop {
+                    if request.cancelled.load(Ordering::Acquire) {
+                        break Completion::Retry(request);
+                    }
+                    let mut acquire = |cancel: &dyn Fn() -> bool| {
+                        if hold.as_ref().is_some_and(|hold| hold.path == request.path) {
+                            let hold = hold.take().unwrap();
+                            let _pause =
+                                trace::scope(trace::Category::Scenario, "scenario.source_pause");
+                            let _ = hold.reached.try_send(());
+                            let _ = hold.release.recv();
+                        }
+
+                        if cancel() || request.cancelled.load(Ordering::Acquire) {
+                            return None;
+                        }
+                        let operation_id = crate::support::operation_id("source");
+                        let _support_context = tracing::info_span!("source", source = %request.path.display(), operation_id = %operation_id).entered();
+                        foveonic::support::event(
+                            foveonic::support::Level::Info,
+                            "source.open",
+                            "Opening photograph",
+                            serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.revision}),
+                        );
+                        let result = cache
+                            .open(&request.path, |stage| {
+                                if request.priority == TaskPriority::Viewport {
+                                    reporter.loaded(stage);
+                                }
+                            })
+                            .map_err(|error| {
+                                foveonic::support::reported_error(
+                                    "source.open",
+                                    error,
+                                    foveonic::support::OperationContext {
+                                        operation_id: Some(operation_id.clone()),
+                                        component: Some("source loader".into()),
+                                        phase: Some("open and decode".into()),
+                                        source: Some(request.path.to_string_lossy().into_owned()),
+                                        revision: Some(request.revision.to_string()),
+                                        ..Default::default()
+                                    },
+                                )
+                            });
+                        if result.is_ok() {
+                            foveonic::support::event(
+                                foveonic::support::Level::Info,
+                                "source.ready",
+                                "Photograph opened",
+                                serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.revision}),
+                            );
+                        }
+                        (!cancel() && !request.cancelled.load(Ordering::Acquire)).then_some(result)
+                    };
+                    let attempt = match request.priority {
+                        TaskPriority::Viewport => Some(acquire(&|| false)),
+                        TaskPriority::Auxiliary => cache.auxiliary_execution(acquire),
+                        TaskPriority::Thumbnail => cache.thumbnail_execution(acquire),
+                        TaskPriority::Idle => cache.idle_execution(acquire),
+                    };
+                    match attempt {
+                        Some(Some(result)) => {
+                            break Completion::Loaded(Loaded {
+                                path: request.path,
+                                result,
+                            })
+                        }
+                        Some(None) => break Completion::Retry(request),
+                        None => std::thread::sleep(Duration::from_millis(10)),
+                    }
+                };
+                if completed.send(completion).is_err() {
                     break;
                 }
             }
@@ -143,8 +209,8 @@ pub(super) fn start(
             queue: Default::default(),
             active: None,
             wanted: Vec::new(),
-            foreground: Vec::new(),
-            speculative: Vec::new(),
+            priorities: Vec::new(),
+            active_request: None,
             slot,
         },
         Control(hold),
@@ -165,6 +231,15 @@ impl Handle {
         &mut self,
         path: &Path,
         revision: u64,
+    ) -> foveonic::source::Result<Option<Arc<Source>>> {
+        self.open_at(path, revision, TaskPriority::Viewport)
+    }
+
+    pub fn open_at(
+        &mut self,
+        path: &Path,
+        revision: u64,
+        priority: TaskPriority,
     ) -> foveonic::source::Result<Option<Arc<Source>>> {
         let (loaded, request) = {
             let mut pending = self.slot.0.lock().unwrap();
@@ -188,6 +263,8 @@ impl Handle {
                 path: path.to_owned(),
                 revision,
                 context: trace::current_context(),
+                priority,
+                cancelled: Arc::new(AtomicBool::new(false)),
             }));
         }
         Ok(None)
@@ -205,6 +282,11 @@ impl Service {
             .is_some_and(|source| !wanted.contains(&source.path))
         {
             pending.source = None;
+        }
+        if let Some(active) = &self.active_request {
+            if !wanted.contains(&active.path) {
+                active.cancelled.store(true, Ordering::Release);
+            }
         }
         self.wanted = wanted;
     }
@@ -228,34 +310,65 @@ impl Service {
         self.admit();
     }
 
-    pub fn completed(&mut self, loaded: Loaded) {
+    pub fn completed(&mut self, completion: Completion) {
         self.active = None;
-        if self.wanted.contains(&loaded.path) {
-            self.slot.0.lock().unwrap().source = Some(loaded);
-            self.slot.1.notify_one();
-        } else {
-            self.slot
-                .0
-                .lock()
-                .unwrap()
-                .source_requests
-                .remove(&loaded.path);
+        self.active_request = None;
+        match completion {
+            Completion::Retry(mut request) if self.wanted.contains(&request.path) => {
+                request.cancelled = Arc::new(AtomicBool::new(false));
+                self.queue.push_back(request);
+            }
+            Completion::Loaded(loaded) if self.wanted.contains(&loaded.path) => {
+                self.slot.0.lock().unwrap().source = Some(loaded);
+                self.slot.1.notify_one();
+            }
+            Completion::Retry(request) => {
+                self.slot
+                    .0
+                    .lock()
+                    .unwrap()
+                    .source_requests
+                    .remove(&request.path);
+            }
+            Completion::Loaded(loaded) => {
+                self.slot
+                    .0
+                    .lock()
+                    .unwrap()
+                    .source_requests
+                    .remove(&loaded.path);
+            }
         }
         self.admit();
     }
 
-    /// Free the single handoff slot when a different foreground source needs it.
-    /// The still-desired continuation may request its source again later.
-    pub fn prioritize(&mut self, foreground: &[PathBuf], speculative: &[PathBuf]) {
-        self.foreground = foreground.to_vec();
-        self.speculative = speculative.to_vec();
+    fn priority(&self, path: &Path, fallback: TaskPriority) -> TaskPriority {
+        self.priorities
+            .iter()
+            .filter(|(candidate, _)| candidate == path)
+            .map(|(_, priority)| *priority)
+            .min()
+            .unwrap_or(fallback)
+    }
+
+    /// Reprioritize shared acquisitions, preserving the strongest same-path demand.
+    pub fn prioritize(&mut self, priorities: &[(PathBuf, TaskPriority)]) {
+        self.priorities = priorities.to_vec();
+        if let Some(active) = &self.active_request {
+            if self.priority(&active.path, active.priority) != active.priority
+                || priorities
+                    .iter()
+                    .any(|(_, priority)| *priority < active.priority)
+            {
+                active.cancelled.store(true, Ordering::Release);
+            }
+        }
         let mut pending = self.slot.0.lock().unwrap();
         if pending.source.as_ref().is_some_and(|source| {
-            speculative.contains(&source.path)
-                && !foreground.contains(&source.path)
-                && foreground
-                    .iter()
-                    .any(|path| pending.source_requests.contains(path))
+            let held = self.priority(&source.path, TaskPriority::Idle);
+            priorities
+                .iter()
+                .any(|(path, priority)| *priority < held && pending.source_requests.contains(path))
         }) {
             let loaded = pending.source.take().unwrap();
             pending.source_requests.remove(&loaded.path);
@@ -269,21 +382,32 @@ impl Service {
         if self.active.is_some() || self.slot.0.lock().unwrap().source.is_some() {
             return;
         }
-        let index = if self.foreground.is_empty() {
-            (!self.queue.is_empty()).then_some(0)
-        } else {
-            self.queue
-                .iter()
-                .position(|request| self.foreground.contains(&request.path))
-                .or_else(|| {
-                    self.queue
-                        .iter()
-                        .position(|request| !self.speculative.contains(&request.path))
-                })
-        };
-        if let Some(request) = index.and_then(|index| self.queue.remove(index)) {
+        let highest = self.priorities.iter().map(|(_, priority)| *priority).min();
+        let index = self
+            .queue
+            .iter()
+            .enumerate()
+            .filter_map(|(index, request)| {
+                let priority = self.priority(&request.path, request.priority);
+                highest
+                    .is_none_or(|highest| priority <= highest)
+                    .then_some((index, priority))
+            })
+            .min_by_key(|(_, priority)| *priority)
+            .map(|(index, _)| index);
+        if let Some(mut request) = index.and_then(|index| self.queue.remove(index)) {
+            request.priority = self.priority(&request.path, request.priority);
             self.active = Some(request.path.clone());
+            self.active_request = Some(request.clone());
             let _ = self.jobs.try_send(request);
+        }
+    }
+}
+
+impl Drop for Service {
+    fn drop(&mut self) {
+        if let Some(active) = &self.active_request {
+            active.cancelled.store(true, Ordering::Release);
         }
     }
 }
@@ -299,11 +423,170 @@ mod tests {
             enabled: false,
             ..Default::default()
         });
+        rig_with_cache(cache)
+    }
+
+    fn rig_with_cache(cache: Arc<Cache>) -> (Handle, Service, Control) {
         start(
             cache,
             Tracker::default(),
             Arc::new((Mutex::new(Pending::default()), Condvar::new())),
         )
+    }
+
+    fn signal_next(service: &mut Service) {
+        let signal = service
+            .signals
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        service.signal(signal);
+    }
+
+    fn complete_next(service: &mut Service) {
+        let completion = service
+            .results
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        service.completed(completion);
+    }
+
+    #[test]
+    fn denied_lower_tier_resumes_after_gate_release_without_a_ui_event() {
+        let cache = Arc::new(Cache::new());
+        let foreground = cache.foreground();
+        let (mut handle, mut service, _control) = rig_with_cache(cache);
+        let path = PathBuf::from("blocked-preview-missing.x3f");
+        service.retain(vec![path.clone()]);
+        service.prioritize(&[(path.clone(), TaskPriority::Thumbnail)]);
+        handle.open_at(&path, 1, TaskPriority::Thumbnail).unwrap();
+        signal_next(&mut service);
+        assert!(service
+            .results
+            .recv_timeout(Duration::from_millis(30))
+            .is_err());
+        assert!(!handle.can_retry(&path, &service.slot.0.lock().unwrap()));
+        drop(foreground);
+        complete_next(&mut service);
+        assert!(handle.open_at(&path, 1, TaskPriority::Thumbnail).is_err());
+    }
+
+    #[test]
+    fn running_preview_yields_to_viewport_and_retries_without_publishing_cancellation() {
+        let cache = Arc::new(Cache::new());
+        let (mut handle, mut service, control) = rig_with_cache(cache.clone());
+        let preview = PathBuf::from("interrupted-preview-missing.x3f");
+        let viewport = PathBuf::from("priority-viewport-missing.x3f");
+        service.retain(vec![preview.clone(), viewport.clone()]);
+        service.prioritize(&[(preview.clone(), TaskPriority::Thumbnail)]);
+        let hold = control.hold(preview.clone());
+        handle
+            .open_at(&preview, 1, TaskPriority::Thumbnail)
+            .unwrap();
+        signal_next(&mut service);
+        hold.reached.recv_timeout(Duration::from_secs(5)).unwrap();
+        let foreground = cache.foreground();
+        service.prioritize(&[
+            (viewport.clone(), TaskPriority::Viewport),
+            (preview.clone(), TaskPriority::Thumbnail),
+        ]);
+        handle.open(&viewport, 2).unwrap();
+        signal_next(&mut service);
+        drop(hold);
+        let yielded = service
+            .results
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(&yielded, Completion::Retry(request) if request.path == preview));
+        service.completed(yielded);
+        assert!(service.slot.0.lock().unwrap().source.is_none());
+        assert!(!handle.can_retry(&preview, &service.slot.0.lock().unwrap()));
+        assert_eq!(service.active.as_ref(), Some(&viewport));
+        complete_next(&mut service);
+        assert!(handle.open(&viewport, 2).is_err());
+        signal_next(&mut service);
+        assert!(
+            service.active.is_none(),
+            "queued preview waits for viewport settlement"
+        );
+        drop(foreground);
+        service.prioritize(&[(preview.clone(), TaskPriority::Thumbnail)]);
+        complete_next(&mut service);
+        assert!(handle
+            .open_at(&preview, 1, TaskPriority::Thumbnail)
+            .is_err());
+    }
+
+    #[test]
+    fn same_path_promotion_restarts_one_shared_acquisition_at_viewport_priority() {
+        let (mut handle, mut service, control) = rig();
+        let path = PathBuf::from("promoted-preview-missing.x3f");
+        service.retain(vec![path.clone()]);
+        service.prioritize(&[(path.clone(), TaskPriority::Thumbnail)]);
+        let hold = control.hold(path.clone());
+        handle.open_at(&path, 1, TaskPriority::Thumbnail).unwrap();
+        signal_next(&mut service);
+        hold.reached.recv_timeout(Duration::from_secs(5)).unwrap();
+        service.prioritize(&[
+            (path.clone(), TaskPriority::Thumbnail),
+            (path.clone(), TaskPriority::Viewport),
+        ]);
+        assert!(handle.open(&path, 2).unwrap().is_none());
+        assert!(
+            service.signals.is_empty(),
+            "promotion must reuse the shared request"
+        );
+        drop(hold);
+        let yielded = service
+            .results
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(&yielded, Completion::Retry(_)));
+        service.completed(yielded);
+        assert_eq!(
+            service.active_request.as_ref().unwrap().priority,
+            TaskPriority::Viewport
+        );
+        assert!(service.queue.is_empty());
+        complete_next(&mut service);
+        assert!(handle.open(&path, 2).is_err());
+    }
+
+    #[test]
+    fn queued_requests_follow_replacement_priorities() {
+        let (mut handle, mut service, control) = rig();
+        let active = PathBuf::from("queued-active-missing.x3f");
+        let first = PathBuf::from("queued-first-missing.x3f");
+        let second = PathBuf::from("queued-second-missing.x3f");
+        service.retain(vec![active.clone(), first.clone(), second.clone()]);
+        let hold = control.hold(active.clone());
+        handle.open(&active, 1).unwrap();
+        signal_next(&mut service);
+        hold.reached.recv_timeout(Duration::from_secs(5)).unwrap();
+        for (path, priority) in [
+            (&first, TaskPriority::Thumbnail),
+            (&second, TaskPriority::Auxiliary),
+        ] {
+            handle.open_at(path, 2, priority).unwrap();
+            signal_next(&mut service);
+        }
+        service.prioritize(&[
+            (active.clone(), TaskPriority::Viewport),
+            (first.clone(), TaskPriority::Auxiliary),
+            (second.clone(), TaskPriority::Thumbnail),
+        ]);
+        drop(hold);
+        complete_next(&mut service);
+        assert!(handle.open(&active, 1).is_err());
+        service.prioritize(&[
+            (first.clone(), TaskPriority::Auxiliary),
+            (second, TaskPriority::Thumbnail),
+        ]);
+        assert_eq!(service.active.as_ref(), Some(&first));
+        assert_eq!(
+            service.active_request.as_ref().unwrap().priority,
+            TaskPriority::Auxiliary
+        );
+        complete_next(&mut service);
     }
 
     #[test]
@@ -336,6 +619,8 @@ mod tests {
         for (revision, rendition) in [(1, Rendition::Current), (2, Rendition::Camera)] {
             coordinator.desire(
                 Arc::new(RenderRequest {
+                    auxiliary_preview: false,
+
                     detail: false,
                     path: path.clone(),
                     revision,
@@ -460,7 +745,7 @@ mod tests {
             .results
             .recv_timeout(Duration::from_secs(5))
             .unwrap();
-        assert!(loaded.result.is_err());
+        assert!(matches!(&loaded, Completion::Loaded(loaded) if loaded.result.is_err()));
         service.completed(loaded);
         assert!(handle.can_retry(&a, &service.slot.0.lock().unwrap()));
         assert!(handle.open(&a, 2).is_err());
@@ -545,12 +830,19 @@ mod tests {
             service.slot.0.lock().unwrap().source.as_ref().unwrap().path,
             a
         );
-        service.prioritize(&[a.clone(), b.clone()], std::slice::from_ref(&a));
+        service.prioritize(&[
+            (a.clone(), TaskPriority::Idle),
+            (a.clone(), TaskPriority::Viewport),
+            (b.clone(), TaskPriority::Viewport),
+        ]);
         assert!(
             service.slot.0.lock().unwrap().source.is_some(),
             "same-path foreground can consume the handoff"
         );
-        service.prioritize(std::slice::from_ref(&b), std::slice::from_ref(&a));
+        service.prioritize(&[
+            (b.clone(), TaskPriority::Viewport),
+            (a.clone(), TaskPriority::Idle),
+        ]);
         assert!(service.slot.0.lock().unwrap().source.is_none());
         assert_eq!(service.active.as_ref(), Some(&b));
         assert!(handle.can_retry(&a, &service.slot.0.lock().unwrap()));
@@ -592,7 +884,11 @@ mod tests {
                     .unwrap(),
             );
         }
-        service.prioritize(std::slice::from_ref(&c), &[a.clone(), b.clone()]);
+        service.prioritize(&[
+            (c.clone(), TaskPriority::Viewport),
+            (a.clone(), TaskPriority::Viewport),
+            (b.clone(), TaskPriority::Idle),
+        ]);
         drop(hold);
         service.completed(
             service
@@ -600,7 +896,11 @@ mod tests {
                 .recv_timeout(Duration::from_secs(5))
                 .unwrap(),
         );
-        service.prioritize(std::slice::from_ref(&c), &[a.clone(), b.clone()]);
+        service.prioritize(&[
+            (c.clone(), TaskPriority::Viewport),
+            (a.clone(), TaskPriority::Idle),
+            (b.clone(), TaskPriority::Idle),
+        ]);
         assert_eq!(service.active.as_ref(), Some(&c));
         service.completed(
             service
@@ -619,7 +919,7 @@ mod tests {
             service.active.is_none(),
             "queued speculative work waits for foreground settlement"
         );
-        service.prioritize(&[], &[a, b.clone()]);
+        service.prioritize(&[(a, TaskPriority::Idle), (b.clone(), TaskPriority::Idle)]);
         assert_eq!(service.active.as_ref(), Some(&b));
     }
 

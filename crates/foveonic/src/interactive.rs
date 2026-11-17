@@ -607,12 +607,13 @@ impl Cache {
             Some(crate::source::SourceOrigin::Memory(_)) => 2 * std::mem::size_of::<usize>(),
             None => 0,
         };
-        bytes += self
-            .working
-            .versions
-            .keys()
-            .map(|name| name.capacity() + std::mem::size_of::<(String, Arc<Version>)>())
-            .sum::<usize>();
+        bytes += self.working.versions.capacity() * std::mem::size_of::<(String, Arc<Version>)>()
+            + self
+                .working
+                .versions
+                .keys()
+                .map(String::capacity)
+                .sum::<usize>();
         bytes += self.identities.capacity() * std::mem::size_of::<(u64, Vec<Weak<Version>>)>()
             + self
                 .identities

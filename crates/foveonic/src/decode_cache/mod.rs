@@ -312,6 +312,40 @@ impl Cache {
     pub fn foreground(&self) -> Activity {
         self.gate.foreground()
     }
+    /// Reserve navigator or scope work below viewport rendering and above browser reads.
+    pub fn auxiliary_demand(&self) -> Activity {
+        self.gate.auxiliary()
+    }
+    /// Check auxiliary admission without parking the shared render worker.
+    pub fn auxiliary_ready(&self) -> bool {
+        self.gate.auxiliary_ready()
+    }
+    /// Attempt auxiliary work without waiting; viewport arrivals cancel the attempt.
+    pub fn auxiliary_execution<T>(&self, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
+        crate::background::auxiliary_execution(self.gate.clone(), work)
+    }
+    /// Check browser-preview admission without waiting on the render worker.
+    pub fn thumbnail_ready(&self) -> bool {
+        self.gate.thumbnail_ready()
+    }
+    /// Attempt browser work without waiting; viewport or auxiliary arrivals cancel it.
+    pub fn thumbnail_execution<T>(&self, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
+        crate::background::thumbnail_execution(self.gate.clone(), work)
+    }
+    /// Run a small auxiliary submission on its worker after viewport work yields.
+    /// The caller owns its demand guard. Cancellation can retire a queued job while waiting.
+    pub fn auxiliary<T>(&self, cancel: &dyn Fn() -> bool, work: impl FnOnce() -> T) -> Option<T> {
+        crate::background::auxiliary(self.gate.clone(), cancel, work)
+    }
+    /// Observe admission without claiming work or waiting on the render thread.
+    pub fn idle_ready(&self) -> bool {
+        self.gate.idle()
+    }
+    /// Attempt idle work without blocking the renderer behind higher-priority work.
+    /// Any higher-tier arrival invalidates the attempt, including one that already completed.
+    pub fn idle_execution<T>(&self, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
+        crate::background::idle_execution(self.gate.clone(), work)
+    }
     /// Reserve browser-thumbnail priority while small requests remain queued.
     /// Active photo work still comes first. Speculative in-memory decodes may finish.
     pub fn thumbnail_demand(&self) -> Activity {

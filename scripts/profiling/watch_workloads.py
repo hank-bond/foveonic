@@ -23,9 +23,9 @@ def is_workload_executable(executable):
     return (name in {'cargo', 'rustc', 'clang', 'clang++', 'cc', 'cc1', 'ld',
                     'foveonic', 'foveonic-gui', 'Foveonic', 'vmmap', 'footprint',
                     'profile_pipeline', 'profile_editing', 'profile_checkpoints',
-                    'profile_noise_resources', 'profile_smart_preview', 'browser_pipeline'}
-            or ('/deps/' in executable and name.startswith(('foveonic-', 'foveonic_gui-')))
-            or re.fullmatch(r'(?:foveonic|foveonic_gui)-[0-9a-f]{16}', name) is not None)
+                     'profile_noise_resources', 'profile_smart_preview', 'profile_wide', 'browser_pipeline'}
+             or ('/deps/' in executable and name.startswith(('foveonic-', 'foveonic_gui-')))
+             or re.fullmatch(r'(?:foveonic|foveonic_gui)-[0-9a-f]{16}', name) is not None)
 
 
 def running_workloads(exclude_pids=()):

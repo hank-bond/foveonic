@@ -15,17 +15,20 @@ pub struct MemoryReservation {
     pub exclusive_bytes: u64,
 }
 impl MemoryReservation {
+    pub(super) fn add_buffer(&mut self, buffer: &crate::gpu::ReadGuard) {
+        if !self
+            .buffers
+            .iter()
+            .any(|prior| prior.shares_storage(buffer))
+        {
+            self.buffers.push(buffer.clone());
+        }
+    }
     /// Merge shared owners from another current snapshot. Exclusive pools need
     /// their caller's own identity-based inventory and are deliberately omitted.
     pub fn extend_shared(&mut self, other: &Self) {
         for buffer in &other.buffers {
-            if !self
-                .buffers
-                .iter()
-                .any(|prior| prior.shares_storage(buffer))
-            {
-                self.buffers.push(buffer.clone());
-            }
+            self.add_buffer(buffer);
         }
         for metadata in &other.metadata {
             self.add_metadata(metadata);
@@ -35,13 +38,7 @@ impl MemoryReservation {
         }
     }
     pub fn add_image(&mut self, image: &crate::image::RenderedImage) {
-        if !self
-            .buffers
-            .iter()
-            .any(|prior| prior.shares_storage(&image.buffer))
-        {
-            self.buffers.push(image.buffer.clone());
-        }
+        self.add_buffer(&image.buffer);
         self.add_metadata(&image.metadata);
     }
     pub fn add_metadata(&mut self, metadata: &Arc<crate::source::Metadata>) {
@@ -60,6 +57,14 @@ impl MemoryReservation {
         }
         self.add_metadata(&source.metadata);
     }
+}
+
+/// The caller's current logical target and retained frontend owners.
+/// Unestimated mandatory work keeps the existing exclusive width-one fallback.
+#[derive(Clone, Copy)]
+pub struct ExecutionBudget<'a> {
+    pub limit_bytes: u64,
+    pub retained: &'a MemoryReservation,
 }
 
 /// Logical retained processing allocations plus the caller's other retained pools.
@@ -87,9 +92,22 @@ impl Engine {
         working: &ProcessingWorkingSet,
         reservation: &MemoryReservation,
     ) -> MemoryResources {
+        self.memory_resources_with(working, reservation, |_| {})
+    }
+
+    pub(super) fn memory_resources_with(
+        &self,
+        working: &ProcessingWorkingSet,
+        reservation: &MemoryReservation,
+        account: impl FnOnce(&mut RetainedBytes),
+    ) -> MemoryResources {
         let mut retained = RetainedBytes::default();
         let containers = working.account_memory(&mut retained);
         self.account_preparation(&mut retained);
+        if let Some(calibration) = &self.noise_calibration {
+            retained.owner(calibration.clone(), calibration.retained_bytes());
+        }
+        account(&mut retained);
         for metadata in &reservation.metadata {
             retained.owner(metadata.clone(), metadata.retained_bytes() as usize);
         }
@@ -105,7 +123,13 @@ impl Engine {
                 buffers.push(buffer);
             }
         }
-        let cpu_bytes = containers.saturating_add(retained.bytes() as u64);
+        let buffer_owners: u64 = buffers
+            .iter()
+            .map(|buffer| buffer.owned_cpu_bytes() as u64)
+            .sum();
+        let cpu_bytes = containers
+            .saturating_add(retained.bytes() as u64)
+            .saturating_add(buffer_owners);
         let gpu_bytes = buffers.into_iter().map(|buffer| buffer.size()).sum();
         MemoryResources {
             cpu_bytes,
@@ -125,27 +149,29 @@ impl Engine {
         limit_bytes: u64,
         reservation: &MemoryReservation,
     ) -> MemoryTrim {
+        self.trim_memory_with(working, limit_bytes, reservation, |_| {})
+    }
+
+    pub(super) fn trim_memory_with(
+        &self,
+        working: &mut ProcessingWorkingSet,
+        limit_bytes: u64,
+        reservation: &MemoryReservation,
+        account: impl Fn(&mut RetainedBytes),
+    ) -> MemoryTrim {
         let _scope = crate::diagnostics::scope(crate::diagnostics::Category::Memory, "memory.trim");
-        let mut resources = self.memory_resources(working, reservation);
-        let mut evicted_sessions = Vec::new();
+        let mut resources = self.memory_resources_with(working, reservation, &account);
         for obsolete_only in [true, false] {
             while resources.total_bytes > limit_bytes {
-                let trimmed = working.trim_optional(obsolete_only);
-                if !trimmed {
+                if !working.trim_optional(obsolete_only) {
                     break;
                 }
-                resources = self.memory_resources(working, reservation);
+                resources = self.memory_resources_with(working, reservation, &account);
             }
         }
+        let mut evicted_sessions = Vec::new();
         while resources.total_bytes > limit_bytes {
-            let mut protected = Vec::new();
-            let mut origins = Vec::new();
-            if let Some(metadata) = working.active_metadata() {
-                protected.push(metadata);
-            }
-            if let Some(origin) = working.active_origin() {
-                origins.push(origin);
-            }
+            let (protected, origins): (Vec<_>, Vec<_>) = working.protected_inputs().unzip();
             if !self.trim_cold_preparation(&protected, &origins) {
                 let Some(key) = working.evict_oldest() else {
                     break;
@@ -168,7 +194,7 @@ impl Engine {
                 );
                 evicted_sessions.push(key);
             }
-            resources = self.memory_resources(working, reservation);
+            resources = self.memory_resources_with(working, reservation, &account);
         }
         crate::diagnostics::counter(
             crate::diagnostics::Category::Memory,

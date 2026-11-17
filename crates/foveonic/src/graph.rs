@@ -167,6 +167,27 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Accounts every authored node, including branches whose outputs are cached.
+    /// The graph's inline storage belongs to its parent. Unsupported parameter
+    /// owners leave this inventory incomplete and must prevent extra admission.
+    pub(crate) fn account(&self, retained: &mut crate::recipe::RetainedBytes) -> Option<()> {
+        retained.add_bytes(self.nodes.capacity() * std::mem::size_of::<Node>());
+        retained.add_bytes(self.outputs.capacity() * std::mem::size_of::<Output>());
+        retained.add_bytes(self.session_outputs.capacity() * std::mem::size_of::<usize>());
+        retained.add_bytes(self.sealed_outputs.capacity() * std::mem::size_of::<usize>());
+        let mut complete = true;
+        for node in &self.nodes {
+            retained.add_bytes(node.inputs.capacity() * std::mem::size_of::<usize>());
+            retained.add_bytes(node.outputs.capacity() * std::mem::size_of::<usize>());
+            complete &= node.operation.account(retained).is_some();
+        }
+        for output in &self.outputs {
+            retained.add_bytes(output.cache_scope.capacity());
+            retained.add_bytes(output.dependencies.capacity() * std::mem::size_of::<usize>());
+        }
+        complete.then_some(())
+    }
+
     /// Camera framing belongs to this output's grid, independently of other
     /// requested outputs and of the eventual photographic frame.
     pub(crate) fn set_view(&mut self, output: usize, view: crate::image::View) {

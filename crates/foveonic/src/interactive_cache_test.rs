@@ -204,6 +204,26 @@ fn existing_version_admission_keeps_its_original_buffer() {
 }
 
 #[test]
+fn working_version_inventory_counts_unused_map_capacity() {
+    let mut cache = admission_cache();
+    let capacity_before = cache.working.versions.capacity();
+    let mut retained_before = crate::recipe::RetainedBytes::default();
+    let bytes_before = cache.account_keys(&mut retained_before);
+
+    cache.working.versions.reserve(113);
+
+    let capacity_after = cache.working.versions.capacity();
+    assert!(capacity_after > capacity_before);
+    let mut retained_after = crate::recipe::RetainedBytes::default();
+    let bytes_after = cache.account_keys(&mut retained_after);
+    assert_eq!(
+        bytes_after - bytes_before,
+        (capacity_after - capacity_before) * std::mem::size_of::<(String, Arc<Version>)>()
+    );
+    assert_eq!(retained_after.bytes(), retained_before.bytes());
+}
+
+#[test]
 fn parameter_resource_attribution_matches_the_unique_inventory() {
     let mut cache = Cache::default();
     let (graph, _, _, target) = source_graph("inventory", 16);

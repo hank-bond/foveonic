@@ -9,6 +9,19 @@ pub(super) const CAPTION: f32 = 22.;
 const PAD: f32 = 6.;
 const FOOT: f32 = CAPTION + 3.;
 
+pub(super) fn pointer_gesture(
+    ctx: &egui::Context,
+    widgets: impl IntoIterator<Item = egui::Id>,
+) -> bool {
+    widgets.into_iter().any(|id| {
+        // egui resolves ownership before drawing, using the previous pass's
+        // widgets. A pane divider can overlap a photo without owning its input.
+        ctx.read_response(id).is_some_and(|response| {
+            response.is_pointer_button_down_on() || response.clicked() || response.drag_stopped()
+        })
+    })
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Tile {
     pub index: usize,
@@ -32,6 +45,10 @@ pub(crate) struct State {
 }
 
 impl State {
+    pub(super) fn shown(&self) -> usize {
+        self.layout.as_ref().map_or(0, |layout| layout.shown)
+    }
+
     pub(super) fn get(
         &mut self,
         paths: &[PathBuf],
@@ -276,6 +293,252 @@ fn shelves(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Workspace {
+        ctx: egui::Context,
+        state: State,
+        aspects: [f32; 2],
+        height: f32,
+        empty_photos: bool,
+    }
+
+    struct Frame {
+        left: egui::Rect,
+        right: egui::Rect,
+        canvas: egui::Rect,
+        tiles: Vec<egui::Rect>,
+        frozen: bool,
+        pointer_down: bool,
+    }
+
+    impl Workspace {
+        fn new() -> Self {
+            Self {
+                ctx: egui::Context::default(),
+                state: State::default(),
+                aspects: [1.5; 2],
+                height: 700.,
+                empty_photos: false,
+            }
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) -> Frame {
+            let mut result = None;
+            let paths = [PathBuf::from("a.x3f"), PathBuf::from("b.x3f")];
+            let _ = self.ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1400., self.height),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    let left = egui::SidePanel::left("organizer")
+                        .default_width(230.)
+                        .width_range(100.0..=400.0)
+                        .resizable(true)
+                        .show(ctx, |ui| ui.allocate_space(ui.available_size()))
+                        .response
+                        .rect;
+                    let right = egui::SidePanel::right("settings")
+                        .default_width(230.)
+                        .width_range(100.0..=400.0)
+                        .resizable(true)
+                        .show(ctx, |ui| ui.allocate_space(ui.available_size()))
+                        .response
+                        .rect;
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ctx, |ui| {
+                            let frozen = pointer_gesture(
+                                ctx,
+                                (0usize..2).flat_map(|index| {
+                                    [
+                                        if self.empty_photos {
+                                            crate::viewport::Viewport::for_photo(&paths[index]).id()
+                                        } else {
+                                            egui::Id::new(index)
+                                        },
+                                        egui::Id::new(("caption", index)),
+                                    ]
+                                }),
+                            );
+                            let canvas = ui.available_rect_before_wrap();
+                            let plan =
+                                self.state
+                                    .get(&paths, &self.aspects, 2, canvas.size(), frozen);
+                            let tiles: Vec<_> = plan.tiles.iter().map(|tile| tile.rect).collect();
+                            for tile in &plan.tiles {
+                                let image = egui::Rect::from_min_max(
+                                    tile.rect.min + canvas.min.to_vec2() + egui::vec2(3., 3.),
+                                    tile.rect.max + canvas.min.to_vec2() - egui::vec2(3., CAPTION),
+                                );
+                                if self.empty_photos {
+                                    let mut child =
+                                        ui.new_child(egui::UiBuilder::new().max_rect(image));
+                                    crate::viewport::Viewport::for_photo(&paths[tile.index])
+                                        .show_empty(&mut child);
+                                } else {
+                                    ui.interact(
+                                        image,
+                                        egui::Id::new(tile.index),
+                                        egui::Sense::click_and_drag(),
+                                    );
+                                }
+                                ui.interact(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(tile.rect.left(), tile.rect.bottom() - CAPTION)
+                                            + canvas.min.to_vec2(),
+                                        tile.rect.max + canvas.min.to_vec2(),
+                                    ),
+                                    egui::Id::new(("caption", tile.index)),
+                                    egui::Sense::click_and_drag(),
+                                );
+                            }
+                            result = Some(Frame {
+                                left,
+                                right,
+                                canvas,
+                                tiles,
+                                frozen,
+                                pointer_down: ctx.input(|input| input.pointer.any_down()),
+                            });
+                        });
+                },
+            );
+            result.unwrap()
+        }
+    }
+
+    fn button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    #[test]
+    fn both_pane_dividers_reflow_tiles_while_the_pointer_is_held() {
+        for left in [true, false] {
+            let mut workspace = Workspace::new();
+            workspace.frame(vec![]);
+            let initial = workspace.frame(vec![]);
+            // The divider grab area extends into the canvas. Ownership,
+            // rather than the press coordinates alone, must choose the gesture.
+            let start = egui::pos2(
+                if left {
+                    initial.left.right() + 1.
+                } else {
+                    initial.right.left() - 1.
+                },
+                initial.canvas.center().y,
+            );
+            workspace.frame(vec![egui::Event::PointerMoved(start), button(start, true)]);
+            let moved = start + egui::vec2(if left { 80. } else { -80. }, 0.);
+            let dragged = workspace.frame(vec![egui::Event::PointerMoved(moved)]);
+            assert!(dragged.pointer_down);
+            assert!(
+                dragged.canvas.width() < initial.canvas.width() - 50.,
+                "left={left}, start={start:?}, before={:?}, after={:?}, frozen={}",
+                initial.canvas,
+                dragged.canvas,
+                dragged.frozen
+            );
+            assert!(!dragged.frozen, "left={left}");
+            assert_ne!(dragged.tiles, initial.tiles);
+            if left {
+                assert!(dragged.canvas.left() > initial.canvas.left());
+            } else {
+                assert_eq!(dragged.canvas.left(), initial.canvas.left());
+            }
+            let released = workspace.frame(vec![button(moved, false)]);
+            assert!(!released.frozen);
+        }
+    }
+
+    #[test]
+    fn photo_click_and_drag_hold_layout_through_release_then_reflow() {
+        for drag in [false, true] {
+            let mut workspace = Workspace::new();
+            workspace.frame(vec![]);
+            let initial = workspace.frame(vec![]);
+            let start = initial.tiles[0].center() + initial.canvas.min.to_vec2();
+            let pressed =
+                workspace.frame(vec![egui::Event::PointerMoved(start), button(start, true)]);
+            assert!(pressed.frozen);
+            workspace.aspects = [2. / 3., 1.5];
+            workspace.height -= 100.;
+            let end = if drag {
+                start + egui::vec2(40., 20.)
+            } else {
+                start
+            };
+            let held = workspace.frame(vec![egui::Event::PointerMoved(end)]);
+            assert!(held.frozen);
+            assert_eq!(held.tiles, initial.tiles);
+            let released = workspace.frame(vec![button(end, false)]);
+            assert!(released.frozen);
+            assert_eq!(released.tiles, initial.tiles);
+            let settled = workspace.frame(vec![]);
+            assert!(!settled.frozen);
+            assert_ne!(settled.tiles, initial.tiles);
+        }
+    }
+
+    #[test]
+    fn cancelled_caption_click_holds_layout_through_release() {
+        let mut workspace = Workspace::new();
+        workspace.frame(vec![]);
+        let initial = workspace.frame(vec![]);
+        let tile = initial.tiles[0];
+        let start = egui::pos2(tile.center().x, tile.bottom() - CAPTION * 0.5)
+            + initial.canvas.min.to_vec2();
+        let pressed = workspace.frame(vec![egui::Event::PointerMoved(start), button(start, true)]);
+        assert!(pressed.frozen);
+        workspace.aspects = [2. / 3., 1.5];
+        let outside = start - egui::vec2(0., CAPTION * 2.);
+        let moved = workspace.frame(vec![egui::Event::PointerMoved(outside)]);
+        assert!(moved.frozen);
+        assert_eq!(moved.tiles, initial.tiles);
+        let released = workspace.frame(vec![button(outside, false)]);
+        let caption = workspace
+            .ctx
+            .read_response(egui::Id::new(("caption", 0usize)))
+            .unwrap();
+        assert!(!caption.clicked());
+        assert!(caption.drag_stopped());
+        assert!(released.frozen);
+        assert_eq!(released.tiles, initial.tiles);
+        let settled = workspace.frame(vec![]);
+        assert!(!settled.frozen);
+        assert_ne!(settled.tiles, initial.tiles);
+    }
+
+    #[test]
+    fn empty_photo_holds_layout_through_cancelled_drag_release() {
+        let mut workspace = Workspace::new();
+        workspace.empty_photos = true;
+        workspace.frame(vec![]);
+        let initial = workspace.frame(vec![]);
+        let start = initial.tiles[0].center() + initial.canvas.min.to_vec2();
+        let pressed = workspace.frame(vec![egui::Event::PointerMoved(start), button(start, true)]);
+        assert!(pressed.frozen);
+        workspace.aspects = [2. / 3., 1.5];
+        let moved = start + egui::vec2(40., 20.);
+        let held = workspace.frame(vec![egui::Event::PointerMoved(moved)]);
+        assert!(held.frozen);
+        assert_eq!(held.tiles, initial.tiles);
+        let released = workspace.frame(vec![button(moved, false)]);
+        assert!(released.frozen);
+        assert_eq!(released.tiles, initial.tiles);
+        let settled = workspace.frame(vec![]);
+        assert!(!settled.frozen);
+        assert_ne!(settled.tiles, initial.tiles);
+    }
 
     fn check(plan: &Layout, count: usize, available: egui::Vec2) {
         assert_eq!(plan.shown + plan.overflow, count);

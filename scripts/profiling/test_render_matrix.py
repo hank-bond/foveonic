@@ -45,6 +45,50 @@ for event,data in [('session',{'settings':{'mode':'test'},'processing_quality':q
 
 
 class MatrixTests(unittest.TestCase):
+    def test_contended_correctness_records_workloads_without_claiming_timing_validity(self):
+        workload = {'pid': 42, 'executable': 'foveonic-gui'}
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), \
+                patch('render_matrix.require_quiet', side_effect=RuntimeError('app running')) as quiet, \
+                patch('render_matrix.running_workloads', return_value=[workload]):
+            root = Path(tmp)
+            binary = root / 'renderer'
+            binary.write_text(FAKE_RENDERER)
+            binary.chmod(0o755)
+            source = root / 'sample.x3f'
+            source.write_bytes(b'original')
+            cases = [{'label': 'sample', 'family': 'merrill', 'source': str(source),
+                      'resolutions': ['thumb'], 'processing_qualities': ['quality']}]
+            blocked = run(binary, cases, root / 'blocked')
+            self.assertFalse(blocked['passed'])
+            allowed = run(binary, cases, root / 'allowed', allow_contended_correctness=True)
+            self.assertTrue(allowed['passed'])
+            self.assertEqual(quiet.call_count, 1)
+            self.assertEqual(allowed['cases'][0]['concurrent_workloads_before_render'], [workload])
+            self.assertIn('correctness-only', allowed['cases'][0]['timing_validity'])
+
+    def test_contended_matrix_uses_current_comparator_for_an_older_renderer(self):
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), \
+                patch('render_matrix.require_quiet', side_effect=RuntimeError('app running')), \
+                patch('render_matrix.running_workloads', return_value=[{'pid': 42, 'executable': 'profile_wide'}]):
+            root = Path(tmp)
+            renderer = root / 'older-renderer'
+            renderer.write_text(FAKE_RENDERER.replace("if sys.argv[1]=='--compare-samples':",
+                                                     "if sys.argv[1]=='--compare-samples':\n    sys.exit('unsupported by older renderer')"))
+            renderer.chmod(0o755)
+            comparator = root / 'current-comparator'
+            comparator.write_text(FAKE_RENDERER)
+            comparator.chmod(0o755)
+            source = root / 'sample.x3f'
+            source.write_bytes(b'original')
+            cases = [{'label': 'sample', 'family': 'merrill', 'source': str(source),
+                      'resolutions': ['thumb'], 'processing_qualities': ['quality', 'speed']}]
+            report = run(renderer, cases, root / 'matrix', allow_contended_correctness=True,
+                         sample_comparator=comparator)
+            self.assertTrue(report['passed'])
+            self.assertEqual(report['sample_comparator']['path'], str(comparator.resolve()))
+            self.assertEqual(report['processing_mode_comparisons'][0]['outcome'], 'complete')
+            self.assertTrue(all('correctness-only' in row['timing_validity'] for row in report['cases']))
+
     def test_snapshot_recipes_preserve_transients_and_use_matrix_owned_axes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)

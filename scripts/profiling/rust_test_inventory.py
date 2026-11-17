@@ -62,6 +62,9 @@ def validate_inventory(document):
             if 'directory' in binding:
                 if binding['directory'] not in document['input_sets']:
                     raise ValueError('unknown fixture set')
+            elif 'value' in binding:
+                if not isinstance(binding['value'], str) or not binding['value']:
+                    raise ValueError('literal environment values must be nonempty strings')
             elif 'file' not in binding or binding['file'] not in document['input_sets']['standard']:
                 raise ValueError('unknown fixture file')
     return suites
@@ -207,8 +210,12 @@ def command_plan(document, discovered, fixtures, environ=None):
         artifact = matched[group['suite']]
         environment = {}
         for name, binding in document['environments'][group['environment']].items():
-            environment[name] = (fixtures[binding['directory']]['directory'] if 'directory' in binding
-                                 else str(Path(fixtures['standard']['directory']) / binding['file']))
+            if 'directory' in binding:
+                environment[name] = fixtures[binding['directory']]['directory']
+            elif 'file' in binding:
+                environment[name] = str(Path(fixtures['standard']['directory']) / binding['file'])
+            else:
+                environment[name] = binding['value']
         selections = [[name] for name in group['tests']] if group['one_test_per_process'] else [group['tests']]
         for index, names in enumerate(selections):
             arguments = [artifact['executable'], *names, '--ignored', '--exact', '--test-threads=1']
@@ -231,7 +238,7 @@ def command_plan(document, discovered, fixtures, environ=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler-json', type=Path, required=True,
-                        help='stdout from cargo test --no-run --message-format=json --workspace; never builds here')
+                        help='stdout from cargo test --workspace --features foveonic-gui/wide-experiment --no-run --message-format=json; never builds here')
     parser.add_argument('--manifest', type=Path, default=MANIFEST)
     parser.add_argument('--fixture-dir', type=Path, required=True, help='disposable full-copy directory with the declared original set')
     parser.add_argument('--merrill-fixture-dir', type=Path, required=True, help='disposable Merrill-HI-only fixture directory')

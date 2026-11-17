@@ -4,6 +4,19 @@ use super::*;
 use crate::source::{Matrix, MatrixEncoding, Metadata, PropertyList};
 
 #[test]
+fn retained_settings_count_string_capacity_without_inline_controls() {
+    let mut settings = Settings::new("Daylight", "Standard");
+    settings.white_balance.reserve(71);
+    settings.color_mode.reserve(109);
+    let mut retained = crate::recipe::RetainedBytes::default();
+    settings.account(&mut retained);
+    assert_eq!(
+        retained.bytes(),
+        settings.white_balance.capacity() + settings.color_mode.capacity()
+    );
+}
+
+#[test]
 fn base_response_is_saved_scoped_and_deferred_to_dng_with_tone_bypass() {
     use crate::render::{BaseResponse, ControlCapabilities, EditScope, EditSection};
     use crate::source::ProcessingFamily;

@@ -9,19 +9,33 @@ use crate::{
     source::Result,
 };
 
+pub(super) struct ArtifactPlan {
+    targets: Vec<usize>,
+    pub(super) roots: Vec<usize>,
+    estimate: Option<usize>,
+}
+
+impl ArtifactPlan {
+    pub(super) fn final_image_only(&self, final_id: usize) -> bool {
+        self.targets == [final_id] && self.estimate.is_none()
+    }
+
+    pub(super) fn account(&self, retained: &mut crate::recipe::RetainedBytes) {
+        retained.add_bytes(self.targets.capacity() * std::mem::size_of::<usize>());
+        retained.add_bytes(self.roots.capacity() * std::mem::size_of::<usize>());
+    }
+}
+
 impl Engine {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn collect_artifacts(
+    pub(super) fn plan_artifacts(
         &self,
-        source: RecipeInput<'_>,
         settings: &Settings,
         graph: &mut Graph,
         final_id: usize,
         names: &[&str],
         profile: &mut Profile,
         execution: &mut Execution<'_>,
-    ) -> Result<Vec<crate::inspection::Artifact>> {
-        use crate::inspection::{Artifact, Content};
+    ) -> Result<ArtifactPlan> {
         let targets: Vec<_> = names
             .iter()
             .map(|name| {
@@ -84,8 +98,27 @@ impl Engine {
                 roots.push(id);
             }
         }
-        let values =
-            self.execute_controlled(source.context(), graph, &roots, profile, execution)?;
+        Ok(ArtifactPlan {
+            targets,
+            roots,
+            estimate,
+        })
+    }
+
+    pub(super) fn package_artifacts(
+        &self,
+        source: RecipeInput<'_>,
+        settings: &Settings,
+        graph: &Graph,
+        plan: ArtifactPlan,
+        values: Vec<super::execute::Value>,
+    ) -> Result<Vec<crate::inspection::Artifact>> {
+        use crate::inspection::{Artifact, Content};
+        let ArtifactPlan {
+            targets,
+            roots,
+            estimate,
+        } = plan;
         let dehaze_estimate = if let Some(id) = estimate {
             let value = &values[roots.iter().position(|root| *root == id).unwrap()];
             let bytes = self.gpu.readback(&value.buffer)?;
@@ -172,5 +205,27 @@ impl Engine {
                 })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArtifactPlan;
+
+    #[test]
+    fn retained_plan_counts_target_and_root_capacity_separately() {
+        let mut plan = ArtifactPlan {
+            targets: Vec::with_capacity(13),
+            roots: Vec::with_capacity(17),
+            estimate: Some(0),
+        };
+        plan.targets.push(0);
+        plan.roots.push(0);
+        let mut retained = crate::recipe::RetainedBytes::default();
+        plan.account(&mut retained);
+        assert_eq!(
+            retained.bytes(),
+            (plan.targets.capacity() + plan.roots.capacity()) * std::mem::size_of::<usize>()
+        );
     }
 }

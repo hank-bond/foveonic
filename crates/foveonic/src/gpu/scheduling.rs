@@ -16,8 +16,8 @@ pub(crate) struct BackgroundStage<'a> {
     previous: Option<Option<u64>>,
 }
 impl Gpu {
-    /// Cancellable graph execution already completes every operation before
-    /// advancing. Do not also block after each dispatch within that operation.
+    /// Operation and window completion already bound unfinished graph work.
+    /// Avoid an additional wait after each dispatch within that boundary.
     pub(crate) fn background_stage(&self, managed_completion: bool) -> BackgroundStage<'_> {
         let previous = (managed_completion && crate::background::context().is_some())
             .then(|| STAGE.with(|stage| stage.replace(Some(self.diagnostics.clock))));
@@ -51,6 +51,50 @@ impl Drop for BackgroundStage<'_> {
             );
             let _ = super::completion::submitted(&self.gpu.device, &self.gpu.queue);
             self.complete();
+        }
+    }
+}
+
+/// Owns completion for the opt-in worker experiment's bounded window.
+#[cfg(feature = "wide-experiment")]
+pub(crate) struct SubmissionWindow<'a> {
+    gpu: &'a Gpu,
+    background: BackgroundStage<'a>,
+    initial_submissions: u64,
+    drained: bool,
+}
+#[cfg(feature = "wide-experiment")]
+impl Gpu {
+    pub(crate) fn submission_window(&self) -> SubmissionWindow<'_> {
+        SubmissionWindow {
+            gpu: self,
+            background: self.background_stage(true),
+            initial_submissions: self.activity().submissions,
+            drained: false,
+        }
+    }
+}
+#[cfg(feature = "wide-experiment")]
+impl SubmissionWindow<'_> {
+    pub(crate) fn complete(mut self) -> crate::source::Result<bool> {
+        let submitted = self.gpu.activity().submissions != self.initial_submissions;
+        if submitted {
+            self.gpu.wait_for_submitted_work()?;
+        }
+        self.background.complete();
+        self.drained = true;
+        Ok(submitted)
+    }
+}
+#[cfg(feature = "wide-experiment")]
+impl Drop for SubmissionWindow<'_> {
+    fn drop(&mut self) {
+        if !self.drained {
+            // Errors cannot leave an unfinished window behind a later request.
+            if self.gpu.activity().submissions != self.initial_submissions {
+                let _ = self.gpu.wait_for_submitted_work();
+            }
+            self.background.complete();
         }
     }
 }

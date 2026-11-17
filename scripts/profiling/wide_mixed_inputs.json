@@ -1,0 +1,37 @@
+{
+  "description": "Two Merrill and six external camera-family originals in fixed heterogeneous traversal order. External provenance is in external_raw_samples.json.",
+  "files": [
+    {
+      "file": "blue-parking-sign.x3f",
+      "sha256": "7a650537a9986bfe348e0da117defbf80da7ceca35f76bc092f220a7cdbcffee"
+    },
+    {
+      "file": "merrill-hazy-coast.x3f",
+      "sha256": "4bfba506a6d270fd433251ccfc425a710c5cd5ab2e68788faa63ef3c899debf4"
+    },
+    {
+      "file": "dp0-quattro.x3f",
+      "sha256": "9e3095dd20237d35117faaaf1c66e22d0c271ab931f60775b3538519b49f54aa"
+    },
+    {
+      "file": "sd-quattro.x3f",
+      "sha256": "bf26469746e5937ca4f9cfb34a022891f9c8518febd676355930b805b9307b48"
+    },
+    {
+      "file": "sd-quattro-h.x3f",
+      "sha256": "c6823f88e7dae554d3ec951d2366aab4b9ba2f8d64ad2d93028b2f9c50c811f2"
+    },
+    {
+      "file": "sd9.x3f",
+      "sha256": "9faed9efe3bb53f34534b487da3045f01d58935f7377450097b6063947964109"
+    },
+    {
+      "file": "sd10.x3f",
+      "sha256": "ea436ba459a7478d7b338428656fae905469de269f928749f3388db2b7b0d53f"
+    },
+    {
+      "file": "sd14.x3f",
+      "sha256": "c32f247eb372c3e66ad3b433518ec11f898fdc317c8432ebe025b46d4917bcf3"
+    }
+  ]
+}

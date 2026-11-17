@@ -1,8 +1,7 @@
 //! Prepares source-free camera dependency cuts and renders reduced sessions.
 
-use super::{recipes, Engine, Scale, Settings};
+use super::{execute::Completion, recipes, Engine, Scale, SessionRender, Settings};
 use crate::{
-    inspection::Artifact,
     interactive::{Cache, Execution, Superseded},
     profile::Profile,
     source::{Metadata, Result, Source, SourceOrigin},
@@ -34,11 +33,6 @@ pub enum ReducedPreparation {
     Prepared(Box<ReducedSession>),
     Superseded,
 }
-pub enum ReducedRender {
-    Rendered(Vec<Artifact>),
-    NeedsOriginal(NeedsOriginal),
-    Superseded,
-}
 
 /// Retains immutable recipe-declared camera inputs, never decoded source samples.
 /// The complete camera and photographic recipes still author every render.
@@ -46,9 +40,9 @@ pub struct ReducedSession {
     pub(super) metadata: Arc<Metadata>,
     pub(super) origin: SourceOrigin,
     pub(super) owner: Arc<()>,
-    scale: Scale,
+    pub(super) scale: Scale,
     pub(super) cache: Cache,
-    preparation: super::source_preparation::SourcePreparation,
+    pub(super) preparation: super::source_preparation::SourcePreparation,
     metadata_bytes: u64,
     pub(super) last_settings: Option<Box<Settings>>,
 }
@@ -190,12 +184,13 @@ impl Engine {
                 return Err("camera recipe declared no immutable sensor dependencies".into());
             }
             execution.plan_seal(&graph, roots)?;
-            self.execute_controlled(
+            self.run_graph(
                 super::Input::Source(&source),
                 &graph,
                 roots,
                 profile,
                 &mut execution,
+                Completion::Operation,
             )?;
             Ok(())
         })();
@@ -280,12 +275,13 @@ impl Engine {
                 &mut execution,
             )?;
             execution.plan_seal(&graph, &graph.sealed_outputs)?;
-            self.execute_controlled(
+            self.run_graph(
                 super::Input::Source(source),
                 &graph,
                 &graph.sealed_outputs,
                 profile,
                 &mut execution,
+                Completion::Operation,
             )?;
             Ok(())
         })();
@@ -321,7 +317,7 @@ impl Engine {
         names: &[&str],
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
-    ) -> Result<ReducedRender> {
+    ) -> Result<SessionRender> {
         self.render_reduced_session_observed(session, settings, names, cancel, profile, None)
     }
     #[allow(clippy::too_many_arguments)]
@@ -333,7 +329,7 @@ impl Engine {
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
         progress: impl Fn(super::RenderProgress),
-    ) -> Result<ReducedRender> {
+    ) -> Result<SessionRender> {
         self.render_reduced_session_observed(
             session,
             settings,
@@ -352,7 +348,7 @@ impl Engine {
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
         progress: Option<&dyn Fn(super::RenderProgress)>,
-    ) -> Result<ReducedRender> {
+    ) -> Result<SessionRender> {
         settings.validate_values().map_err(|error| {
             failure(
                 error,
@@ -362,7 +358,7 @@ impl Engine {
             )
         })?;
         if !Arc::ptr_eq(&session.owner, &self.owner) {
-            return Ok(ReducedRender::NeedsOriginal(NeedsOriginal::EngineChanged));
+            return Ok(SessionRender::NeedsOriginal(NeedsOriginal::EngineChanged));
         }
         session.cache.bind(&self.owner);
         session.cache.bind_source(&session.origin);
@@ -372,7 +368,7 @@ impl Engine {
             progress,
             ..Execution::default()
         };
-        let result = self.render_recipe(
+        let result = self.run_recipe(
             recipes::RecipeInput::Metadata {
                 metadata: &session.metadata,
                 origin: &session.origin,
@@ -382,6 +378,7 @@ impl Engine {
             recipes::Recipe::Photographic(names),
             profile,
             &mut execution,
+            Completion::Operation,
         );
         if result.is_ok() {
             session.cache.commit();
@@ -391,17 +388,17 @@ impl Engine {
             Ok(artifacts) => {
                 session.scale = settings.working_scale;
                 session.last_settings = Some(Box::new(settings.clone()));
-                Ok(ReducedRender::Rendered(artifacts))
+                Ok(SessionRender::Rendered(artifacts))
             }
             Err(error)
                 if error
                     .downcast_ref::<super::execute::SourceRequired>()
                     .is_some() =>
             {
-                Ok(ReducedRender::NeedsOriginal(NeedsOriginal::UpstreamChanged))
+                Ok(SessionRender::NeedsOriginal(NeedsOriginal::UpstreamChanged))
             }
             Err(error) if error.downcast_ref::<Superseded>().is_some() => {
-                Ok(ReducedRender::Superseded)
+                Ok(SessionRender::Superseded)
             }
             Err(error) => Err(failure(
                 error,

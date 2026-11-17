@@ -24,12 +24,12 @@ def _array(value):
 def explain(events, work, memory, recorded_history_valid):
     """Describe observed availability and work, without simulating another policy."""
     headers, outputs, snapshots, nodes = {}, defaultdict(list), {}, defaultdict(list)
-    complete, history = set(), defaultdict(list)
+    complete, completed_at, history = set(), {}, defaultdict(list)
     tasks = {}
     for event in events:
         fields = event['args']
         graph = fields.get('graph_id')
-        if event['name'] == 'graph.execute' and graph is not None:
+        if event['name'] in ('graph.execute', 'graph.prepare_execution') and graph is not None:
             if graph in headers:
                 raise ValueError('duplicate graph identity')
             headers[graph] = event
@@ -41,6 +41,7 @@ def explain(events, work, memory, recorded_history_valid):
             snapshots[graph] = event
         elif event['name'] == 'graph.complete' and graph is not None:
             complete.add(graph)
+            completed_at[graph] = event['ts']
         if event['name'] in ('cache.checkpoint.admitted', 'cache.checkpoint.evicted'):
             if fields.get('cache_id') is not None and fields.get('generation') is not None:
                 history[(fields['cache_id'], fields['generation'])].append(event)
@@ -157,7 +158,10 @@ def explain(events, work, memory, recorded_history_valid):
                 reentries.append(row['node'])
         result = {'graph_id':graph_id, 'cache_id':cache_id,
                   **dict(zip(IDENTITY, _identity(header))),
-                  'ts_ns':header['ts'], 'inclusive_host_ms':None if header['dur'] < 0 else header['dur'] / 1e6,
+                  'ts_ns':header['ts'], 'scope_event':header['name'],
+                  'inclusive_host_ms':header['dur'] / 1e6 if header['name']=='graph.execute' and header['dur'] >= 0 else None,
+                  'preparation_host_ms':header['dur'] / 1e6 if header['name']=='graph.prepare_execution' and header['dur'] >= 0 else None,
+                  'execution_elapsed_ms':(completed_at[graph_id]-header['ts']) / 1e6 if graph_id in completed_at else None,
                   'local_evidence_complete':not issues, 'issues':sorted(set(issues)),
                   'entry_checkpoints':inventory, 'executed_nodes':executed,
                   'requested_roots':roots,
@@ -173,13 +177,14 @@ def explain(events, work, memory, recorded_history_valid):
                                    or task['memory_boundaries'] or task.get('request')
                                    or task.get('native_encoding_count')],
             'unidentified_graph_records':sum(
-                event['name'] in ('graph.execute', 'graph.output', 'graph.complete', 'cache.checkpoint.snapshot')
+                event['name'] in ('graph.execute', 'graph.prepare_execution', 'graph.output', 'graph.complete', 'cache.checkpoint.snapshot')
                 and event['args'].get('graph_id') is None for event in events)
                 + sum(node.get('graph_id') is None for node in work['nodes']),
             'orphan_graph_ids':sorted(orphans), 'recorded_history_valid':recorded_history_valid,
             'history_before_capture':'unknown',
             'memory_boundaries':memory,
             'limits':['This report explains observed work, not savings under another cache policy.',
+                      'A resumable graph preparation slice measures initialization only. Execution elapsed time includes interleaving, waits and service of other jobs, not CPU-active time.',
                       'Available outputs are not necessarily required. Cached siblings do not prevent work for missing outputs.',
                       'History before capture is unknown even in a loss-free recording. No prior eviction observation is not proof of eviction or invalidation.',
                       'Snapshot and eviction bytes reference allocations. Aliases count once and eviction does not imply freed memory.',

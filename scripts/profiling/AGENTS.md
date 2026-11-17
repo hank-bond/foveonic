@@ -45,6 +45,11 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 - **[trace_analysis.py](./trace_analysis.py)** Query real Perfetto captures for loss, scenario correctness and shared-clock latency.
 - **[verified_images.py](./verified_images.py)** Remove only rehashed raw samples from complete successful GUI slider cases.
 - **[watch_workloads.py](./watch_workloads.py)** Check and record actual app, compiler and measurement processes that can contaminate timings.
+- **[wide.py](./wide.py)** Compare opt-in wide-rendering mechanisms with pinned inputs and separately classified timing evidence.
+- **[wide_native.py](./wide_native.py)** Compare experimental polling intervals through existing background-window application scenarios.
+- **[wide_replay.py](./wide_replay.py)** Compare probe outputs with an independently frozen ordinary renderer using exact snapshots and geometry.
+- **[wide_stress.py](./wide_stress.py)** Check wide-probe memory observations and independent settlement after submitted-work interruption.
+- **[wide_suite.py](./wide_suite.py)** Run the bounded wide-rendering investigation serially and preserve each independent experiment's evidence.
 - **[worker_resources.py](./worker_resources.py)** Resolve slider-worker guards and admit finite groups within a child-memory budget.
 
 <!-- INDEX:END -->

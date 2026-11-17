@@ -15,6 +15,21 @@ enum Step {
     SmartGroupZoomOther,
     SmartGroupSelectPending,
     SmartGroupEdit,
+    GroupBeforeSetup,
+    GroupCamera,
+    GroupColdEvict,
+    GroupColdAddFocus,
+    GroupColdReturn,
+    GroupDefaults,
+    GroupFocus,
+    GroupBeforeZoom,
+    GroupBeforePan,
+    GroupAfter,
+    GroupViewPan,
+    GroupViewWheel,
+    GroupViewFit,
+    GroupViewSnap,
+    GroupBeforeEnd,
     SmartGroupSolo,
     SmartGroupEnd,
     TileZoom,
@@ -59,8 +74,30 @@ fn steps(seed: u64, count: usize, photos: usize) -> Vec<Step> {
         result.push(Step::Select((n % photos as u64) as usize));
         result.push(Step::Edit(n & 0x100 != 0));
     }
+    result.push(Step::SmartGroupFit);
+    if photos >= 3 {
+        result.extend([Step::GroupBeforeSetup, Step::GroupCamera]);
+        if photos == 4 {
+            result.extend([
+                Step::GroupColdEvict,
+                Step::GroupColdAddFocus,
+                Step::GroupColdReturn,
+            ]);
+        }
+        result.extend([
+            Step::GroupDefaults,
+            Step::GroupFocus,
+            Step::GroupBeforeZoom,
+            Step::GroupBeforePan,
+            Step::GroupAfter,
+            Step::GroupViewPan,
+            Step::GroupViewWheel,
+            Step::GroupViewFit,
+            Step::GroupViewSnap,
+            Step::GroupBeforeEnd,
+        ]);
+    }
     result.extend([
-        Step::SmartGroupFit,
         Step::SmartGroupEdit,
         Step::SmartGroupEdit,
         Step::SmartGroupEdit,
@@ -140,6 +177,31 @@ struct ViewSnapshot {
     detail: Option<((u64, u64), [u32; 4])>,
 }
 
+struct GroupPhoto {
+    path: PathBuf,
+    authored: foveonic::render::Settings,
+    current: std::sync::Weak<foveonic::image::ImageTexture>,
+    browser_revision_ceiling: u64,
+    origin: foveonic::source::SourceOrigin,
+    camera: foveonic::render::Settings,
+    defaults: foveonic::render::Settings,
+}
+struct GroupBefore {
+    original_b: foveonic::render::Settings,
+    photos: Vec<GroupPhoto>,
+    idle_completion: bool,
+    editing_limit: usize,
+    cold_began: Option<std::time::Instant>,
+    zoom_pan: egui::Vec2,
+}
+
+struct GroupViewing {
+    views: Vec<(f32, egui::Vec2)>,
+    focus: Option<PathBuf>,
+    began: std::time::Instant,
+    pan_delta: egui::Vec2,
+}
+
 struct TileView {
     index: usize,
     zoom: f32,
@@ -154,6 +216,8 @@ pub(super) struct TransitionJourney {
     pending: bool,
     single: Option<usize>,
     tile_view: Option<TileView>,
+    group_before: Option<GroupBefore>,
+    group_viewing: Option<GroupViewing>,
     next_double_click: Option<std::time::Instant>,
     smart_active: Option<usize>,
     smart_zoomed: bool,
@@ -184,6 +248,8 @@ impl TransitionJourney {
             pending: false,
             single: None,
             tile_view: None,
+            group_before: None,
+            group_viewing: None,
             next_double_click: None,
             smart_active: None,
             smart_zoomed: false,
@@ -532,6 +598,493 @@ impl TransitionJourney {
         Ok(())
     }
 
+    fn check_saved_currents(&self, app: &App, after: bool) -> Result<(), String> {
+        let group = self
+            .group_before
+            .as_ref()
+            .ok_or("missing group expectations")?;
+        Self::check_current_photos(app, after, &group.photos)
+    }
+
+    fn check_current_photos(app: &App, after: bool, photos: &[GroupPhoto]) -> Result<(), String> {
+        for (index, photo) in photos.iter().enumerate() {
+            let authored = if app.selected.as_ref() == Some(&photo.path) {
+                Some(&app.settings)
+            } else {
+                app.multi_edit.settings(&photo.path)
+            }
+            .ok_or("missing authored group settings")?;
+            if authored != &photo.authored {
+                return Err(format!(
+                    "group Before changed authored settings for {}",
+                    photo.path.display()
+                ));
+            }
+            let current = app
+                .current_photo_frame(&photo.path)
+                .ok_or("group Before lost Current pixels")?;
+            let same_pixels = photo
+                .current
+                .upgrade()
+                .is_some_and(|saved| std::sync::Arc::ptr_eq(&saved, &current.texture));
+            let native_replacement = after
+                && index == 1
+                && current.artifact.settings.working_scale == foveonic::render::Scale::NATIVE;
+            if !same_pixels && !native_replacement {
+                return Err(format!(
+                    "group Before replaced saved Current pixels for {}",
+                    photo.path.display()
+                ));
+            }
+            if !after
+                && app
+                    .browser
+                    .rendered_revision(&photo.path)
+                    .is_some_and(|revision| revision > photo.browser_revision_ceiling)
+            {
+                return Err(format!(
+                    "group Before published alternate browser pixels for {}",
+                    photo.path.display()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn check_group_before(
+        &mut self,
+        app: &App,
+        paths: &[PathBuf],
+        step: Step,
+    ) -> Result<bool, String> {
+        use crate::editor::Rendition;
+        let rendition = match step {
+            Step::GroupCamera => Rendition::Camera,
+            Step::GroupAfter => Rendition::Current,
+            _ => Rendition::Defaults,
+        };
+        if app.before.active != rendition || app.edit_selection.paths() != &paths[..2] {
+            return Err("group rendition or editing targets changed during Before viewing".into());
+        }
+        if step == Step::GroupFocus && app.selected.as_ref() != Some(&paths[1]) {
+            return Err("technical focus did not move to the other blue target".into());
+        }
+        self.check_saved_currents(app, step == Step::GroupAfter)?;
+        let group = self
+            .group_before
+            .as_ref()
+            .ok_or("missing group expectations")?;
+        if !app.multi_edit.multiple() || app.scope_key.is_some() {
+            return Err("group viewing left scopes enabled".into());
+        }
+        let mut observations = Vec::new();
+        for (index, photo) in group.photos.iter().enumerate() {
+            let expected_rendition = if index < 2 {
+                rendition
+            } else {
+                Rendition::Current
+            };
+            if app.photo_rendition(&photo.path) != expected_rendition {
+                return Err("a white peer inherited the blue targets' Before rendition".into());
+            }
+            let frame = if app.selected.as_ref() == Some(&photo.path) {
+                app.frame.as_ref()
+            } else {
+                app.rendition_frame(&photo.path, expected_rendition)
+            };
+            let Some(frame) = frame.filter(|frame| frame.rendition == expected_rendition) else {
+                return Ok(false);
+            };
+            let expected = match expected_rendition {
+                Rendition::Camera => &photo.camera,
+                Rendition::Defaults => &photo.defaults,
+                Rendition::Current => &photo.authored,
+            };
+            if frame.path != photo.path
+                || frame.rendition != expected_rendition
+                || frame.processing_quality != app.preferences.processing_quality
+                || frame.origin != photo.origin
+                || !crate::rendering::matching::same_authored_edits(&frame.requested, expected)
+            {
+                return Err(format!(
+                    "group rendition did not use its own settings/source/geometry for {}",
+                    photo.path.display()
+                ));
+            }
+            let mut coverage = None;
+            if index == 1
+                && matches!(
+                    step,
+                    Step::GroupBeforeZoom | Step::GroupBeforePan | Step::GroupAfter
+                )
+            {
+                let view = app.viewports.view(Some(&photo.path));
+                if !view.explicit_zoom() {
+                    return Err("group view lost explicit zoom".into());
+                }
+                let Some(visible) = view.visible_pixels() else {
+                    return Ok(false);
+                };
+                let window = frame.display_window(false);
+                let visible = [
+                    visible.top_left[0] + window[0],
+                    visible.top_left[1] + window[1],
+                    visible.bottom_right[0] + 1 + window[0],
+                    visible.bottom_right[1] + 1 + window[1],
+                ];
+                let detail =
+                    app.photo_detail(&photo.path, Some(frame), expected, expected_rendition);
+                if let Some(detail) = detail {
+                    if detail.path != photo.path
+                        || detail.rendition != expected_rendition
+                        || detail.origin != photo.origin
+                        || detail.processing_quality != app.preferences.processing_quality
+                        || detail.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
+                        || !crate::rendering::matching::same_authored_edits(
+                            &detail.requested,
+                            expected,
+                        )
+                    {
+                        return Err("group native patch has the wrong source, rendition, sampling or authored settings".into());
+                    }
+                }
+                coverage = detail.map(|detail| detail.detail_region());
+                if frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
+                    && !coverage.is_some_and(|coverage| {
+                        crate::rendering::smart::contains(coverage, visible)
+                    })
+                {
+                    return Ok(false);
+                }
+                if step == Step::GroupBeforePan && (view.pan - group.zoom_pan).length() < 1. {
+                    return Err("group Before image did not pan".into());
+                }
+            }
+            observations.push(serde_json::json!({"source":photo.path,"rendition":format!("{expected_rendition:?}"),"task":frame.diagnostic_task.id,"crop":frame.requested.crop,"rotation":frame.requested.rotation,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"detail_coverage":coverage}));
+        }
+        let event = serde_json::json!({"group_before":step,"photos":observations,"scopes_suppressed":true,"multiple_editing_targets":true,"authored_settings_preserved":true});
+        crate::timing::emit("scenario.group_before", || event.clone());
+        self.events.push(event);
+        Ok(true)
+    }
+
+    fn group_view_geometry(
+        app: &App,
+        path: &std::path::Path,
+        pixels_per_point: f32,
+    ) -> Result<(f32, egui::Vec2), String> {
+        let view = app.viewports.view(Some(path));
+        let zoom = view
+            .zoom_percent(pixels_per_point)
+            .ok_or("missing group view geometry")?;
+        let frame = app
+            .current_photo_frame(path)
+            .ok_or("missing group Current frame")?;
+        let extent = frame.display_extent(false);
+        let display =
+            egui::vec2(extent[0] as f32, extent[1] as f32) * (zoom / 100. / pixels_per_point);
+        Ok((zoom, egui::vec2(0.5, 0.5) - view.pan / display))
+    }
+
+    fn check_group_viewing(
+        &mut self,
+        app: &App,
+        ctx: &egui::Context,
+        paths: &[PathBuf],
+        step: Step,
+    ) -> Result<bool, String> {
+        let saved = self
+            .group_viewing
+            .as_ref()
+            .ok_or("missing group viewing expectation")?;
+        if app.edit_selection.paths() != &paths[..2]
+            || app.selected != saved.focus
+            || app.before.active != crate::editor::Rendition::Current
+            || crate::photo_tools::selected(ctx) != crate::photo_tools::Tool::Pointer
+        {
+            return Err(
+                "group viewing changed editing targets, technical focus, rendition or tool".into(),
+            );
+        }
+        let geometry = paths
+            .iter()
+            .map(|path| Self::group_view_geometry(app, path, ctx.pixels_per_point()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let factor = geometry[1].0 / saved.views[1].0;
+        if step == Step::GroupViewWheel
+            && (factor <= 1.001 || (geometry[0].0 - geometry[1].0).abs() < 1.)
+        {
+            return Err(
+                "Shift wheel did not zoom the blue group relatively from different magnifications"
+                    .into(),
+            );
+        }
+        let group = self
+            .group_before
+            .as_ref()
+            .ok_or("missing group photographs")?;
+        let mut observations = Vec::new();
+        for (index, photo) in group.photos.iter().enumerate() {
+            let view = app.viewports.view(Some(&photo.path));
+            let (zoom, center) = geometry[index];
+            let authored = if app.selected.as_ref() == Some(&photo.path) {
+                Some(&app.settings)
+            } else {
+                app.multi_edit.settings(&photo.path)
+            };
+            let frame = app
+                .current_photo_frame(&photo.path)
+                .ok_or("missing group viewing Current")?;
+            if authored != Some(&photo.authored)
+                || frame.path != photo.path
+                || frame.origin != photo.origin
+                || frame.rendition != crate::editor::Rendition::Current
+                || frame.processing_quality != app.preferences.processing_quality
+                || !crate::rendering::matching::same_authored_edits(
+                    &frame.requested,
+                    &photo.authored,
+                )
+            {
+                return Err(
+                    "group viewing changed authored settings, source or photographic policy".into(),
+                );
+            }
+            let mut coverage = None;
+            if index >= 2 {
+                if (zoom - saved.views[index].0).abs() > 0.01
+                    || (center - saved.views[index].1).length() > 1e-4
+                    || !photo
+                        .current
+                        .upgrade()
+                        .is_some_and(|texture| std::sync::Arc::ptr_eq(&texture, &frame.texture))
+                {
+                    return Err(
+                        "blue group gesture changed a white peer's view or Current pixels".into(),
+                    );
+                }
+            } else {
+                let expected_center = match step {
+                    Step::GroupViewPan => {
+                        let size = view
+                            .current_image_size()
+                            .ok_or("missing group pan geometry")?;
+                        saved.views[index].1 - saved.pan_delta / egui::vec2(size[0], size[1])
+                    }
+                    Step::GroupViewFit | Step::GroupViewSnap => egui::vec2(0.5, 0.5),
+                    Step::GroupViewWheel => saved.views[index].1,
+                    _ => unreachable!(),
+                };
+                if (center - expected_center).length() > 1e-4 {
+                    return Err(format!("group {step:?} center mismatch for {index}: {center:?} vs {expected_center:?}"));
+                }
+                match step {
+                    Step::GroupViewPan if (zoom - saved.views[index].0).abs() > 0.01 => {
+                        return Err("Shift pan changed magnification".into())
+                    }
+                    Step::GroupViewWheel if (zoom / saved.views[index].0 - factor).abs() > 1e-4 => {
+                        return Err(
+                            "Shift wheel copied absolute zoom instead of its multiplier".into()
+                        )
+                    }
+                    Step::GroupViewFit if view.explicit_zoom() || view.pan.length() > 0.1 => {
+                        return Err(
+                            "group double-click did not return both blue peers to centered Fit"
+                                .into(),
+                        )
+                    }
+                    Step::GroupViewSnap
+                        if (zoom - app.preferences.zoom_snap.multiple() * 100.).abs() > 0.01 =>
+                    {
+                        return Err(
+                            "group double-click did not use the common configured snap".into()
+                        )
+                    }
+                    _ => {}
+                }
+                if step != Step::GroupViewFit {
+                    let Some(visible) = view.visible_pixels() else {
+                        return Ok(false);
+                    };
+                    let window = frame.display_window(false);
+                    let visible = [
+                        visible.top_left[0] + window[0],
+                        visible.top_left[1] + window[1],
+                        visible.bottom_right[0] + 1 + window[0],
+                        visible.bottom_right[1] + 1 + window[1],
+                    ];
+                    let detail = app.photo_detail(
+                        &photo.path,
+                        Some(frame),
+                        &photo.authored,
+                        crate::editor::Rendition::Current,
+                    );
+                    if let Some(detail) = detail {
+                        if detail.path != photo.path
+                            || detail.origin != photo.origin
+                            || detail.rendition != crate::editor::Rendition::Current
+                            || detail.processing_quality != app.preferences.processing_quality
+                            || detail.artifact.settings.working_scale
+                                != foveonic::render::Scale::NATIVE
+                            || !crate::rendering::matching::same_authored_edits(
+                                &detail.requested,
+                                &photo.authored,
+                            )
+                        {
+                            return Err("group gesture native detail has incompatible source, settings or policy".into());
+                        }
+                    }
+                    coverage = detail.map(|detail| detail.detail_region());
+                    if frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
+                        && !coverage.is_some_and(|region| {
+                            crate::rendering::smart::contains(region, visible)
+                        })
+                    {
+                        return Ok(false);
+                    }
+                }
+            }
+            observations.push(serde_json::json!({"source":photo.path,"zoom":zoom,"center":[center.x,center.y],"native_coverage":coverage,"white":index>=2}));
+        }
+        self.next_double_click = None;
+        let event = serde_json::json!({"group_viewing":step,"photos":observations,"zoom_multiplier":factor,"authored_settings_preserved":true,"selection_preserved":true});
+        crate::timing::emit("scenario.group_viewing", || event.clone());
+        self.events.push(event);
+        Ok(true)
+    }
+
+    fn cold_group_state(&self, app: &App, paths: &[PathBuf]) -> serde_json::Value {
+        serde_json::json!({"group_before_cold":self.steps[self.index],
+            "opening":app.opening.is_some(),"worker_busy":app.worker.busy(),
+            "selected":app.selected,"editing_targets":app.edit_selection.paths(),
+            "cold_photos":paths[2..4].iter().map(|path| {
+                let frame = if app.selected.as_ref() == Some(path) {
+                    app.frame.as_ref().filter(|frame| frame.path == *path)
+                } else {
+                    app.rendition_frame(path, crate::editor::Rendition::Camera)
+                };
+                serde_json::json!({"source":path,"settings_known":app.multi_edit.settings(path).is_some(),
+                    "metadata_known":app.multi_edit.metadata(path).is_some(),
+                    "current_pixels":app.current_photo_frame(path).is_some(),
+                    "camera_pixels":frame.is_some_and(|frame| frame.rendition == crate::editor::Rendition::Camera)})
+            }).collect::<Vec<_>>()})
+    }
+
+    fn check_cold_group(
+        &mut self,
+        app: &App,
+        paths: &[PathBuf],
+        step: Step,
+    ) -> Result<bool, String> {
+        use crate::editor::Rendition;
+        let group = self
+            .group_before
+            .as_mut()
+            .ok_or("missing cold group expectations")?;
+        Self::check_current_photos(app, false, &group.photos[..2])?;
+        if app.before.active != Rendition::Camera {
+            return Err("cold selection left group Camera mode".into());
+        }
+        if step == Step::GroupColdEvict {
+            if app.edit_selection.paths() != &paths[..2] {
+                return Err("cold eviction changed the A/B editing targets".into());
+            }
+            for path in &paths[2..4] {
+                if app.multi_edit.metadata(path).is_some()
+                    || app.multi_edit.settings(path).is_some()
+                    || app.current_photo_frame(path).is_some()
+                    || app
+                        .multi_edit
+                        .before_frame(path, Rendition::Camera)
+                        .is_some()
+                    || app.multi_edit.rendering(path)
+                {
+                    return Err("retention did not evict the cold target's application metadata/pixels/demand".into());
+                }
+            }
+            // sync_render_demand publishes retain_overviews with only retained owners.
+            // The common readiness gate has waited for that command to be processed.
+            let event = serde_json::json!({"group_before_cold":step,
+                "evicted":&paths[2..4],"retained":app.multi_edit.retained_paths(),
+                "render_paths":app.multi_edit.render_paths(),"worker_busy":app.worker.busy(),
+                "current_demand_retirement":"processed retain_overviews excludes C/D"});
+            crate::timing::emit("scenario.group_before_cold", || event.clone());
+            self.events.push(event);
+            return Ok(true);
+        }
+        if step == Step::GroupColdAddFocus {
+            if app.edit_selection.paths() != &paths[..4] || app.selected.as_ref() != Some(&paths[2])
+            {
+                return Err("cold targets were not added with C as technical focus".into());
+            }
+            for (index, path) in paths.iter().enumerate().take(4).skip(2) {
+                let photo = &group.photos[index];
+                if app.multi_edit.metadata(path).is_none() {
+                    return Ok(false);
+                }
+                let frame = if index == 2 {
+                    app.frame.as_ref()
+                } else {
+                    app.rendition_frame(path, Rendition::Camera)
+                };
+                let Some(frame) = frame.filter(|frame| frame.rendition == Rendition::Camera) else {
+                    return Ok(false);
+                };
+                if frame.path != *path
+                    || frame.origin != photo.origin
+                    || frame.processing_quality != app.preferences.processing_quality
+                    || !crate::rendering::matching::same_authored_edits(
+                        &frame.requested,
+                        &photo.camera,
+                    )
+                    || app.multi_edit.settings(path) != Some(&photo.authored)
+                {
+                    return Err(format!(
+                        "cold target {index} mismatch: path={}, source={}, policy={}, baseline={}, authored={}, actual_request={:?}, expected_baseline={:?}, authored_settings={:?}, expected_authored={:?}",
+                        frame.path == *path, frame.origin == photo.origin,
+                        frame.processing_quality == app.preferences.processing_quality,
+                        crate::rendering::matching::same_authored_edits(&frame.requested, &photo.camera),
+                        app.multi_edit.settings(path) == Some(&photo.authored),
+                        frame.requested, photo.camera, app.multi_edit.settings(path), photo.authored,
+                    ));
+                }
+            }
+            if app.opening.is_some() {
+                return Ok(false);
+            }
+        } else {
+            if app.edit_selection.paths() != &paths[..2]
+                || app.selected.as_ref() != Some(&paths[0])
+                || app.preferences.multi_edit_limit != group.editing_limit
+            {
+                return Err(
+                    "cold journey did not restore A/B selection, retention and technical focus"
+                        .into(),
+                );
+            }
+            for photo in &mut group.photos[2..] {
+                let Some(current) = app.current_photo_frame(&photo.path) else {
+                    return Ok(false);
+                };
+                if !crate::rendering::matching::same_authored_edits(
+                    &current.requested,
+                    &photo.authored,
+                ) {
+                    return Ok(false);
+                }
+                // These white owners were deliberately evicted and legitimately rendered again.
+                photo.current = std::sync::Arc::downgrade(&current.texture);
+                photo.browser_revision_ceiling = current
+                    .revision
+                    .max(current.content_revision())
+                    .max(app.browser.rendered_revision(&photo.path).unwrap_or(0));
+            }
+        }
+        let event = self.cold_group_state(app, paths);
+        crate::timing::emit("scenario.group_before_cold", || event.clone());
+        self.events.push(event);
+        Ok(true)
+    }
+
     fn advance_inner(
         &mut self,
         app: &mut App,
@@ -539,6 +1092,38 @@ impl TransitionJourney {
         smoke: &mut super::Smoke,
         paths: &[PathBuf],
     ) -> Result<bool, String> {
+        if self.pending
+            && matches!(
+                self.steps[self.index],
+                Step::GroupViewPan
+                    | Step::GroupViewWheel
+                    | Step::GroupViewFit
+                    | Step::GroupViewSnap
+            )
+            && self
+                .group_viewing
+                .as_ref()
+                .is_some_and(|saved| saved.began.elapsed() > std::time::Duration::from_secs(25))
+        {
+            return Err(format!(
+                "group viewing {:?} did not settle within 25 seconds",
+                self.steps[self.index]
+            ));
+        }
+        if self.pending
+            && self.steps[self.index] == Step::GroupColdAddFocus
+            && self
+                .group_before
+                .as_ref()
+                .and_then(|group| group.cold_began)
+                .is_some_and(|began| began.elapsed() > std::time::Duration::from_secs(25))
+        {
+            let state = self.cold_group_state(app, paths);
+            self.events.push(state.clone());
+            return Err(format!(
+                "cold group Before did not settle within 25 seconds: {state}"
+            ));
+        }
         if self.pending
             && self.steps[self.index] == Step::Loupe
             && !self
@@ -589,6 +1174,62 @@ impl TransitionJourney {
             let step = self.steps[self.index];
             if step == Step::SmartGroupFit
                 && (app.edit_selection.paths() != paths || !app.multi_edit.editable_ready())
+            {
+                return Ok(false);
+            }
+            if step == Step::GroupBeforeSetup {
+                for path in &paths[..2] {
+                    let settings = app
+                        .multi_edit
+                        .settings(path)
+                        .ok_or("missing group settings")?;
+                    if app.current_photo_frame(path).is_none_or(|frame| {
+                        !crate::rendering::matching::same_authored_edits(&frame.requested, settings)
+                    }) {
+                        return Ok(false);
+                    }
+                }
+            }
+            if matches!(
+                step,
+                Step::GroupColdEvict | Step::GroupColdAddFocus | Step::GroupColdReturn
+            ) && !self.check_cold_group(app, paths, step)?
+            {
+                return Ok(false);
+            }
+            if matches!(
+                step,
+                Step::GroupCamera
+                    | Step::GroupDefaults
+                    | Step::GroupFocus
+                    | Step::GroupBeforeZoom
+                    | Step::GroupBeforePan
+                    | Step::GroupAfter
+            ) && !self.check_group_before(app, paths, step)?
+            {
+                return Ok(false);
+            }
+            if step == Step::GroupBeforeEnd {
+                let original = &self
+                    .group_before
+                    .as_ref()
+                    .ok_or("missing group restore")?
+                    .original_b;
+                if app.multi_edit.settings(&paths[1]) != Some(original)
+                    || app.current_photo_frame(&paths[1]).is_none_or(|frame| {
+                        !crate::rendering::matching::same_authored_edits(&frame.requested, original)
+                    })
+                {
+                    return Ok(false);
+                }
+            }
+            if matches!(
+                step,
+                Step::GroupViewPan
+                    | Step::GroupViewWheel
+                    | Step::GroupViewFit
+                    | Step::GroupViewSnap
+            ) && !self.check_group_viewing(app, ctx, paths, step)?
             {
                 return Ok(false);
             }
@@ -784,24 +1425,104 @@ impl TransitionJourney {
                 self.events.push(serde_json::json!({"drawn_image":[image.min.x,image.min.y,image.max.x,image.max.y]}));
             }
             if matches!(step, Step::ViewportScopes | Step::WholeScopes) {
-                let frame = app.frame.as_ref().ok_or("missing frame for scopes")?;
-                let expected_region = if step == Step::ViewportScopes {
+                let path = app.selected.as_deref().ok_or("missing scope photo")?;
+                let base = app.frame.as_ref().ok_or("missing scope overview")?;
+                if app.multi_edit.multiple()
+                    || app.before.active != crate::editor::Rendition::Current
+                {
+                    return Err("single-photo Current scopes did not re-enable".into());
+                }
+                let calibration = app
+                    .noise_calibration
+                    .selected(app.preferences.noise_profile);
+                let signature = calibration.as_ref().map(|profile| profile.signature());
+                let origin = app.worker.cache.source_origin(path);
+                let compatible = |frame: &crate::rendering::worker::Frame| {
+                    frame.path.as_path() == path
+                        && frame.rendition == crate::editor::Rendition::Current
+                        && frame.output == "final"
+                        && !frame.framing_preview
+                        && frame.comparison.is_none()
+                        && frame.processing_quality == app.preferences.processing_quality
+                        && frame.requested.processing_quality == app.preferences.processing_quality
+                        && frame.calibration_signature.as_deref() == signature
+                        && origin.as_ref().is_none_or(|origin| &frame.origin == origin)
+                        && crate::rendering::matching::same_authored_edits(
+                            &frame.requested,
+                            &app.settings,
+                        )
+                };
+                // The viewport reads native whole-photo coordinates even when its
+                // overview texture is reduced. A patch stores samples relative to its origin.
+                let window = base.display_window(false);
+                let pixels = app
+                    .viewport()
+                    .visible_pixels_for([window[2] - window[0], window[3] - window[1]])
+                    .ok_or("missing native scope bounds")?;
+                let visible = [
+                    pixels.top_left[0] + window[0],
+                    pixels.top_left[1] + window[1],
+                    pixels.bottom_right[0] + 1 + window[0],
+                    pixels.bottom_right[1] + 1 + window[1],
+                ];
+                let detail = app.multi_edit.detail(path).filter(|frame| {
+                    step == Step::ViewportScopes
+                        && compatible(frame)
+                        && frame.detail
+                        && frame.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
+                        && frame
+                            .artifact
+                            .settings
+                            .preview_region
+                            .is_some_and(|region| {
+                                crate::rendering::smart::contains(region, visible)
+                            })
+                });
+                // A complete finer image wins over a reduced whole-photo preview.
+                // Neither a stale whole nor a regional patch can supply whole-photo scopes.
+                let whole = [Some(base), app.multi_edit.preview(path)]
+                    .into_iter()
+                    .flatten()
+                    .filter(|frame| compatible(frame) && frame.is_photographic())
+                    .min_by_key(|frame| frame.artifact.settings.working_scale.divisor());
+                let Some(source) = detail.or(whole) else {
+                    return Ok(false);
+                };
+                let region = if step == Step::WholeScopes {
+                    None
+                } else if let Some(patch) = source.artifact.settings.preview_region {
+                    Some([
+                        visible[0] - patch[0],
+                        visible[1] - patch[1],
+                        visible[2] - patch[0],
+                        visible[3] - patch[1],
+                    ])
+                } else {
                     let pixels = app
                         .viewport()
-                        .visible_pixels_for(frame.texture.description().extent)
-                        .ok_or("missing visible pixel bounds")?;
+                        .visible_pixels_for(source.texture.description().extent)
+                        .ok_or("missing scope sampling bounds")?;
                     Some([
                         pixels.top_left[0],
                         pixels.top_left[1],
                         pixels.bottom_right[0] + 1,
                         pixels.bottom_right[1] + 1,
                     ])
-                } else {
-                    None
                 };
+                let foveonic::inspection::Content::Image(image) = &source.artifact.content else {
+                    return Err("scope source is not photographic samples".into());
+                };
+                if let Some([left, top, right, bottom]) = region {
+                    let [width, height] = image.view().extent;
+                    if left >= right || top >= bottom || right > width || bottom > height {
+                        return Err(
+                            "scope sampling coordinates lie outside their source image".into()
+                        );
+                    }
+                }
                 let key = crate::rendering::worker::ScopeKey {
-                    revision: frame.revision,
-                    region: expected_region,
+                    revision: source.revision,
+                    region,
                 };
                 if app.scope_key != Some(key)
                     || app
@@ -812,7 +1533,10 @@ impl TransitionJourney {
                     return Ok(false);
                 }
                 self.events.push(
-                    serde_json::json!({"scope_revision":key.revision,"scope_region":key.region}),
+                    serde_json::json!({"scope_revision":key.revision,"scope_region":key.region,
+                    "scope_source":source.path,"scope_source_task":source.diagnostic_task.id,
+                    "scope_source_scale":source.artifact.settings.working_scale.divisor(),
+                    "scope_source_patch":source.artifact.settings.preview_region}),
                 );
             }
             if step == Step::HeldSupersession {
@@ -953,7 +1677,9 @@ impl TransitionJourney {
                     return Err("composition did not persist".into());
                 }
             }
-            self.check(app, paths)?;
+            if !matches!(step, Step::GroupColdEvict | Step::GroupColdAddFocus) {
+                self.check(app, paths)?;
+            }
             if step == Step::SpaceClick {
                 if crate::photo_tools::selected(ctx) != crate::photo_tools::Tool::Pointer {
                     return Err("Pointer tool changed after temporary Space input".into());
@@ -969,7 +1695,14 @@ impl TransitionJourney {
             return Ok(true);
         }
         let step = self.steps[self.index];
-        if matches!(step, Step::TileZoom | Step::TilePointerZoom | Step::TileFit) {
+        if matches!(
+            step,
+            Step::TileZoom
+                | Step::TilePointerZoom
+                | Step::TileFit
+                | Step::GroupViewFit
+                | Step::GroupViewSnap
+        ) {
             // egui groups clicks globally across widgets, including a triple-click
             // interval twice as long as its double-click interval.
             let ready = self.next_double_click.get_or_insert_with(|| {
@@ -980,7 +1713,7 @@ impl TransitionJourney {
                 return Ok(false);
             }
         }
-        self.events.push(serde_json::json!({"action":step,"coverage": if matches!(step, Step::Select(_) | Step::SpaceClick | Step::TileZoom | Step::TilePointerZoom | Step::TilePan | Step::TileSelect | Step::TileFit) {"egui-input"} else {"direct-command"}}));
+        self.events.push(serde_json::json!({"action":step,"coverage": if matches!(step, Step::Select(_) | Step::SpaceClick | Step::TileZoom | Step::TilePointerZoom | Step::TilePan | Step::TileSelect | Step::TileFit | Step::GroupViewPan | Step::GroupViewWheel | Step::GroupViewFit | Step::GroupViewSnap) {"egui-input"} else {"direct-command"}}));
         match step {
             Step::Select(index) => {
                 self.model.select(vec![index]);
@@ -1021,6 +1754,318 @@ impl TransitionJourney {
                         app.preferences.multi_edit_limit,
                     );
                 }
+                app.sync_multi_edit();
+                app.submit(None);
+            }
+            Step::GroupBeforeSetup => {
+                let original_b = app
+                    .multi_edit
+                    .settings(&paths[1])
+                    .ok_or("missing B settings")?
+                    .clone();
+                let mut distinct_b = original_b.clone();
+                distinct_b.crop.bounds = [0.1, 0.15, 0.85, 0.9];
+                distinct_b.rotation.turns = (app
+                    .multi_edit
+                    .settings(&paths[0])
+                    .ok_or("missing A settings")?
+                    .rotation
+                    .turns
+                    + 1)
+                    % 4;
+                app.sidecars.apply(paths[1].clone(), distinct_b.clone());
+                app.multi_edit.observe_requested(&paths[1], &distinct_b);
+                for (index, gesture) in [
+                    (0, crate::viewport_selection::Gesture::Replace),
+                    (1, crate::viewport_selection::Gesture::Toggle),
+                ] {
+                    app.edit_selection.apply(
+                        crate::viewport_selection::Request {
+                            path: paths[index].clone(),
+                            gesture,
+                        },
+                        app.preferences.multi_edit_limit,
+                    );
+                }
+                self.model.select(vec![0, 1]);
+                app.select(paths[0].clone(), false);
+                app.sync_multi_edit();
+                self.group_before = Some(GroupBefore {
+                    original_b,
+                    photos: Vec::new(),
+                    idle_completion: app.preferences.background_full_image_completion,
+                    editing_limit: app.preferences.multi_edit_limit,
+                    cold_began: None,
+                    zoom_pan: egui::Vec2::ZERO,
+                });
+                app.preferences.background_full_image_completion = false;
+                app.worker.set_background_completion(false);
+                app.submit(None);
+            }
+            Step::GroupCamera => {
+                // A prior Current preview may still be queued after its viewport settles.
+                app.previews.invalidate();
+                let mut photos = Vec::new();
+                for path in paths {
+                    let frame = app
+                        .current_photo_frame(path)
+                        .ok_or("missing saved Current photograph")?;
+                    let current = if app.selected.as_ref() == Some(path) {
+                        &app.settings
+                    } else {
+                        app.multi_edit
+                            .settings(path)
+                            .ok_or("missing saved authored settings")?
+                    };
+                    let mut camera =
+                        foveonic::render::camera_settings(&frame.artifact.metadata, None)
+                            .map_err(|e| e.to_string())?;
+                    let mut defaults = app
+                        .preferences
+                        .editor
+                        .defaults
+                        .for_metadata(&frame.artifact.metadata)
+                        .map_err(|e| e.to_string())?;
+                    for baseline in [&mut camera, &mut defaults] {
+                        baseline.working_scale = current.working_scale;
+                        baseline.output_size = current.output_size;
+                        baseline.crop = current.crop;
+                        baseline.rotation = current.rotation;
+                    }
+                    photos.push(GroupPhoto {
+                        path: path.clone(),
+                        authored: current.clone(),
+                        current: std::sync::Arc::downgrade(&frame.texture),
+                        browser_revision_ceiling: frame
+                            .revision
+                            .max(frame.content_revision())
+                            .max(app.browser.rendered_revision(path).unwrap_or(0)),
+                        origin: frame.origin.clone(),
+                        camera: app.preferences.render_settings(&camera),
+                        defaults: app.preferences.render_settings(&defaults),
+                    });
+                }
+                if photos[0].authored.crop == photos[1].authored.crop
+                    && photos[0].authored.rotation == photos[1].authored.rotation
+                {
+                    return Err("group baselines require distinct authored geometry".into());
+                }
+                let group = self.group_before.as_mut().unwrap();
+                group.photos = photos;
+                app.toggle_before(crate::editor::Rendition::Camera);
+            }
+            Step::GroupColdEvict => {
+                app.preferences.multi_edit_limit = 2;
+                app.sync_multi_edit();
+                app.sync_render_demand();
+            }
+            Step::GroupColdAddFocus => {
+                app.preferences.multi_edit_limit = 4;
+                for path in &paths[2..4] {
+                    app.edit_selection.apply(
+                        crate::viewport_selection::Request {
+                            path: path.clone(),
+                            gesture: crate::viewport_selection::Gesture::Toggle,
+                        },
+                        4,
+                    );
+                }
+                self.model.select(vec![0, 1, 2, 3]);
+                app.sync_multi_edit();
+                // Sidecars resolve asynchronously through ordinary target admission.
+                for path in &paths[2..4] {
+                    if app.multi_edit.metadata(path).is_some()
+                        || app.current_photo_frame(path).is_some()
+                    {
+                        return Err(
+                            "cold-add precondition already has metadata or Current pixels".into(),
+                        );
+                    }
+                }
+                app.select(paths[2].clone(), false);
+                if app.opening.is_none() {
+                    return Err("cold technical focus did not create an opening".into());
+                }
+                self.group_before.as_mut().unwrap().cold_began = Some(std::time::Instant::now());
+                let event = self.cold_group_state(app, paths);
+                crate::timing::emit("scenario.group_before_cold", || event.clone());
+                self.events.push(event);
+                app.submit_photos();
+            }
+            Step::GroupColdReturn => {
+                let limit = self.group_before.as_ref().unwrap().editing_limit;
+                app.preferences.multi_edit_limit = limit;
+                // Restore evicted white owners through ordinary selection/retention, then
+                // leave only A/B blue before the next frame can request their renditions.
+                for (index, gesture) in [
+                    (0, crate::viewport_selection::Gesture::Replace),
+                    (paths.len() - 1, crate::viewport_selection::Gesture::Range),
+                ] {
+                    app.edit_selection.apply(
+                        crate::viewport_selection::Request {
+                            path: paths[index].clone(),
+                            gesture,
+                        },
+                        limit,
+                    );
+                }
+                app.sync_multi_edit();
+                for (index, gesture) in [
+                    (0, crate::viewport_selection::Gesture::Replace),
+                    (1, crate::viewport_selection::Gesture::Toggle),
+                ] {
+                    app.edit_selection.apply(
+                        crate::viewport_selection::Request {
+                            path: paths[index].clone(),
+                            gesture,
+                        },
+                        limit,
+                    );
+                }
+                self.model.select(vec![0, 1]);
+                app.select(paths[0].clone(), false);
+                app.sync_multi_edit();
+                app.submit_photos();
+            }
+            Step::GroupDefaults => app.toggle_before(crate::editor::Rendition::Defaults),
+            Step::GroupFocus => app.select(paths[1].clone(), false),
+            Step::GroupBeforeZoom => {
+                let view = app.viewports.view_mut(Some(&paths[1]));
+                let percent = view
+                    .zoom_percent(ctx.pixels_per_point())
+                    .ok_or("missing group zoom geometry")?;
+                view.zoom_by(200. / percent);
+            }
+            Step::GroupBeforePan => {
+                let view = app.viewports.view_mut(Some(&paths[1]));
+                self.group_before.as_mut().unwrap().zoom_pan = view.pan;
+                view.pan_to(egui::vec2(0.8, 0.2));
+            }
+            Step::GroupAfter => {
+                app.toggle_before(crate::editor::Rendition::Defaults);
+                self.check_saved_currents(app, false)?;
+            }
+            Step::GroupViewPan
+            | Step::GroupViewWheel
+            | Step::GroupViewFit
+            | Step::GroupViewSnap => {
+                crate::photo_tools::pointer(ctx);
+                if step == Step::GroupViewPan {
+                    for (index, percent) in [(0, 200.), (1, 100.)] {
+                        let view = app.viewports.view_mut(Some(&paths[index]));
+                        let old = view
+                            .zoom_percent(ctx.pixels_per_point())
+                            .ok_or("missing group pan setup geometry")?;
+                        view.zoom_by(percent / old);
+                        view.pan_to(if index == 0 {
+                            egui::vec2(0.55, 0.45)
+                        } else {
+                            egui::vec2(0.45, 0.55)
+                        });
+                    }
+                } else if step == Step::GroupViewSnap {
+                    // A is still Fit. B starts explicitly zoomed so independent toggles would diverge.
+                    app.viewports.view_mut(Some(&paths[1])).zoom_by(2.);
+                }
+                let views = paths
+                    .iter()
+                    .map(|path| Self::group_view_geometry(app, path, ctx.pixels_per_point()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let pan_delta = egui::vec2(41., 25.);
+                self.group_viewing = Some(GroupViewing {
+                    views,
+                    focus: app.selected.clone(),
+                    began: std::time::Instant::now(),
+                    pan_delta,
+                });
+                let source = if matches!(step, Step::GroupViewWheel | Step::GroupViewFit) {
+                    1
+                } else {
+                    0
+                };
+                let point = ctx
+                    .read_response(app.viewports.view(Some(&paths[source])).id())
+                    .ok_or("group source tile is not drawn")?
+                    .rect
+                    .center();
+                match step {
+                    Step::GroupViewPan => {
+                        let end = point + egui::vec2(41., 25.);
+                        smoke.direct_events.extend([
+                            vec![
+                                egui::Event::PointerMoved(point),
+                                egui::Event::PointerButton {
+                                    pos: point,
+                                    button: egui::PointerButton::Primary,
+                                    pressed: true,
+                                    modifiers: egui::Modifiers::SHIFT,
+                                },
+                            ],
+                            vec![egui::Event::PointerMoved(end)],
+                            vec![egui::Event::PointerButton {
+                                pos: end,
+                                button: egui::PointerButton::Primary,
+                                pressed: false,
+                                modifiers: egui::Modifiers::SHIFT,
+                            }],
+                        ]);
+                    }
+                    Step::GroupViewWheel => {
+                        smoke.direct_events.extend([
+                            vec![
+                                egui::Event::PointerMoved(point),
+                                egui::Event::MouseWheel {
+                                    unit: egui::MouseWheelUnit::Point,
+                                    delta: egui::vec2(0., 80.),
+                                    modifiers: egui::Modifiers::SHIFT,
+                                },
+                            ],
+                            vec![egui::Event::PointerGone],
+                        ]);
+                    }
+                    Step::GroupViewFit | Step::GroupViewSnap => {
+                        for _ in 0..2 {
+                            app.smoke_multi_click(ctx, smoke, source, egui::Modifiers::SHIFT);
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+                smoke.direct_events.push_back(vec![]);
+            }
+            Step::GroupBeforeEnd => {
+                let group = self.group_before.as_ref().ok_or("missing group restore")?;
+                app.sidecars
+                    .apply(paths[1].clone(), group.original_b.clone());
+                app.multi_edit
+                    .observe_requested(&paths[1], &group.original_b);
+                if app.selected.as_ref() == Some(&paths[1]) {
+                    app.settings = group.original_b.clone();
+                }
+                app.preferences.background_full_image_completion = group.idle_completion;
+                app.worker.set_background_completion(group.idle_completion);
+                for path in paths {
+                    app.viewports.view_mut(Some(path)).reset();
+                }
+                for (index, gesture) in [
+                    (0, crate::viewport_selection::Gesture::Replace),
+                    (paths.len() - 1, crate::viewport_selection::Gesture::Range),
+                ] {
+                    app.edit_selection.apply(
+                        crate::viewport_selection::Request {
+                            path: paths[index].clone(),
+                            gesture,
+                        },
+                        app.preferences.multi_edit_limit,
+                    );
+                }
+                self.model.select((0..paths.len()).collect());
+                app.select(
+                    paths[self
+                        .smart_active
+                        .ok_or("missing original technical focus")?]
+                    .clone(),
+                    false,
+                );
                 app.sync_multi_edit();
                 app.submit(None);
             }
@@ -1413,6 +2458,52 @@ mod tests {
                 Step::Before,
                 Step::After,
                 Step::Photograph,
+            ]));
+    }
+
+    #[test]
+    fn group_before_requires_two_blue_targets_and_a_visible_white_peer() {
+        assert!(!steps(0, 1, 2).contains(&Step::GroupCamera));
+        let sequence = steps(0, 1, 3);
+        assert!(sequence.windows(12).any(|steps| steps
+            == [
+                Step::GroupBeforeSetup,
+                Step::GroupCamera,
+                Step::GroupDefaults,
+                Step::GroupFocus,
+                Step::GroupBeforeZoom,
+                Step::GroupBeforePan,
+                Step::GroupAfter,
+                Step::GroupViewPan,
+                Step::GroupViewWheel,
+                Step::GroupViewFit,
+                Step::GroupViewSnap,
+                Step::GroupBeforeEnd,
+            ]));
+        assert!(
+            sequence
+                .iter()
+                .position(|step| *step == Step::GroupBeforeEnd)
+                .unwrap()
+                < sequence
+                    .iter()
+                    .position(|step| *step == Step::SmartGroupEdit)
+                    .unwrap()
+        );
+    }
+
+    #[test]
+    fn cold_before_addition_requires_four_photos() {
+        for photos in [2, 3, 5, 6, 7, 8] {
+            assert!(!steps(0, 1, photos).contains(&Step::GroupColdEvict));
+        }
+        assert!(steps(0, 1, 4).windows(5).any(|steps| steps
+            == [
+                Step::GroupCamera,
+                Step::GroupColdEvict,
+                Step::GroupColdAddFocus,
+                Step::GroupColdReturn,
+                Step::GroupDefaults,
             ]));
     }
 

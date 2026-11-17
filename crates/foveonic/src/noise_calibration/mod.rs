@@ -164,6 +164,32 @@ pub struct Calibration {
     signature: std::sync::OnceLock<String>,
 }
 impl Calibration {
+    /// Logical owned bytes, excluding Arc and allocator overhead. Reading the
+    /// inventory does not initialize the lazily computed signature.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        let mut bytes = size_of::<Self>()
+            + self.captures.capacity() * size_of::<Capture>()
+            + self.defects.capacity() * size_of::<SensorDefects>()
+            + self.model.row_priors.capacity() * size_of::<noise_model::RowPrior>()
+            + self.model.shield_tables.capacity() * size_of::<f32>()
+            + self.signature.get().map_or(0, String::capacity);
+        for capture in &self.captures {
+            bytes += capture.path.capacity()
+                + capture.condition.camera_model.capacity()
+                + capture
+                    .condition
+                    .serial
+                    .as_ref()
+                    .map_or(0, String::capacity);
+        }
+        for map in &self.defects {
+            bytes += map.camera_model.capacity()
+                + map.serial.capacity()
+                + map.points.capacity() * size_of::<Defect>();
+        }
+        bytes
+    }
+
     pub fn captures(&self) -> &[Capture] {
         &self.captures
     }

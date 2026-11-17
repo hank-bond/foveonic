@@ -639,11 +639,13 @@ fn compare_complete_native_photograph(recorded_range_cutoff_witness: bool) {
         )
         .unwrap();
     let values = engine
-        .execute(
+        .run_graph(
             execute::Input::Rendered(image),
             &graph,
             &[encoded],
             &mut Profile::default(),
+            &mut crate::interactive::Execution::default(),
+            crate::render::execute::Completion::Queued,
         )
         .unwrap();
     let actual = engine.gpu.readback(&values[0].buffer).unwrap();

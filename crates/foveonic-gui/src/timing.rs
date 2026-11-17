@@ -298,6 +298,7 @@ pub fn purpose(purpose: &crate::rendering::request::Purpose) -> &'static str {
         Purpose::Camera => "camera",
         Purpose::Defaults => "defaults",
         Purpose::Detail => "detail",
+        Purpose::Preview => "preview",
         Purpose::Inspection(_, _) => "inspection",
         Purpose::Export => "export",
     }

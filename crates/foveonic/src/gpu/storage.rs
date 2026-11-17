@@ -61,6 +61,9 @@ impl ReadGuard {
     pub fn size(&self) -> u64 {
         self.0.buffer.size()
     }
+    pub(crate) fn owned_cpu_bytes(&self) -> usize {
+        size_of::<Allocation>() + self.0.label.capacity()
+    }
     pub(crate) fn identity(&self) -> (u64, u64) {
         (self.0.id, self.0.generation)
     }
