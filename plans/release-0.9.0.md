@@ -21,12 +21,12 @@ The release process uses one frozen source/configuration, independent Mac and Wi
 - [x] Resolve and independently review the merge against current main. Preserve unrelated 0.8.4 release records in the main checkout.
 - [x] Reproduce and fix Shift-zoom anchoring with behavioral mixed-aspect, pan, wheel/pinch, selection and tool checks.
 - [x] Enable the tested wide release configuration, set 0.9.0 and prepare reviewed changelog/draft notes.
-- [ ] Freeze matching app, renderer, tests and inputs. Reconcile every ignored test with the maintained capability inventory.
-- [ ] Run ordinary workspace/renderer, lint, Python, documentation and all required GPU/original-file checks on both backends.
-- [ ] Run the complete native catalog, all slider cases and approved numerical comparisons using independent host lanes and exact-union report checks.
-- [ ] Build the signed macOS and Windows draft packages and retain matching developer symbols. Verify the actual archives and normal-stack desktop smoke checkpoints.
-- [ ] Compare exact packaged candidate latency and separately sampled memory against published 0.8.4 on matched, exclusive workloads. Investigate reproducible changes.
-- [ ] Summarize unavailable platforms, coverage gaps, failed or deferred checks and performance observations for owner review before publication.
+- [x] Freeze matching app, renderer, tests and inputs. Reconcile every ignored test with the maintained capability inventory.
+- [x] Run workspace, renderer, lint and all required GPU and original-file checks on both backends. Run portable Python and documentation checks.
+- [x] Run the complete native catalog, all slider cases and approved numerical comparisons using independent host lanes and exact-union report checks.
+- [x] Build the signed macOS draft package and the Windows draft package and retain matching developer symbols. Verify the actual archives and normal-stack desktop smoke checkpoints.
+- [x] Compare exact packaged candidate latency and separately sampled memory against published 0.8.4 on matched, exclusive workloads. Investigate reproducible changes.
+- [x] Summarize unavailable platforms, coverage gaps, failed or deferred checks and performance observations for owner review before publication.
 
 ## Initial evidence
 
@@ -50,4 +50,20 @@ The matched packaged performance comparison retains initial and reversed trials,
 
 The replacement candidate exposed an unsupported deadline in the new capture test on debug CI. Saving completed in 8.83 seconds after the test had rejected its five-second wait. Earlier successful diagnostic captures took roughly eight to eleven seconds on that runner. The test now awaits save completion like the existing capture tests, while preserving its bounded admission check and every event, generation and loss assertion. No product behavior changes for this correction. Preserve the rejected candidate records under their original identity and rerun the replacement source.
 
-The next candidate passed the capture regression in CI and the ordinary Rust suite on the primary Mac. After a signing timestamp failure and a successful signing rerun, hosted validation found two Python assertions that still expected 499 required checks. The inventory already included the 500th check for Navigator restoration. The planner assertion now compares its count with the declared inventory, and the inventory test pins the new total of 500. The profiling Python suite passes with one optional integration skipped. The draft still needs complete checks against the replacement candidate.
+The next candidate passed the capture regression in CI and the ordinary Rust suite on the primary Mac. After a signing timestamp failure and a successful signing rerun, hosted validation found two Python assertions that still expected 499 required checks. The inventory already included the 500th check for Navigator restoration. The planner assertion now compares its count with the declared inventory, and the inventory test pins the new total of 500. The profiling Python suite passes with one optional integration skipped. The final frozen checks are recorded below.
+
+## Final frozen candidate
+
+Candidate `c4e0414` passed 1,372 ordinary workspace checks on Metal and 1,368 on DirectX 12. Both lanes passed all 19 renderer checks, strict Clippy and all 500 required GPU and original-file checks in 25 commands. The inventory retains 158 research exclusions. Formatting, documentation, artwork and Python passed. The optional Python checkpoint integration was skipped in this run. Its earlier native-trace pass remains recorded under the first candidate.
+
+All 48 native acceptance jobs passed with matching executable and runner identities. This includes 1,440 independently verified slider cases in 28 groups and 144 exact numerical comparisons. The 32 GiB Mac ran the remaining 46 jobs so the owner could keep using the primary Mac. An external wrapper incorrectly required merged terminal records to move into its output directory. Separate verification reopened each terminal under its original partition, checked its hash and validated the exact 48-job union without rerunning any jobs. The catalog still records 14 covered paths, five partial paths and one missing path. Native file-dialog coverage remains missing.
+
+The exact macOS and Windows draft executables each passed ten desktop smoke checkpoints at their normal stack sizes. Both downloaded draft archives match the verified CI artifacts and public checksums. Matching developer symbols remain separate. Two hosted Mac signing attempts failed to obtain a secure timestamp. A fresh hosted synthetic request returned a granted timestamp with the matching message imprint and nonce, followed by a successful attempt against the same frozen source and signature settings. All four release CI jobs passed, including Sequoia binary loading. Native Metal rendering on Sequoia and native Windows 10 coverage remain unavailable. The release remains a draft. [Release CI](https://github.com/hank-bond/foveonic/actions/runs/44152506638)
+
+## Packaged performance review
+
+Published 0.8.4 and the exact signed draft ran on the same quiet 32 GiB M1 Pro Mac, using matched inputs, delivered grids and cache settings. Twenty-one of 22 latency observations were comparable, including reversed runs. The eight-photo pressure comparison remains unavailable because one of the three 0.8.4 trials started with a different grid. All candidate catalog trials completed. All seven memory workloads have three matched pairs sampled separately from latency.
+
+Eight-photo warm edits repeatedly took about 29 to 33 ms longer to report group readiness. At 6 GiB their median was 218 to 250 ms. These timings include the embedded progress readiness boundary and do not isolate rendering cost. The warm-disk selection difference changed direction when run order reversed. Single-photo warm edits, cached switching, HDR and ColorField warm edits were broadly flat. In reversed native-detail runs, foreground zoom was about 484 to 483 ms for one photo and 849 to 833 ms for two. Optional whole-image completion was about 283 and 584 ms later, respectively. At 6 GiB, the two-photo foreground stayed near 816 ms while whole-image completion was about 617 ms later.
+
+At a 2 GiB cache budget the median sampled peak fell in all five matched workflows, including about 31 MiB for mixed eight-photo editing and 184 MiB for two-photo native detail. At 6 GiB the median sampled peak grew by about 95 MiB for mixed eight-photo editing and 239 MiB for two-photo native detail. Samples are spaced about 100 ms apart and can miss true peaks. Sustained idle settlement, GPU residency, cold startup, physical presentation, six-photo native detail and Windows performance remain unmeasured. Review the repeated group readiness change, larger-budget memory growth and unavailable pressure comparison before publication. [Packaged observations](../scripts/profiling/baselines/v0.9.0/apple-m1-pro/native-release-observations.json)
