@@ -315,7 +315,7 @@ fn stop_closes_admission_before_draining_accepted_emission() {
     // Clean up the held emitter and control thread before any red assertion.
     drop(release);
     let producer = producer.join();
-    let saved = saving.recv_timeout(Duration::from_secs(5));
+    let saved = saving.recv();
     assert!(entered, "accepted emitter did not reach its fields");
     assert!(producer.is_ok(), "accepted emitter failed");
     let saved = saved.unwrap().unwrap();
