@@ -40,5 +40,10 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 - **[summarize.py](./summarize.py)** Summarize declared aggregate benchmark JSON; native SDK captures use trace_analysis.py.
 - **[trace_analysis.py](./trace_analysis.py)** Query real Perfetto captures for loss, scenario correctness and shared-clock latency.
 - **[watch_workloads.py](./watch_workloads.py)** Check and record actual app, compiler and measurement processes that can contaminate timings.
+- **[wide.py](./wide.py)** Compare opt-in wide-rendering mechanisms with pinned inputs and separately classified timing evidence.
+- **[wide_native.py](./wide_native.py)** Compare experimental polling intervals through existing background-window application scenarios.
+- **[wide_replay.py](./wide_replay.py)** Compare probe outputs with an independently frozen ordinary renderer using exact snapshots and geometry.
+- **[wide_stress.py](./wide_stress.py)** Check wide-probe memory observations and independent settlement after submitted-work interruption.
+- **[wide_suite.py](./wide_suite.py)** Run the bounded wide-rendering investigation serially and preserve each independent experiment's evidence.
 
 <!-- INDEX:END -->

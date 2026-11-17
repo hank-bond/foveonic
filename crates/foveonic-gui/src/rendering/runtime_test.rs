@@ -80,6 +80,8 @@ fn request(path: &str, revision: u64, exposure: f32) -> Request {
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.exposure = exposure;
     Request {
+        auxiliary_preview: false,
+
         detail: false,
         path: path.into(),
         revision,
@@ -110,6 +112,7 @@ fn view(requests: &[Request]) -> ViewState {
             .iter()
             .map(|request| crate::rendering::delivery::PhotoView {
                 path: request.path.clone(),
+                rendition: request.rendition,
                 settings: request.settings.clone(),
                 displayed_revision: None,
                 detail_revision: None,
@@ -279,7 +282,7 @@ fn a_failure_in_transit_cannot_overwrite_a_newer_ui_edit() {
 }
 
 #[test]
-fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_revision() {
+fn refinement_publication_coalesces_source_binding_and_covered_pans() {
     let rig = Rig::new();
     let mut first = request("a.x3f", 1, 0.);
     first.processing_quality = ProcessingQuality::Quality;
@@ -287,14 +290,20 @@ fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_r
     first.detail = true;
     first.settings.preview_region = Some([0, 0, 128, 128]);
     rig.handle.set_view(view(&[first.clone()]));
-    let initial = super::super::request::Refinement { first, whole: None };
+    let initial = super::super::request::Refinement {
+        visible_region: None,
+        preview: None,
+        first,
+        whole: None,
+    };
     assert!(rig.handle.refine(initial.clone(), None, Instant::now()));
     rig.applied();
     assert_eq!(rig.progress.snapshot().unwrap().revision, 1);
     let mut pan = initial;
     pan.first.revision = 3;
     pan.first.detail = true;
-    pan.first.settings.preview_region = Some([100, 100, 228, 228]);
+    pan.first.settings.preview_region = Some([16, 16, 144, 144]);
+    pan.visible_region = Some([48, 48, 112, 112]);
     assert!(!rig
         .handle
         .refine(pan, Some(SourceOrigin::default()), Instant::now()));
@@ -306,8 +315,12 @@ fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_r
     replacement.preview_scale = foveonic::render::Scale::NATIVE;
     replacement.detail = true;
     replacement.settings.preview_region = Some([0, 0, 128, 128]);
+    replacement.settings.exposure = 0.5;
     assert!(rig.handle.refine(
         super::super::request::Refinement {
+            visible_region: None,
+            preview: None,
+
             first: replacement,
             whole: None
         },
@@ -316,6 +329,100 @@ fn refinement_publication_coalesces_source_binding_and_panning_without_phantom_r
     ));
     rig.applied();
     assert_eq!(rig.tasks()[0].stamp.revision, 5);
+}
+
+#[test]
+fn uncovered_pan_publication_preserves_inflight_work_and_latest_demand() {
+    let rig = Rig::new();
+    let mut first = request("a.x3f", 1, 0.);
+    first.preview_scale = foveonic::render::Scale::NATIVE;
+    first.detail = true;
+    first.settings.preview_region = Some([0, 0, 128, 128]);
+    rig.handle.set_view(view(&[first.clone()]));
+    let initial = Refinement {
+        visible_region: Some([32, 32, 96, 96]),
+        first,
+        preview: None,
+        whole: None,
+    };
+    assert!(rig.handle.refine(initial.clone(), None, Instant::now()));
+    rig.applied();
+    let running = rig.tasks()[0].clone();
+    for (revision, offset) in [(2, 200), (3, 400), (4, 600)] {
+        let mut pan = initial.clone();
+        pan.first.revision = revision;
+        pan.first.settings.preview_region = Some([offset, offset, offset + 128, offset + 128]);
+        pan.visible_region = Some([offset + 32, offset + 32, offset + 96, offset + 96]);
+        assert!(rig.handle.refine(pan.clone(), None, Instant::now()));
+        assert!(!rig.handle.refine(pan, None, Instant::now()));
+        rig.applied();
+        assert_eq!(rig.tasks()[0].stamp, running.stamp);
+        assert_eq!(rig.progress.snapshot().unwrap().revision, 1);
+    }
+    // Even a failed earlier render must not discard newer required coverage.
+    rig.results.send(result(&running)).unwrap();
+    assert!(rig.receive().handling.unwrap().current);
+    wait(|| {
+        rig.tasks()
+            .first()
+            .is_some_and(|task| task.stamp.revision == 4)
+    });
+    assert_eq!(rig.tasks().len(), 1);
+    assert_eq!(
+        rig.tasks()[0].request.settings.preview_region,
+        Some([600, 600, 728, 728])
+    );
+    assert_eq!(rig.progress.snapshot().unwrap().revision, 4);
+}
+
+#[test]
+fn covered_pan_back_withdraws_pending_work_through_the_handle() {
+    let rig = Rig::new();
+    let mut first = request("a.x3f", 1, 0.);
+    first.preview_scale = foveonic::render::Scale::NATIVE;
+    first.detail = true;
+    first.settings.preview_region = Some([0, 0, 256, 256]);
+    rig.handle.set_view(view(&[first.clone()]));
+    let initial = Refinement {
+        first,
+        visible_region: Some([64, 64, 192, 192]),
+        preview: None,
+        whole: None,
+    };
+    assert!(rig.handle.refine(initial.clone(), None, Instant::now()));
+    rig.applied();
+    let running = rig.tasks()[0].clone();
+    let mut pan = initial.clone();
+    pan.first.revision = 2;
+    pan.first.settings.preview_region = Some([100, 100, 356, 356]);
+    pan.visible_region = Some([164, 164, 292, 292]);
+    assert!(rig.handle.refine(pan.clone(), None, Instant::now()));
+    rig.applied();
+    let mut returned = initial;
+    returned.first.revision = 3;
+    returned.first.settings.preview_region = Some([56, 56, 284, 284]);
+    returned.visible_region = Some([120, 120, 220, 220]);
+    assert!(
+        pan.covers(&returned),
+        "last published pending patch also covers the return"
+    );
+    assert!(!rig.handle.refine(returned.clone(), None, Instant::now()));
+    rig.applied();
+    let sequence = rig.handle.sequence.get();
+    assert!(!rig.handle.refine(returned, None, Instant::now()));
+    assert_eq!(
+        rig.handle.sequence.get(),
+        sequence,
+        "exact repeats must coalesce"
+    );
+    assert_eq!(rig.tasks()[0].stamp, running.stamp);
+    assert_eq!(rig.progress.snapshot().unwrap().revision, 1);
+    rig.results.send(result(&running)).unwrap();
+    rig.receive();
+    assert!(
+        rig.tasks().is_empty(),
+        "return to native coverage must withdraw pending pan"
+    );
 }
 
 #[test]
@@ -331,6 +438,9 @@ fn complete_demand_retains_current_detail_but_removal_forgets_its_suppressed_int
     whole.detail = false;
     whole.settings.preview_region = None;
     let intent = Refinement {
+        visible_region: None,
+        preview: None,
+
         first: first.clone(),
         whole: Some(whole),
     };
@@ -395,4 +505,109 @@ fn idle_preparation_mode_changes_replace_the_config_while_identical_values_coale
     let changed = rig.slot.0.lock().unwrap().preparation.clone().unwrap();
     assert_eq!(changed.processing_quality, ProcessingQuality::Speed);
     assert!(!Arc::ptr_eq(&original, &changed));
+}
+
+#[test]
+fn render_width_updates_are_deduplicated_without_starting_work() {
+    let rig = Rig::new();
+    rig.handle.set_render_width(Some(4));
+    rig.applied();
+    assert_eq!(rig.slot.0.lock().unwrap().render_width, Some(4));
+    let sequence = rig.handle.sequence.get();
+    rig.handle.set_render_width(Some(4));
+    assert_eq!(rig.handle.sequence.get(), sequence);
+    assert!(!rig.handle.busy());
+    rig.handle.set_render_width(Some(usize::MAX));
+    rig.applied();
+    assert_eq!(rig.slot.0.lock().unwrap().render_width, Some(8));
+    rig.handle.set_render_width(None);
+    rig.applied();
+    assert_eq!(rig.slot.0.lock().unwrap().render_width, None);
+    assert!(rig.tasks().is_empty());
+    assert!(!rig.handle.busy());
+}
+
+#[test]
+fn group_before_view_survives_activation_and_after_retires_all_before_tasks() {
+    let rig = Rig::new();
+    let mut a = request("a.x3f", 1, 0.);
+    a.rendition = crate::editor::Rendition::Camera;
+    let mut b = request("b.x3f", 2, 0.);
+    b.rendition = crate::editor::Rendition::Camera;
+    let white = request("white.x3f", 3, 0.);
+    rig.requests(vec![a.clone(), b.clone(), white.clone()]);
+    rig.handle.activate(white.path.clone());
+    rig.applied();
+    assert_eq!(rig.tasks().len(), 3);
+    let mut after = view(&[a, b, white]);
+    after.active = Some("white.x3f".into());
+    after.rendition = crate::editor::Rendition::Current;
+    for photo in &mut after.overviews {
+        photo.rendition = crate::editor::Rendition::Current;
+    }
+    rig.handle.set_view(after);
+    rig.applied();
+    assert_eq!(rig.tasks().len(), 1);
+    assert_eq!(rig.tasks()[0].request.path, PathBuf::from("white.x3f"));
+}
+
+#[test]
+fn removed_before_intent_can_be_republished_after_readding_the_photo() {
+    let rig = Rig::new();
+    let mut before = request("a.x3f", 1, 0.);
+    before.rendition = crate::editor::Rendition::Camera;
+    let white = request("white.x3f", 2, 0.);
+    let snapshot = view(&[white.clone(), before.clone()]);
+    rig.handle.set_view(snapshot.clone());
+    let intent = Refinement {
+        first: before.clone(),
+        whole: None,
+        preview: None,
+        visible_region: None,
+    };
+    assert!(rig.handle.refine(intent.clone(), None, Instant::now()));
+    rig.handle.activate(white.path.clone());
+    assert!(
+        !rig.handle.refine(intent.clone(), None, Instant::now()),
+        "activation preserves demanded Before intent suppression"
+    );
+    rig.applied();
+    rig.handle.set_view(view(&[white]));
+    rig.applied();
+    assert!(rig.tasks().is_empty());
+    rig.handle.set_view(snapshot);
+    assert!(
+        rig.handle.refine(intent, None, Instant::now()),
+        "readding a removed target must publish its Before intent again"
+    );
+    rig.applied();
+    assert_eq!(rig.tasks().len(), 1);
+    assert_eq!(rig.tasks()[0].request.path, before.path);
+}
+
+#[test]
+fn current_completion_during_before_is_forwarded_and_remains_settled_after() {
+    let rig = Rig::new();
+    let current = request("a.x3f", 1, 1.);
+    rig.requests(vec![current.clone()]);
+    let task = rig.tasks()[0].clone();
+    let mut before_view = view(std::slice::from_ref(&current));
+    before_view.rendition = crate::editor::Rendition::Camera;
+    before_view.overviews[0].rendition = crate::editor::Rendition::Camera;
+    rig.handle.set_view(before_view.clone());
+    rig.applied();
+    rig.results.send(result(&task)).unwrap();
+    let reply = rig.receive();
+    let context = before_view.context(&current.path);
+    let handling = super::super::delivery::recheck(&reply, &context, Some(&current.settings));
+    assert!(handling.current && handling.update_photo);
+    assert_eq!(
+        handling.destination,
+        Some(super::super::delivery::Destination::Overview)
+    );
+    rig.requests(vec![current]);
+    assert!(
+        rig.tasks().is_empty(),
+        "After reuses the settled Current completion rather than rerunning it"
+    );
 }

@@ -148,6 +148,7 @@ pub struct Preferences {
     pub white_viewport_background: bool,
     pub decode_cache: foveonic::decode_cache::Settings,
     pub memory_cache_bytes: u64,
+    pub background_full_image_completion: bool,
     pub multi_edit_limit: usize,
     pub noise_profile: crate::noise_calibration::Slot,
     pub display_gamut: crate::preferences::DisplayGamut,
@@ -178,6 +179,7 @@ impl Default for Preferences {
             white_viewport_background: false,
             decode_cache: Default::default(),
             memory_cache_bytes: DEFAULT_MEMORY_CACHE_BYTES,
+            background_full_image_completion: true,
             multi_edit_limit: DEFAULT_MULTI_EDIT_LIMIT,
             noise_profile: Default::default(),
             display_gamut: Default::default(),
@@ -284,6 +286,31 @@ mod tests {
             self.0.insert(k.into(), v);
         }
         fn flush(&mut self) {}
+    }
+    #[test]
+    fn retired_width_preference_does_not_reset_other_saved_settings() {
+        let mut store = Storage::default();
+        store.0.insert(
+            STORAGE_KEY.into(),
+            "(organizer:List,simultaneous_photos:6,memory_cache_bytes:6291456000)".into(),
+        );
+        let restored = Preferences::load(Some(&store));
+        assert_eq!(restored.organizer, Organizer::List);
+        assert_eq!(restored.memory_cache_bytes, 6291456000);
+    }
+    #[test]
+    fn background_completion_setting_survives_restart_and_preserves_existing_default() {
+        let mut store = Storage::default();
+        store
+            .0
+            .insert(STORAGE_KEY.into(), "(scope:Histogram)".into());
+        assert!(Preferences::load(Some(&store)).background_full_image_completion);
+        let prefs = Preferences {
+            background_full_image_completion: false,
+            ..Default::default()
+        };
+        prefs.save(&mut store);
+        assert!(!Preferences::load(Some(&store)).background_full_image_completion);
     }
     #[test]
     fn display_gamut_defaults_for_existing_preferences_and_survives_restart() {

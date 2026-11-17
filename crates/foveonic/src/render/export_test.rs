@@ -461,11 +461,13 @@ fn zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged() {
         )
         .unwrap();
     let outputs = engine
-        .execute(
+        .run_graph(
             Input::Rendered(&image),
             &graph,
             &[color, mono],
             &mut Profile::default(),
+            &mut crate::interactive::Execution::default(),
+            crate::render::execute::Completion::Queued,
         )
         .unwrap();
     for output in outputs {

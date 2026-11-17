@@ -296,3 +296,38 @@ fn photographic_gpu_resize_matches_scalar_crops_rotations_edges_and_singletons()
         }
     }
 }
+
+#[test]
+fn allocation_contract_covers_prepared_resize_branches_without_materializing_them() {
+    let mut cases = vec![
+        params([32, 24], [0, 0, 32, 24], 0, [32, 24]),
+        params([32, 24], [2, 3, 30, 23], 0, [27, 19]),
+        params([32, 24], [2, 3, 30, 23], 90, [9, 13]),
+        params([32, 24], [2, 3, 30, 23], 0, [11, 7]),
+    ];
+    let mut affine = params([32, 24], [0, 0, 32, 24], 0, [11, 7]);
+    affine.mapping = [[30., 0., 0., 1.], [0., 22., 0., 0.]];
+    cases.push(affine);
+    let mut saw_bypass = false;
+    let mut saw_direct = false;
+    let mut saw_table = false;
+    for params in cases {
+        let bound = allocation(&params).unwrap();
+        match Prepared::new(&params).unwrap() {
+            None => saw_bypass = true,
+            Some(prepared) => {
+                saw_direct |= prepared.coefficients.len() == 1;
+                saw_table |= prepared.coefficients.len() == PHASES * PHASES * TAPS * TAPS;
+                let actual_temporaries = size_of::<EncodeParams>()
+                    + size_of::<Mapping>()
+                    + prepared.coefficients.len() * size_of::<f32>();
+                assert!(actual_temporaries as u64 <= bound.temporary_bytes);
+                assert_eq!(
+                    bound.output_bytes,
+                    u64::from(params.output[0]) * u64::from(params.output[1]) * 12
+                );
+            }
+        }
+    }
+    assert!(saw_bypass && saw_direct && saw_table);
+}

@@ -1,6 +1,8 @@
 //! Owns bounded photo settings and images with independent editing selection and render demand.
 
-use crate::{multi_edit_controls, rendering::request, rendering::worker, sidecars};
+use crate::{
+    editor::Rendition, multi_edit_controls, rendering::request, rendering::worker, sidecars,
+};
 use foveonic::{
     render::{ProcessingQuality, Settings},
     source::Metadata,
@@ -20,9 +22,18 @@ struct Photo {
     defaults_basis: Option<Settings>,
     frame: Option<worker::Frame>,
     detail: Option<worker::Frame>,
+    before_frame: Option<worker::Frame>,
+    before_detail: Option<worker::Frame>,
     dirty: bool,
-    preview: Option<(foveonic::render::ProcessingQuality, foveonic::render::Scale)>,
+    preview_policy: Option<(foveonic::render::ProcessingQuality, foveonic::render::Scale)>,
+    preview: Option<worker::Frame>,
     error: Option<String>,
+}
+
+impl Photo {
+    fn current_demand(&self, rendition: Rendition, editing: bool) -> bool {
+        rendition == Rendition::Current || !editing || self.metadata.is_none()
+    }
 }
 
 #[derive(Default)]
@@ -200,11 +211,13 @@ impl Runtime {
     }
     pub fn invalidate_photo(&mut self, path: &Path) {
         if let Some(photo) = self.photos.get_mut(path) {
+            photo.preview = None;
             photo.dirty = true;
         }
     }
     pub fn invalidate(&mut self) {
         for photo in self.photos.values_mut() {
+            photo.preview = None;
             photo.dirty = true;
         }
     }
@@ -216,8 +229,8 @@ impl Runtime {
     ) {
         if let Some(photo) = self.photos.get_mut(path) {
             let preview = Some((policy, quality));
-            if photo.preview != preview {
-                photo.preview = preview;
+            if photo.preview_policy != preview {
+                photo.preview_policy = preview;
                 photo.dirty = true;
             }
         }
@@ -474,23 +487,32 @@ impl Runtime {
     pub fn rendering(&self, path: &Path) -> bool {
         self.render_paths.iter().any(|candidate| candidate == path)
     }
-    pub fn needs_render(&self, excluded: Option<&Path>) -> bool {
+    pub fn needs_render(&self, excluded: Option<&Path>, rendition: Rendition) -> bool {
         self.render_paths
             .iter()
             .filter(|path| Some(path.as_path()) != excluded)
             .any(|path| {
                 let photo = &self.photos[path];
-                photo.dirty && photo.settings.is_some() && photo.error.is_none()
+                photo.current_demand(rendition, self.editing_paths.contains(path))
+                    && photo.dirty
+                    && photo.settings.is_some()
+                    && photo.error.is_none()
             })
     }
     /// Publish the complete ready demand, preserving unchanged in-flight work.
-    pub fn request(&mut self, excluded: Option<&Path>) -> Vec<(PathBuf, Settings)> {
+    pub fn request(
+        &mut self,
+        excluded: Option<&Path>,
+        rendition: Rendition,
+    ) -> Vec<(PathBuf, Settings)> {
+        let editing = &self.editing_paths;
         self.render_paths
             .iter()
             .filter(|path| Some(path.as_path()) != excluded)
             .filter_map(|path| {
                 let photo = self.photos.get_mut(path).unwrap();
-                if photo.error.is_some() {
+                if photo.error.is_some() || !photo.current_demand(rendition, editing.contains(path))
+                {
                     return None;
                 }
                 let settings = photo.settings.as_ref()?.clone();
@@ -521,6 +543,9 @@ impl Runtime {
         }
     }
     pub fn retain(&mut self, frame: worker::Frame) {
+        if frame.auxiliary_preview {
+            return;
+        }
         let regional = frame.is_current_detail();
         if !frame.is_photographic() && !frame.is_current_detail() {
             return;
@@ -528,6 +553,13 @@ impl Runtime {
         let Some(photo) = self.photos.get_mut(&frame.path) else {
             return;
         };
+        if photo
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.origin != frame.origin)
+        {
+            photo.preview = None;
+        }
         let slot = if regional {
             &mut photo.detail
         } else {
@@ -547,6 +579,119 @@ impl Runtime {
         {
             photo.detail = None;
         }
+    }
+    pub fn retain_before(&mut self, frame: worker::Frame) {
+        if frame.rendition == crate::editor::Rendition::Current
+            || frame.output != "final"
+            || frame.auxiliary_preview
+            || frame.framing_preview
+            || frame.comparison.is_some()
+        {
+            return;
+        }
+        let Some(photo) = self.photos.get_mut(&frame.path) else {
+            return;
+        };
+        if !frame.detail
+            && photo
+                .before_detail
+                .as_ref()
+                .is_some_and(|detail| frame.supersedes_detail(detail))
+        {
+            photo.before_detail = None;
+        }
+        let slot = if frame.detail {
+            &mut photo.before_detail
+        } else {
+            &mut photo.before_frame
+        };
+        if slot
+            .as_ref()
+            .is_none_or(|old| old.content_revision() <= frame.content_revision())
+        {
+            *slot = Some(frame);
+        }
+    }
+    pub fn before_frame(
+        &self,
+        path: &Path,
+        rendition: crate::editor::Rendition,
+    ) -> Option<&worker::Frame> {
+        self.photos
+            .get(path)?
+            .before_frame
+            .as_ref()
+            .filter(|frame| frame.rendition == rendition)
+    }
+    pub fn before_detail(
+        &self,
+        path: &Path,
+        rendition: crate::editor::Rendition,
+    ) -> Option<&worker::Frame> {
+        self.photos
+            .get(path)?
+            .before_detail
+            .as_ref()
+            .filter(|frame| frame.rendition == rendition)
+    }
+    pub fn take_before_frame(
+        &mut self,
+        path: &Path,
+        rendition: crate::editor::Rendition,
+    ) -> Option<worker::Frame> {
+        let photo = self.photos.get_mut(path)?;
+        if photo
+            .before_frame
+            .as_ref()
+            .is_some_and(|frame| frame.rendition == rendition)
+        {
+            photo.before_frame.take()
+        } else {
+            None
+        }
+    }
+    pub fn take_before_detail(
+        &mut self,
+        path: &Path,
+        rendition: crate::editor::Rendition,
+    ) -> Option<worker::Frame> {
+        let photo = self.photos.get_mut(path)?;
+        if photo
+            .before_detail
+            .as_ref()
+            .is_some_and(|frame| frame.rendition == rendition)
+        {
+            photo.before_detail.take()
+        } else {
+            None
+        }
+    }
+    pub fn request_current(&mut self) {
+        for path in &self.editing_paths {
+            self.photos.get_mut(path).unwrap().dirty = true;
+        }
+    }
+    /// Auxiliary delivery never changes viewport pixels, detail, or authored settings.
+    pub fn retain_preview(&mut self, frame: worker::Frame) -> Option<&worker::Frame> {
+        if !frame.auxiliary_preview || !frame.is_photographic() {
+            return None;
+        }
+        let photo = self.photos.get_mut(&frame.path)?;
+        if photo
+            .preview
+            .as_ref()
+            .is_some_and(|old| old.content_revision() >= frame.content_revision())
+            || photo.frame.iter().chain(photo.detail.iter()).any(|old| {
+                old.content_revision() > frame.content_revision() && old.origin != frame.origin
+            })
+        {
+            return None;
+        }
+        photo.preview = Some(frame);
+        photo.preview.as_ref()
+    }
+    pub fn preview(&self, path: &Path) -> Option<&worker::Frame> {
+        self.photos.get(path)?.preview.as_ref()
     }
     pub fn detail(&self, path: &Path) -> Option<&worker::Frame> {
         self.photos.get(path)?.detail.as_ref()
@@ -581,7 +726,14 @@ impl Runtime {
             if let Some(metadata) = &photo.metadata {
                 inventory.metadata(metadata);
             }
-            for frame in photo.frame.iter().chain(photo.detail.iter()) {
+            for frame in photo
+                .frame
+                .iter()
+                .chain(photo.detail.iter())
+                .chain(photo.preview.iter())
+                .chain(photo.before_frame.iter())
+                .chain(photo.before_detail.iter())
+            {
                 inventory.frame(frame);
             }
         }
@@ -591,7 +743,14 @@ impl Runtime {
             if let Some(metadata) = &photo.metadata {
                 key.push(Arc::as_ptr(metadata) as usize as u64);
             }
-            for frame in photo.frame.iter().chain(photo.detail.iter()) {
+            for frame in photo
+                .frame
+                .iter()
+                .chain(photo.detail.iter())
+                .chain(photo.preview.iter())
+                .chain(photo.before_frame.iter())
+                .chain(photo.before_detail.iter())
+            {
                 crate::memory::frame_key(frame, key);
             }
         }
@@ -855,6 +1014,9 @@ impl crate::App {
         }
         self.sync_multi_edit();
         self.sync_render_demand();
+        if self.before.active != crate::editor::Rendition::Current {
+            self.submit_before_photos();
+        }
         let policy = self.preferences.processing_quality;
         for path in self.multi_edit.render_paths().to_vec() {
             self.multi_edit
@@ -866,7 +1028,9 @@ impl crate::App {
                 .flatten();
         let mut refined = Vec::new();
         for path in self.multi_edit.render_paths().to_vec() {
-            if excluded.as_ref() == Some(&path) {
+            if self.photo_rendition(&path) != crate::editor::Rendition::Current
+                || excluded.as_ref() == Some(&path)
+            {
                 continue;
             }
             let Some(settings) = self.multi_edit.settings(&path).cloned() else {
@@ -882,6 +1046,7 @@ impl crate::App {
             let revision = refinement
                 .whole
                 .as_ref()
+                .or(refinement.preview.as_ref())
                 .unwrap_or(&refinement.first)
                 .revision;
             let queued_at = self
@@ -894,14 +1059,22 @@ impl crate::App {
                 self.revision = revision;
                 if self.selected.as_ref() == Some(&path) {
                     crate::timing::requested(revision, &path, "final", &self.settings);
-                    self.opening = None;
                 }
             }
+            // Repeated intent has already transferred work to the coordinator.
+            if self.selected.as_ref() == Some(&path) {
+                self.opening = None;
+            }
         }
-        if !self.multi_edit.needs_render(excluded.as_deref()) {
+        if !self
+            .multi_edit
+            .needs_render(excluded.as_deref(), self.before.active)
+        {
             return;
         }
-        let mut targets = self.multi_edit.request(excluded.as_deref());
+        let mut targets = self
+            .multi_edit
+            .request(excluded.as_deref(), self.before.active);
         targets.retain(|(path, _)| !refined.contains(path));
         targets.sort_by_key(|(path, _)| self.selected.as_ref() != Some(path));
         let covers_active = self.before.active == crate::editor::Rendition::Current
@@ -925,8 +1098,17 @@ impl crate::App {
                 settings.preview_region = None;
                 let framing_preview =
                     self.selected.as_ref() == Some(&path) && self.framing_preview_active();
-                let preview_scale = self.preview_scale_for(&path, policy);
+                let mut preview_scale = self.preview_scale_for(&path, policy);
+                if self.photo_rendition(&path) != Rendition::Current
+                    && self.multi_edit.metadata(&path).is_none()
+                    && preview_scale == foveonic::render::Scale::NATIVE
+                {
+                    // Acquire metadata with a small Current image before deriving Before.
+                    preview_scale = foveonic::render::Scale::new(8).unwrap();
+                }
                 request::Request {
+                    auxiliary_preview: false,
+
                     detail: false,
                     framing_preview,
                     calibration: calibration.clone(),
@@ -1058,6 +1240,62 @@ mod tests {
     }
 
     #[test]
+    fn group_before_bootstraps_unknown_metadata_through_current_demand() {
+        let mut runtime = runtime();
+        let mut sidecars = session();
+        let paths = runtime.editing_paths.clone();
+        runtime.sync(&paths[..1], 2, &mut sidecars);
+        runtime.sync_render_paths(&paths);
+        runtime.invalidate_photo(&paths[0]);
+        assert!(runtime.metadata(&paths[0]).is_none());
+        let authored = runtime.settings(&paths[0]).unwrap().clone();
+        let requests = runtime.request(None, Rendition::Camera);
+        assert!(
+            requests
+                .iter()
+                .any(|(path, settings)| path == &paths[0] && settings == &authored),
+            "Before must acquire metadata for a newly added blue target"
+        );
+        assert!(
+            requests.iter().any(|(path, _)| path == &paths[1]),
+            "white peers remain Current"
+        );
+        assert_eq!(runtime.settings(&paths[0]), Some(&authored));
+    }
+
+    #[test]
+    fn group_before_preserves_pending_current_until_after_or_white_display() {
+        let mut runtime = runtime();
+        let mut sidecars = session();
+        let paths = runtime.editing_paths.clone();
+        runtime.sync(&paths[..1], 2, &mut sidecars);
+        runtime.sync_render_paths(&paths);
+        runtime.photos.get_mut(&paths[0]).unwrap().metadata =
+            Some(Arc::new(crate::capture::processing_metadata(
+                [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into(),
+            )));
+        runtime.request(None, Rendition::Current);
+        runtime.invalidate_photo(&paths[0]);
+        assert!(!runtime.needs_render(None, Rendition::Camera));
+        let requests = runtime.request(None, Rendition::Camera);
+        assert!(!requests.iter().any(|(path, _)| path == &paths[0]));
+        assert!(
+            runtime.needs_render(None, Rendition::Current),
+            "Before must not consume pending Current work"
+        );
+        runtime.sync(&paths[1..], 2, &mut sidecars);
+        runtime.sync_render_paths(&paths);
+        assert!(
+            runtime.needs_render(None, Rendition::Camera),
+            "a white peer must recover Current while the group remains in Before"
+        );
+        assert!(runtime
+            .request(None, Rendition::Camera)
+            .iter()
+            .any(|(path, _)| path == &paths[0]));
+    }
+
+    #[test]
     fn ordinary_active_changes_publish_complete_demand_for_one_or_many_photos() {
         for count in 1..=2 {
             let mut runtime = runtime();
@@ -1065,12 +1303,12 @@ mod tests {
             let paths = runtime.editing_paths[..count].to_vec();
             runtime.sync(&paths, 2, &mut sidecars);
             runtime.sync_render_paths(&paths);
-            runtime.request(None);
+            runtime.request(None, Rendition::Current);
             let mut edited = runtime.settings(&paths[0]).unwrap().clone();
             edited.exposure = 0.75;
             runtime.observe_active(&paths[0], &edited, None);
-            assert!(runtime.needs_render(None));
-            let requests = runtime.request(None);
+            assert!(runtime.needs_render(None, Rendition::Current));
+            let requests = runtime.request(None, Rendition::Current);
             assert_eq!(
                 requests.len(),
                 count,
@@ -1079,12 +1317,12 @@ mod tests {
             assert_eq!(requests[0], (paths[0].clone(), edited.clone()));
             runtime.observe_active(&paths[0], &edited, None);
             assert!(
-                !runtime.needs_render(None),
+                !runtime.needs_render(None, Rendition::Current),
                 "observation alone does not resubmit"
             );
             runtime.invalidate_photo(&paths[0]);
             assert!(
-                runtime.needs_render(None),
+                runtime.needs_render(None, Rendition::Current),
                 "explicit view changes can request the same edits"
             );
         }
@@ -1101,13 +1339,13 @@ mod tests {
         let settings = Settings::new("", "");
         runtime.observe_active(&paths[0], &settings, None);
         assert!(!runtime.ready());
-        assert!(runtime.needs_render(None));
+        assert!(runtime.needs_render(None, Rendition::Current));
         assert_eq!(
-            runtime.request(None),
+            runtime.request(None, Rendition::Current),
             vec![(paths[0].clone(), settings.clone())]
         );
         runtime.observe_requested(&paths[1], &settings);
-        assert_eq!(runtime.request(None).len(), 2);
+        assert_eq!(runtime.request(None, Rendition::Current).len(), 2);
         assert!(!runtime.editable_ready());
     }
 
@@ -1123,12 +1361,14 @@ mod tests {
             }],
             &[String::new(), String::new()],
         );
-        assert!(!runtime.needs_render(None));
+        assert!(!runtime.needs_render(None, Rendition::Current));
         let restored = Settings::new("", "");
         runtime.observe_active(&path, &restored, None);
         assert!(runtime.photos[&path].error.is_none());
-        assert!(runtime.needs_render(None));
-        assert!(runtime.request(None).contains(&(path, restored)));
+        assert!(runtime.needs_render(None, Rendition::Current));
+        assert!(runtime
+            .request(None, Rendition::Current)
+            .contains(&(path, restored)));
     }
 
     #[test]
@@ -1176,7 +1416,7 @@ mod tests {
         assert!(runtime.editable_ready());
         assert_eq!(runtime.snapshots().len(), 2);
         assert_eq!(runtime.numeric_snapshots().len(), 2);
-        assert!(!runtime.needs_render(None));
+        assert!(!runtime.needs_render(None, Rendition::Current));
         assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
         assert!(runtime.photos[&inactive].settings.is_none());
     }
@@ -1192,28 +1432,28 @@ mod tests {
             ProcessingQuality::Quality,
             foveonic::render::Scale::new(2).unwrap(),
         );
-        assert!(runtime.needs_render(None));
-        runtime.request(None);
+        assert!(runtime.needs_render(None, Rendition::Current));
+        runtime.request(None, Rendition::Current);
         runtime.observe_preview(
             &path,
             ProcessingQuality::Quality,
             foveonic::render::Scale::new(2).unwrap(),
         );
-        assert!(!runtime.needs_render(None));
+        assert!(!runtime.needs_render(None, Rendition::Current));
         runtime.observe_preview(
             &path,
             ProcessingQuality::Quality,
             foveonic::render::Scale::new(4).unwrap(),
         );
-        assert!(runtime.needs_render(None));
-        runtime.request(None);
+        assert!(runtime.needs_render(None, Rendition::Current));
+        runtime.request(None, Rendition::Current);
         runtime.observe_preview(
             &path,
             ProcessingQuality::Speed,
             foveonic::render::Scale::new(2).unwrap(),
         );
         assert!(
-            runtime.needs_render(None),
+            runtime.needs_render(None, Rendition::Current),
             "workspace policy also participates in reuse"
         );
         assert_eq!(runtime.settings(&path), Some(&original));
@@ -1234,19 +1474,19 @@ mod tests {
         edited.exposure -= 0.25;
         runtime.observe_active(&displayed[0], &edited, None);
         assert_eq!(runtime.settings(&displayed[1]), Some(&untouched));
-        runtime.request(None);
+        runtime.request(None, Rendition::Current);
         runtime.observe_preview(
             &displayed[1],
             ProcessingQuality::Speed,
             foveonic::render::Scale::new(2).unwrap(),
         );
-        assert!(runtime.needs_render(None));
+        assert!(runtime.needs_render(None, Rendition::Current));
         assert_eq!(
-            runtime.request(None).len(),
+            runtime.request(None, Rendition::Current).len(),
             2,
             "unchanged sibling demand remains present"
         );
-        assert!(!runtime.needs_render(None));
+        assert!(!runtime.needs_render(None, Rendition::Current));
         runtime.sync(&[], 2, &mut sidecars);
         runtime.sync_render_paths(&displayed);
         assert_eq!(runtime.render_paths(), displayed);
@@ -1268,10 +1508,10 @@ mod tests {
             photo.dirty = true;
         }
         assert!(!runtime.ready());
-        assert!(runtime.needs_render(None));
-        assert_eq!(runtime.request(None).len(), 1);
+        assert!(runtime.needs_render(None, Rendition::Current));
+        assert_eq!(runtime.request(None, Rendition::Current).len(), 1);
         assert!(runtime.photos[&paths[1]].dirty);
-        assert!(!runtime.needs_render(None));
+        assert!(!runtime.needs_render(None, Rendition::Current));
         assert!(runtime
             .resolve(
                 vec![sidecars::Resolved {
@@ -1281,8 +1521,8 @@ mod tests {
                 &[String::new(), String::new()]
             )
             .is_empty());
-        assert!(runtime.needs_render(None));
-        assert_eq!(runtime.request(None).len(), 2);
+        assert!(runtime.needs_render(None, Rendition::Current));
+        assert_eq!(runtime.request(None, Rendition::Current).len(), 2);
     }
 
     #[test]
@@ -1298,7 +1538,7 @@ mod tests {
             ProcessingQuality::Quality,
             foveonic::render::Scale::new(2).unwrap(),
         );
-        runtime.request(None);
+        runtime.request(None, Rendition::Current);
         runtime.sync_render_paths(&paths[..1]);
         assert!(!runtime.rendering(&paths[1]));
         runtime.sync_render_paths(&paths);
@@ -1307,9 +1547,9 @@ mod tests {
             ProcessingQuality::Quality,
             foveonic::render::Scale::new(2).unwrap(),
         );
-        assert!(runtime.needs_render(None));
+        assert!(runtime.needs_render(None, Rendition::Current));
         assert!(runtime
-            .request(None)
+            .request(None, Rendition::Current)
             .iter()
             .any(|(path, _)| path == &paths[1]));
     }
@@ -1319,13 +1559,16 @@ mod tests {
         let mut runtime = runtime();
         let paths = runtime.editing_paths.clone();
         runtime.photos.get_mut(&paths[0]).unwrap().dirty = true;
-        assert!(!runtime.needs_render(Some(&paths[0])));
+        assert!(!runtime.needs_render(Some(&paths[0]), Rendition::Current));
         runtime.photos.get_mut(&paths[1]).unwrap().dirty = true;
-        assert!(runtime.needs_render(Some(&paths[0])));
-        assert_eq!(runtime.request(Some(&paths[0])).len(), 1);
+        assert!(runtime.needs_render(Some(&paths[0]), Rendition::Current));
+        assert_eq!(
+            runtime.request(Some(&paths[0]), Rendition::Current).len(),
+            1
+        );
         assert!(runtime.photos[&paths[0]].dirty);
-        assert!(!runtime.needs_render(Some(&paths[0])));
-        assert!(runtime.needs_render(None));
+        assert!(!runtime.needs_render(Some(&paths[0]), Rendition::Current));
+        assert!(runtime.needs_render(None, Rendition::Current));
     }
 
     #[test]
@@ -1360,16 +1603,18 @@ mod tests {
         let paths = runtime.editing_paths.clone();
         assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
         let latest = runtime.settings(&paths[1]).unwrap().clone();
-        runtime.request(None);
-        assert!(!runtime.needs_render(None));
+        runtime.request(None, Rendition::Current);
+        assert!(!runtime.needs_render(None, Rendition::Current));
 
         runtime.sync(&paths[..1], 2, &mut sidecars);
         runtime.sync(&paths, 2, &mut sidecars);
-        assert!(runtime.needs_render(None));
+        assert!(runtime.needs_render(None, Rendition::Current));
         assert!(runtime.photos[&paths[1]].dirty);
         assert!(!runtime.photos[&paths[0]].dirty);
         assert_eq!(runtime.settings(&paths[1]), Some(&latest));
-        assert!(runtime.request(None).contains(&(paths[1].clone(), latest)));
+        assert!(runtime
+            .request(None, Rendition::Current)
+            .contains(&(paths[1].clone(), latest)));
     }
     #[test]
     fn relative_edits_clamp_independently_and_preserve_unrelated_authored_values() {

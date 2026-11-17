@@ -42,6 +42,19 @@ def report(events, work, valid=True):
 
 
 class CheckpointTraceTests(unittest.TestCase):
+    def test_resumable_preparation_header_identifies_the_graph_without_claiming_execution_duration(self):
+        events, work = fixture()
+        events[0]['name'] = 'graph.prepare_execution'
+        events[0]['dur'] = 2
+        result = report(events, work)
+        graph = result['graphs'][0]
+        self.assertTrue(graph['local_evidence_complete'])
+        self.assertEqual(result['orphan_graph_ids'], [])
+        self.assertEqual(graph['scope_event'], 'graph.prepare_execution')
+        self.assertIsNone(graph['inclusive_host_ms'])
+        self.assertEqual(graph['preparation_host_ms'], 2 / 1e6)
+        self.assertEqual(graph['execution_elapsed_ms'], 21 / 1e6)
+
     def test_warm_capture_explains_missing_sibling_and_counts_shared_storage_once(self):
         events, work = fixture()
         result = report(events, work)

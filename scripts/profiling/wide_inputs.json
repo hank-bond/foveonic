@@ -1,0 +1,37 @@
+{
+  "description": "Eight Merrill photographs from the example-photographs release, in fixed traversal order.",
+  "files": [
+    {
+      "file": "blue-parking-sign.x3f",
+      "sha256": "7a650537a9986bfe348e0da117defbf80da7ceca35f76bc092f220a7cdbcffee"
+    },
+    {
+      "file": "glossy-leaves-and-buds.x3f",
+      "sha256": "c5cce42fdf5826b6c202e5372898ac5b04d6f25a0d01dfce425f4fd48d68eedb"
+    },
+    {
+      "file": "low-light-speaker-and-desk.x3f",
+      "sha256": "46704158239f724b97ba004b80e498a7ae0d43b059ff8667f1bb04a72f04a4ad"
+    },
+    {
+      "file": "low-light-spider-and-web.x3f",
+      "sha256": "e67449f05493ad0bc54dfa21a1d119467d0d50d9138fae2184d2f79a9ee8bf2a"
+    },
+    {
+      "file": "merrill-hazy-coast.x3f",
+      "sha256": "4bfba506a6d270fd433251ccfc425a710c5cd5ab2e68788faa63ef3c899debf4"
+    },
+    {
+      "file": "paper-and-recycling-can.x3f",
+      "sha256": "8276657823dcdbf1baf6d6d9e654f694ec4e9a185f05c8a9a2009936118cf299"
+    },
+    {
+      "file": "rocks-and-tree-shadows.x3f",
+      "sha256": "2cce73035afea1dd180b4215095f36e400183104ba8d296734d265b8e42a65ef"
+    },
+    {
+      "file": "sunlit-metal-latch.x3f",
+      "sha256": "0a5eb458f53f245c33e15209b4149b153ccfd178698899b73ef84b4a6dec8b02"
+    }
+  ]
+}

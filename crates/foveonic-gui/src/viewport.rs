@@ -620,6 +620,16 @@ pub struct ViewTransform {
     scale: Option<f32>,
     one_to_one: bool,
     center: Option<egui::Vec2>,
+    pending_zoom: Option<f32>,
+}
+
+/// One image-relative viewing change, independent of photo and widget identity.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ViewChange {
+    Pan(egui::Vec2),
+    Zoom { factor: f32, anchor: egui::Vec2 },
+    Fit,
+    Snap { scale: f32, center: egui::Vec2 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -635,6 +645,7 @@ pub struct Viewport {
     scale: Option<f32>,
     pub pan: egui::Vec2,
     pub editing: bool,
+    pub group_target: bool,
     pub framing: Option<crate::framing::Presentation>,
     response: Option<egui::Response>,
     pub one_to_one: bool,
@@ -645,6 +656,9 @@ pub struct Viewport {
     /// Image-relative center carried until the next photograph's geometry arrives.
     pending_center: Option<egui::Vec2>,
     navigator_offset: egui::Vec2,
+    pending_zoom: Option<f32>,
+    group_drag: bool,
+    group_changes: Vec<ViewChange>,
 }
 impl Default for Viewport {
     fn default() -> Self {
@@ -653,6 +667,7 @@ impl Default for Viewport {
             scale: None,
             pan: egui::Vec2::ZERO,
             editing: false,
+            group_target: false,
             framing: None,
             response: None,
             one_to_one: false,
@@ -662,6 +677,9 @@ impl Default for Viewport {
             last_image: None,
             pending_center: None,
             navigator_offset: egui::Vec2::ZERO,
+            pending_zoom: None,
+            group_drag: false,
+            group_changes: Vec::new(),
         }
     }
 }
@@ -675,7 +693,7 @@ impl Viewport {
 
     pub fn show_empty(&mut self, ui: &mut egui::Ui) {
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
-        self.response = Some(ui.interact(rect, self.id, egui::Sense::click()));
+        self.response = Some(ui.interact(rect, self.id, egui::Sense::click_and_drag()));
         self.last_image = None;
         self.last_canvas = None;
     }
@@ -698,6 +716,7 @@ impl Viewport {
             scale: self.scale,
             one_to_one: self.one_to_one,
             center,
+            pending_zoom: self.pending_zoom,
         }
     }
 
@@ -706,10 +725,12 @@ impl Viewport {
         self.scale = transform.scale;
         self.one_to_one = transform.one_to_one;
         self.pending_center = transform.center;
+        self.pending_zoom = transform.pending_zoom;
         self.explicit_zoom_pending = self.explicit_zoom();
     }
 
     pub fn reset(&mut self) {
+        self.pending_zoom = None;
         self.explicit_zoom_pending = false;
         self.scale = None;
         self.pan = egui::Vec2::ZERO;
@@ -733,6 +754,81 @@ impl Viewport {
         self.response = None;
         self.navigator_offset = egui::Vec2::ZERO;
     }
+    /// Shift on an existing blue group reserves the image click for viewing.
+    pub(crate) fn selection_eligible(&self, selecting: bool) -> bool {
+        selecting
+            && !(self.group_target
+                && self
+                    .response
+                    .as_ref()
+                    .is_some_and(|response| response.ctx.input(|input| input.modifiers.shift)))
+    }
+
+    pub(crate) fn take_group_changes(&mut self) -> Vec<ViewChange> {
+        std::mem::take(&mut self.group_changes)
+    }
+
+    /// Apply relative intent to this photograph's own magnification and center.
+    pub(crate) fn apply_view_change(&mut self, change: ViewChange, pixels_per_point: f32) {
+        let mut center = self.transform().center.unwrap_or(egui::vec2(0.5, 0.5));
+        let old_scale = if self.one_to_one {
+            Some(1. / pixels_per_point)
+        } else {
+            self.scale.or_else(|| {
+                self.last_canvas
+                    .map(|(size, extent)| Self::fit_scale(size, extent))
+            })
+        };
+        match change {
+            ViewChange::Fit => {
+                let canvas = self.last_canvas;
+                self.reset();
+                self.last_canvas = canvas;
+                return;
+            }
+            ViewChange::Snap {
+                scale,
+                center: next,
+            } => {
+                self.scale = Some(scale);
+                self.pending_zoom = None;
+                center = next;
+            }
+            ViewChange::Pan(delta) => {
+                center -= delta;
+                self.scale = old_scale;
+                if old_scale.is_none() {
+                    self.pending_zoom.get_or_insert(1.);
+                }
+            }
+            ViewChange::Zoom { factor, anchor } => {
+                let effective = if let Some(old) = old_scale {
+                    let next =
+                        (old * factor).clamp(0.05 / pixels_per_point, 64. / pixels_per_point);
+                    self.scale = Some(next);
+                    next / old
+                } else {
+                    // A never-drawn Fit view has no physical scale yet.
+                    self.pending_zoom = Some(self.pending_zoom.unwrap_or(1.) * factor);
+                    factor
+                };
+                center = anchor + (center - anchor) / effective;
+            }
+        }
+        self.one_to_one = false;
+        self.explicit_zoom_pending = true;
+        self.pending_center = Some(center);
+        if let Some((size, extent)) = self.last_canvas {
+            if size.x > 0. && size.y > 0. {
+                let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
+                self.pan = (egui::vec2(0.5, 0.5) - center)
+                    * egui::vec2(extent[0] as f32, extent[1] as f32)
+                    * scale;
+                self.pending_center = None;
+            }
+        }
+    }
+
     fn fit_scale(size: egui::Vec2, extent: [u32; 2]) -> f32 {
         (size.x / extent[0] as f32).min(size.y / extent[1] as f32)
     }
@@ -829,8 +925,14 @@ impl Viewport {
         });
     }
 
-    fn reframe(&mut self, size: egui::Vec2, extent: [u32; 2]) {
+    fn reframe(&mut self, size: egui::Vec2, extent: [u32; 2], pixels_per_point: f32) {
         if size.x > 0. && size.y > 0. {
+            if let Some(factor) = self.pending_zoom.take() {
+                let fit = Self::fit_scale(size, extent);
+                // Absolute limits become meaningful only when this Fit view has geometry.
+                self.scale =
+                    Some((fit * factor).clamp(0.05 / pixels_per_point, 64. / pixels_per_point));
+            }
             if let Some(center) = self.pending_center.take() {
                 let scale = self.scale.unwrap_or_else(|| Self::fit_scale(size, extent));
                 let image_size = egui::vec2(extent[0] as f32, extent[1] as f32) * scale;
@@ -860,9 +962,10 @@ impl Viewport {
 
     /// Allocate the same canvas and interaction geometry for JPEG and pipeline presentation.
     fn layout(&mut self, ui: &mut egui::Ui, extent: [u32; 2]) -> (egui::Rect, egui::Rect) {
+        self.group_changes.clear();
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
         let response = ui.interact(rect, self.id, egui::Sense::click_and_drag());
-        self.reframe(rect.size(), extent);
+        self.reframe(rect.size(), extent, ui.ctx().pixels_per_point());
         let fit = Self::fit_scale(rect.size(), extent);
         if self.one_to_one {
             self.set_scale_at(1. / ui.ctx().pixels_per_point(), egui::Vec2::ZERO);
@@ -870,6 +973,18 @@ impl Viewport {
         self.response = Some(response.clone());
         let temporary_pan = ui.input(|i| i.key_down(egui::Key::Space));
         let pan = crate::photo_tools::selects_photos(ui.ctx()) || temporary_pan;
+        let viewing = !crate::loupe_tool::active(ui.ctx()) || temporary_pan;
+        let (pressed, released, shift) = ui.input(|input| {
+            (
+                input.pointer.primary_pressed(),
+                input.pointer.primary_released(),
+                input.modifiers.shift,
+            )
+        });
+        let group = self.group_target && pan && viewing && shift;
+        if pressed {
+            self.group_drag = group && (response.is_pointer_button_down_on() || response.clicked());
+        }
         if pan && (response.hovered() || response.dragged()) {
             ui.ctx().set_cursor_icon(if response.dragged() {
                 egui::CursorIcon::Grabbing
@@ -881,18 +996,40 @@ impl Viewport {
         }
         if response.dragged() && pan {
             self.scale.get_or_insert(fit);
-            self.pan += ui.input(|i| i.pointer.delta());
+            let delta = ui.input(|i| i.pointer.delta());
+            self.pan += delta;
+            if self.group_drag {
+                let display = egui::vec2(extent[0] as f32, extent[1] as f32) * self.scale.unwrap();
+                self.group_changes.push(ViewChange::Pan(delta / display));
+            }
         }
-        let viewing = !crate::loupe_tool::active(ui.ctx()) || temporary_pan;
         if response.double_clicked() && (!self.editing || temporary_pan) && viewing {
             let anchor = response
                 .interact_pointer_pos()
                 .map(|mouse| mouse - rect.center())
                 .unwrap_or(egui::Vec2::ZERO);
             self.toggle_fit_snap(ui.ctx().pixels_per_point(), anchor);
+            if self.group_drag {
+                let change = self
+                    .scale
+                    .map_or(ViewChange::Fit, |scale| ViewChange::Snap {
+                        scale,
+                        center: self.transform().center.unwrap_or(egui::vec2(0.5, 0.5)),
+                    });
+                self.group_changes.push(change);
+            }
         }
         if response.hovered() && viewing {
-            let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            let (scroll, pinch) = ui.input(|i| {
+                (
+                    if i.modifiers.shift && i.smooth_scroll_delta.y == 0. {
+                        i.smooth_scroll_delta.x
+                    } else {
+                        i.smooth_scroll_delta.y
+                    },
+                    i.zoom_delta(),
+                )
+            });
             let factor = if pinch != 1. {
                 pinch
             } else {
@@ -906,8 +1043,19 @@ impl Viewport {
                     .hover_pos()
                     .map(|mouse| mouse - rect.center())
                     .unwrap_or(egui::Vec2::ZERO);
+                let image = self.image_rect(rect, extent);
+                let image_anchor = (rect.center() + anchor - image.min) / image.size();
                 self.set_scale_at(next, anchor);
+                if group {
+                    self.group_changes.push(ViewChange::Zoom {
+                        factor,
+                        anchor: image_anchor,
+                    });
+                }
             }
+        }
+        if released {
+            self.group_drag = false;
         }
         if rect.width() > 0. && rect.height() > 0. {
             self.last_canvas = Some((rect.size(), extent));
@@ -1009,6 +1157,13 @@ impl Viewport {
 
     pub fn image_rectangles(&self) -> Option<(egui::Rect, egui::Rect)> {
         self.last_image
+    }
+
+    /// Geometry at the latest transform, including changes applied after painting a peer.
+    pub(crate) fn current_image_size(&self) -> Option<[f32; 2]> {
+        let (size, extent) = self.last_canvas?;
+        let image = self.image_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, size), extent);
+        Some([image.width(), image.height()])
     }
 
     pub fn visible_uv(&self) -> egui::Rect {
@@ -1227,8 +1382,8 @@ mod photo_navigation_tests {
                 assert!(viewport.visible_pixels().is_none());
                 // Repeated navigation can supersede photos before they load.
                 viewport.detach_layout();
-                viewport.reframe(egui::Vec2::ZERO, extent);
-                viewport.reframe(canvas_size, extent);
+                viewport.reframe(egui::Vec2::ZERO, extent, 1.);
+                viewport.reframe(canvas_size, extent, 1.);
                 let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, canvas_size);
                 let image = viewport.image_rect(canvas, extent);
                 let center = (canvas.center() - image.min) / image.size();
@@ -1236,7 +1391,7 @@ mod photo_navigation_tests {
                 assert_eq!(viewport.zoom_percent(pixels_per_point), Some(200.));
                 let bounds = viewport.visible_pixels();
                 // Replacing the loading preview with the render must not move it.
-                viewport.reframe(canvas_size, extent);
+                viewport.reframe(canvas_size, extent, 1.);
                 assert_eq!(viewport.visible_pixels(), bounds);
             }
         }
@@ -1255,7 +1410,7 @@ mod photo_navigation_tests {
         viewport.reset();
         assert_eq!(viewport.zoom_percent(1.), None);
         for extent in [[4000, 3000], [3000, 4000]] {
-            viewport.reframe(size, extent);
+            viewport.reframe(size, extent, 1.);
             assert_eq!(viewport.scale, None);
             assert_eq!(viewport.pan, egui::Vec2::ZERO);
             viewport.detach_layout();
@@ -2014,7 +2169,7 @@ mod tests {
                 egui::vec2(600., 400.),
                 egui::vec2(800., 600.),
             ] {
-                viewport.reframe(size, extent);
+                viewport.reframe(size, extent, 1.);
                 let image =
                     viewport.image_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, size), extent);
                 assert_eq!(
@@ -2033,7 +2188,7 @@ mod tests {
         let extent = [900, 600];
         let mut viewport = Viewport::default();
         for size in [egui::vec2(800., 600.), egui::vec2(400., 900.)] {
-            viewport.reframe(size, extent);
+            viewport.reframe(size, extent, 1.);
             let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
             let image = viewport.image_rect(canvas, extent);
             assert_eq!(image.center(), canvas.center());
@@ -2044,14 +2199,14 @@ mod tests {
         viewport.scale = Some(1.);
         viewport.pan = egui::vec2(-100., 0.);
         let origin = viewport.visible_uv().min.x;
-        viewport.reframe(egui::vec2(600., 800.), extent);
+        viewport.reframe(egui::vec2(600., 800.), extent, 1.);
         assert_eq!(viewport.pan.y, 0.);
         assert!((viewport.visible_uv().min.x - origin).abs() < 1e-6);
-        viewport.reframe(egui::vec2(1000., 800.), extent);
+        viewport.reframe(egui::vec2(1000., 800.), extent, 1.);
         assert_eq!(viewport.pan, egui::Vec2::ZERO);
         assert_eq!(viewport.visible_pixels().unwrap().extent, extent);
         // Shrinking a fully visible axis starts cropping at image pixel zero.
-        viewport.reframe(egui::vec2(500., 400.), extent);
+        viewport.reframe(egui::vec2(500., 400.), extent, 1.);
         assert_eq!(viewport.visible_uv().min, egui::Pos2::ZERO);
         assert_eq!(viewport.scale, Some(1.));
         viewport.one_to_one = true;
@@ -2074,7 +2229,7 @@ mod tests {
             viewport.image_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, size), extent);
         let uv = viewport.visible_uv();
         let pan = viewport.pan;
-        viewport.reframe(size, extent);
+        viewport.reframe(size, extent, 1.);
         let offset = egui::vec2(125., 73.);
         let moved = viewport.image_rect(egui::Rect::from_min_size(offset.to_pos2(), size), extent);
         assert_eq!(moved, original.translate(offset));
@@ -2388,7 +2543,7 @@ mod preview_scale_tests {
                     native_pixels.bottom_right[c] / 2
                 );
             }
-            viewport.reframe(canvas.size(), native);
+            viewport.reframe(canvas.size(), native, 1.);
             assert_eq!(viewport.image_rect(canvas, native), before);
         }
     }
@@ -2748,3 +2903,7 @@ mod loupe_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "viewport_group_test.rs"]
+mod group_tests;

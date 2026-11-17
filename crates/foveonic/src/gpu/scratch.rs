@@ -12,6 +12,11 @@ pub(crate) struct Scratch {
 }
 
 impl Scratch {
+    /// GPU storage is inventoried separately by allocation identity.
+    pub(crate) fn account(&self, retained: &mut crate::recipe::RetainedBytes) {
+        retained.add_bytes(self.buffers.capacity() * size_of::<crate::gpu::ReadGuard>());
+    }
+
     pub(crate) fn buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
         self.buffers.iter()
     }

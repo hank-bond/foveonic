@@ -104,7 +104,9 @@ fn shared_reservations_and_processing_owners_are_counted_once() {
         .any(|buffer| buffer.shares_storage(&image.buffer)));
     let mut reduced = ProcessingWorkingSet::new();
     let empty = MemoryReservation::default();
-    reduced.insert_native(1, native, &engine, SessionUse::Foreground);
+    reduced
+        .insert_native(1, native, &engine, SessionUse::Foreground)
+        .unwrap();
     let baseline = engine.memory_resources(&reduced, &empty);
     let mut reservation = MemoryReservation::default();
     reservation.add_image(&image);
@@ -159,7 +161,7 @@ fn shared_reservations_and_processing_owners_are_counted_once() {
                     &mut Profile::default()
                 )
                 .unwrap(),
-            Some(super::super::ReducedRender::Rendered(_))
+            Some(super::super::SessionRender::Rendered(_))
         ),
         "active sensor inputs remain source-free"
     );
@@ -218,7 +220,7 @@ fn coordinated_budget_evicts_cold_history_before_actual_active_photos() {
                 &mut Profile::default()
             )
             .unwrap(),
-        Some(super::super::ReducedRender::Rendered(_))
+        Some(super::super::SessionRender::Rendered(_))
     ));
 }
 
@@ -230,27 +232,26 @@ fn native_fine_edits_keep_their_restart_frontier_under_memory_pressure() {
     let source = Arc::new(Source::open(path).unwrap());
     let engine = Engine::new().unwrap();
     let mut reduced = ProcessingWorkingSet::new();
-    reduced.insert_native(
-        1,
-        RenderSession::new(source.clone()),
-        &engine,
-        SessionUse::Foreground,
-    );
+    reduced
+        .insert_native(
+            1,
+            RenderSession::new(source.clone()),
+            &engine,
+            SessionUse::Foreground,
+        )
+        .unwrap();
     let mut settings = super::super::Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
     settings.sharpen_amount = Some(0.75);
     for (step, fine) in [1., 0.1, 0.15, 0.2].into_iter().enumerate() {
         settings.reconstruction.as_mut().unwrap().texture.fine = fine;
         let mut profile = Profile::new(crate::profile::Mode::Wall);
-        let Content::Image(image) = engine
-            .render_session(
-                reduced.native_mut(1).unwrap(),
-                &settings,
-                &["final"],
-                || false,
-                &mut profile,
-            )
+        let Content::Image(image) = reduced
+            .with_native(1, |session| {
+                engine.render_session(session, &settings, &["final"], || false, &mut profile)
+            })
             .unwrap()
+            .flatten()
             .unwrap()
             .remove(0)
             .content

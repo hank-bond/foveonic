@@ -130,17 +130,31 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
                 &mut execution,
             )
             .unwrap();
-            let mut artifacts = engine
-                .collect_artifacts(
-                    crate::render::recipes::RecipeInput::Original(&source),
-                    &settings,
-                    &mut built.graph,
-                    built.final_id,
-                    &["dehaze.analysis", "final"],
-                    &mut profile,
-                    &mut execution,
-                )
-                .unwrap();
+            let mut artifacts = {
+                let input = crate::render::recipes::RecipeInput::Original(&source);
+                let plan = engine
+                    .plan_artifacts(
+                        &settings,
+                        &mut built.graph,
+                        built.final_id,
+                        &["dehaze.analysis", "final"],
+                        &mut profile,
+                        &mut execution,
+                    )
+                    .unwrap();
+                let values = engine
+                    .run_graph(
+                        input.context(),
+                        &built.graph,
+                        &plan.roots,
+                        &mut profile,
+                        &mut execution,
+                        crate::render::execute::Completion::Queued,
+                    )
+                    .unwrap();
+                engine.package_artifacts(input, &settings, &built.graph, plan, values)
+            }
+            .unwrap();
             let Content::Image(image) = artifacts.pop().unwrap().content else {
                 panic!("image")
             };
@@ -1362,23 +1376,37 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                             _ => None,
                         })
                         .unwrap();
-                    let artifacts = engine
-                        .collect_artifacts(
-                            crate::render::recipes::RecipeInput::Original(&source),
-                            &settings,
-                            &mut built.graph,
-                            built.final_id,
-                            &[
-                                "linear.edits-input",
-                                "base-response.mask",
-                                "base-response.analysis",
-                                "base-response.analysis-mask",
-                                "base-response.rgb",
-                            ],
-                            &mut profile,
-                            &mut execution,
-                        )
-                        .unwrap();
+                    let artifacts = {
+                        let input = crate::render::recipes::RecipeInput::Original(&source);
+                        let plan = engine
+                            .plan_artifacts(
+                                &settings,
+                                &mut built.graph,
+                                built.final_id,
+                                &[
+                                    "linear.edits-input",
+                                    "base-response.mask",
+                                    "base-response.analysis",
+                                    "base-response.analysis-mask",
+                                    "base-response.rgb",
+                                ],
+                                &mut profile,
+                                &mut execution,
+                            )
+                            .unwrap();
+                        let values = engine
+                            .run_graph(
+                                input.context(),
+                                &built.graph,
+                                &plan.roots,
+                                &mut profile,
+                                &mut execution,
+                                crate::render::execute::Completion::Queued,
+                            )
+                            .unwrap();
+                        engine.package_artifacts(input, &settings, &built.graph, plan, values)
+                    }
+                    .unwrap();
                     let images: Vec<_> = artifacts
                         .into_iter()
                         .map(|a| match a.content {

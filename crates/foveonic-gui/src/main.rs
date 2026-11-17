@@ -186,8 +186,10 @@ impl App {
                 "presentation_revision":frame.revision,"artifact":frame.artifact.name,
                 "scale":frame.artifact.settings.working_scale.divisor(),"purpose":frame.diagnostic_task.purpose})),
             "output":self.output,"rendition":format!("{:?}",self.before.active),
-            "render_pending":self.worker.busy(),"disk_cache":self.preferences.decode_cache,
-            "memory_cache_bytes":self.preferences.memory_cache_bytes,"multi_edit_limit":self.preferences.multi_edit_limit,
+            "render_pending":self.worker.busy(),"opening":self.opening.is_some(),
+            "disk_cache":self.preferences.decode_cache,
+            "background_full_image_completion":self.preferences.background_full_image_completion,"memory_cache_bytes":self.preferences.memory_cache_bytes,"multi_edit_limit":self.preferences.multi_edit_limit,
+            "render_concurrency":if cfg!(feature = "wide-experiment") { "automatic" } else { "serial" },
             "hardware":self.diagnostic_hardware()})
     }
     pub(crate) fn viewport(&self) -> &viewport::Viewport {
@@ -290,6 +292,9 @@ impl App {
         let training_engine = engine.executor();
         let batch_engine = engine.executor();
         let worker = worker::Worker::new(engine, cc.egui_ctx.clone());
+        worker.set_background_completion(preferences.background_full_image_completion);
+        let navigator =
+            navigator::Navigator::new(rs.clone(), cc.egui_ctx.clone(), worker.cache.clone());
         let import =
             import_review::Review::new(batch_engine, worker.cache.clone(), cc.egui_ctx.clone());
         let previews =
@@ -357,7 +362,7 @@ impl App {
             scope_snapshot: None,
             scope_key: None,
             viewports: Default::default(),
-            navigator: navigator::Navigator::new(rs.clone(), cc.egui_ctx.clone()),
+            navigator,
             revision: 0,
             busy: false,
             memory_key: Vec::new(),
@@ -528,6 +533,8 @@ impl App {
     }
 
     fn select(&mut self, path: PathBuf, preserve_viewport: bool) {
+        let rendition = self.before.active;
+        self.cache_before_view();
         let carried = preserve_viewport.then(|| self.viewport().transform());
         if self.selected.as_ref() != Some(&path) || carried.is_some() {
             self.viewports.select(&path, carried);
@@ -545,11 +552,19 @@ impl App {
                 .is_some_and(|settings| self.reusable_photograph(&path, frame, settings))
         });
         let retain_current = self.selected.as_ref() == Some(&path) && cached_selection;
-        if let Some(previous) = &self.selected {
-            self.worker.retire_before(previous);
+        let keep_before = self.edit_selection.contains(&path);
+        if !keep_before {
+            for previous in self.multi_edit.retained_paths() {
+                self.worker.retire_before(&previous);
+            }
         }
         self.worker.activate(&path);
         self.before = Default::default();
+        self.before.active = if keep_before {
+            rendition
+        } else {
+            editor::Rendition::Current
+        };
         self.browser.invalidate_prefetch();
         timing::selected(self.revision + 1, &path);
         let began = std::time::Instant::now();
@@ -585,46 +600,76 @@ impl App {
                 frame.revision = self.revision;
             }
         }
+        self.restore_before_view();
         self.scope_key = None;
         viewport::clear(&self.render_state);
     }
+    fn navigator_uses_preview(&self) -> bool {
+        let mapping = self.displayed_mapping();
+        if self.before.active != editor::Rendition::Current
+            || self.output != "final"
+            || self.comparison.requested()
+            || self.framing_preview_active()
+            || mapping.input
+            || mapping.difference_gain != 0.
+        {
+            return false;
+        }
+        let Some(path) = self.selected.as_deref() else {
+            return false;
+        };
+        let Some(preview) = self.multi_edit.preview(path) else {
+            return false;
+        };
+        let calibration = self
+            .noise_calibration
+            .selected(self.preferences.noise_profile);
+        let origin = self.worker.cache.source_origin(path);
+        let info = delivery::ImageInfo::from(preview);
+        delivery::auxiliary_preview_matches(
+            &info,
+            &self.preferences.render_settings(&self.settings),
+            self.preferences.processing_quality,
+            calibration.as_ref().map(|profile| profile.signature()),
+            origin.as_ref(),
+        ) && delivery::prefer_auxiliary_preview(
+            self.frame
+                .as_ref()
+                .filter(|frame| frame.path == path && frame.is_photographic())
+                .map(delivery::ImageInfo::from)
+                .as_ref(),
+            &info,
+        )
+    }
+    pub(crate) fn navigator_source(&self) -> Option<&worker::Frame> {
+        if self.navigator_uses_preview() {
+            self.selected
+                .as_deref()
+                .and_then(|path| self.multi_edit.preview(path))
+        } else {
+            self.frame.as_ref()
+        }
+    }
     fn update_browser_preview(&mut self, frame: &worker::Frame) {
-        // Selection can change presentation revision without changing pixels.
-        let revision = frame.diagnostic_task.revision;
-        if self.browser.has_rendered_preview(&frame.path, revision) {
-            return;
-        }
-        if let Some((thumbnail, preview)) = self.previews.snapshot(frame) {
-            self.browser
-                .rendered_texture(frame.path.clone(), revision, thumbnail, preview);
-        }
+        update_browser_preview(&mut self.browser, &mut self.previews, frame);
     }
     fn submit(&mut self, export: Option<export::Export>) {
         if export.is_some() {
             self.exit_before();
         }
         if export.is_none()
-            && self.before.active == editor::Rendition::Current
-            && self.output == "final"
-            && !self.comparison.requested()
+            && (self.before.active != editor::Rendition::Current
+                || (self.output == "final" && !self.comparison.requested()))
         {
-            if let Some(path) = &self.selected {
-                self.multi_edit.invalidate_photo(path);
+            if self.before.active == editor::Rendition::Current {
+                if let Some(path) = &self.selected {
+                    self.multi_edit.invalidate_photo(path);
+                }
             }
             self.submit_photos();
             return;
         }
-        if self.before.active != editor::Rendition::Current {
-            self.cancel_smart();
-        }
-        if export.is_none() && self.smart_refinement_active() {
-            self.submit_smart_refinement();
-        } else {
-            self.submit_with_quality(export, None, self.preferences.processing_quality);
-        }
-    }
-    fn submit_request(&mut self, export: Option<export::Export>, region: Option<[u32; 4]>) {
-        self.submit_with_quality(export, region, self.preferences.processing_quality);
+        self.submit_with_quality(export, None, self.preferences.processing_quality);
     }
     fn submit_with_quality(
         &mut self,
@@ -683,6 +728,8 @@ impl App {
             self.preview_scale_for(path, quality)
         };
         Some(request::Request {
+            auxiliary_preview: false,
+
             detail: region.is_some(),
             framing_preview: export.is_none() && self.framing_preview_active(),
             calibration: self
@@ -752,12 +799,12 @@ impl App {
                     continue;
                 }
                 worker::Update::Scopes { key, result, .. } => {
-                    if self
-                        .frame
-                        .as_ref()
-                        .into_iter()
-                        .chain(self.detail_frame())
-                        .any(|frame| frame.revision == key.revision)
+                    if !self.multi_edit.multiple()
+                        && self
+                            .navigator_source()
+                            .into_iter()
+                            .chain(self.detail_frame())
+                            .any(|frame| frame.revision == key.revision)
                         && self.scope_key == Some(key)
                     {
                         match result {
@@ -786,8 +833,35 @@ impl App {
             }
             let update = self.render_result_for_view(&reply);
             let current = update.current;
+            if reply.stamp.target.purpose == request::Purpose::Preview {
+                if update.destination == Some(delivery::Destination::Preview) {
+                    match reply.result {
+                        Ok(Some(frame)) => {
+                            timing::task(
+                                &reply.stamp,
+                                "image_accepted",
+                                || serde_json::json!({"current":current,"destination":"preview","scale":frame.artifact.settings.working_scale.divisor()}),
+                            );
+                            if let Some(frame) = self.multi_edit.retain_preview(frame) {
+                                update_browser_preview(
+                                    &mut self.browser,
+                                    &mut self.previews,
+                                    frame,
+                                );
+                            }
+                        }
+                        Err(error) => timing::task(
+                            &reply.stamp,
+                            "preview_failed",
+                            || serde_json::json!({"error":error}),
+                        ),
+                        Ok(None) => {}
+                    }
+                }
+                continue;
+            }
             self.sync_render_progress((current && reply.result.is_err()).then_some(reply.revision));
-            if update.update_photo {
+            if update.update_photo && reply.rendition == editor::Rendition::Current {
                 self.multi_edit.complete(
                     &reply.path,
                     reply.metadata.clone(),
@@ -850,8 +924,12 @@ impl App {
                             "destination":"overview","scale":frame.artifact.settings.working_scale.divisor(),
                             "artifact":frame.artifact.name,"extent":frame.texture.description().extent})
                         });
-                        self.update_browser_preview(&frame);
-                        self.multi_edit.retain(frame);
+                        if frame.rendition == editor::Rendition::Current {
+                            self.update_browser_preview(&frame);
+                            self.multi_edit.retain(frame);
+                        } else {
+                            self.multi_edit.retain_before(frame);
+                        }
                     }
                     Err(error) if current => {
                         self.fail(format!("{}: {error}", reply.path.display()))
@@ -950,6 +1028,10 @@ impl App {
         }
     }
     fn update_scopes(&mut self) {
+        if self.multi_edit.multiple() {
+            self.scope_key = None;
+            return;
+        }
         let window = self
             .frame
             .as_ref()
@@ -966,7 +1048,7 @@ impl App {
             self.preferences.scope_viewport
                 && visible.is_some_and(|visible| smart::contains(detail.detail_region(), visible))
         });
-        let Some(frame) = detail.or(self.frame.as_ref()) else {
+        let Some(frame) = detail.or_else(|| self.navigator_source()) else {
             self.scope_key = None;
             return;
         };
@@ -1208,12 +1290,15 @@ impl App {
         )
     }
     fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
+        if self.multi_edit.multiple() && matches!(section, Section::Navigator | Section::Scopes) {
+            ui.add_enabled(false, egui::Label::new("Available when editing one photo."));
+            return false;
+        }
         match section {
             Section::Navigator => {
                 let mapping = self.displayed_mapping();
                 let texture = self
-                    .frame
-                    .as_ref()
+                    .navigator_source()
                     .map(|frame| self.navigator.image(frame, mapping));
                 let preview = self
                     .selected
@@ -1566,6 +1651,12 @@ impl App {
     }
 
     fn show_photo(&mut self, ui: &mut egui::Ui, mapping: viewport::Mapping) -> bool {
+        let group_target = self.edit_selection.paths().len() > 1
+            && self
+                .selected
+                .as_ref()
+                .is_some_and(|path| self.edit_selection.contains(path));
+        self.viewport_mut().group_target = group_target;
         let allowed = self.photo_interaction_available(mapping);
         let framing_active =
             self.framing_preview_active() && !self.exporting && self.sidecars.ready();
@@ -1646,36 +1737,8 @@ impl App {
                 ));
             });
         }
-        if self.output == "final"
-            && !self.comparison.requested()
-            && self
-                .frame
-                .as_ref()
-                .is_none_or(|frame| frame.output == "final")
-            && (!framing_active || self.viewport().explicit_zoom_pending())
-        {
-            let density = self
-                .frame
-                .as_ref()
-                .filter(|frame| frame.output == "final")
-                .and_then(|frame| {
-                    self.viewport().image_rectangles().map(|(_, image)| {
-                        let extent = frame.native_display_extent();
-                        rendering::quality::display_density(
-                            [image.width(), image.height()],
-                            extent,
-                            ui.ctx().pixels_per_point(),
-                        )
-                    })
-                })
-                .or_else(|| {
-                    self.viewport()
-                        .zoom_percent(ui.ctx().pixels_per_point())
-                        .map(|percent| percent / 100.)
-                });
-            if let Some((path, density)) = self.selected.clone().zip(density) {
-                self.observe_preview_density(&path, density);
-            }
+        if let Some(path) = self.selected.clone() {
+            self.observe_photo_view_density(&path, ui.ctx().pixels_per_point());
         }
         if let (Some(path), Some((response, uv))) = (
             &self.selected,
@@ -1842,7 +1905,7 @@ impl eframe::App for App {
             self.import.set_noise_calibration(selected);
             self.browser.invalidate_previews();
             self.previews.invalidate();
-            self.submit_request(None, None);
+            self.submit(None);
         }
         self.smoke_tick(ctx);
         automation::begin_frame(ctx);
@@ -1895,6 +1958,8 @@ impl eframe::App for App {
             }
         }
         application_settings::adaptive(ctx, &mut self.preferences);
+        self.worker
+            .set_background_completion(self.preferences.background_full_image_completion);
         self.browser
             .set_thumbnail_budget(self.preferences.thumbnail_cache_bytes());
         if previous_gamut != self.preferences.display_gamut {
@@ -2116,20 +2181,41 @@ impl eframe::App for App {
         self.editor_ui.dialog(ctx, &mut self.preferences.editor);
         self.activity.show(ctx);
         if !self.multi_photo_overview() {
-            self.update_smart();
+            self.update_framing_preview();
         }
         self.update_scopes();
         self.smoke_check_scope_retention();
         self.sync_render_progress(None);
         self.previews.update(self.frame.as_ref(), self.busy, ctx);
-        self.navigator.update(
-            self.frame.as_ref(),
-            self.displayed_mapping(),
-            self.busy,
-            ctx,
-        );
+        let use_preview = self.navigator_uses_preview();
+        let mapping = self.displayed_mapping();
+        let navigator_source = if self.multi_edit.multiple() {
+            None
+        } else if use_preview {
+            self.selected
+                .as_deref()
+                .and_then(|path| self.multi_edit.preview(path))
+        } else {
+            self.frame.as_ref()
+        };
+        self.navigator
+            .update(navigator_source, mapping, self.busy, ctx);
         self.update_memory();
         self.publish_render_view();
+    }
+}
+fn update_browser_preview(
+    browser: &mut browser::Browser,
+    previews: &mut previews::Previews,
+    frame: &worker::Frame,
+) {
+    // Selection can change presentation revision without changing pixels.
+    let revision = frame.content_revision();
+    if browser.has_rendered_preview(&frame.path, revision) {
+        return;
+    }
+    if let Some((thumbnail, preview)) = previews.snapshot(frame) {
+        browser.rendered_texture(frame.path.clone(), revision, thumbnail, preview);
     }
 }
 fn multi_photo_overview(paths: &[PathBuf], active: Option<&std::path::Path>) -> bool {

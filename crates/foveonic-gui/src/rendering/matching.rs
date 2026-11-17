@@ -70,6 +70,7 @@ pub(crate) fn same_calibration_snapshot(
 
 pub(crate) fn same_request_context(a: &Request, b: &Request) -> bool {
     a.path == b.path
+        && a.auxiliary_preview == b.auxiliary_preview
         && a.detail == b.detail
         && a.output == b.output
         && a.rendition == b.rendition
@@ -127,6 +128,8 @@ mod tests {
 
     fn request() -> Request {
         Request {
+            auxiliary_preview: false,
+
             detail: false,
             framing_preview: false,
             calibration: None,

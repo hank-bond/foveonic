@@ -1,7 +1,7 @@
 //! Owns render coordination on a dedicated thread and publishes bounded UI updates.
 
 use super::{
-    coordinator::{RenderCoordinator, TaskId},
+    coordinator::{RenderCoordinator, TaskId, TaskPriority, WorkPlan},
     delivery::ViewState,
     request::{Refinement, Request},
     worker::{
@@ -36,6 +36,9 @@ enum Command {
     Delivered(u64),
     Memory(MemoryBudget),
     Preparation(Arc<PreparationConfig>),
+    BackgroundCompletion(bool),
+    #[cfg(test)]
+    RenderWidth(Option<usize>),
     Stop,
 }
 
@@ -55,6 +58,9 @@ pub(super) struct Handle {
     view: RefCell<Option<Arc<ViewState>>>,
     refinements: RefCell<Vec<(Refinement, Option<SourceOrigin>)>>,
     preparation: RefCell<Option<Arc<PreparationConfig>>>,
+    background_completion: Cell<bool>,
+    #[cfg(test)]
+    render_width: Cell<Option<usize>>,
 }
 
 impl Handle {
@@ -70,6 +76,8 @@ impl Handle {
         let (output, updates) = crossbeam_channel::bounded(2);
         let status = Arc::new(Mutex::new(Arc::new(Status::default())));
         let published = status.clone();
+        #[cfg(test)]
+        let render_width = slot.0.lock().unwrap().render_width;
         std::thread::Builder::new()
             .name("render-coordinator".into())
             .spawn(move || {
@@ -98,6 +106,9 @@ impl Handle {
                 view: Default::default(),
                 refinements: Default::default(),
                 preparation: Default::default(),
+                background_completion: Cell::new(true),
+                #[cfg(test)]
+                render_width: Cell::new(render_width),
             },
             updates,
         )
@@ -125,6 +136,20 @@ impl Handle {
         self.pending.get() > status.processed || status.busy
     }
 
+    pub fn set_background_completion(&self, enabled: bool) {
+        if self.background_completion.replace(enabled) != enabled {
+            self.send(Command::BackgroundCompletion(enabled), false);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn set_render_width(&self, width: Option<usize>) {
+        let width = width.map(|value| value.clamp(1, 8));
+        if self.render_width.replace(width) != width {
+            self.send(Command::RenderWidth(width), false);
+        }
+    }
+
     pub fn is_settled_and_admitted(&self, frame: &worker::Frame) -> bool {
         let status = self.status();
         self.pending.get() <= status.processed
@@ -137,6 +162,15 @@ impl Handle {
     pub fn set_view(&self, view: ViewState) {
         let mut previous = self.view.borrow_mut();
         if previous.as_deref() != Some(&view) {
+            self.refinements.borrow_mut().retain(|(request, _)| {
+                request.first.rendition == crate::editor::Rendition::Current
+                    || (view.active.as_ref() == Some(&request.first.path)
+                        && view.rendition == request.first.rendition)
+                    || view.overviews.iter().any(|photo| {
+                        photo.path == request.first.path
+                            && photo.rendition == request.first.rendition
+                    })
+            });
             let view = Arc::new(view);
             *previous = Some(view.clone());
             self.send(Command::View(view), false);
@@ -147,6 +181,12 @@ impl Handle {
         self.refinements.borrow_mut().retain(|(request, _)| {
             request.first.rendition == crate::editor::Rendition::Current
                 || request.first.path == path
+                || self.view.borrow().as_ref().is_some_and(|view| {
+                    view.overviews.iter().any(|photo| {
+                        photo.path == request.first.path
+                            && photo.rendition == request.first.rendition
+                    })
+                })
         });
         self.send(Command::Activate(path), true);
     }
@@ -184,12 +224,22 @@ impl Handle {
         let mut previous = self.refinements.borrow_mut();
         if let Some((old, old_origin)) = previous.iter_mut().find(|(old, old_origin)| {
             old.same_sequence(&request)
+                && old.covers(&request)
                 && (old_origin.is_none() || origin.is_none() || *old_origin == origin)
         }) {
-            if old_origin.is_none() && origin.is_some() {
+            let visible = request
+                .visible_region
+                .or(request.first.settings.preview_region);
+            let coverage_changed =
+                old.visible_region.or(old.first.settings.preview_region) != visible;
+            let origin_bound = old_origin.is_none() && origin.is_some();
+            if origin_bound {
                 *old_origin = origin.clone();
-                // Binding identity changes the desired snapshot, not the work
-                // or presentation revision already published for this sequence.
+            }
+            if coverage_changed || origin_bound {
+                // A pan back into an in-flight patch can withdraw pending work.
+                // Keep the reserved region and revision while updating visibility.
+                old.visible_region = visible;
                 self.send(
                     Command::Refine(Box::new(old.clone()), origin, queued_at),
                     false,
@@ -389,7 +439,10 @@ impl Runtime {
         );
         self.processed = sequence;
         match command {
-            Command::View(view) => self.view = Some(view),
+            Command::View(view) => {
+                self.coordinator.set_view(&view);
+                self.view = Some(view);
+            }
             Command::Activate(path) => self.coordinator.activate(&path),
             Command::RetireBefore(path) => self.coordinator.retire_before(&path),
             Command::RetireDetail(path) => self.coordinator.retire_detail(&path),
@@ -415,7 +468,11 @@ impl Runtime {
             }
             Command::Refine(request, origin, queued_at) => {
                 let origin = self.cache.source_origin(&request.first.path).or(origin);
-                if let Some(started) = self.coordinator.refine(*request, origin, queued_at) {
+                if let Some(started) = self
+                    .coordinator
+                    .refine(*request, origin, queued_at)
+                    .filter(|task| task.viewport())
+                {
                     self.progress
                         .begin(started.stamp.revision, started.queued_at);
                 }
@@ -439,11 +496,16 @@ impl Runtime {
             }
             Command::Delivered(revision) => self.coordinator.delivered(revision),
             Command::Memory(budget) => self.slot.0.lock().unwrap().memory = Some(budget),
+            #[cfg(test)]
+            Command::RenderWidth(width) => self.slot.0.lock().unwrap().render_width = width,
             Command::Preparation(config) => {
                 let mut pending = self.slot.0.lock().unwrap();
                 if pending.preparation.as_deref() != Some(&config) {
                     pending.preparation = Some(config);
                 }
+            }
+            Command::BackgroundCompletion(enabled) => {
+                self.coordinator.set_background_completion(enabled)
             }
             Command::Stop => return false,
         }
@@ -459,7 +521,11 @@ impl Runtime {
         let revision = request.revision;
         self.coordinator
             .desire(Arc::new(request), origin, queued_at);
-        if self.coordinator.desired(&target).map(|task| &task.stamp) != previous.as_ref() {
+        if self
+            .coordinator
+            .desired(&target)
+            .is_some_and(|task| task.viewport() && Some(&task.stamp) != previous.as_ref())
+        {
             self.progress.begin(revision, queued_at);
         }
     }
@@ -477,7 +543,7 @@ impl Runtime {
                 let view = self.view.as_ref().unwrap().context(&reply.path);
                 let (handling, started) = self.coordinator.handle_result(reply, &view);
                 reply.handling = Some(handling);
-                if let Some(started) = started {
+                if let Some(started) = started.filter(|task| task.viewport()) {
                     self.progress
                         .begin(started.stamp.revision, started.queued_at);
                 }
@@ -500,8 +566,23 @@ impl Runtime {
         Some(update)
     }
 
+    fn work_plan(&self) -> Arc<WorkPlan> {
+        let mut plan = self.coordinator.plan();
+        Arc::make_mut(&mut plan).preview_active = self
+            .view
+            .as_ref()
+            .filter(|view| {
+                view.rendition == crate::editor::Rendition::Current
+                    && view.output == "final"
+                    && !view.comparison
+                    && !view.framing_preview
+            })
+            .and_then(|view| view.active.clone());
+        plan
+    }
+
     fn publish(&mut self) {
-        let plan = self.coordinator.plan();
+        let plan = self.work_plan();
         let mut wanted = plan
             .tasks
             .iter()
@@ -529,11 +610,21 @@ impl Runtime {
         );
         {
             let mut pending = self.slot.0.lock().unwrap();
-            pending.activity = (!plan.tasks.is_empty()
-                || plan.scopes.is_some()
+            pending.activity = (plan.tasks.iter().any(|task| task.viewport())
                 || plan.pick.is_some()
                 || pending.export.is_some())
             .then(|| self.cache.foreground());
+            pending.auxiliary_activity = (plan.scopes.is_some()
+                || plan
+                    .tasks
+                    .iter()
+                    .any(|task| plan.priority(task) == TaskPriority::Auxiliary))
+            .then(|| self.cache.auxiliary_demand());
+            pending.thumbnail_activity = plan
+                .tasks
+                .iter()
+                .any(|task| plan.priority(task) == TaskPriority::Thumbnail)
+                .then(|| self.cache.thumbnail_demand());
             pending.plan = plan;
             pending.retained = retained.into();
         }
@@ -546,22 +637,24 @@ impl Runtime {
     }
 
     fn prioritize_sources(&mut self) {
-        let plan = self.coordinator.plan();
-        let mut foreground = plan
+        let plan = self.work_plan();
+        let mut priorities = plan
             .tasks
             .iter()
-            .filter(|task| !task.speculative)
-            .map(|task| task.request.path.clone())
+            .map(|task| (task.request.path.clone(), plan.priority(task)))
             .collect::<Vec<_>>();
-        foreground.extend(plan.pick.iter().map(|task| task.request.path.clone()));
-        foreground.extend(self.exporting.iter().cloned());
-        let speculative = plan
-            .tasks
-            .iter()
-            .filter(|task| task.speculative)
-            .map(|task| task.request.path.clone())
-            .collect::<Vec<_>>();
-        self.loader.prioritize(&foreground, &speculative);
+        priorities.extend(
+            plan.pick
+                .iter()
+                .map(|task| (task.request.path.clone(), TaskPriority::Viewport)),
+        );
+        priorities.extend(
+            self.exporting
+                .iter()
+                .cloned()
+                .map(|path| (path, TaskPriority::Viewport)),
+        );
+        self.loader.prioritize(&priorities);
     }
 
     fn stop(&self) {

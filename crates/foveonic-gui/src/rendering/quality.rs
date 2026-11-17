@@ -42,7 +42,49 @@ pub(crate) fn accepts_scale(requested: Scale, retained: Scale) -> bool {
     retained.divisor() <= requested.divisor()
 }
 
+/// Sampling demand after a transform change, before the next paint.
+pub(crate) fn view_density(
+    view: &crate::viewport::Viewport,
+    native: Option<[u32; 2]>,
+    pixels_per_point: f32,
+) -> Option<f32> {
+    if let Some(native) = native {
+        view.current_image_size()
+            .map(|size| display_density(size, native, pixels_per_point))
+    } else {
+        view.zoom_percent(pixels_per_point)
+            .map(|percent| percent / 100.)
+    }
+}
+
 impl App {
+    pub(crate) fn observe_photo_view_density(&mut self, path: &Path, pixels_per_point: f32) {
+        let view = self.viewports.view(Some(path));
+        let frame = if self.selected.as_deref() == Some(path) {
+            if self.output != "final"
+                || self.comparison.requested()
+                || self
+                    .frame
+                    .as_ref()
+                    .is_some_and(|frame| frame.output != "final")
+                || (self.framing_preview_active() && !view.explicit_zoom_pending())
+            {
+                return;
+            }
+            self.frame.as_ref()
+        } else {
+            self.rendition_frame(path, self.photo_rendition(path))
+                .or_else(|| self.current_photo_frame(path))
+        };
+        if let Some(density) = view_density(
+            view,
+            frame.map(|frame| frame.native_display_extent()),
+            pixels_per_point,
+        ) {
+            self.observe_preview_density(path, density);
+        }
+    }
+
     pub(crate) fn current_processing_quality(&self) -> ProcessingQuality {
         for_view(
             self.preferences.processing_quality,
@@ -75,6 +117,49 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_group_density_respects_resized_output_sampling() {
+        for pixels_per_point in [1., 2.] {
+            let ctx = eframe::egui::Context::default();
+            let mut view = crate::viewport::Viewport::default();
+            let _ = ctx.run(
+                eframe::egui::RawInput {
+                    screen_rect: Some(eframe::egui::Rect::from_min_size(
+                        eframe::egui::Pos2::ZERO,
+                        eframe::egui::vec2(400., 300.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    eframe::egui::CentralPanel::default().show(ctx, |ui| {
+                        view.show_preview(
+                            ui,
+                            (
+                                eframe::egui::TextureId::User(1),
+                                eframe::egui::vec2(1000., 667.),
+                            ),
+                            [1000, 667],
+                            Default::default(),
+                        );
+                    });
+                },
+            );
+            view.apply_view_change(
+                crate::viewport::ViewChange::Snap {
+                    scale: 1. / pixels_per_point,
+                    center: eframe::egui::vec2(0.5, 0.5),
+                },
+                pixels_per_point,
+            );
+            assert_eq!(view.zoom_percent(pixels_per_point), Some(100.));
+            let density = view_density(&view, Some([6000, 4002]), pixels_per_point).unwrap();
+            assert!(
+                (density - 1. / 6.).abs() < 1e-6,
+                "resized display samples must not be mistaken for native pixels: {density}"
+            );
+        }
+    }
 
     #[test]
     fn both_policies_resolve_display_density_with_their_upscale_limit() {

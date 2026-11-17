@@ -458,12 +458,10 @@ impl Smoke {
             if self.targets == multi_edit::TARGETS || self.scenario.is_some() {
                 input.modifiers = events
                     .iter()
-                    .find_map(|event| {
-                        if let egui::Event::PointerButton { modifiers, .. } = event {
-                            Some(*modifiers)
-                        } else {
-                            None
-                        }
+                    .find_map(|event| match event {
+                        egui::Event::PointerButton { modifiers, .. }
+                        | egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),
+                        _ => None,
                     })
                     .unwrap_or_default();
             }
@@ -616,7 +614,7 @@ impl App {
             "frame":self.frame.as_ref().map(|frame|serde_json::json!({
                 "matches_settings":crate::rendering::matching::same_authored_edits(&frame.requested,&self.settings),
                 "admitted":self.worker.is_settled_and_admitted(frame),
-                "navigator_ready":self.navigator.ready(frame,self.displayed_mapping()),
+                "navigator_ready":self.navigator_source().is_some_and(|source|self.navigator.ready(source,self.displayed_mapping())),
                 "thumbnail_revision":self.browser.rendered_revision(&frame.path),
             })),
         });
@@ -786,6 +784,9 @@ impl App {
             .selected
             .as_deref()
             .map(|path| self.preview_scale_for(path, self.preferences.processing_quality));
+        let navigator_ready = self
+            .navigator_source()
+            .is_some_and(|source| self.navigator.ready(source, mapping));
         let Some(smoke) = &mut self.smoke else {
             return;
         };
@@ -2494,7 +2495,7 @@ impl App {
                         self.scope_snapshot
                             .as_ref()
                             .is_some_and(|snapshot| Some(snapshot.key) == self.scope_key)
-                            && self.navigator.ready(frame, mapping)
+                            && navigator_ready
                             && (frame.rendition != crate::editor::Rendition::Current
                                 || frame.output != "final"
                                 || frame.artifact.settings.color_range_preview.is_some()
@@ -2502,7 +2503,7 @@ impl App {
                                 || self.browser.rendered_revision(&frame.path)
                                     // Thumbnails identify the delivered image, even when
                                     // selection or Before/After starts a new presentation.
-                                    == Some(frame.diagnostic_task.revision))
+                                    == Some(frame.content_revision().max(self.multi_edit.preview(&frame.path).map_or(0, |preview| preview.content_revision()))))
                     })
             };
             let ready =

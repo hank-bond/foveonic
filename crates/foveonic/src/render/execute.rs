@@ -148,6 +148,19 @@ struct ScalarParams {
     value: [f32; 4],
 }
 
+/// Tone may reuse scratch, but admission reserves a fresh RGB output.
+pub(super) fn tone_allocation(
+    extent: [u32; 2],
+    curve_len: usize,
+) -> Option<super::allocation::GpuAllocation> {
+    use super::allocation::{image_bytes, uploaded_bytes, GpuAllocation};
+    GpuAllocation::new(
+        image_bytes(extent, 3)?,
+        uploaded_bytes::<f32>(curve_len)?.checked_add(uploaded_bytes::<ScalarParams>(1)?)?,
+    )
+}
+
+#[derive(Clone, Copy)]
 pub(super) enum Input<'a> {
     Source(&'a Source),
     Metadata(&'a std::sync::Arc<Metadata>),
@@ -183,52 +196,106 @@ pub(crate) struct Value {
     pub(crate) description: Option<Description>,
 }
 
-impl Engine {
-    pub(super) fn execute(
-        &self,
-        context: Input<'_>,
-        graph: &Graph,
-        targets: &[usize],
-        profile: &mut Profile,
-    ) -> Result<Vec<Value>> {
-        self.execute_controlled(context, graph, targets, profile, &mut Execution::default())
+fn operation_extent(operation: &Operation, inherited: [u32; 2]) -> [u32; 2] {
+    match operation {
+        Operation::HighlightEvidence(prepared) => prepared.grid().output_extent(),
+        Operation::PoolSignal(prepared) => prepared.output_extent(),
+        Operation::ReduceLayers { prepared, .. } => prepared.output_extent(),
+        Operation::ResampleRgb { params, .. } => [params.output[0], params.output[1]],
+        Operation::ToneMask { guide, .. }
+        | Operation::AdaptiveToneGuide { guide, .. }
+        | Operation::ExpandBrightnessGuide { guide, .. } => guide.extent(),
+        Operation::ImageRegion { prepared, .. } => prepared.extent(),
+        Operation::AdaptiveTone { window, .. } | Operation::TonalRanges { window, .. }
+            if window.output.is_some() =>
+        {
+            let bounds = window.output.expect("regional output bounds");
+            [bounds[2] - bounds[0], bounds[3] - bounds[1]]
+        }
+        Operation::ProjectColorTiles { params, .. } => params.output_extent(),
+        Operation::NoiseContext(p) => reconstruction::context_extent(*p),
+        Operation::Banding(p) => {
+            let [l, t, r, b] = p.output_bounds();
+            [r - l, b - t]
+        }
+        Operation::PackedLab(p) => p.extent(),
+        Operation::CodeCrop(p) => p.extent(),
+        Operation::WaveletContrast(p) => p.extent(),
+        Operation::CodeChannelMap(p) => p.extent(),
+        Operation::ChannelNoise(p) => p.extent(),
+        Operation::Multiscale(p) => p.extent(),
+        Operation::ShieldNoise(p) => p.extent(),
+        Operation::RowGuard(p) => p.extent(),
+        Operation::ColorSharpen(p) => p.extent(),
+        Operation::ProportionalSharpen(p) => p.extent(),
+        Operation::Encode { params, .. } => [params.output[0], params.output[1]],
+        Operation::BlueGuidedReconstruct(p) => p.output_extent(),
+        _ => inherited,
     }
+}
 
-    pub(super) fn execute_controlled(
+/// GPU completion is independent of cancellation and input ownership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Completion {
+    /// Submit work with bounded allocation overlap. Readback waits separately.
+    Queued,
+    /// Complete each operation before reporting progress or advancing.
+    Operation,
+    /// The caller owns and completes a bounded submission window.
+    #[cfg(feature = "wide-experiment")]
+    Window,
+}
+
+impl Completion {
+    fn windowed(self) -> bool {
+        #[cfg(feature = "wide-experiment")]
+        {
+            self == Self::Window
+        }
+        #[cfg(not(feature = "wide-experiment"))]
+        {
+            false
+        }
+    }
+}
+
+/// Owns traversal and live storage between graph operations. Each advancement
+/// borrows the same graph, input, execution cache and profile. An error is terminal.
+pub(super) struct GraphExecution {
+    next_node: usize,
+    graph_id: Option<u64>,
+    completed_allocation_bytes: u64,
+    trace: crate::gpu::GpuTrace,
+    scratch: Scratch,
+    values: Vec<Option<Value>>,
+    cached: Vec<bool>,
+    required: Vec<bool>,
+    reachable: Option<Vec<bool>>,
+    reads: Vec<Vec<usize>>,
+    consumers: Vec<usize>,
+    stage_total: usize,
+    stage_completed: usize,
+    pending_stages: usize,
+    shared_ranges: Option<Vec<(usize, usize, usize)>>,
+}
+
+impl Engine {
+    pub(super) fn start_graph(
         &self,
         context: Input<'_>,
         graph: &Graph,
         targets: &[usize],
         profile: &mut Profile,
         execution: &mut Execution<'_>,
-    ) -> Result<Vec<Value>> {
-        let graph_id = (profile.mode.enabled() || crate::diagnostics::enabled())
-            .then(crate::profile::next_graph_id);
-        let _execution_scope = crate::diagnostics::scope_with(
-            crate::diagnostics::Category::Graph,
-            "graph.execute",
-            |fields| {
-                fields.u64("nodes", graph.nodes.len() as u64);
-                fields.u64("targets", targets.len() as u64);
-                fields.u64("outputs", graph.outputs.len() as u64).str(
-                    "requested_roots",
-                    &serde_json::to_string(targets).expect("graph targets"),
-                );
-                if let Some(cache) = execution.cache.as_deref() {
-                    fields.u64("cache_id", cache.diagnostic_id());
-                }
-                if let Some(id) = graph_id {
-                    fields.u64("graph_id", id);
-                }
-            },
-        );
+        graph_id: Option<u64>,
+    ) -> Result<GraphExecution> {
         let preparation =
             (profile.mode.enabled() || crate::diagnostics::enabled()).then(Instant::now);
         let gpu = &self.gpu;
-        let mut completed_allocation_bytes = allocated_bytes(gpu.activity());
-        let mut trace = gpu.trace(profile.mode.gpu(), graph.nodes.len() as u32 * 2);
-        let mut scratch = Scratch::default();
-        let mut values: Vec<Option<Value>> = graph
+        let completed_allocation_bytes = allocated_bytes(gpu.activity());
+        let trace = gpu.trace(profile.mode.gpu(), graph.nodes.len() as u32 * 2);
+        let scratch = Scratch::default();
+        let values: Vec<Option<Value>> = graph
             .outputs
             .iter()
             .map(|output| execution.seed(&output.cache_name()))
@@ -308,7 +375,7 @@ impl Engine {
             .iter()
             .filter(|node| node.outputs.iter().any(|id| required[*id] && !cached[*id]))
             .count();
-        let mut stage_completed = 0;
+        let stage_completed = 0;
         if stage_total == 0 {
             if let Some(progress) = execution.progress {
                 progress(super::RenderProgress::Stage {
@@ -320,8 +387,139 @@ impl Engine {
         if let Some(start) = preparation {
             profile.record("prepare graph execution", start);
         }
-        let mut shared_ranges = profile.mode.gpu().then(Vec::new);
-        for (node_index, node) in graph.nodes.iter().enumerate() {
+        let shared_ranges = profile.mode.gpu().then(Vec::new);
+        Ok(GraphExecution {
+            next_node: 0,
+            graph_id,
+            completed_allocation_bytes,
+            trace,
+            scratch,
+            values,
+            cached,
+            required,
+            reachable,
+            reads,
+            consumers,
+            stage_total,
+            stage_completed,
+            pending_stages: 0,
+            shared_ranges,
+        })
+    }
+}
+
+impl GraphExecution {
+    pub(super) fn next_node(&self) -> usize {
+        self.next_node
+    }
+
+    pub(super) fn allocation_plan(
+        &self,
+        graph: &Graph,
+        mode: crate::profile::Mode,
+        regional: bool,
+    ) -> Option<Vec<super::allocation::GpuAllocation>> {
+        if mode != crate::profile::Mode::Off || regional {
+            return None;
+        }
+        let mut extents: Vec<_> = self
+            .values
+            .iter()
+            .map(|value| {
+                value
+                    .as_ref()
+                    .and_then(|value| value.description.map(|description| description.extent))
+            })
+            .collect();
+        let mut allocations = vec![super::allocation::GpuAllocation::default(); graph.nodes.len()];
+        for (index, node) in graph.nodes.iter().enumerate().skip(self.next_node) {
+            let outputs: Vec<_> = node.outputs.iter().map(|id| self.required[*id]).collect();
+            if !outputs.iter().any(|required| *required) {
+                continue;
+            }
+            let input_extent = self.reads[index].iter().find_map(|id| extents[*id]);
+            allocations[index] = super::allocation::estimate(
+                &node.operation,
+                &outputs,
+                input_extent,
+                mode,
+                regional,
+            )?;
+            let extent = operation_extent(&node.operation, input_extent.unwrap_or([0, 0]));
+            for (&id, required) in node.outputs.iter().zip(outputs) {
+                if required {
+                    extents[id] = graph.outputs[id]
+                        .data
+                        .image_description(extent)
+                        .map(|description| description.extent);
+                }
+            }
+        }
+        Some(allocations)
+    }
+
+    pub(super) fn account(&self, retained: &mut crate::recipe::RetainedBytes) -> Option<()> {
+        retained.add_bytes(self.values.capacity() * size_of::<Option<Value>>());
+        retained.add_bytes(self.cached.capacity() * size_of::<bool>());
+        retained.add_bytes(self.required.capacity() * size_of::<bool>());
+        if let Some(reachable) = &self.reachable {
+            retained.add_bytes(reachable.capacity() * size_of::<bool>());
+        }
+        retained.add_bytes(self.reads.capacity() * size_of::<Vec<usize>>());
+        for reads in &self.reads {
+            retained.add_bytes(reads.capacity() * size_of::<usize>());
+        }
+        retained.add_bytes(self.consumers.capacity() * size_of::<usize>());
+        if let Some(ranges) = &self.shared_ranges {
+            retained.add_bytes(ranges.capacity() * size_of::<(usize, usize, usize)>());
+        }
+        self.scratch.account(retained);
+        self.trace.account(retained)
+    }
+
+    pub(super) fn buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
+        self.values
+            .iter()
+            .flatten()
+            .map(|value| &value.buffer)
+            .chain(self.scratch.buffers())
+    }
+
+    /// Advance through skipped nodes and at most one required operation.
+    /// A window also consumes trailing skipped nodes before reporting completion.
+    pub(super) fn advance(
+        &mut self,
+        engine: &Engine,
+        context: Input<'_>,
+        graph: &Graph,
+        profile: &mut Profile,
+        execution: &mut Execution<'_>,
+        completion: Completion,
+    ) -> Result<bool> {
+        let grouped = completion.windowed();
+        let gpu = &engine.gpu;
+        let Self {
+            next_node,
+            graph_id,
+            completed_allocation_bytes,
+            trace,
+            scratch,
+            values,
+            cached,
+            required,
+            reachable,
+            reads,
+            consumers,
+            stage_total,
+            stage_completed,
+            pending_stages,
+            shared_ranges,
+        } = self;
+        let graph_id = *graph_id;
+        while *next_node < graph.nodes.len() {
+            let node_index = *next_node;
+            *next_node += 1;
+            let node = &graph.nodes[node_index];
             execution.check()?;
             let _node_context = crate::diagnostics::current_context().map(|mut context| {
                 context.node = Some(node_index as u64);
@@ -383,7 +581,7 @@ impl Engine {
                     nested_gpu_end: profile.gpu.len(),
                     shared_gpu_start: None,
                     shared_gpu_end: None,
-                    memory_before: boundary_memory(&values, &scratch, execution),
+                    memory_before: boundary_memory(values, scratch, execution),
                     memory_after_publication: Default::default(),
                     memory_after_retirement: Default::default(),
                     diagnostic_overhead_ms: 0.,
@@ -405,8 +603,8 @@ impl Engine {
                     graph_id,
                     graph,
                     &node.outputs,
-                    &values,
-                    &cached,
+                    values,
+                    cached,
                     reachable.as_deref(),
                     execution,
                 );
@@ -418,7 +616,7 @@ impl Engine {
                 continue;
             }
             let index = node.outputs[0];
-            let mut submission_stage = gpu.background_stage(execution.cancel.is_some());
+            let mut submission_stage = gpu.background_stage(completion != Completion::Queued);
             let start = Instant::now();
             let input = |slot: usize| {
                 values[node.inputs[slot]].as_ref().unwrap_or_else(|| {
@@ -471,41 +669,7 @@ impl Engine {
                 }
                 _ => inherited_scale,
             };
-            let extent = match &node.operation {
-                Operation::HighlightEvidence(prepared) => prepared.grid().output_extent(),
-                Operation::PoolSignal(prepared) => prepared.output_extent(),
-                Operation::ReduceLayers { prepared, .. } => prepared.output_extent(),
-                Operation::ResampleRgb { params, .. } => [params.output[0], params.output[1]],
-                Operation::ToneMask { guide, .. }
-                | Operation::AdaptiveToneGuide { guide, .. }
-                | Operation::ExpandBrightnessGuide { guide, .. } => guide.extent(),
-                Operation::ImageRegion { prepared, .. } => prepared.extent(),
-                Operation::AdaptiveTone { window, .. } | Operation::TonalRanges { window, .. }
-                    if window.output.is_some() =>
-                {
-                    let bounds = window.output.expect("regional output bounds");
-                    [bounds[2] - bounds[0], bounds[3] - bounds[1]]
-                }
-                Operation::ProjectColorTiles { params, .. } => params.output_extent(),
-                Operation::NoiseContext(p) => reconstruction::context_extent(*p),
-                Operation::Banding(p) => {
-                    let [l, t, r, b] = p.output_bounds();
-                    [r - l, b - t]
-                }
-                Operation::PackedLab(p) => p.extent(),
-                Operation::CodeCrop(p) => p.extent(),
-                Operation::WaveletContrast(p) => p.extent(),
-                Operation::CodeChannelMap(p) => p.extent(),
-                Operation::ChannelNoise(p) => p.extent(),
-                Operation::Multiscale(p) => p.extent(),
-                Operation::ShieldNoise(p) => p.extent(),
-                Operation::RowGuard(p) => p.extent(),
-                Operation::ColorSharpen(p) => p.extent(),
-                Operation::ProportionalSharpen(p) => p.extent(),
-                Operation::Encode { params, .. } => [params.output[0], params.output[1]],
-                Operation::BlueGuidedReconstruct(p) => p.output_extent(),
-                _ => inherited,
-            };
+            let extent = operation_extent(&node.operation, inherited);
             let inherited_view = reads[node_index]
                 .iter()
                 .find_map(|id| values[*id].as_ref().and_then(|value| value.view));
@@ -597,7 +761,7 @@ impl Engine {
             let dimensions = [inherited[0], inherited[1], 0, 0];
             let bytes = u64::from(inherited[0]) * u64::from(inherited[1]) * 12;
             let mut dispatch = |kernel, buffers: &mut [(u32, crate::gpu::Binding<'_>)], groups| {
-                gpu.dispatch(kernel, buffers, groups, &mut trace)
+                gpu.dispatch(kernel, buffers, groups, trace)
             };
             let output = match &node.operation {
                 Operation::CodeCrop(prepared) => {
@@ -834,7 +998,7 @@ impl Engine {
                     use crate::nodes::sensor::multiscale::Evidence;
                     let flags = prepared
                         .grid()
-                        .map(|grid| self.clipping_flags(context.metadata(), Some(grid)))
+                        .map(|grid| engine.clipping_flags(context.metadata(), Some(grid)))
                         .transpose()?;
                     let clipping = flags
                         .as_ref()
@@ -868,7 +1032,7 @@ impl Engine {
                     use crate::nodes::sensor::row_guard::Inputs;
                     let flags = prepared
                         .grid()
-                        .map(|grid| self.clipping_flags(context.metadata(), Some(grid)))
+                        .map(|grid| engine.clipping_flags(context.metadata(), Some(grid)))
                         .transpose()?;
                     let clipping = flags
                         .as_ref()
@@ -1825,7 +1989,8 @@ impl Engine {
                 Operation::Highlights(prepared) => {
                     let materialized;
                     let prepared = if prepared.flags.is_none() {
-                        materialized = self.materialize_highlights(context.metadata(), prepared)?;
+                        materialized =
+                            engine.materialize_highlights(context.metadata(), prepared)?;
                         &materialized
                     } else {
                         prepared
@@ -1835,7 +2000,7 @@ impl Engine {
                 Operation::ColorField(prepared) => {
                     let clipping = prepared
                         .grid
-                        .map(|grid| self.clipping_flags(context.metadata(), Some(grid)))
+                        .map(|grid| engine.clipping_flags(context.metadata(), Some(grid)))
                         .transpose()?;
                     Some(color_field::apply(
                         gpu,
@@ -1855,7 +2020,8 @@ impl Engine {
                 Operation::HighlightDensity(prepared) => {
                     let materialized;
                     let prepared = if prepared.flags.is_none() {
-                        materialized = self.materialize_highlights(context.metadata(), prepared)?;
+                        materialized =
+                            engine.materialize_highlights(context.metadata(), prepared)?;
                         &materialized
                     } else {
                         prepared
@@ -2293,8 +2459,7 @@ impl Engine {
                     output.published = !cached[id] && values[id].is_some();
                     output.resource = values[id].as_ref().map(resource_observation);
                 }
-                observation.memory_after_publication =
-                    boundary_memory(&values, &scratch, execution);
+                observation.memory_after_publication = boundary_memory(values, scratch, execution);
                 observation.diagnostic_overhead_ms +=
                     diagnostic_started.elapsed().as_secs_f64() * 1000.;
             }
@@ -2302,22 +2467,25 @@ impl Engine {
                 graph_id,
                 graph,
                 &node.outputs,
-                &values,
-                &cached,
+                values,
+                cached,
                 reachable.as_deref(),
                 execution,
             );
-            // Queuing a whole outdated render would delay both drawing and newer edits.
-            // Finish submitted work off-thread, then check for newer work between stages.
-            // Background graph work uses this same completed-operation boundary.
+            // Interactive work completes each operation. Fresh work bounds allocation
+            // overlap while leaving final completion to its consumer or readback.
             let pending_allocation_bytes =
-                allocated_bytes(gpu.activity()).saturating_sub(completed_allocation_bytes);
-            let completed_stage = execution.cancel.is_some()
-                || pending_allocation_bytes >= SUBMISSION_ALLOCATION_WINDOW_BYTES;
+                allocated_bytes(gpu.activity()).saturating_sub(*completed_allocation_bytes);
+            let completed_stage = match completion {
+                Completion::Queued => {
+                    pending_allocation_bytes >= SUBMISSION_ALLOCATION_WINDOW_BYTES
+                }
+                Completion::Operation => true,
+                #[cfg(feature = "wide-experiment")]
+                Completion::Window => false,
+            };
             if completed_stage {
-                // Stateless exports also need bounded temporary resource overlap.
-                // Preserve interactive cancellation's existing stage boundaries.
-                let label = if execution.cancel.is_some() {
+                let label = if completion == Completion::Operation {
                     "complete interactive graph stage"
                 } else {
                     "complete graph submission window"
@@ -2328,14 +2496,16 @@ impl Engine {
                     observation.completion_wait_ms =
                         wait.map(|start| start.elapsed().as_secs_f64() * 1000.);
                 }
-                completed_allocation_bytes = allocated_bytes(gpu.activity());
+                *completed_allocation_bytes = allocated_bytes(gpu.activity());
             }
             submission_stage.complete();
-            stage_completed += 1;
-            if let Some(progress) = execution.progress {
+            *stage_completed += 1;
+            if grouped {
+                *pending_stages += 1;
+            } else if let Some(progress) = execution.progress {
                 progress(super::RenderProgress::Stage {
-                    completed: stage_completed,
-                    total: stage_total,
+                    completed: *stage_completed,
+                    total: *stage_total,
                 });
             }
             let retirement = profile.mode.enabled().then(Instant::now);
@@ -2363,16 +2533,58 @@ impl Engine {
                 observation.retirement_ms =
                     retirement.map(|start| start.elapsed().as_secs_f64() * 1000.);
                 let diagnostic_started = Instant::now();
-                observation.memory_after_retirement = boundary_memory(&values, &scratch, execution);
+                observation.memory_after_retirement = boundary_memory(values, scratch, execution);
                 observation.diagnostic_overhead_ms +=
                     diagnostic_started.elapsed().as_secs_f64() * 1000.;
                 observation.total_ms = Some(started.elapsed().as_secs_f64() * 1000.);
-                if let (Some(ranges), Some((start, end))) = (&mut shared_ranges, shared_range) {
+                if let (Some(ranges), Some((start, end))) = (shared_ranges.as_mut(), shared_range) {
                     ranges.push((profile.nodes.len(), start, end));
                 }
                 profile.nodes.push(observation);
             }
+            if grouped && *stage_completed == *stage_total {
+                continue;
+            }
+            return Ok(true);
         }
+        Ok(false)
+    }
+
+    /// Called only after the enclosing submission window has drained.
+    #[cfg(feature = "wide-experiment")]
+    pub(super) fn complete_window(
+        &mut self,
+        engine: &Engine,
+        progress: Option<&dyn Fn(super::RenderProgress)>,
+    ) {
+        self.completed_allocation_bytes = allocated_bytes(engine.gpu.activity());
+        if self.pending_stages > 0 {
+            if let Some(progress) = progress {
+                progress(super::RenderProgress::Stage {
+                    completed: self.stage_completed,
+                    total: self.stage_total,
+                });
+            }
+            self.pending_stages = 0;
+            self.scratch.trim_completed(COMPLETED_SCRATCH_SPARE_BYTES);
+        }
+    }
+
+    pub(super) fn finish(
+        self,
+        engine: &Engine,
+        targets: &[usize],
+        profile: &mut Profile,
+    ) -> Result<Vec<Value>> {
+        let Self {
+            graph_id,
+            trace,
+            scratch,
+            mut values,
+            shared_ranges,
+            ..
+        } = self;
+        let gpu = &engine.gpu;
         let shared_gpu_base = profile.mode.gpu().then_some(profile.gpu.len());
         gpu.finish_trace(&trace, profile)?;
         if let (Some(base), Some(ranges)) = (shared_gpu_base, shared_ranges) {
@@ -2409,6 +2621,257 @@ mod observation_tests {
         render::Settings,
     };
     use std::sync::Arc;
+
+    fn resumable_fixture(engine: &Engine) -> (RenderedImage, Graph, usize) {
+        let extent = [2, 2];
+        let image = RenderedImage {
+            buffer: engine
+                .gpu
+                .upload(
+                    "resumable signed codes",
+                    &[100_f32, -200., 13000.].repeat(4),
+                )
+                .unwrap(),
+            description: Description::new(extent, Space::NormalizedCodeRgb),
+            view: View {
+                crop: [0, 0, 2, 2],
+                rotation: 0,
+                extent,
+            },
+            metadata: Arc::new(Metadata {
+                processing_version: None,
+                width: 2,
+                height: 2,
+                rotation: 0,
+                properties: Default::default(),
+                matrices: Default::default(),
+                lists: Default::default(),
+            }),
+            settings: Settings::new("Sunlight", "Standard"),
+            owner: engine.owner.clone(),
+            regional: None,
+            dehaze_basis: None,
+        };
+        let mut graph = Graph::default();
+        let input = graph
+            .add(
+                Operation::RenderedInput {
+                    data: DataType::NormalizedCodeRgb,
+                },
+                &[],
+            )
+            .unwrap();
+        let target = graph
+            .add(
+                Operation::CodeGain(
+                    crate::nodes::color::code_gain::Prepared::new(extent, 2.).unwrap(),
+                ),
+                &[input],
+            )
+            .unwrap();
+        graph
+            .add(
+                Operation::ImageAlias {
+                    dehaze_basis: None,
+                    data: DataType::LinearCodeRgb,
+                    output: "unused.trailing",
+                },
+                &[target],
+            )
+            .unwrap();
+        (image, graph, target)
+    }
+
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn queued_and_operation_completion_preserve_samples_and_wait_boundaries() {
+        let engine = Engine::new().unwrap();
+        let (image, graph, target) = resumable_fixture(&engine);
+        let never_cancel = || false;
+        for completion in [Completion::Queued, Completion::Operation] {
+            for cancellable in [false, true] {
+                let progress = std::cell::RefCell::new(Vec::new());
+                let report = |stage| progress.borrow_mut().push(stage);
+                let mut execution = Execution {
+                    cancel: cancellable.then_some(&never_cancel as &dyn Fn() -> bool),
+                    progress: Some(&report),
+                    ..Default::default()
+                };
+                let mut profile = Profile::new(Mode::Wall);
+                let values = engine
+                    .run_graph(
+                        Input::Rendered(&image),
+                        &graph,
+                        &[target],
+                        &mut profile,
+                        &mut execution,
+                        completion,
+                    )
+                    .unwrap();
+                assert_eq!(profile.nodes.iter().filter(|node| node.executed).count(), 2);
+                assert_eq!(
+                    profile
+                        .nodes
+                        .iter()
+                        .filter(|node| node.completion_wait_ms.is_some())
+                        .count(),
+                    if completion == Completion::Operation {
+                        2
+                    } else {
+                        0
+                    },
+                    "{completion:?}, cancellable={cancellable}",
+                );
+                assert_eq!(
+                    *progress.borrow(),
+                    [
+                        super::super::RenderProgress::Stage {
+                            completed: 1,
+                            total: 2
+                        },
+                        super::super::RenderProgress::Stage {
+                            completed: 2,
+                            total: 2
+                        },
+                    ],
+                );
+                let bytes = engine.gpu.readback(&values[0].buffer).unwrap();
+                let samples: &[f32] = bytemuck::cast_slice(&bytes);
+                assert_eq!(samples, [200_f32, -400., 24000.].repeat(4));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn resumed_graph_preserves_signed_samples_progress_and_trailing_observations() {
+        let engine = Engine::new().unwrap();
+        let (image, graph, target) = resumable_fixture(&engine);
+        let progress = std::cell::RefCell::new(Vec::new());
+        let report = |stage| {
+            if let super::super::RenderProgress::Stage { completed, total } = stage {
+                progress.borrow_mut().push((completed, total));
+            }
+        };
+        let mut execution = Execution {
+            cancel: Some(&|| false),
+            progress: Some(&report),
+            ..Default::default()
+        };
+        let mut profile = Profile::new(Mode::Wall);
+        let context = Input::Rendered(&image);
+        let mut state = engine
+            .start_graph(
+                context,
+                &graph,
+                &[target],
+                &mut profile,
+                &mut execution,
+                Some(1),
+            )
+            .unwrap();
+        assert!(state
+            .advance(
+                &engine,
+                context,
+                &graph,
+                &mut profile,
+                &mut execution,
+                Completion::Operation,
+            )
+            .unwrap());
+        assert_eq!(*progress.borrow(), [(1, 2)]);
+        // The caller regains control with a live input and can resume later.
+        assert!(state.values[0].is_some());
+        assert!(state
+            .advance(
+                &engine,
+                context,
+                &graph,
+                &mut profile,
+                &mut execution,
+                Completion::Operation,
+            )
+            .unwrap());
+        assert_eq!(*progress.borrow(), [(1, 2), (2, 2)]);
+        assert!(!state
+            .advance(
+                &engine,
+                context,
+                &graph,
+                &mut profile,
+                &mut execution,
+                Completion::Operation,
+            )
+            .unwrap());
+        assert!(!state
+            .advance(
+                &engine,
+                context,
+                &graph,
+                &mut profile,
+                &mut execution,
+                Completion::Operation,
+            )
+            .unwrap());
+        assert_eq!(profile.nodes.len(), 3);
+        assert!(!profile.nodes[2].executed);
+        let values = state.finish(&engine, &[target], &mut profile).unwrap();
+        let bytes = engine.gpu.readback(&values[0].buffer).unwrap();
+        let samples: &[f32] = bytemuck::cast_slice(&bytes);
+        assert_eq!(samples, [200_f32, -400., 24000.].repeat(4));
+        assert_eq!(values[0].description.unwrap().extent, [2, 2]);
+    }
+
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn cancellation_between_advancements_does_not_execute_the_next_operation() {
+        let engine = Engine::new().unwrap();
+        let (image, graph, target) = resumable_fixture(&engine);
+        let cancelled = std::cell::Cell::new(false);
+        let cancel = || cancelled.get();
+        let mut execution = Execution {
+            cancel: Some(&cancel),
+            ..Default::default()
+        };
+        let mut profile = Profile::new(Mode::Wall);
+        let context = Input::Rendered(&image);
+        let mut state = engine
+            .start_graph(
+                context,
+                &graph,
+                &[target],
+                &mut profile,
+                &mut execution,
+                Some(1),
+            )
+            .unwrap();
+        assert!(state
+            .advance(
+                &engine,
+                context,
+                &graph,
+                &mut profile,
+                &mut execution,
+                Completion::Operation,
+            )
+            .unwrap());
+        cancelled.set(true);
+        let before = engine.gpu_activity();
+        assert!(state
+            .advance(
+                &engine,
+                context,
+                &graph,
+                &mut profile,
+                &mut execution,
+                Completion::Operation,
+            )
+            .is_err());
+        assert_eq!(engine.gpu_activity().dispatches, before.dispatches);
+        assert!(state.values[target].is_none());
+        assert_eq!(profile.nodes.len(), 1);
+    }
 
     #[test]
     #[ignore = "requires a GPU with timestamps"]
@@ -2487,12 +2950,13 @@ mod observation_tests {
             ..Default::default()
         };
         let mut profile = Profile::new(Mode::Gpu);
-        let result = engine.execute_controlled(
+        let result = engine.run_graph(
             Input::Rendered(&image),
             &graph,
             &[target],
             &mut profile,
             &mut execution,
+            Completion::Operation,
         );
         assert!(result.is_err());
         assert!(profile
@@ -2557,24 +3021,26 @@ mod observation_tests {
         };
         execution.plan(&graph, &[main]).unwrap();
         let retained = engine
-            .execute_controlled(
+            .run_graph(
                 Input::Rendered(&image),
                 &graph,
                 &[main],
                 &mut Profile::default(),
                 &mut execution,
+                Completion::Operation,
             )
             .unwrap()
             .remove(0);
         execution.plan(&graph, &[main, side]).unwrap();
         let mut profile = Profile::new(Mode::Wall);
         let results = engine
-            .execute_controlled(
+            .run_graph(
                 Input::Rendered(&image),
                 &graph,
                 &[main, side],
                 &mut profile,
                 &mut execution,
+                Completion::Operation,
             )
             .unwrap();
         assert!(retained.buffer.shares_storage(&results[0].buffer));

@@ -2,8 +2,8 @@
 
 use super::*;
 
-fn rendered(outcome: ReducedRender) -> crate::image::RenderedImage {
-    let ReducedRender::Rendered(mut artifacts) = outcome else {
+fn rendered(outcome: SessionRender) -> crate::image::RenderedImage {
+    let SessionRender::Rendered(mut artifacts) = outcome else {
         panic!("expected source-free image");
     };
     let crate::inspection::Content::Image(image) = artifacts.pop().unwrap().content else {
@@ -261,7 +261,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                     )
                     .unwrap()
                 {
-                    ReducedRender::Rendered(artifacts) => artifacts,
+                    SessionRender::Rendered(artifacts) => artifacts,
                     _ => panic!("source-free render {name} scale{divisor} edit{edit}"),
                 };
                 let artifact = artifacts.pop().unwrap();
@@ -322,7 +322,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                                     &mut Profile::default()
                                 )
                                 .unwrap(),
-                            ReducedRender::Rendered(_)
+                            SessionRender::Rendered(_)
                         ),
                         "resized-only filter change {name} scale{divisor}"
                     );
@@ -349,7 +349,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                                 &mut Profile::default()
                             )
                             .unwrap(),
-                        ReducedRender::NeedsOriginal(NeedsOriginal::UpstreamChanged)
+                        SessionRender::NeedsOriginal(NeedsOriginal::UpstreamChanged)
                     ),
                     "real native dependency change {name} scale{divisor}"
                 );
@@ -369,7 +369,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                         &mut Profile::default()
                     )
                     .unwrap(),
-                ReducedRender::Superseded
+                SessionRender::Superseded
             ));
             assert!(matches!(
                 engine
@@ -382,7 +382,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                         &mut Profile::default()
                     )
                     .unwrap(),
-                ReducedRender::NeedsOriginal(NeedsOriginal::EngineChanged)
+                SessionRender::NeedsOriginal(NeedsOriginal::EngineChanged)
             ));
             eprintln!("exact source-free {name} scale{divisor}");
         }
@@ -421,27 +421,34 @@ fn shared_working_set_orders_native_reduced_and_speculative_owners() {
     working
         .insert_reduced(1, session, &engine, SessionUse::Foreground)
         .unwrap();
-    working.insert_native(
-        2,
-        RenderSession::new(source.clone()),
-        &engine,
-        SessionUse::Foreground,
-    );
-    working.insert_native(
-        3,
-        RenderSession::new(source.clone()),
-        &engine,
-        SessionUse::Preparation,
-    );
-    let first_native = engine
-        .render_session(
-            working.native_mut(2).unwrap(),
-            &settings,
-            &["final"],
-            || false,
-            &mut Profile::default(),
+    working
+        .insert_native(
+            2,
+            RenderSession::new(source.clone()),
+            &engine,
+            SessionUse::Foreground,
         )
+        .unwrap();
+    working
+        .insert_native(
+            3,
+            RenderSession::new(source.clone()),
+            &engine,
+            SessionUse::Preparation,
+        )
+        .unwrap();
+    let first_native = working
+        .with_native(2, |session| {
+            engine.render_session(
+                session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+        })
         .unwrap()
+        .flatten()
         .unwrap()
         .remove(0);
     let crate::inspection::Content::Image(first_native) = first_native.content else {
@@ -471,15 +478,18 @@ fn shared_working_set_orders_native_reduced_and_speculative_owners() {
     assert_eq!(working.evict_oldest(), Some(speculative));
     assert_eq!(working.evict_oldest(), Some(reduced));
     assert!(working.contains(active));
-    let replay = engine
-        .render_session(
-            working.native_mut(2).unwrap(),
-            &settings,
-            &["final"],
-            || false,
-            &mut Profile::default(),
-        )
+    let replay = working
+        .with_native(2, |session| {
+            engine.render_session(
+                session,
+                &settings,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+        })
         .unwrap()
+        .flatten()
         .unwrap()
         .remove(0);
     let crate::inspection::Content::Image(replay) = replay.content else {
@@ -639,8 +649,8 @@ fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation
     assert!(
         matches!(
             changed,
-            ReducedRender::Rendered(_)
-                | ReducedRender::NeedsOriginal(NeedsOriginal::UpstreamChanged)
+            SessionRender::Rendered(_)
+                | SessionRender::NeedsOriginal(NeedsOriginal::UpstreamChanged)
         ),
         "a new guide uses the retained cut or requests its actually missing native dependencies"
     );

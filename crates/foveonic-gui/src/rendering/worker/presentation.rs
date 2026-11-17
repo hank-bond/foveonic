@@ -58,6 +58,20 @@ struct Whole {
     images: Vec<Image>,
     display: Option<Display>,
 }
+impl Whole {
+    fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
+        for image in &self.images {
+            inventory.image(&image.image);
+            inventory.metadata(&image.metadata);
+        }
+        if let Some(display) = &self.display {
+            inventory.image_texture(&display.texture);
+            if let Some(comparison) = &display.comparison {
+                inventory.image_texture(&comparison.texture);
+            }
+        }
+    }
+}
 #[derive(Clone)]
 pub(crate) struct Snapshot(Whole);
 impl Snapshot {
@@ -99,10 +113,7 @@ impl Snapshot {
         }))
     }
     pub fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
-        Presentation {
-            whole: Some(self.0.clone()),
-        }
-        .memory_resources(inventory);
+        self.0.memory_resources(inventory);
     }
 }
 #[derive(Default)]
@@ -122,16 +133,7 @@ impl Presentation {
     }
     pub fn memory_resources(&self, inventory: &mut crate::memory::Inventory) {
         if let Some(whole) = &self.whole {
-            for image in &whole.images {
-                inventory.image(&image.image);
-                inventory.metadata(&image.metadata);
-            }
-            if let Some(display) = &whole.display {
-                inventory.image_texture(&display.texture);
-                if let Some(comparison) = &display.comparison {
-                    inventory.image_texture(&comparison.texture);
-                }
-            }
+            whole.memory_resources(inventory);
         }
     }
     pub fn clear(&mut self) {
@@ -326,6 +328,8 @@ mod tests {
         framing: bool,
     ) -> Request {
         Request {
+            auxiliary_preview: false,
+
             path: path.to_owned(),
             revision,
             settings: Settings {
@@ -361,6 +365,63 @@ mod tests {
             .find(|entry| entry.0 == revision)
             .unwrap()
             .1
+    }
+    #[test]
+    #[ignore = "requires GPU and pinned Merrill FOVEONIC_FIXTURE_DIR original"]
+    fn retained_snapshots_and_presentation_count_shared_frame_resources_once() {
+        use foveonic::render::ProcessingWorkingSet;
+        use sha2::{Digest, Sha256};
+
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../scripts/profiling/wide_inputs.json"
+        ))
+        .unwrap();
+        let entry = &manifest["files"][0];
+        let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
+            .join(entry["file"].as_str().unwrap());
+        assert_eq!(
+            format!("{:x}", Sha256::digest(std::fs::read(&path).unwrap())),
+            entry["sha256"].as_str().unwrap()
+        );
+        let engine = Engine::new().unwrap();
+        let verifier = engine.executor();
+        let worker = Worker::new(engine, egui::Context::default());
+        let request = request(
+            &path,
+            1,
+            Scale::new(8).unwrap(),
+            ProcessingQuality::Speed,
+            &Settings::new("Sunlight", "Standard"),
+            false,
+        );
+        worker.submit(request.clone());
+        let frame = receive(&worker, request.revision);
+        let snapshot = Snapshot::from_frame(&frame, &request).unwrap();
+        let mut presentation = Presentation::default();
+        presentation.seed(&snapshot);
+
+        let working = ProcessingWorkingSet::new();
+        let resources = |inventory: &crate::memory::Inventory| {
+            verifier.memory_resources(&working, inventory.reservation())
+        };
+        let empty = resources(&crate::memory::Inventory::default());
+        let mut expected = crate::memory::Inventory::default();
+        expected.frame(&frame);
+        let expected = resources(&expected);
+        assert!(expected.cpu_bytes > empty.cpu_bytes);
+        assert!(expected.gpu_bytes > empty.gpu_bytes);
+        assert_eq!(
+            expected.reserved_bytes,
+            crate::memory::texture_bytes(frame.texture.texture())
+        );
+
+        let mut retained = crate::memory::Inventory::default();
+        snapshot.memory_resources(&mut retained);
+        assert_eq!(resources(&retained), expected);
+        snapshot.clone().memory_resources(&mut retained);
+        presentation.memory_resources(&mut retained);
+        retained.frame(&frame);
+        assert_eq!(resources(&retained), expected);
     }
     fn pixels(engine: &Engine, image: &ImageTexture) -> Vec<u8> {
         let texture = image.texture();
@@ -544,7 +605,7 @@ mod tests {
                     Scale::new(2).unwrap()
                 }
             );
-            let loads = worker.checks.source_loads.load(Ordering::Relaxed);
+            let baseline_loads = worker.checks.source_loads.load(Ordering::Relaxed);
             if policy == ProcessingQuality::Quality {
                 let mut region = settings.clone();
                 region.preview_region = Some([100, 100, 400, 500]);
@@ -552,6 +613,8 @@ mod tests {
                 let tile = receive(&worker, 2);
                 assert!(tile.artifact.settings.preview_region.is_some());
             }
+            let loads = worker.checks.source_loads.load(Ordering::Relaxed);
+            println!("framing reuse setup {policy:?}: baseline source loads={baseline_loads}, after native setup={loads}");
             worker.submit(request(&path, 3, Scale::NATIVE, policy, &settings, true));
             let plane = receive(&worker, 3);
             assert_eq!(
@@ -572,7 +635,8 @@ mod tests {
                 "drag/commit keeps the untrimmed texture"
             );
             assert_eq!(dispatches(&worker, 4), 0);
-            worker.submit(request(&path, 5, Scale::NATIVE, policy, &settings, false));
+            // Commit at the displayed grid before explicitly asking for native pixels.
+            worker.submit(request(&path, 5, quality, policy, &settings, false));
             let committed = receive(&worker, 5);
             assert_eq!(committed.artifact.settings.working_scale, quality);
             assert_eq!(dispatches(&worker, 5), 0);
@@ -786,6 +850,8 @@ mod completed_sampling_tests {
             eframe::egui::Context::default(),
         );
         let first = Request {
+            auxiliary_preview: false,
+
             detail: false,
             framing_preview: false,
             calibration: None,

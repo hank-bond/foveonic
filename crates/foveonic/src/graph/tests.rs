@@ -5,6 +5,165 @@ use crate::color_space::ColorSpace;
 use crate::nodes::sensor::calibration::{Calibration, ColorParams, EncodeParams};
 
 #[test]
+fn retained_graph_accounts_spare_capacity_and_cached_node_containers() {
+    let mut graph = Graph::default();
+    let source = graph.add_scoped(Operation::Source, &[], "camera").unwrap();
+    graph.retain_for_session(source);
+    graph.retain_for_seal(source);
+    graph.nodes.reserve(11);
+    graph.outputs.reserve(13);
+    graph.session_outputs.reserve(17);
+    graph.sealed_outputs.reserve(19);
+    graph.nodes[0].inputs.reserve(23);
+    graph.nodes[0].outputs.reserve(29);
+    graph.outputs[0].cache_scope.reserve(31);
+    graph.outputs[0].dependencies.reserve(37);
+
+    // Even a fully cached root retains its complete authored graph.
+    assert_eq!(graph.required_until(&[source], &[true]).unwrap(), [true]);
+    let expected = graph.nodes.capacity() * std::mem::size_of::<Node>()
+        + graph.outputs.capacity() * std::mem::size_of::<Output>()
+        + (graph.session_outputs.capacity()
+            + graph.sealed_outputs.capacity()
+            + graph.nodes[0].inputs.capacity()
+            + graph.nodes[0].outputs.capacity()
+            + graph.outputs[0].dependencies.capacity())
+            * std::mem::size_of::<usize>()
+        + graph.outputs[0].cache_scope.capacity();
+    let mut retained = crate::recipe::RetainedBytes::default();
+    assert_eq!(graph.account(&mut retained), Some(()));
+    assert_eq!(retained.bytes(), expected);
+}
+
+#[test]
+fn graph_parameters_share_retained_identity_with_preparation_and_keys() {
+    use crate::{
+        nodes::sensor::{camera_repair, highlight},
+        recipe::{RetainedBytes, Shared},
+    };
+    use std::sync::Arc;
+
+    let repair = Arc::new(camera_repair::Prepared::default());
+    let flags: Shared<u32> = vec![1, 2, 3, 4].into();
+    let highlights = Arc::new(highlight::Prepared {
+        flags: Some(flags.clone()),
+        ..Default::default()
+    });
+    let curve: Shared<f32> = vec![0., 0.5, 1.].into();
+    let mut retained = RetainedBytes::default();
+    retained.owner(repair.clone(), repair.retained_bytes().unwrap());
+    flags.account(&mut retained);
+    curve.key().account(&mut retained);
+    let before = retained.bytes();
+
+    assert_eq!(Operation::Repair(repair).account(&mut retained), Some(()));
+    for operation in [
+        Operation::Highlights(highlights.clone()),
+        Operation::HighlightDensity(highlights),
+    ] {
+        assert_eq!(operation.account(&mut retained), Some(()));
+    }
+    assert_eq!(
+        Operation::Tone {
+            curve,
+            exposure: 0.,
+            space: ColorSpace::Srgb
+        }
+        .account(&mut retained),
+        Some(())
+    );
+    assert_eq!(
+        retained.bytes(),
+        before + std::mem::size_of::<highlight::Prepared>()
+    );
+}
+
+#[test]
+fn cached_unsupported_prepared_owner_keeps_graph_accounting_incomplete() {
+    let mut graph = Graph::default();
+    let source = graph
+        .add(
+            Operation::RenderedInput {
+                data: DataType::UnsignedCodeRgb,
+            },
+            &[],
+        )
+        .unwrap();
+    let crop =
+        crate::nodes::finish::code_crop::Prepared::new([4, 4], [0, 0, 4, 4], [4, 4], 0, false)
+            .unwrap();
+    let output = graph
+        .add(Operation::CodeCrop(std::sync::Arc::new(crop)), &[source])
+        .unwrap();
+    assert_eq!(
+        graph.required_until(&[output], &[false, true]).unwrap(),
+        [false, true]
+    );
+    assert_eq!(
+        graph.account(&mut crate::recipe::RetainedBytes::default()),
+        None
+    );
+}
+
+#[test]
+fn merrill_owned_parameter_tables_count_capacity_and_boxed_uniforms() {
+    use crate::nodes::{
+        color::{color_dq, pattern},
+        finish::advanced_color,
+        sensor::{color_field, despeckle},
+    };
+    use bytemuck::Zeroable;
+
+    let mut grid_values = Vec::with_capacity(17);
+    grid_values.push(1.);
+    let mut tables = Vec::with_capacity(23);
+    tables.push(2.);
+    let mut repairs = Vec::with_capacity(31);
+    repairs.push(3);
+    let mut prepared = pattern::Prepared::new([1, 1, 1, 0], [0.; 4]).unwrap();
+    prepared.offsets.reserve(37);
+    let mut values = Vec::with_capacity(41);
+    values.push(4);
+    let expected = (grid_values.capacity() + tables.capacity()) * std::mem::size_of::<f32>()
+        + (repairs.capacity() + prepared.offsets.capacity()) * std::mem::size_of::<u32>()
+        + values.capacity() * std::mem::size_of::<i32>()
+        + std::mem::size_of::<advanced_color::Params>();
+    let operations = [
+        Operation::Calibrate(Calibration {
+            params: Zeroable::zeroed(),
+            grid_values,
+        }),
+        Operation::Despeckle(despeckle::Prepared {
+            params: Zeroable::zeroed(),
+            tables,
+        }),
+        Operation::ColorField(color_field::Prepared {
+            params: Zeroable::zeroed(),
+            repairs,
+            grid: None,
+        }),
+        Operation::Pattern {
+            params: Zeroable::zeroed(),
+            prepared,
+        },
+        Operation::TiledColorDq {
+            params: Zeroable::zeroed(),
+            table: color_dq::Table { period: 1, values },
+            space: ColorSpace::Srgb,
+        },
+        Operation::AdvancedColor {
+            params: Box::new(Zeroable::zeroed()),
+            space: ColorSpace::Srgb,
+        },
+    ];
+    let mut retained = crate::recipe::RetainedBytes::default();
+    for operation in operations {
+        assert_eq!(operation.account(&mut retained), Some(()));
+    }
+    assert_eq!(retained.bytes(), expected);
+}
+
+#[test]
 fn demand_tracks_ports_without_requiring_siblings_or_unrelated_nodes() {
     let mut graph = Graph::default();
     let source = graph.add(Operation::Source, &[]).unwrap();

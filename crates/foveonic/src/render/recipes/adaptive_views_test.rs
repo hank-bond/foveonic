@@ -256,17 +256,31 @@ fn capture_views(adaptive_variants: bool) {
                     .clone_from(&node.inputs);
             }
         }
-        let mut artifacts = engine
-            .collect_artifacts(
-                input(),
-                &settings,
-                &mut built.graph,
-                built.final_id,
-                &["final"],
-                &mut profile,
-                &mut execution,
-            )
-            .unwrap();
+        let mut artifacts = {
+            let input = input();
+            let plan = engine
+                .plan_artifacts(
+                    &settings,
+                    &mut built.graph,
+                    built.final_id,
+                    &["final"],
+                    &mut profile,
+                    &mut execution,
+                )
+                .unwrap();
+            let values = engine
+                .run_graph(
+                    input.context(),
+                    &built.graph,
+                    &plan.roots,
+                    &mut profile,
+                    &mut execution,
+                    crate::render::execute::Completion::Queued,
+                )
+                .unwrap();
+            engine.package_artifacts(input, &settings, &built.graph, plan, values)
+        }
+        .unwrap();
         let Content::Image(image) = artifacts.pop().unwrap().content else {
             panic!("expected RGB")
         };

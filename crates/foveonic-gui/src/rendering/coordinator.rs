@@ -62,10 +62,34 @@ pub struct WorkPlan {
     pub tasks: Vec<Arc<Task>>,
     pub scopes: Option<Arc<ScopeTask>>,
     pub pick: Option<Arc<PickTask>>,
+    pub preview_active: Option<PathBuf>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TaskPriority {
+    Viewport,
+    Auxiliary,
+    Thumbnail,
+    Idle,
 }
 impl WorkPlan {
     pub fn task(&self, target: &Target) -> Option<&Arc<Task>> {
         self.tasks.iter().find(|task| &task.stamp.target == target)
+    }
+    pub fn priority(&self, task: &Task) -> TaskPriority {
+        if task.speculative {
+            TaskPriority::Idle
+        } else if task.stamp.target.purpose != Purpose::Preview {
+            TaskPriority::Viewport
+        } else if self.preview_active.as_ref() == Some(&task.request.path) {
+            TaskPriority::Auxiliary
+        } else {
+            TaskPriority::Thumbnail
+        }
+    }
+}
+impl Task {
+    pub fn viewport(&self) -> bool {
+        !self.speculative && self.stamp.target.purpose != Purpose::Preview
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,9 +104,16 @@ pub struct ResultUpdate {
     pub update_photo: bool,
     pub destination: Option<Destination>,
 }
+#[derive(Clone)]
 struct RefinementState {
     first: Stamp,
     request: Arc<Refinement>,
+    pending: Option<PendingRegion>,
+}
+#[derive(Clone)]
+struct PendingRegion {
+    request: Arc<Refinement>,
+    queued_at: Instant,
 }
 struct Desired {
     task: Arc<Task>,
@@ -111,6 +142,8 @@ pub struct RenderCoordinator {
     scopes: Option<Arc<ScopeTask>>,
     pick: Option<Arc<PickTask>>,
     active: Option<PathBuf>,
+    before_overviews: Vec<(PathBuf, crate::editor::Rendition)>,
+    background_completion_disabled: bool,
 }
 impl RenderCoordinator {
     fn id(&mut self) -> TaskId {
@@ -123,8 +156,20 @@ impl RenderCoordinator {
         origin: Option<SourceOrigin>,
         queued_at: Instant,
     ) -> TaskId {
+        self.desire_inner(request, origin, queued_at, false)
+    }
+
+    fn desire_inner(
+        &mut self,
+        request: Arc<Request>,
+        origin: Option<SourceOrigin>,
+        queued_at: Instant,
+        speculative: bool,
+    ) -> TaskId {
         let target = Target::of(&request);
-        if target.purpose == Purpose::Detail {
+        if speculative || target.purpose == Purpose::Preview {
+            // Keep the admitted region and its intent independently settled.
+        } else if target.purpose == Purpose::Detail {
             // A moving lens replaces its detail, not a useful Whole continuation.
             if let Some(entry) = self
                 .desired
@@ -134,10 +179,11 @@ impl RenderCoordinator {
                 entry.refinement = None;
             }
         } else if !matches!(target.purpose, Purpose::Inspection(_, _) | Purpose::Export) {
-            self.cancel_refinement_for(&request.path, Some(request.rendition));
+            self.cancel_refinement_for(&request.path, Some(request.rendition), Some(&target));
         }
         self.desired.retain(|entry| {
-            if target.purpose == Purpose::Current
+            if !speculative
+                && target.purpose == Purpose::Current
                 && entry.task.stamp.target.path == target.path
                 && entry.task.stamp.target.purpose == Purpose::Detail
                 && (entry.settled
@@ -182,12 +228,12 @@ impl RenderCoordinator {
                     "coalesced",
                     || json!({"desired_revision":request.revision,"settled":self.desired[index].settled}),
                 );
-                if (old.origin.is_none() && origin.is_some()) || old.speculative {
+                if (old.origin.is_none() && origin.is_some()) || (!speculative && old.speculative) {
                     let mut task = (**old).clone();
                     if task.origin.is_none() {
                         task.origin = origin;
                     }
-                    task.speculative = false;
+                    task.speculative &= speculative;
                     self.desired[index].task = Arc::new(task);
                 }
                 return id;
@@ -226,7 +272,7 @@ impl RenderCoordinator {
             origin,
             queued_at,
             seed,
-            speculative: false,
+            speculative,
         });
         crate::timing::task(&task.stamp, "desired", || {
             json!({"nominal_scale":task.request.preview_scale.divisor(),"preview_scale":format!("{:?}",task.request.preview_scale),
@@ -266,7 +312,8 @@ impl RenderCoordinator {
     ) -> Option<Arc<Task>> {
         if let Some(index) = self.desired.iter().position(|entry| {
             entry.refinement.as_ref().is_some_and(|state| {
-                state.request.same_sequence(&request)
+                state.first.target == entry.task.stamp.target
+                    && state.request.same_sequence(&request)
                     && (entry.task.origin.is_none()
                         || origin.is_none()
                         || entry.task.origin == origin)
@@ -276,9 +323,59 @@ impl RenderCoordinator {
                 let stamp = self.desired[index].task.stamp.clone();
                 self.bind_origin(&stamp, &origin);
             }
-            return None;
+            let entry = &self.desired[index];
+            let state = entry.refinement.as_ref().unwrap();
+            let whole_admitted = self.whole_admitted(state, entry.task.origin.as_ref());
+            let first_admitted_whole =
+                entry.settled && entry.admitted == entry.task.stamp.revision && !entry.regional;
+            if whole_admitted || first_admitted_whole || state.request.covers(&request) {
+                self.desired[index].refinement.as_mut().unwrap().pending = None;
+                return None;
+            }
+            let pending = PendingRegion {
+                request: Arc::new(request),
+                queued_at,
+            };
+            if !entry.settled && entry.task.stamp == state.first {
+                // Finish useful work already in flight, retaining only the latest
+                // uncovered viewport rather than restarting on every pan event.
+                self.desired[index].refinement.as_mut().unwrap().pending = Some(pending);
+                return None;
+            }
+            let state = state.clone();
+            let origin = entry.task.origin.clone();
+            return self.start_region(state, pending, origin);
         }
-        self.cancel_refinement_for(&request.first.path, Some(request.first.rendition));
+        // A loupe can replace and then retire the primary patch while its
+        // same-edit preview/whole work remains useful. Recover that sequence's
+        // frozen siblings, but do not mistake its retired patch for coverage.
+        if let Some(index) = self.desired.iter().position(|entry| {
+            entry.refinement.as_ref().is_some_and(|state| {
+                state.request.same_sequence(&request)
+                    && (entry.task.origin.is_none()
+                        || origin.is_none()
+                        || entry.task.origin == origin)
+            })
+        }) {
+            if let Some(origin) = &origin {
+                let stamp = self.desired[index].task.stamp.clone();
+                self.bind_origin(&stamp, origin);
+            }
+            let entry = &self.desired[index];
+            let state = entry.refinement.as_ref().unwrap();
+            if self.whole_admitted(state, entry.task.origin.as_ref()) {
+                return None;
+            }
+            return self.start_region(
+                state.clone(),
+                PendingRegion {
+                    request: Arc::new(request),
+                    queued_at,
+                },
+                entry.task.origin.clone(),
+            );
+        }
+        self.cancel_refinement_for(&request.first.path, Some(request.first.rendition), None);
         // A new edit's regional job replaces obsolete whole-image work for that
         // photo. Completed whole images remain useful presentation resources.
         self.desired.retain(|entry| {
@@ -301,6 +398,7 @@ impl RenderCoordinator {
         entry.refinement = Some(RefinementState {
             first: entry.task.stamp.clone(),
             request,
+            pending: None,
         });
         if !entry.settled {
             return Some(entry.task.clone());
@@ -324,8 +422,55 @@ impl RenderCoordinator {
         None
     }
 
+    fn whole_admitted(&self, state: &RefinementState, origin: Option<&SourceOrigin>) -> bool {
+        state.request.whole.as_ref().is_some_and(|whole| {
+            self.desired.iter().any(|entry| {
+                entry.settled
+                    && entry.admitted == entry.task.stamp.revision
+                    && !entry.regional
+                    && origin.is_none_or(|origin| entry.task.origin.as_ref() == Some(origin))
+                    && crate::rendering::matching::same_delivery_request(&entry.task.request, whole)
+            })
+        })
+    }
+
+    fn start_region(
+        &mut self,
+        mut state: RefinementState,
+        pending: PendingRegion,
+        origin: Option<SourceOrigin>,
+    ) -> Option<Arc<Task>> {
+        let mut request = (*state.request).clone();
+        request.first = pending.request.first.clone();
+        request.visible_region = pending.request.visible_region;
+        // Before/Defaults share one target across both phases, so their whole
+        // result needs a revision newer than the replacement regional result.
+        if let Some((whole, next_whole)) =
+            request.whole.as_mut().zip(pending.request.whole.as_ref())
+        {
+            if Target::of(whole) == Target::of(&request.first) {
+                whole.revision = next_whole.revision;
+            }
+        }
+        state.request = Arc::new(request);
+        state.pending = None;
+        self.desire_inner(
+            Arc::new(state.request.first.clone()),
+            origin,
+            pending.queued_at,
+            false,
+        );
+        let entry = self
+            .desired
+            .iter_mut()
+            .find(|entry| entry.task.stamp.target == Target::of(&state.request.first))?;
+        state.first = entry.task.stamp.clone();
+        entry.refinement = Some(state);
+        (!entry.settled).then(|| entry.task.clone())
+    }
+
     pub fn cancel_refinement(&mut self, path: &Path, rendition: crate::editor::Rendition) {
-        self.cancel_refinement_for(path, Some(rendition));
+        self.cancel_refinement_for(path, Some(rendition), None);
     }
 
     pub fn retire_detail(&mut self, path: &Path) {
@@ -339,7 +484,12 @@ impl RenderCoordinator {
         });
     }
 
-    fn cancel_refinement_for(&mut self, path: &Path, rendition: Option<crate::editor::Rendition>) {
+    fn cancel_refinement_for(
+        &mut self,
+        path: &Path,
+        rendition: Option<crate::editor::Rendition>,
+        replacing: Option<&Target>,
+    ) {
         self.desired.retain_mut(|entry| {
             if entry.task.stamp.target.path != path
                 || !entry.refinement.as_ref().is_some_and(|state| {
@@ -349,7 +499,11 @@ impl RenderCoordinator {
                 return true;
             }
             entry.refinement = None;
-            let keep = !entry.task.request.detail || entry.settled;
+            let keep = replacing == Some(&entry.task.stamp.target)
+                || (!entry.task.request.detail
+                    && !entry.task.speculative
+                    && entry.task.stamp.target.purpose != Purpose::Preview)
+                || entry.settled;
             if !keep {
                 retired(entry, "refinement_cancelled");
             }
@@ -370,23 +524,57 @@ impl RenderCoordinator {
                     .as_ref()
                     .is_some_and(|state| state.first == *stamp)
         })?;
-        if !update.current || update.destination.is_none() {
+        let mut state = self.desired[index].refinement.as_ref().unwrap().clone();
+        let pending = state.pending.take();
+        self.desired[index].refinement.as_mut().unwrap().pending = None;
+        if !update.current || update.destination.is_none() || image.is_none() {
+            let origin = self.desired[index].task.origin.clone();
             self.desired[index].refinement = None;
+            // A failed region must not swallow a later pan. A rejected source,
+            // however, cannot authorize work from the previous source identity.
+            if update.current && image.is_none() {
+                if let Some(pending) = pending {
+                    return self.start_region(state, pending, origin);
+                }
+            }
             return None;
         }
-        let Some((origin, regional)) = image else {
-            self.desired[index].refinement = None;
-            return None;
-        };
+        let (origin, regional) = image.unwrap();
+        self.desired[index].regional = regional;
         if !regional {
             return None;
         }
-        let state = self.desired[index].refinement.take().unwrap();
-        let Some(whole) = state.request.whole.as_ref() else {
-            self.desired[index].refinement = Some(state);
+        if let Some(preview) = &state.request.preview {
+            self.desire_inner(
+                Arc::new(preview.clone()),
+                Some(origin.clone()),
+                Instant::now(),
+                false,
+            );
+            if let Some(entry) = self
+                .desired
+                .iter_mut()
+                .find(|entry| entry.task.stamp.target == Target::of(preview))
+            {
+                entry.refinement = Some(state.clone());
+            }
+        }
+        if let Some(pending) = pending.filter(|_| !self.whole_admitted(&state, Some(origin))) {
+            return self.start_region(state, pending, Some(origin.clone()));
+        }
+        if self.background_completion_disabled {
             return None;
-        };
+        }
+        let whole = state.request.whole.as_ref()?;
         let target = Target::of(whole);
+        if self.desired.iter().any(|entry| {
+            entry.task.stamp.target == target
+                && !entry.settled
+                && !entry.task.speculative
+                && !crate::rendering::matching::same_delivery_request(&entry.task.request, whole)
+        }) {
+            return None;
+        }
         let foreground = self.desired.iter().any(|entry| {
             entry.task.stamp.target == target
                 && !entry.settled
@@ -398,10 +586,11 @@ impl RenderCoordinator {
                     .is_none_or(|current| current == origin)
                 && crate::rendering::matching::same_delivery_request(&entry.task.request, whole)
         });
-        self.desire(
+        self.desire_inner(
             Arc::new(whole.clone()),
             Some(origin.clone()),
             Instant::now(),
+            !foreground,
         );
         let entry = self
             .desired
@@ -417,11 +606,75 @@ impl RenderCoordinator {
         (!entry.settled).then(|| entry.task.clone())
     }
 
+    /// Policy changes retire optional work without rerendering admitted regions.
+    pub fn set_background_completion(&mut self, enabled: bool) {
+        if self.background_completion_disabled == !enabled {
+            return;
+        }
+        self.background_completion_disabled = !enabled;
+        if !enabled {
+            self.desired.retain_mut(|entry| {
+                let keep = !entry.task.speculative || entry.settled;
+                if !keep {
+                    retired(entry, "background_completion_disabled");
+                    // Before uses the same target for both phases. Restore its
+                    // admitted region instead of losing foreground settlement.
+                    if let Some(state) = entry
+                        .refinement
+                        .as_ref()
+                        .filter(|state| state.first.target == entry.task.stamp.target)
+                    {
+                        entry.task = Arc::new(Task {
+                            stamp: state.first.clone(),
+                            request: Arc::new(state.request.first.clone()),
+                            origin: entry.task.origin.clone(),
+                            queued_at: entry.task.queued_at,
+                            seed: None,
+                            speculative: false,
+                        });
+                        entry.settled = true;
+                        entry.admitted = state.first.revision;
+                        entry.regional = true;
+                        entry.delivered = None;
+                        return true;
+                    }
+                }
+                keep
+            });
+            return;
+        }
+        let ready = self
+            .desired
+            .iter()
+            .filter(|entry| {
+                entry.settled
+                    && entry.regional
+                    && entry.admitted == entry.task.stamp.revision
+                    && entry
+                        .refinement
+                        .as_ref()
+                        .is_some_and(|state| state.first == entry.task.stamp)
+            })
+            .map(|entry| (entry.task.stamp.clone(), entry.task.origin.clone()))
+            .collect::<Vec<_>>();
+        for (stamp, origin) in ready {
+            self.advance_refinement(
+                &stamp,
+                ResultUpdate {
+                    current: true,
+                    update_photo: true,
+                    destination: Some(Destination::Active),
+                },
+                origin.as_ref().map(|origin| (origin, true)),
+            );
+        }
+    }
+
     pub fn retain_overviews(&mut self, paths: &[PathBuf], retained: &[PathBuf]) {
         self.desired.retain(|entry| {
             let keep = !matches!(
                 entry.task.stamp.target.purpose,
-                Purpose::Current | Purpose::Detail
+                Purpose::Current | Purpose::Detail | Purpose::Preview
             ) || paths.contains(&entry.task.stamp.target.path)
                 || (entry.settled && retained.contains(&entry.task.stamp.target.path));
             if !keep {
@@ -430,6 +683,30 @@ impl RenderCoordinator {
             keep
         });
     }
+    pub fn set_view(&mut self, view: &super::delivery::ViewState) {
+        self.before_overviews = view
+            .overviews
+            .iter()
+            .filter(|photo| photo.rendition != crate::editor::Rendition::Current)
+            .map(|photo| (photo.path.clone(), photo.rendition))
+            .collect();
+        self.desired.retain(|entry| {
+            let request = &entry.task.request;
+            let keep = !matches!(
+                entry.task.stamp.target.purpose,
+                Purpose::Camera | Purpose::Defaults
+            ) || (view.active.as_ref() == Some(&request.path)
+                && view.rendition == request.rendition)
+                || self.before_overviews.iter().any(|(path, rendition)| {
+                    path == &request.path && *rendition == request.rendition
+                });
+            if !keep {
+                retired(entry, "before_view_changed");
+            }
+            keep
+        });
+    }
+
     pub fn activate(&mut self, path: &Path) {
         if self.active.as_deref() == Some(path) {
             return;
@@ -438,8 +715,11 @@ impl RenderCoordinator {
         self.desired.retain(|entry| {
             let keep = matches!(
                 entry.task.stamp.target.purpose,
-                Purpose::Current | Purpose::Detail | Purpose::Export
-            ) || entry.task.stamp.target.path == path;
+                Purpose::Current | Purpose::Detail | Purpose::Preview | Purpose::Export
+            ) || entry.task.stamp.target.path == path
+                || self.before_overviews.iter().any(|(path, rendition)| {
+                    path == &entry.task.request.path && *rendition == entry.task.request.rendition
+                });
             if !keep {
                 retired(entry, "active_photo_changed");
             }
@@ -504,10 +784,13 @@ impl RenderCoordinator {
                 .collect(),
             scopes: self.scopes.clone(),
             pick: self.pick.clone(),
+            preview_active: self.active.clone(),
         })
     }
     pub fn busy(&self) -> bool {
-        self.desired.iter().any(|entry| !entry.settled)
+        self.desired
+            .iter()
+            .any(|entry| !entry.settled && entry.task.viewport())
     }
     #[cfg(test)]
     pub fn is_settled_and_admitted(&self, id: TaskId, revision: u64) -> bool {
@@ -783,6 +1066,7 @@ impl RenderCoordinator {
 #[derive(Default)]
 pub struct Cursor {
     served: HashSet<Stamp>,
+    claimed: HashSet<Stamp>,
     last: Option<Target>,
     scopes: Option<TaskId>,
     pick: Option<TaskId>,
@@ -791,33 +1075,53 @@ pub struct Cursor {
     waiting_pick: Option<TaskId>,
 }
 impl Cursor {
-    pub fn should_yield(&self, plan: &WorkPlan, task: &Task, export_pending: bool) -> bool {
-        task.speculative
-            && plan
-                .task(&task.stamp.target)
-                .is_some_and(|current| current.speculative)
-            && (export_pending || self.foreground_pending(plan, &task.stamp.target))
+    /// Keep a photo exclusive while an admitted task executes or awaits delivery.
+    /// Replacement plans do not retire physical work already owned by the worker.
+    #[cfg(any(feature = "wide-experiment", test))]
+    pub fn claim(&mut self, stamp: &Stamp) -> bool {
+        if self.path_claimed(&stamp.target.path) {
+            return false;
+        }
+        self.claimed.insert(stamp.clone());
+        self.served.insert(stamp.clone());
+        true
     }
-    pub fn foreground_pending(&self, plan: &WorkPlan, except: &Target) -> bool {
-        plan.tasks
-            .iter()
-            .any(|task| !task.speculative && &task.stamp.target != except)
-            || plan
-                .scopes
-                .as_ref()
-                .is_some_and(|task| self.scopes != Some(task.id))
-            || plan
-                .pick
-                .as_ref()
-                .is_some_and(|task| self.pick != Some(task.id))
+    /// Release only the retired task, never a newer claim for the same photo.
+    pub fn release(&mut self, stamp: &Stamp) {
+        self.claimed.remove(stamp);
+    }
+    fn path_claimed(&self, path: &Path) -> bool {
+        self.claimed.iter().any(|stamp| stamp.target.path == path)
+    }
+    pub fn should_yield(&self, plan: &WorkPlan, task: &Task, export_pending: bool) -> bool {
+        let Some(current) = plan.task(&task.stamp.target) else {
+            return false;
+        };
+        let priority = plan.priority(current);
+        priority != TaskPriority::Viewport
+            && (export_pending
+                || plan.tasks.iter().any(|other| {
+                    other.stamp.target != current.stamp.target && plan.priority(other) < priority
+                })
+                || plan
+                    .pick
+                    .as_ref()
+                    .is_some_and(|pick| self.pick != Some(pick.id))
+                || (priority > TaskPriority::Auxiliary
+                    && plan
+                        .scopes
+                        .as_ref()
+                        .is_some_and(|scope| self.scopes != Some(scope.id))))
     }
     pub fn defer(&mut self, stamp: &Stamp) {
+        self.release(stamp);
         self.served.remove(stamp);
         self.waiting.insert(stamp.clone());
         self.followed = None;
     }
     /// A yielded continuation remains desired and can run as soon as foreground work settles.
     pub fn yield_task(&mut self, stamp: &Stamp) {
+        self.release(stamp);
         self.served.remove(stamp);
         self.waiting.remove(stamp);
         self.followed = None;
@@ -829,6 +1133,11 @@ impl Cursor {
         // An untried job may reuse presentation or session data. Wait only
         // after execution actually discovers that this job needs a source.
         !self.waiting.contains(stamp) || can_retry_source
+    }
+    pub fn available(&self, task: &Task, can_retry_source: bool) -> bool {
+        !self.path_claimed(&task.stamp.target.path)
+            && !self.served.contains(&task.stamp)
+            && self.ready(&task.stamp, can_retry_source)
     }
     pub fn retain_waiting(&mut self, plan: &WorkPlan, export: Option<&Stamp>) {
         self.waiting.retain(|stamp| {
@@ -854,10 +1163,21 @@ impl Cursor {
     pub fn next(&mut self, plan: &WorkPlan) -> Option<Arc<Task>> {
         self.next_ready(plan, |_| true)
     }
+    #[cfg(test)]
     pub fn next_ready(
         &mut self,
         plan: &WorkPlan,
         ready: impl Fn(&Task) -> bool,
+    ) -> Option<Arc<Task>> {
+        self.next_ready_matching(plan, ready, |_| true)
+    }
+    /// Eligibility filters every candidate. Source readiness only gates tasks
+    /// that previously discovered a missing source.
+    pub fn next_ready_matching(
+        &mut self,
+        plan: &WorkPlan,
+        ready: impl Fn(&Task) -> bool,
+        eligible: impl Fn(&Task) -> bool,
     ) -> Option<Arc<Task>> {
         self.served
             .retain(|stamp| plan.tasks.iter().any(|task| task.stamp == *stamp));
@@ -866,8 +1186,13 @@ impl Cursor {
             return None;
         }
         // Even a foreground render waiting for source loading precedes background work.
-        let foreground = plan.tasks.iter().any(|task| !task.speculative);
-        if !foreground
+        let priority = plan
+            .tasks
+            .iter()
+            .map(|task| plan.priority(task))
+            .min()
+            .unwrap();
+        if priority != TaskPriority::Viewport
             && (plan
                 .scopes
                 .as_ref()
@@ -890,10 +1215,13 @@ impl Cursor {
             .map_or(0, |index| (index + 1) % len);
         for offset in 0..len {
             let task = &plan.tasks[(start + offset) % len];
-            if foreground && task.speculative {
+            if plan.priority(task) != priority
+                || self.path_claimed(&task.stamp.target.path)
+                || !eligible(task)
+            {
                 continue;
             }
-            if self.ready(&task.stamp, ready(task)) && self.served.insert(task.stamp.clone()) {
+            if self.available(task, ready(task)) && self.served.insert(task.stamp.clone()) {
                 self.waiting.remove(&task.stamp);
                 self.last = Some(task.stamp.target.clone());
                 self.followed = None;
@@ -904,7 +1232,8 @@ impl Cursor {
     }
     pub fn followup(&mut self, plan: &WorkPlan, previous: &Stamp) -> Option<Arc<Task>> {
         let next = plan.task(&previous.target)?;
-        if (!next.speculative || !self.foreground_pending(plan, &next.stamp.target))
+        if !self.path_claimed(&next.stamp.target.path)
+            && !self.should_yield(plan, next, false)
             && self.followed != Some(previous.id)
             && next.stamp.id == previous.id
             && next.stamp.revision != previous.revision
@@ -917,6 +1246,9 @@ impl Cursor {
         }
     }
     pub fn scope(&mut self, plan: &WorkPlan) -> Option<Arc<ScopeTask>> {
+        if plan.tasks.iter().any(|task| task.viewport()) {
+            return None;
+        }
         let task = plan.scopes.as_ref()?;
         if self.scopes == Some(task.id) {
             None

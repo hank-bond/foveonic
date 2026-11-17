@@ -58,7 +58,6 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.
 - **[viewport-overnight](./viewport-overnight.md)** Complete the approved viewport workflow slices in reviewed commits, then investigate wide execution with isolated measurements.
 - **[viewport-workflows](./viewport-workflows.md)** Review small ownership and quality-policy changes supporting Smart comparisons, persistent zoom and a Full-detail loupe.
-- **[wide-rendering](./wide-rendering.md)** Compare serial, threaded and stage-interleaved rendering in an isolated probe with exact outputs and bounded resource ownership.
 - **[windows-release](./windows-release.md)** Build and validate a Windows x64 test archive for the current release branch.
 
 <!-- INDEX:END -->

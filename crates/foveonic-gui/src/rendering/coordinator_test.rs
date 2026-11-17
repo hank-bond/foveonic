@@ -9,6 +9,8 @@ fn request(path: &str, revision: u64, exposure: f32) -> Arc<Request> {
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.exposure = exposure;
     Arc::new(Request {
+        auxiliary_preview: false,
+
         detail: false,
         framing_preview: false,
         calibration: None,
@@ -58,6 +60,7 @@ fn result_view(reply: &Reply) -> ViewContext<'_> {
         calibration: None,
         settings: &reply.settings,
         overview_visible: true,
+        overview_rendition: Some(crate::editor::Rendition::Current),
         overview_settings: Some(&reply.settings),
         overview_displayed_revision: None,
         overview_detail_revision: None,
@@ -510,6 +513,122 @@ fn an_explicit_native_pass_without_composition_change_gets_new_pixel_work() {
 }
 
 #[test]
+fn cursor_claims_four_photos_and_settles_each_independently() {
+    let mut coordinator = RenderCoordinator::default();
+    let mut cursor = Cursor::default();
+    let stamps: Vec<_> = ["a.x3f", "b.x3f", "c.x3f", "d.x3f"]
+        .into_iter()
+        .map(|path| desire(&mut coordinator, request(path, 1, 0.)))
+        .collect();
+    for stamp in &stamps {
+        let task = cursor.next(&coordinator.plan()).unwrap();
+        assert_eq!(&task.stamp, stamp);
+        assert!(cursor.claim(stamp));
+        assert!(!cursor.claim(stamp));
+    }
+    assert!(cursor.next(&coordinator.plan()).is_none());
+    assert_eq!(coordinator.finish(&stamps[1]), Completion::Current);
+    cursor.release(&stamps[1]);
+    assert_eq!(cursor.claimed.len(), 3);
+    assert!(cursor.next(&coordinator.plan()).is_none());
+    assert_eq!(coordinator.plan().tasks.len(), 3);
+}
+
+#[test]
+fn replacement_plans_preserve_claims_and_stale_release_cannot_release_a_new_claim() {
+    let mut coordinator = RenderCoordinator::default();
+    let mut cursor = Cursor::default();
+    let old = desire(&mut coordinator, request("a.x3f", 1, 0.));
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, old);
+    assert!(cursor.claim(&old));
+    let replacement = desire(&mut coordinator, request("a.x3f", 2, 0.25));
+    cursor.retain_waiting(&coordinator.plan(), None);
+    assert!(cursor.next(&coordinator.plan()).is_none());
+    assert!(!cursor.claim(&replacement));
+    assert_eq!(coordinator.finish(&old), Completion::Superseded);
+    cursor.release(&old);
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, replacement);
+    assert!(cursor.claim(&replacement));
+    cursor.release(&old);
+    let latest = desire(&mut coordinator, request("a.x3f", 3, 0.5));
+    assert!(cursor.next(&coordinator.plan()).is_none());
+    assert!(!cursor.claim(&latest));
+    cursor.release(&replacement);
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, latest);
+}
+
+#[test]
+fn a_claim_blocks_other_purposes_and_composition_followups_for_the_same_photo() {
+    let mut coordinator = RenderCoordinator::default();
+    let mut cursor = Cursor::default();
+    let current = desire(&mut coordinator, request("a.x3f", 1, 0.));
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, current);
+    assert!(cursor.claim(&current));
+    let mut detail = (*request("a.x3f", 2, 0.)).clone();
+    detail.detail = true;
+    let detail = desire(&mut coordinator, Arc::new(detail));
+    assert_ne!(detail.target.purpose, current.target.purpose);
+    assert!(cursor.next(&coordinator.plan()).is_none());
+    assert!(!cursor.claim(&detail));
+    let mut composed = (*request("a.x3f", 3, 0.)).clone();
+    composed.settings.crop.bounds = [0.1, 0., 1., 1.];
+    let composed = desire(&mut coordinator, Arc::new(composed));
+    assert_eq!(composed.id, current.id);
+    assert!(cursor.followup(&coordinator.plan(), &current).is_none());
+    cursor.release(&current);
+    assert_eq!(
+        cursor
+            .followup(&coordinator.plan(), &current)
+            .unwrap()
+            .stamp,
+        composed
+    );
+}
+
+#[test]
+fn candidate_eligibility_does_not_change_source_retry_semantics() {
+    let mut coordinator = RenderCoordinator::default();
+    let mut cursor = Cursor::default();
+    let a = desire(&mut coordinator, request("a.x3f", 1, 0.));
+    let b = desire(&mut coordinator, request("b.x3f", 1, 0.));
+    let candidate = cursor
+        .next_ready_matching(&coordinator.plan(), |_| false, |task| task.stamp == b)
+        .unwrap();
+    assert_eq!(candidate.stamp, b);
+    assert!(!cursor.served.contains(&a));
+    assert!(cursor.claim(&b));
+    cursor.defer(&b);
+    assert!(cursor.claimed.is_empty());
+    assert!(cursor
+        .next_ready_matching(&coordinator.plan(), |_| false, |task| task.stamp == b)
+        .is_none());
+    assert_eq!(
+        cursor
+            .next_ready(&coordinator.plan(), |_| false)
+            .unwrap()
+            .stamp,
+        a
+    );
+    assert_eq!(
+        cursor
+            .next_ready_matching(&coordinator.plan(), |_| true, |task| task.stamp == b)
+            .unwrap()
+            .stamp,
+        b
+    );
+    assert!(cursor.claim(&b));
+    cursor.yield_task(&b);
+    assert!(cursor.claimed.is_empty());
+    assert_eq!(
+        cursor
+            .next_ready(&coordinator.plan(), |_| false)
+            .unwrap()
+            .stamp,
+        b
+    );
+}
+
+#[test]
 fn loading_one_source_leaves_ready_siblings_and_replacement_jobs_serviceable() {
     let mut coordinator = RenderCoordinator::default();
     let mut cursor = Cursor::default();
@@ -687,7 +806,120 @@ fn refinement(rendition: Rendition, revision: u64, continue_whole: bool) -> Refi
         whole.settings.preview_region = None;
         whole
     });
-    Refinement { first, whole }
+    Refinement {
+        visible_region: None,
+        preview: None,
+        first,
+        whole,
+    }
+}
+
+fn refinement_with_preview(revision: u64) -> Refinement {
+    let mut intent = refinement(Rendition::Current, revision, true);
+    let mut preview = intent.first.clone();
+    preview.auxiliary_preview = true;
+    preview.detail = false;
+    preview.revision += 1;
+    preview.preview_scale = foveonic::render::Scale::new(8).unwrap();
+    preview.settings.preview_region = None;
+    intent.preview = Some(preview);
+    intent.whole.as_mut().unwrap().revision += 1;
+    intent
+}
+
+#[test]
+fn regional_delivery_queues_ui_preview_with_idle_completion_disabled() {
+    let mut coordinator = RenderCoordinator::default();
+    coordinator.set_background_completion(false);
+    coordinator.activate(Path::new("a.x3f"));
+    let origin = SourceOrigin::default();
+    coordinator.refine(
+        refinement_with_preview(1),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    regional_completion(&mut coordinator, &first, &origin);
+    let plan = coordinator.plan();
+    assert_eq!(plan.tasks.len(), 1);
+    let preview = &plan.tasks[0];
+    assert_eq!(preview.stamp.target.purpose, Purpose::Preview);
+    assert_eq!(preview.origin.as_ref(), Some(&origin));
+    assert_eq!(plan.priority(preview), TaskPriority::Auxiliary);
+    assert!(!preview.speculative);
+    assert!(!coordinator.busy());
+    assert!(coordinator.is_settled_and_admitted(first.id, first.revision));
+    coordinator.set_background_completion(true);
+    assert_eq!(
+        coordinator
+            .plan()
+            .task(&preview.stamp.target)
+            .unwrap()
+            .stamp,
+        preview.stamp
+    );
+    coordinator.set_background_completion(false);
+    assert_eq!(coordinator.plan().tasks.len(), 1);
+}
+
+#[test]
+fn viewport_then_preview_then_idle_service_preserves_independent_claims() {
+    let mut coordinator = RenderCoordinator::default();
+    let origin = SourceOrigin::default();
+    coordinator.refine(
+        refinement_with_preview(1),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    regional_completion(&mut coordinator, &first, &origin);
+    let mut cursor = Cursor::default();
+    let plan = coordinator.plan();
+    let preview = cursor.next(&plan).unwrap();
+    assert_eq!(preview.stamp.target.purpose, Purpose::Preview);
+    let whole = plan
+        .tasks
+        .iter()
+        .find(|task| task.speculative)
+        .unwrap()
+        .clone();
+    assert!(cursor.should_yield(&plan, &whole, false));
+    let viewport = desire(&mut coordinator, request("b.x3f", 4, 0.));
+    assert!(cursor.should_yield(&coordinator.plan(), &preview, false));
+    cursor.yield_task(&preview.stamp);
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, viewport);
+    coordinator.finish(&viewport);
+    assert_eq!(
+        cursor.next(&coordinator.plan()).unwrap().stamp,
+        preview.stamp
+    );
+    coordinator.finish(&preview.stamp);
+    assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, whole.stamp);
+}
+
+#[test]
+fn preview_replacement_and_target_removal_retire_only_obsolete_work() {
+    let mut coordinator = RenderCoordinator::default();
+    coordinator.set_background_completion(false);
+    let origin = SourceOrigin::default();
+    coordinator.refine(
+        refinement_with_preview(1),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    regional_completion(&mut coordinator, &first, &origin);
+    let preview = coordinator.plan().tasks[0].stamp.clone();
+    let mut next = refinement_with_preview(4);
+    next.first.settings.exposure = 1.;
+    next.preview.as_mut().unwrap().settings.exposure = 1.;
+    next.whole.as_mut().unwrap().settings.exposure = 1.;
+    coordinator.refine(next, Some(origin.clone()), Instant::now());
+    assert_eq!(coordinator.finish(&preview), Completion::Removed);
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    regional_completion(&mut coordinator, &first, &origin);
+    coordinator.retain_overviews(&[], &[]);
+    assert!(coordinator.plan().tasks.is_empty());
 }
 
 fn regional_completion(coordinator: &mut RenderCoordinator, stamp: &Stamp, origin: &SourceOrigin) {
@@ -711,6 +943,65 @@ fn regional_completion(coordinator: &mut RenderCoordinator, stamp: &Stamp, origi
         },
         Some((origin, true)),
     );
+}
+
+#[test]
+fn background_completion_toggle_preserves_regional_settlement_and_restarts_only_optional_work() {
+    for rendition in [Rendition::Current, Rendition::Camera, Rendition::Defaults] {
+        let mut coordinator = RenderCoordinator::default();
+        let origin = SourceOrigin::default();
+        coordinator.set_background_completion(false);
+        coordinator.refine(
+            refinement(rendition, 1, true),
+            Some(origin.clone()),
+            Instant::now(),
+        );
+        let first = coordinator.plan().tasks[0].stamp.clone();
+        regional_completion(&mut coordinator, &first, &origin);
+        assert!(!coordinator.busy());
+        assert!(coordinator.plan().tasks.is_empty());
+        assert!(coordinator.is_settled_and_admitted(first.id, first.revision));
+
+        coordinator.set_background_completion(true);
+        let whole = coordinator.plan().tasks[0].clone();
+        assert!(whole.speculative);
+        assert!(
+            !coordinator.busy(),
+            "optional work must not keep foreground busy"
+        );
+        coordinator.set_background_completion(false);
+        assert!(coordinator.plan().tasks.is_empty());
+        assert!(coordinator.is_settled_and_admitted(first.id, first.revision));
+        assert_ne!(coordinator.finish(&whole.stamp), Completion::Current);
+
+        coordinator.set_background_completion(true);
+        let retry = coordinator.plan().tasks[0].clone();
+        assert!(retry.speculative);
+        assert_ne!(retry.stamp.id, whole.stamp.id);
+        coordinator.set_background_completion(false);
+        assert!(!coordinator.busy());
+    }
+}
+
+#[test]
+fn disabling_background_completion_preserves_explicit_whole_demand() {
+    let mut coordinator = RenderCoordinator::default();
+    let origin = SourceOrigin::default();
+    coordinator.refine(
+        refinement(Rendition::Current, 1, true),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    regional_completion(&mut coordinator, &first, &origin);
+    let whole = coordinator.plan().tasks[0].clone();
+    coordinator.desire(whole.request.clone(), Some(origin), Instant::now());
+    coordinator.set_background_completion(false);
+    assert!(coordinator.busy());
+    let plan = coordinator.plan();
+    assert_eq!(plan.tasks.len(), 1);
+    assert!(!plan.tasks[0].speculative);
+    assert_eq!(plan.tasks[0].stamp.id, whole.stamp.id);
 }
 
 #[test]
@@ -770,7 +1061,7 @@ fn speculative_whole_waits_for_all_foreground_and_can_resume_after_yield() {
     assert!(coordinator.finish_pick(pick.id));
     assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, whole.stamp);
     let new = desire(&mut coordinator, request("d.x3f", 5, 0.));
-    assert!(cursor.foreground_pending(&coordinator.plan(), &whole.stamp.target));
+    assert!(cursor.should_yield(&coordinator.plan(), &whole, false));
     cursor.yield_task(&whole.stamp);
     assert_eq!(cursor.next(&coordinator.plan()).unwrap().stamp, new);
     assert_eq!(coordinator.finish(&new), Completion::Current);
@@ -868,14 +1159,50 @@ fn moving_loupe_replaces_detail_and_preserves_pending_whole_continuation() {
     coordinator.retire_detail(Path::new("a.x3f"));
     assert_eq!(coordinator.plan().tasks.len(), 1);
     assert_eq!(coordinator.plan().tasks[0].stamp, whole);
-    assert!(coordinator
+    let restored = coordinator
         .refine(
             refinement(Rendition::Current, 10, true),
-            Some(origin),
-            Instant::now()
+            Some(origin.clone()),
+            Instant::now(),
         )
-        .is_none());
+        .expect("the loupe retired Smart's native coverage");
+    assert_eq!(restored.stamp.revision, 10);
+    assert!(coordinator
+        .plan()
+        .tasks
+        .iter()
+        .any(|task| task.stamp == whole));
+    regional_completion(&mut coordinator, &restored.stamp, &origin);
     assert_eq!(coordinator.plan().tasks[0].stamp, whole);
+}
+
+#[test]
+fn admitted_whole_still_covers_smart_after_loupe_retires_its_patch() {
+    let mut coordinator = RenderCoordinator::default();
+    let origin = SourceOrigin::default();
+    coordinator.refine(
+        refinement_with_preview(1),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    regional_completion(&mut coordinator, &first, &origin);
+    let whole = coordinator
+        .plan()
+        .tasks
+        .iter()
+        .find(|task| task.speculative)
+        .unwrap()
+        .stamp
+        .clone();
+    coordinator.finish(&whole);
+    assert!(coordinator.admit(&whole, &origin));
+    coordinator.retire_detail(Path::new("a.x3f"));
+    assert!(coordinator
+        .refine(refinement_with_preview(10), Some(origin), Instant::now())
+        .is_none());
+    assert!(!coordinator.busy());
+    assert!(coordinator.is_settled_and_admitted(whole.id, whole.revision));
 }
 
 #[test]
@@ -925,9 +1252,10 @@ fn region_only_and_native_fallback_settle_without_whole_work() {
         pan.first.detail = true;
         pan.first.settings.preview_region = Some([400, 400, 600, 600]);
         let _ = coordinator.refine(pan, None, Instant::now());
-        assert!(
-            !coordinator.busy(),
-            "panning must not restart a completed sequence"
+        assert_eq!(
+            coordinator.busy(),
+            regional,
+            "only admitted whole-image coverage satisfies an uncovered pan"
         );
     }
 }
@@ -1180,4 +1508,292 @@ fn relaxed_sampling_does_not_share_an_inflight_pixel_task() {
     assert_ne!(old.id, new.id);
     assert!(coordinator.desired(&new.target).unwrap().seed.is_none());
     assert_eq!(coordinator.finish(&old), Completion::Superseded);
+}
+
+fn pan(mut intent: Refinement, visible: [u32; 4], region: [u32; 4]) -> Refinement {
+    intent.visible_region = Some(visible);
+    intent.first.settings.preview_region = Some(region);
+    intent
+}
+
+#[test]
+fn covered_visible_pan_reuses_overscan_even_when_new_overscan_differs() {
+    let mut coordinator = RenderCoordinator::default();
+    coordinator.refine(refinement_with_preview(1), None, Instant::now());
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    let covered = pan(
+        refinement_with_preview(4),
+        [64, 64, 150, 150],
+        [0, 0, 214, 214],
+    );
+    assert!(coordinator.refine(covered, None, Instant::now()).is_none());
+    assert_eq!(coordinator.plan().tasks[0].stamp, first);
+    regional_completion(&mut coordinator, &first, &SourceOrigin::default());
+    assert!(!coordinator.busy());
+}
+
+#[test]
+fn running_region_finishes_then_latest_uncovered_pan_runs_with_original_siblings() {
+    let mut coordinator = RenderCoordinator::default();
+    coordinator.set_background_completion(false);
+    let origin = SourceOrigin::default();
+    coordinator.refine(
+        refinement_with_preview(1),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    let mut last_queued = Instant::now();
+    for revision in [4, 7, 10] {
+        last_queued = Instant::now();
+        let x = revision as u32 * 100;
+        let next = pan(
+            refinement_with_preview(revision),
+            [x, 0, x + 100, 100],
+            [x, 0, x + 164, 164],
+        );
+        assert!(coordinator
+            .refine(next, Some(origin.clone()), last_queued)
+            .is_none());
+        assert_eq!(coordinator.plan().tasks[0].stamp, first);
+    }
+    regional_completion(&mut coordinator, &first, &origin);
+    let plan = coordinator.plan();
+    let next = plan
+        .tasks
+        .iter()
+        .find(|task| task.stamp.target.purpose == Purpose::Detail)
+        .unwrap();
+    assert_eq!(next.stamp.revision, 10);
+    assert_eq!(next.queued_at, last_queued);
+    let preview = plan
+        .tasks
+        .iter()
+        .find(|task| task.stamp.target.purpose == Purpose::Preview)
+        .unwrap()
+        .stamp
+        .clone();
+    assert_eq!(preview.revision, 2);
+    regional_completion(&mut coordinator, &next.stamp, &origin);
+    assert_eq!(coordinator.plan().tasks[0].stamp, preview);
+    coordinator.set_background_completion(true);
+    let plan = coordinator.plan();
+    assert_eq!(
+        plan.tasks
+            .iter()
+            .find(|task| task.speculative)
+            .unwrap()
+            .stamp
+            .revision,
+        3
+    );
+}
+
+#[test]
+fn pan_back_into_running_region_clears_the_pending_replacement() {
+    let mut coordinator = RenderCoordinator::default();
+    coordinator.set_background_completion(false);
+    coordinator.refine(
+        refinement(Rendition::Current, 1, false),
+        None,
+        Instant::now(),
+    );
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    coordinator.refine(
+        pan(
+            refinement(Rendition::Current, 2, false),
+            [500, 500, 600, 600],
+            [436, 436, 664, 664],
+        ),
+        None,
+        Instant::now(),
+    );
+    coordinator.refine(
+        pan(
+            refinement(Rendition::Current, 3, false),
+            [64, 64, 128, 128],
+            [0, 0, 192, 192],
+        ),
+        None,
+        Instant::now(),
+    );
+    regional_completion(&mut coordinator, &first, &SourceOrigin::default());
+    assert!(coordinator.plan().tasks.is_empty());
+    assert!(!coordinator.busy());
+}
+
+#[test]
+fn failed_region_promotes_pending_pan_without_publishing_siblings() {
+    let mut coordinator = RenderCoordinator::default();
+    let initial = refinement_with_preview(1);
+    coordinator.refine(initial.clone(), None, Instant::now());
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    coordinator.refine(
+        pan(
+            refinement_with_preview(4),
+            [500, 500, 600, 600],
+            [436, 436, 664, 664],
+        ),
+        None,
+        Instant::now(),
+    );
+    let mut reply = render_result(first, &initial.first);
+    reply.result = Err("source error".into());
+    let (_, started) = coordinator.handle_result(&reply, &result_view(&reply));
+    assert_eq!(started.unwrap().stamp.revision, 4);
+    assert_eq!(coordinator.plan().tasks.len(), 1);
+}
+
+#[test]
+fn rejected_source_discards_pending_pan_and_native_fallback_satisfies_it() {
+    for native_fallback in [false, true] {
+        let mut coordinator = RenderCoordinator::default();
+        let origin = SourceOrigin::default();
+        coordinator.refine(
+            refinement_with_preview(1),
+            Some(origin.clone()),
+            Instant::now(),
+        );
+        let first = coordinator.plan().tasks[0].stamp.clone();
+        coordinator.refine(
+            pan(
+                refinement_with_preview(4),
+                [500, 500, 600, 600],
+                [436, 436, 664, 664],
+            ),
+            Some(origin.clone()),
+            Instant::now(),
+        );
+        coordinator.finish(&first);
+        if native_fallback {
+            assert!(coordinator.admit(&first, &origin));
+        }
+        coordinator.advance_refinement(
+            &first,
+            ResultUpdate {
+                current: true,
+                update_photo: native_fallback,
+                destination: native_fallback.then_some(Destination::Active),
+            },
+            Some((&origin, !native_fallback)),
+        );
+        assert!(coordinator.plan().tasks.is_empty());
+    }
+}
+
+#[test]
+fn before_pan_keeps_whole_revision_after_its_latest_region() {
+    let mut coordinator = RenderCoordinator::default();
+    let origin = SourceOrigin::default();
+    coordinator.refine(
+        refinement(Rendition::Camera, 1, true),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    let first = coordinator.plan().tasks[0].stamp.clone();
+    coordinator.refine(
+        pan(
+            refinement(Rendition::Camera, 3, true),
+            [500, 500, 600, 600],
+            [436, 436, 664, 664],
+        ),
+        Some(origin.clone()),
+        Instant::now(),
+    );
+    regional_completion(&mut coordinator, &first, &origin);
+    let second = coordinator.plan().tasks[0].stamp.clone();
+    assert_eq!(second.revision, 3);
+    regional_completion(&mut coordinator, &second, &origin);
+    let whole = coordinator.plan().tasks[0].stamp.clone();
+    assert_eq!(whole.revision, 4);
+    coordinator.finish(&whole);
+    assert!(coordinator.admit(&whole, &origin));
+}
+
+#[test]
+fn preview_promotion_yields_a_claimed_browser_peer_and_reorders_service() {
+    let mut coordinator = RenderCoordinator::default();
+    for (path, revision) in [("a.x3f", 1), ("b.x3f", 2)] {
+        let mut preview = (*request(path, revision, 0.)).clone();
+        preview.auxiliary_preview = true;
+        desire(&mut coordinator, Arc::new(preview));
+    }
+    let mut plan = (*coordinator.plan()).clone();
+    let a = plan
+        .tasks
+        .iter()
+        .find(|t| t.request.path == Path::new("a.x3f"))
+        .unwrap()
+        .clone();
+    let b = plan
+        .tasks
+        .iter()
+        .find(|t| t.request.path == Path::new("b.x3f"))
+        .unwrap()
+        .clone();
+    let mut cursor = Cursor::default();
+    assert!(cursor.claim(&a.stamp));
+    assert!(cursor.claim(&b.stamp));
+    assert_eq!(plan.priority(&a), TaskPriority::Thumbnail);
+    assert!(!cursor.should_yield(&plan, &a, false));
+    plan.preview_active = Some(b.request.path.clone());
+    assert_eq!(plan.priority(&b), TaskPriority::Auxiliary);
+    assert!(cursor.should_yield(&plan, &a, false));
+    assert!(!cursor.should_yield(&plan, &b, false));
+    cursor.yield_task(&a.stamp);
+    cursor.yield_task(&b.stamp);
+    assert_eq!(cursor.next(&plan).unwrap().stamp, b.stamp);
+    assert!(
+        cursor.next(&plan).is_none(),
+        "claimed navigator work still precedes browser work"
+    );
+    plan.tasks.retain(|t| t.stamp != b.stamp);
+    assert_eq!(cursor.next(&plan).unwrap().stamp, a.stamp);
+}
+
+#[test]
+fn group_before_survives_activation_and_retires_when_its_view_returns_after() {
+    let mut coordinator = RenderCoordinator::default();
+    let mut a = (*request("a.x3f", 1, 0.)).clone();
+    a.rendition = Rendition::Camera;
+    let mut b = a.clone();
+    b.path = "b.x3f".into();
+    let mut view = super::super::delivery::ViewState {
+        processing_quality: ProcessingQuality::Speed,
+        active: Some(a.path.clone()),
+        rendition: Rendition::Camera,
+        output: "final".into(),
+        comparison: false,
+        framing_preview: false,
+        exporting: false,
+        calibration: None,
+        settings: a.settings.clone(),
+        overviews: [&a, &b]
+            .into_iter()
+            .map(|request| super::super::delivery::PhotoView {
+                path: request.path.clone(),
+                rendition: request.rendition,
+                settings: request.settings.clone(),
+                displayed_revision: None,
+                detail_revision: None,
+            })
+            .collect(),
+        displayed_revision: None,
+        detail_revision: None,
+    };
+    coordinator.set_view(&view);
+    desire(&mut coordinator, Arc::new(a.clone()));
+    desire(&mut coordinator, Arc::new(b.clone()));
+    coordinator.activate(Path::new("white.x3f"));
+    assert!(coordinator.desired(&Target::of(&a)).is_some());
+    assert!(coordinator.desired(&Target::of(&b)).is_some());
+    view.active = Some("white.x3f".into());
+    view.rendition = Rendition::Current;
+    view.overviews[0].rendition = Rendition::Current;
+    coordinator.set_view(&view);
+    assert!(coordinator.desired(&Target::of(&a)).is_none());
+    assert!(coordinator.desired(&Target::of(&b)).is_some());
+    view.overviews.clear();
+    coordinator.set_view(&view);
+    assert!(coordinator.desired(&Target::of(&b)).is_none());
 }

@@ -12,7 +12,7 @@ Requirements: [render orchestration](../docs/specs/render-orchestration.md), [in
 - **Checkpoint:** `33453b3` separates requested source loading, `ab317e5` corrects shared-source retry readiness, and `02104b4` groups browser sources. `075bbcc` contains the earlier behavioral coverage and focused delivery fixes. See the [behavioral plan](./behavioral-testing.md) for checks and remaining coverage limits.
 - **Completed unit:** source acquisition is independent of the serial renderer. Reuse remains before loading, and an already-ready photo can render while another load is held.
 - **Decided:** protect UI responsiveness, use one runtime for individual and multi-photo editing, isolate responsibilities and support subordinate speculative work. Keep engine execution serial throughout this migration.
-- **Separate future effort:** [wide rendering](./wide-rendering.md). Clear application/engine ownership should make that experiment easier, without building its execution machinery here.
+- **Separate future effort:** [wide rendering](archived/wide-rendering.md). Clear application/engine ownership should make that experiment easier, without building its execution machinery here.
 - **Not decided:** later state ownership, shared foreground/background admission policy and backlog limits.
 - **Communication direction:** ordinary typed messages, fixed consumers and directly called handlers. Keep existing library queues across threads. Add a broadcast/watch dependency only when an actual consumer needs the full primitive.
 - **Next action:** finish the [portable test-input setup](./behavioral-testing.md#reproducibility-follow-up), then discuss the [viewport architecture review](./viewport-workflows.md), starting with one preview-quality policy. Implementation requires agreement on the next small slice. The earlier cached-switch failure and its subsequent fix remain recorded in the behavioral plan.
@@ -197,7 +197,7 @@ No new test framework is needed. Existing retained-versus-fresh verification rem
 
 The [overhead investigation](./coordination-overhead-profile.md) separates warm edits, cold-processing selection and prepared selection. Historical warm eight-photo Wall measurements include about 3.27 ms graph planning, 20.47 ms graph completion waits and 23.09 ms display completion waits. These are inclusive, overlapping observations, not recoverable savings. They justify testing completion boundaries separately from graph traversal.
 
-Source findings about per-operation waits, internal GPU submissions and the single protected reduced session are retained in the [future wide-rendering investigation](./wide-rendering.md). They do not require engine restructuring in this ownership migration.
+Source findings about per-operation waits, internal GPU submissions and the single protected reduced session are retained in the [future wide-rendering investigation](archived/wide-rendering.md). They do not require engine restructuring in this ownership migration.
 
 Record these harness changes with the slice that first needs them:
 

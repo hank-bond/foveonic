@@ -198,17 +198,31 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
             reaches_correction,
             "{quality:?} must reconstruct corrected blue"
         );
-        let mut artifacts = engine
-            .collect_artifacts(
-                crate::render::recipes::RecipeInput::Original(&source),
-                &settings,
-                &mut recipe.graph,
-                recipe.final_id,
-                &["phase-detection.blue", "extraction.blue"],
-                &mut profile,
-                &mut execution,
-            )
-            .unwrap();
+        let mut artifacts = {
+            let input = crate::render::recipes::RecipeInput::Original(&source);
+            let plan = engine
+                .plan_artifacts(
+                    &settings,
+                    &mut recipe.graph,
+                    recipe.final_id,
+                    &["phase-detection.blue", "extraction.blue"],
+                    &mut profile,
+                    &mut execution,
+                )
+                .unwrap();
+            let values = engine
+                .run_graph(
+                    input.context(),
+                    &recipe.graph,
+                    &plan.roots,
+                    &mut profile,
+                    &mut execution,
+                    crate::render::execute::Completion::Queued,
+                )
+                .unwrap();
+            engine.package_artifacts(input, &settings, &recipe.graph, plan, values)
+        }
+        .unwrap();
         let Content::Image(raw) = artifacts.pop().unwrap().content else {
             panic!("raw blue")
         };
@@ -284,11 +298,13 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
             .position(|o| o.name == "highlight-restoration.mask")
             .unwrap();
         let values = engine
-            .execute(
+            .run_graph(
                 crate::render::execute::Input::Source(&source),
                 &recipe.graph,
                 &[restored, blue, mask],
                 &mut Profile::default(),
+                &mut crate::interactive::Execution::default(),
+                crate::render::execute::Completion::Queued,
             )
             .unwrap();
         let histories: Vec<_> = values

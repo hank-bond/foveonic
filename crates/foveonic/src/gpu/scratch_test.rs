@@ -54,3 +54,18 @@ fn trimming_spares_does_not_change_a_retained_readers_samples() {
         bytemuck::cast_slice::<u32, u8>(&[1, 2, 3, 4])
     );
 }
+
+#[test]
+fn empty_scratch_still_accounts_reserved_guard_capacity() {
+    let scratch = Scratch {
+        buffers: Vec::with_capacity(4),
+        ..Default::default()
+    };
+    let mut retained = crate::recipe::RetainedBytes::default();
+    scratch.account(&mut retained);
+    assert_eq!(
+        retained.bytes(),
+        scratch.buffers.capacity() * size_of::<crate::gpu::ReadGuard>()
+    );
+    assert_eq!(scratch.buffers().count(), 0);
+}

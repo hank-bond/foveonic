@@ -331,6 +331,8 @@ impl App {
         settings.working_scale = Scale::NATIVE;
         settings.preview_region = geometry.map(|geometry| geometry.region);
         let request = Request {
+            auxiliary_preview: false,
+
             detail: true,
             framing_preview: false,
             calibration: self
@@ -373,6 +375,8 @@ mod tests {
             ..Default::default()
         };
         Request {
+            auxiliary_preview: false,
+
             detail: true,
             framing_preview: false,
             calibration: None,

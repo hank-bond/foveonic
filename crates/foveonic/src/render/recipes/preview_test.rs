@@ -8,6 +8,39 @@ use crate::{
 };
 
 #[test]
+fn prepared_recipe_retains_both_settings_and_the_entire_authored_graph() {
+    let mut graph = crate::graph::Graph::default();
+    let final_id = graph.add(crate::graph::Operation::Source, &[]).unwrap();
+    let mut retained = crate::recipe::RetainedBytes::default();
+    graph.account(&mut retained).unwrap();
+    let graph_bytes = retained.bytes();
+    let mut settings = Settings::new("Daylight", "Standard");
+    let mut requested = Settings::new("Auto", "Neutral");
+    settings.white_balance.reserve(41);
+    requested.color_mode.reserve(67);
+    let strings = settings.white_balance.capacity()
+        + settings.color_mode.capacity()
+        + requested.white_balance.capacity()
+        + requested.color_mode.capacity();
+    let prepared = super::PreparedRecipe {
+        built: super::BuiltRecipe {
+            graph,
+            final_id,
+            params: bytemuck::Zeroable::zeroed(),
+            rgb_to_native: [[0.; 3]; 2],
+            rgb_extent: [1; 2],
+            rgb_bounds: [0, 0, 1, 1],
+        },
+        settings,
+        requested,
+        regional: None,
+    };
+    let mut retained = crate::recipe::RetainedBytes::default();
+    assert_eq!(prepared.account(&mut retained), Some(()));
+    assert_eq!(retained.bytes(), graph_bytes + strings);
+}
+
+#[test]
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F, optional SMALL_PREVIEW_OUT"]
 fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
     let source = Source::open(std::env::var_os("SMALL_PREVIEW_X3F").unwrap()).unwrap();

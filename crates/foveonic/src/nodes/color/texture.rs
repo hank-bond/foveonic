@@ -94,6 +94,26 @@ pub(crate) struct Prepared {
     identity: bool,
 }
 impl Prepared {
+    /// The neutral spatial controls skip the pyramid. Uniforms are still
+    /// allocated when the identity branch returns the input unchanged.
+    pub(crate) fn allocation(
+        self,
+        params: Parameters,
+        requested: Requested,
+    ) -> Option<crate::render::allocation::GpuAllocation> {
+        use crate::render::allocation::{image_bytes, uploaded_bytes, GpuAllocation};
+        if self.spatial || !requested.layers || requested.change {
+            return None;
+        }
+        let extent = super::reconstruction::whole_atlas_extent(params)?;
+        // Input-size validation runs before the identity return in apply.
+        let bytes = image_bytes(extent, 3)?;
+        GpuAllocation::new(
+            if self.identity { 0 } else { bytes },
+            uploaded_bytes::<Parameters>(1)?.checked_add(uploaded_bytes::<Uniforms>(1)?)?,
+        )
+    }
+
     pub(crate) fn needs_base(self) -> bool {
         !self.identity
     }

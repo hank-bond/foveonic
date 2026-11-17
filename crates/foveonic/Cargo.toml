@@ -21,3 +21,6 @@ tempfile = "3"
 rayon = "1.11"
 perfetto-sdk = "1.2.1"
 sha2 = "0.10"
+
+[features]
+wide-experiment = []

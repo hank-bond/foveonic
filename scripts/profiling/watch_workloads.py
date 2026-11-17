@@ -22,7 +22,7 @@ def is_workload_executable(executable):
     return (name in {'cargo', 'rustc', 'clang', 'clang++', 'cc', 'cc1', 'ld',
                     'foveonic', 'foveonic-gui', 'Foveonic', 'vmmap', 'footprint',
                     'profile_pipeline', 'profile_editing', 'profile_checkpoints',
-                    'profile_noise_resources', 'profile_smart_preview', 'browser_pipeline'}
+                    'profile_noise_resources', 'profile_smart_preview', 'profile_wide', 'browser_pipeline'}
             or ('/deps/' in executable and name.startswith(('foveonic-', 'foveonic_gui-'))))
 
 

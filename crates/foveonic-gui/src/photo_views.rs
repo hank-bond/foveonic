@@ -1,4 +1,4 @@
-//! Retains per-photo viewing geometry independently of rendered pixels and editing selection.
+//! Retains per-photo viewing geometry and shares Shift viewing changes across editing targets.
 
 use crate::viewport::{ViewTransform, Viewport};
 use std::{
@@ -28,6 +28,36 @@ impl PhotoViews {
         }
     }
 
+    /// Fan out source-owned changes once, after all tiles have interpreted input.
+    pub fn apply_group_input(
+        &mut self,
+        targets: &[PathBuf],
+        displayed: &[PathBuf],
+        pixels_per_point: f32,
+    ) -> bool {
+        let mut changes = Vec::new();
+        for path in targets {
+            if let Some(view) = self.photos.get_mut(path) {
+                changes.extend(
+                    view.take_group_changes()
+                        .into_iter()
+                        .map(|change| (path.clone(), change)),
+                );
+            }
+        }
+        let changed = !changes.is_empty();
+        for (source, change) in changes {
+            for path in targets.iter().filter(|path| **path != source) {
+                let peer = self.view_mut(Some(path));
+                if !displayed.contains(path) {
+                    peer.detach_layout();
+                }
+                peer.apply_view_change(change, pixels_per_point);
+            }
+        }
+        changed
+    }
+
     pub fn select(&mut self, path: &Path, carried: Option<ViewTransform>) {
         let view = self.view_mut(Some(path));
         if let Some(transform) = carried {
@@ -45,7 +75,7 @@ mod tests {
     use super::*;
     use eframe::egui;
 
-    fn draw(
+    pub(super) fn draw(
         views: &mut PhotoViews,
         ctx: &egui::Context,
         paths: &[&Path],
@@ -59,6 +89,18 @@ mod tests {
         views: &mut PhotoViews,
         ctx: &egui::Context,
         paths: &[&Path],
+        time: f64,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> Vec<crate::viewport_selection::Request> {
+        draw_targets(views, ctx, paths, &[], time, events, modifiers)
+    }
+
+    pub(super) fn draw_targets(
+        views: &mut PhotoViews,
+        ctx: &egui::Context,
+        paths: &[&Path],
+        targets: &[std::path::PathBuf],
         time: f64,
         events: Vec<egui::Event>,
         modifiers: egui::Modifiers,
@@ -89,6 +131,8 @@ mod tests {
                             ui.new_child(egui::UiBuilder::new().id_salt(index).max_rect(rect));
                         let view = views.view_mut(Some(path));
                         view.editing = crate::photo_tools::takes_pointer(ctx);
+                        view.group_target =
+                            targets.len() > 1 && targets.iter().any(|target| target == *path);
                         view.show_preview(
                             &mut child,
                             (egui::TextureId::User(index as u64), egui::vec2(200., 150.)),
@@ -96,7 +140,10 @@ mod tests {
                             Default::default(),
                         );
                         if let Some(gesture) = view.response().and_then(|response| {
-                            crate::photo_tools::selection_gesture(&response, selecting)
+                            crate::photo_tools::selection_gesture(
+                                &response,
+                                view.selection_eligible(selecting),
+                            )
                         }) {
                             requests.push(crate::viewport_selection::Request {
                                 path: path.to_path_buf(),
@@ -107,7 +154,30 @@ mod tests {
                 });
             },
         );
+        views.apply_group_input(
+            targets,
+            &paths
+                .iter()
+                .map(|path| path.to_path_buf())
+                .collect::<Vec<_>>(),
+            ctx.pixels_per_point(),
+        );
         requests
+    }
+
+    fn group_draw(
+        views: &mut PhotoViews,
+        ctx: &egui::Context,
+        paths: &[&Path],
+        time: f64,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> Vec<crate::viewport_selection::Request> {
+        let targets = paths
+            .iter()
+            .map(|path| path.to_path_buf())
+            .collect::<Vec<_>>();
+        draw_targets(views, ctx, paths, &targets, time, events, modifiers)
     }
 
     fn click(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
@@ -120,6 +190,93 @@ mod tests {
                 modifiers: Default::default(),
             },
         ]
+    }
+
+    #[test]
+    fn shift_group_pinch_keeps_relative_zoom_for_every_target() {
+        let mut views = PhotoViews::default();
+        let ctx = egui::Context::default();
+        let paths = [Path::new("a.x3f"), Path::new("b.x3f")];
+        draw(&mut views, &ctx, &paths, 0., vec![]);
+        views.view_mut(Some(paths[1])).zoom_by(2.);
+        draw(&mut views, &ctx, &paths, 0.1, vec![]);
+        let before = paths.map(|path| views.view(Some(path)).zoom_percent(1.).unwrap());
+        let point = views.view(Some(paths[0])).response().unwrap().rect.center();
+        group_draw(
+            &mut views,
+            &ctx,
+            &paths,
+            0.2,
+            vec![egui::Event::PointerMoved(point), egui::Event::Zoom(1.5)],
+            egui::Modifiers::SHIFT,
+        );
+        for (index, path) in paths.iter().enumerate() {
+            let ratio = views.view(Some(path)).zoom_percent(1.).unwrap() / before[index];
+            assert!(
+                (ratio - 1.5).abs() < 1e-5,
+                "Shift zoom must apply once to every blue photo: {index} changed by {ratio}"
+            );
+        }
+    }
+
+    #[test]
+    fn shift_group_double_click_uses_one_snap_then_fit_destination() {
+        let mut views = PhotoViews::default();
+        let ctx = egui::Context::default();
+        let paths = [Path::new("a.x3f"), Path::new("b.x3f")];
+        draw(&mut views, &ctx, &paths, 0., vec![]);
+        views.view_mut(Some(paths[1])).zoom_by(8.);
+        let point = views.view(Some(paths[0])).response().unwrap().rect.center();
+        let mut requests = Vec::new();
+        for (time, pressed) in [(0.1, true), (0.15, false), (0.2, true), (0.25, false)] {
+            requests.extend(group_draw(
+                &mut views,
+                &ctx,
+                &paths,
+                time,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::SHIFT,
+                    },
+                ],
+                egui::Modifiers::SHIFT,
+            ));
+        }
+        assert!(
+            requests.is_empty(),
+            "Shift double-click must preserve the editing group"
+        );
+        for path in paths {
+            assert_eq!(views.view(Some(path)).zoom_percent(1.), Some(200.));
+        }
+        for (time, pressed) in [(1.1, true), (1.15, false), (1.2, true), (1.25, false)] {
+            group_draw(
+                &mut views,
+                &ctx,
+                &paths,
+                time,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::SHIFT,
+                    },
+                ],
+                egui::Modifiers::SHIFT,
+            );
+        }
+        for path in paths {
+            assert!(
+                !views.view(Some(path)).explicit_zoom(),
+                "Every photo returns to Fit"
+            );
+        }
     }
 
     #[test]
@@ -366,3 +523,7 @@ mod tests {
         assert_eq!(views.view(Some(b)).pan, egui::Vec2::ZERO);
     }
 }
+
+#[cfg(test)]
+#[path = "photo_views_group_test.rs"]
+mod group_tests;

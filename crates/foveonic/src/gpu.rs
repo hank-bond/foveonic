@@ -12,7 +12,20 @@ mod scheduling;
 pub(crate) mod scratch;
 mod storage;
 pub use kernels::Kernel;
+#[cfg(feature = "wide-experiment")]
+pub(crate) use scheduling::SubmissionWindow;
 pub(crate) use storage::{Binding, ReadGuard, WriteGuard};
+
+pub(crate) struct Retirement {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+impl Retirement {
+    pub(crate) fn wait(&self) -> Result<()> {
+        completion::submitted(&self.device, &self.queue)
+    }
+}
 
 #[derive(Clone)]
 struct TracePass {
@@ -33,6 +46,16 @@ pub(crate) struct GpuTrace {
 }
 
 impl GpuTrace {
+    /// Timestamp owners have separate device/readback lifetimes and no audited
+    /// allocation contract. An ordinary trace owns only its pass-vector heap.
+    pub(crate) fn account(&self, retained: &mut crate::recipe::RetainedBytes) -> Option<()> {
+        if self.query.is_some() || self.capture.is_some() {
+            return None;
+        }
+        retained.add_bytes(self.passes.capacity() * size_of::<TracePass>());
+        Some(())
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.passes.len()
     }
@@ -76,6 +99,12 @@ pub struct Gpu {
 }
 
 impl Gpu {
+    pub(crate) fn retirement(&self) -> Retirement {
+        Retirement {
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+        }
+    }
     pub fn executor(&self) -> Self {
         Self {
             device: self.device.clone(),
@@ -832,3 +861,28 @@ mod scheduling_tests {
 #[cfg(test)]
 #[path = "../examples/chroma_investigation/gpu.rs"]
 pub(crate) mod chroma_investigation;
+
+#[cfg(test)]
+mod accounting_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_trace_counts_reserved_pass_capacity_without_a_device() {
+        let mut trace = GpuTrace::default();
+        trace.passes.reserve_exact(3);
+        trace.passes.push(TracePass {
+            label: "example",
+            submission: 1,
+            context: Some(Default::default()),
+        });
+        let expected = trace.passes.capacity() * size_of::<TracePass>();
+        for clear in [false, true] {
+            if clear {
+                trace.passes.clear();
+            }
+            let mut retained = crate::recipe::RetainedBytes::default();
+            assert_eq!(trace.account(&mut retained), Some(()));
+            assert_eq!(retained.bytes(), expected);
+        }
+    }
+}

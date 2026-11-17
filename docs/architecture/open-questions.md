@@ -23,4 +23,4 @@ Requested source acquisition now uses a separate I/O thread, the existing disk c
 
 Loupe, focus/eye analysis and other culling UX remain future consumers of the runtime. Their concrete algorithms and interactions are outside this migration.
 
-Wide execution and its session-admission/graph-advancement questions belong to the [separate deferred investigation](../../plans/wide-rendering.md). Clear ownership should make that experiment easier, but it is not a required implementation step or success criterion here.
+Wide execution and its session-admission/graph-advancement questions belong to the [separate deferred investigation](../../plans/archived/wide-rendering.md). Clear ownership should make that experiment easier, but it is not a required implementation step or success criterion here.

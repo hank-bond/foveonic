@@ -125,15 +125,41 @@ fn execution_settings<'a>(
     request
 }
 
+pub(super) struct PreparedRecipe {
+    pub(super) built: BuiltRecipe,
+    pub(super) settings: Settings,
+    requested: Settings,
+    regional: Option<crate::rotation::Regional>,
+}
+impl PreparedRecipe {
+    pub(super) fn account(&self, retained: &mut crate::recipe::RetainedBytes) -> Option<()> {
+        self.settings.account(retained);
+        self.requested.account(retained);
+        self.built.graph.account(retained)
+    }
+
+    pub(super) fn compose(&self, artifacts: &mut [crate::inspection::Artifact]) {
+        if let Some(region) = self.regional {
+            for artifact in artifacts {
+                artifact.settings = self.requested.clone();
+                if let crate::inspection::Content::Image(image) = &mut artifact.content {
+                    image.settings = self.requested.clone();
+                    image.regional = Some(region);
+                }
+            }
+        }
+    }
+}
+
 impl Engine {
-    pub(super) fn render_recipe(
+    pub(super) fn prepare_recipe(
         &self,
         source: RecipeInput<'_>,
         settings: &Settings,
         recipe: Recipe<'_>,
         profile: &mut Profile,
         execution: &mut Execution<'_>,
-    ) -> Result<Vec<crate::inspection::Artifact>> {
+    ) -> Result<PreparedRecipe> {
         let names = match recipe {
             Recipe::Photographic(names) => names,
             Recipe::DngBase => &["final"],
@@ -143,7 +169,7 @@ impl Engine {
         profile.mode.check_gpu_features(self.device().features())?;
         settings.validate_values()?;
         if names.is_empty() {
-            return Ok(Vec::new());
+            return Err("empty recipe request".into());
         }
         // Image artifacts must describe the region actually rendered, so
         // whole-frame fallback still applies saved crop and rotation.
@@ -207,25 +233,12 @@ impl Engine {
         if let Some(progress) = execution.progress {
             progress(super::RenderProgress::Prepared);
         }
-        let mut artifacts = self.collect_artifacts(
-            source,
-            settings,
-            &mut built.graph,
-            built.final_id,
-            names,
-            profile,
-            execution,
-        )?;
-        if let Some(region) = regional {
-            for artifact in &mut artifacts {
-                artifact.settings = requested.clone();
-                if let crate::inspection::Content::Image(image) = &mut artifact.content {
-                    image.settings = requested.clone();
-                    image.regional = Some(region);
-                }
-            }
-        }
-        Ok(artifacts)
+        Ok(PreparedRecipe {
+            built,
+            settings: settings.clone(),
+            requested: requested.clone(),
+            regional,
+        })
     }
 }
 

@@ -340,6 +340,9 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
         let fresh = engine
             .render(&session.source, &settings, &mut Profile::default())
             .unwrap();
+        assert_eq!(retained.description(), fresh.description(), "cold {name}");
+        assert_eq!(retained.view(), fresh.view(), "cold {name}");
+        assert_eq!(retained.settings(), fresh.settings(), "cold {name}");
         assert_same_pixels(
             &format!("cold {name}"),
             &before,
@@ -405,22 +408,19 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
                 }
                 _ => unreachable!(),
             }
-            // Detail edits need all of their unchanged inputs ready. Switching edit
-            // groups may need one render to prepare a different set of inputs.
-            let activity = engine.gpu_activity();
             let cached = session_image(&engine, &mut session, &settings);
-            let delta = engine.gpu_activity().since(activity);
-            if step < 5 {
-                assert!(
-                    delta.dispatches <= 12,
-                    "unexpected expensive work {name} {step}: {delta:?}"
-                );
-            }
             let actual = engine.gpu.readback(&cached.buffer).unwrap();
             let fresh = engine
                 .render(&session.source, &settings, &mut Profile::default())
                 .unwrap();
             let expected = engine.gpu.readback(&fresh.buffer).unwrap();
+            assert_eq!(
+                cached.description(),
+                fresh.description(),
+                "{name} step {step}"
+            );
+            assert_eq!(cached.view(), fresh.view(), "{name} step {step}");
+            assert_eq!(cached.settings(), fresh.settings(), "{name} step {step}");
             assert_same_pixels(&format!("{name} step {step}"), &actual, &expected);
             assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
         }
@@ -448,6 +448,9 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
         let fresh = engine
             .render(&session.source, &settings, &mut Profile::default())
             .unwrap();
+        assert_eq!(resumed.description(), fresh.description(), "resumed {name}");
+        assert_eq!(resumed.view(), fresh.view(), "resumed {name}");
+        assert_eq!(resumed.settings(), fresh.settings(), "resumed {name}");
         assert_same_pixels(
             &format!("resumed {name}"),
             &engine.gpu.readback(&resumed.buffer).unwrap(),

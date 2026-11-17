@@ -3,6 +3,7 @@
 use crate::gpu::Gpu;
 use crate::graph::{Graph, Operation};
 use crate::image::{Description, ImageTexture, Layout, RenderedImage, Space};
+use crate::inspection::Artifact;
 pub use crate::interactive::RenderSession;
 use crate::interactive::{Execution, Superseded};
 use crate::profile::Profile;
@@ -11,11 +12,18 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+pub(crate) mod allocation;
 mod artifacts;
 mod banding_controls;
 mod capabilities;
 #[path = "dng/gpu.rs"]
 mod dng_gpu;
+mod driver;
+#[cfg(feature = "wide-experiment")]
+pub use driver::{
+    experimental::{RenderExecutionStart, SubmissionWindow},
+    RenderExecution,
+};
 mod edits;
 mod execute;
 mod memory;
@@ -27,15 +35,14 @@ mod scale;
 mod settings;
 mod source_preparation;
 mod working_set;
-pub use memory::{MemoryReservation, MemoryResources, MemoryTrim};
+pub use memory::{ExecutionBudget, MemoryReservation, MemoryResources, MemoryTrim};
 pub use quality::ProcessingQuality;
 pub use reduced::{
-    NeedsOriginal, ParameterResources, ReducedPreparation, ReducedRender, ReducedSession,
-    SessionResources,
+    NeedsOriginal, ParameterResources, ReducedPreparation, ReducedSession, SessionResources,
 };
 pub use scale::Scale;
 pub(crate) use scale::WorkingGrid;
-pub use working_set::{ProcessingWorkingSet, SessionKey, SessionKind, SessionUse};
+pub use working_set::{ProcessingWorkingSet, SessionInUse, SessionKey, SessionKind, SessionUse};
 /// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.
 pub fn native_extent(metadata: &crate::source::Metadata) -> crate::source::Result<[u32; 2]> {
     recipes::native_extent(metadata)
@@ -61,8 +68,8 @@ pub use crate::nodes::finish::advanced_color::{
     MAX_NAME_CHARS as MAX_COLOR_RANGE_NAME_CHARS, MAX_RANGES as MAX_COLOR_RANGES,
 };
 pub use crate::nodes::finish::color_editor::Sample as ColorRangeSample;
-use execute::Input;
 pub(crate) use execute::Value;
+use execute::{Completion, Input};
 use recipes::Recipe;
 pub use settings::{
     AutoExposureCompensation, ColorEditorControls, ColorFieldApproach, ColorFieldControls,
@@ -70,6 +77,13 @@ pub use settings::{
     PhotographicControls, PhotographicMethod, ProcessingSections, Rendering, RepairThreshold,
     Settings, TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening, WhiteBalanceBias,
 };
+
+/// A completed session render or a request to recover missing reduced-session inputs.
+pub enum SessionRender {
+    Rendered(Vec<Artifact>),
+    NeedsOriginal(NeedsOriginal),
+    Superseded,
+}
 
 /// Completed recipe preparation and execution boundaries for an interactive render.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -381,12 +395,45 @@ impl Engine {
         names: &[&str],
         profile: &mut Profile,
     ) -> Result<Vec<crate::inspection::Artifact>> {
-        self.render_recipe(
+        self.run_recipe(
             recipes::RecipeInput::Original(source),
             settings,
             Recipe::Photographic(names),
             profile,
             &mut Execution::default(),
+            Completion::Queued,
+        )
+    }
+
+    /// Render one or more outputs of a retained native photograph through the shared lifecycle.
+    /// Missing input returns None. Supersession is reported in SessionRender.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_native(
+        &self,
+        working: &mut ProcessingWorkingSet,
+        photo: u64,
+        settings: &Settings,
+        names: &[&str],
+        usage: SessionUse,
+        cancel: impl Fn() -> bool,
+        profile: &mut Profile,
+        progress: impl Fn(RenderProgress),
+        budget: Option<ExecutionBudget<'_>>,
+    ) -> Result<Option<SessionRender>> {
+        driver::render_session(
+            self,
+            working,
+            SessionKey {
+                photo,
+                kind: SessionKind::Native,
+            },
+            settings,
+            names,
+            usage,
+            &cancel,
+            profile,
+            Some(&progress),
+            budget,
         )
     }
 
@@ -404,7 +451,7 @@ impl Engine {
         self.render_session_observed(session, settings, names, cancel, profile, None)
     }
 
-    /// Report completed graph stages after the interactive executor's existing GPU waits.
+    /// Report graph stages after per-operation GPU completion.
     #[allow(clippy::too_many_arguments)]
     pub fn render_session_with_progress(
         &self,
@@ -441,12 +488,13 @@ impl Engine {
         if let Some(start) = preparation {
             profile.record("prepare session cache", start);
         }
-        let result = self.render_recipe(
+        let result = self.run_recipe(
             recipes::RecipeInput::Original(&session.source),
             settings,
             Recipe::Photographic(names),
             profile,
             &mut execution,
+            Completion::Operation,
         );
         profile.measure("finish session cache", || {
             if result.is_ok() {
@@ -468,12 +516,13 @@ impl Engine {
         profile: &mut Profile,
     ) -> Result<RenderedImage> {
         let artifact = self
-            .render_recipe(
+            .run_recipe(
                 recipes::RecipeInput::Original(source),
                 settings,
                 Recipe::DngBase,
                 profile,
                 &mut Execution::default(),
+                Completion::Queued,
             )?
             .pop()
             .ok_or("missing DNG processing base")?;
@@ -555,7 +604,14 @@ impl Engine {
             },
             &[encoded],
         )?;
-        self.execute(Input::Rendered(image), &graph, &[file], profile)?;
+        self.run_graph(
+            Input::Rendered(image),
+            &graph,
+            &[file],
+            profile,
+            &mut Execution::default(),
+            Completion::Queued,
+        )?;
         Ok(image.view().extent)
     }
 

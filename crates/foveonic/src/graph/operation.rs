@@ -315,6 +315,87 @@ fn native_encoding(params: &EncodeParams) -> bool {
 }
 
 impl Operation {
+    /// Accounts owned parameter storage for the initial Merrill admission scope.
+    /// Other prepared owners remain unestimated even when their nodes are cached.
+    pub(super) fn account(&self, retained: &mut crate::recipe::RetainedBytes) -> Option<()> {
+        match self {
+            Self::Calibrate(prepared) => {
+                retained.add_bytes(prepared.grid_values.capacity() * std::mem::size_of::<f32>());
+            }
+            Self::Repair(prepared) => {
+                retained.owner(prepared.clone(), prepared.retained_bytes()?);
+            }
+            Self::Highlights(prepared) | Self::HighlightDensity(prepared) => {
+                if retained.owner(prepared.clone(), std::mem::size_of::<highlight::Prepared>()) {
+                    if let Some(flags) = &prepared.flags {
+                        flags.account(retained);
+                    }
+                }
+            }
+            Self::Despeckle(prepared) => {
+                retained.add_bytes(prepared.tables.capacity() * std::mem::size_of::<f32>());
+            }
+            Self::ColorField(prepared) => {
+                retained.add_bytes(prepared.repairs.capacity() * std::mem::size_of::<u32>());
+            }
+            Self::Pattern { prepared, .. } => {
+                retained.add_bytes(prepared.offsets.capacity() * std::mem::size_of::<u32>());
+            }
+            Self::TiledColorDq { table, .. } | Self::ColorDq { table, .. } => {
+                retained.add_bytes(table.values.capacity() * std::mem::size_of::<i32>());
+            }
+            Self::Tone { curve, .. } | Self::AdaptiveTone { curve, .. } => {
+                curve.account(retained);
+            }
+            Self::AdvancedColor { params, .. } => {
+                retained.add_bytes(std::mem::size_of_val(params.as_ref()));
+            }
+            Self::WriteImage { path, .. } => retained.add_bytes(path.capacity()),
+            Self::Source
+            | Self::RenderedInput { .. }
+            | Self::Black(_)
+            | Self::PoolSignal(_)
+            | Self::ReduceLayers { .. }
+            | Self::ResampleRgb { .. }
+            | Self::ImageRegion { .. }
+            | Self::LinearCodeBase
+            | Self::LinearCodeRgb { .. }
+            | Self::Color { .. }
+            | Self::Banding(_)
+            | Self::NoiseContext(_)
+            | Self::NoiseBase(_)
+            | Self::Column { .. }
+            | Self::Ratio(_)
+            | Self::Texture { .. }
+            | Self::ProjectColorTiles { .. }
+            | Self::TiledColor { .. }
+            | Self::Saturation { .. }
+            | Self::SharpSignal { .. }
+            | Self::Sharpen { .. }
+            | Self::ImageAlias { .. }
+            | Self::PhotographicTone { .. }
+            | Self::LinearUniversalSharpen { .. }
+            | Self::ShadowNeutralGuide { .. }
+            | Self::ShadowNeutralize { .. }
+            | Self::LinearColorEditor { .. }
+            | Self::PerceptualGrade { .. }
+            | Self::DehazeEstimate { .. }
+            | Self::Dehaze { .. }
+            | Self::LinearBasis { .. }
+            | Self::LinearWhiteBalance { .. }
+            | Self::TransferLinearGain { .. }
+            | Self::LinearBrightness { .. }
+            | Self::LinearLocalContrast { .. }
+            | Self::AdaptiveToneGuide { .. }
+            | Self::ExpandBrightnessGuide { .. }
+            | Self::ToneMask { .. }
+            | Self::TonalRanges { .. }
+            | Self::Encode { .. } => {}
+            _ => return None,
+        }
+        Some(())
+    }
+
     /// Each operation owns the coordinate mapping and support of its inputs.
     /// Unconverted operations conservatively require their complete input domain.
     pub(crate) fn input_demand(

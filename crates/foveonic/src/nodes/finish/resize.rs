@@ -213,6 +213,20 @@ impl Prepared {
     }
 }
 
+/// Reserve the allocating branch without constructing its CPU coefficient table.
+/// Natural-size bypass and direct sampling can use less than this bound.
+pub(crate) fn allocation(
+    params: &EncodeParams,
+) -> Option<crate::render::allocation::GpuAllocation> {
+    use crate::render::allocation::{image_bytes, uploaded_bytes, GpuAllocation};
+    GpuAllocation::new(
+        image_bytes([params.output[0], params.output[1]], 3)?,
+        uploaded_bytes::<EncodeParams>(1)?
+            .checked_add(uploaded_bytes::<Mapping>(1)?)?
+            .checked_add(uploaded_bytes::<f32>(PHASES * PHASES * TAPS * TAPS)?)?,
+    )
+}
+
 /// Materialize only resized exports. Native-size encoding retains its exact old path.
 pub(crate) fn apply(
     gpu: &Gpu,

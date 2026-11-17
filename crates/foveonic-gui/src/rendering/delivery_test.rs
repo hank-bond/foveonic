@@ -3,6 +3,8 @@
 use super::*;
 use crate::rendering::request;
 use foveonic::render::ProcessingQuality;
+static ORIGIN: std::sync::LazyLock<foveonic::source::SourceOrigin> =
+    std::sync::LazyLock::new(Default::default);
 
 fn view(settings: &Settings) -> ViewContext<'_> {
     ViewContext {
@@ -16,6 +18,7 @@ fn view(settings: &Settings) -> ViewContext<'_> {
         calibration: None,
         settings,
         overview_visible: true,
+        overview_rendition: Some(Rendition::Current),
         overview_settings: Some(settings),
         overview_displayed_revision: None,
         overview_detail_revision: None,
@@ -31,6 +34,9 @@ fn reply(settings: &Settings) -> ReplyInfo<'_> {
         rendition: Rendition::Current,
         exported: false,
         image: Some(ImageInfo {
+            auxiliary_preview: false,
+            origin: &ORIGIN,
+            working_scale: foveonic::render::Scale::NATIVE,
             path: Path::new("a.x3f"),
             output: "final",
             requested: settings,
@@ -290,6 +296,8 @@ fn overtaken_edit_advances_feedback_then_latest_group_settles_without_rewinding(
         let mut requested = settings.clone();
         requested.exposure = exposure;
         Arc::new(request::Request {
+            auxiliary_preview: false,
+
             detail: false,
             path: path.into(),
             revision,
@@ -413,6 +421,7 @@ fn view_snapshot_keeps_each_photos_content_order_separate() {
         calibration: None,
         settings: settings.clone(),
         overviews: vec![PhotoView {
+            rendition: Rendition::Current,
             path: "a.x3f".into(),
             settings: settings.clone(),
             displayed_revision: Some(10),
@@ -560,4 +569,175 @@ fn before_photographic_renditions_use_speed_even_when_the_saved_current_root_is_
             Err(Rejection::ProcessingQualityChanged)
         );
     }
+}
+
+fn preview_reply(settings: &Settings) -> ReplyInfo<'_> {
+    let mut incoming = reply(settings);
+    incoming.purpose = &Purpose::Preview;
+    let image = incoming.image.as_mut().unwrap();
+    image.auxiliary_preview = true;
+    image.working_scale = foveonic::render::Scale::new(8).unwrap();
+    incoming
+}
+
+#[test]
+fn current_preview_updates_only_auxiliary_consumers_despite_newer_viewport_revision() {
+    let settings = Settings::default();
+    let mut context = view(&settings);
+    context.displayed_revision = Some(90);
+    context.detail_revision = Some(91);
+    let incoming = preview_reply(&settings);
+    assert_eq!(
+        classify(Completion::Current, &incoming, &context),
+        Decision {
+            retain_pixels: true,
+            update_photo: false,
+            destination: Ok(Destination::Preview),
+        }
+    );
+    for completion in [Completion::Removed, Completion::Superseded] {
+        let decision = classify(completion, &incoming, &context);
+        assert!(!decision.retain_pixels);
+        assert!(!decision.update_photo);
+        assert!(decision.destination.is_err());
+    }
+}
+
+#[test]
+fn preview_requires_latest_edits_quality_calibration_and_known_source() {
+    let settings = Settings::default();
+    let mut changed = settings.clone();
+    changed.exposure = 1.;
+    let incoming = preview_reply(&settings);
+    assert!(classify(Completion::Current, &incoming, &view(&changed))
+        .destination
+        .is_err());
+    let mut context = view(&settings);
+    context.processing_quality = ProcessingQuality::Speed;
+    assert!(classify(Completion::Current, &incoming, &context)
+        .destination
+        .is_err());
+    context.processing_quality = ProcessingQuality::Quality;
+    context.calibration = Some("new-calibration");
+    assert!(classify(Completion::Current, &incoming, &context)
+        .destination
+        .is_err());
+    let image = incoming.image.as_ref().unwrap();
+    assert!(auxiliary_preview_matches(
+        image,
+        &settings,
+        ProcessingQuality::Quality,
+        None,
+        Some(&ORIGIN)
+    ));
+    let replacement = foveonic::source::SourceOrigin::default();
+    assert!(!auxiliary_preview_matches(
+        image,
+        &settings,
+        ProcessingQuality::Quality,
+        None,
+        Some(&replacement)
+    ));
+    assert!(!auxiliary_preview_matches(
+        image,
+        &settings,
+        ProcessingQuality::Quality,
+        Some("new-calibration"),
+        None
+    ));
+}
+
+#[test]
+fn preview_never_downgrades_matching_finer_navigator_source() {
+    let settings = Settings::default();
+    let incoming = preview_reply(&settings);
+    let preview = incoming.image.as_ref().unwrap();
+    let mut whole = reply(&settings);
+    whole.image.as_mut().unwrap().revision = 2;
+    assert!(!prefer_auxiliary_preview(whole.image.as_ref(), preview));
+    let mut stale = settings.clone();
+    stale.exposure = 0.5;
+    let stale_whole = reply(&stale);
+    assert!(prefer_auxiliary_preview(
+        stale_whole.image.as_ref(),
+        preview
+    ));
+    let mut regional = reply(&settings);
+    regional.image.as_mut().unwrap().detail = true;
+    assert!(prefer_auxiliary_preview(regional.image.as_ref(), preview));
+}
+
+#[test]
+fn preview_delivery_does_not_depend_on_current_view_rendition_or_viewport_geometry() {
+    let settings = Settings::default();
+    let incoming = preview_reply(&settings);
+    let mut context = view(&settings);
+    context.rendition = Rendition::Camera;
+    context.output = "sensor.layers";
+    context.comparison = true;
+    assert_eq!(
+        classify(Completion::Current, &incoming, &context).destination,
+        Ok(Destination::Preview)
+    );
+    context.active = Some(Path::new("b.x3f"));
+    assert_eq!(
+        classify(Completion::Current, &incoming, &context).destination,
+        Ok(Destination::Preview)
+    );
+    context.overview_settings = None;
+    assert!(classify(Completion::Current, &incoming, &context)
+        .destination
+        .is_err());
+}
+
+#[test]
+fn before_peers_and_white_current_peer_use_their_own_rendition() {
+    let settings = Settings::default();
+    let mut context = view(&settings);
+    context.active = Some(Path::new("active.x3f"));
+    for (rendition, purpose) in [
+        (Rendition::Camera, Purpose::Camera),
+        (Rendition::Defaults, Purpose::Defaults),
+        (Rendition::Current, Purpose::Current),
+    ] {
+        context.overview_rendition = Some(rendition);
+        let mut incoming = reply(&settings);
+        incoming.rendition = rendition;
+        incoming.purpose = &purpose;
+        assert_eq!(
+            classify(Completion::Current, &incoming, &context).destination,
+            Ok(Destination::Overview)
+        );
+        context.overview_rendition = Some(if rendition == Rendition::Current {
+            Rendition::Camera
+        } else {
+            Rendition::Current
+        });
+        assert_eq!(
+            classify(Completion::Current, &incoming, &context).destination,
+            if rendition == Rendition::Current {
+                Ok(Destination::Overview)
+            } else {
+                Err(Rejection::RenditionChanged)
+            }
+        );
+    }
+}
+
+#[test]
+fn delayed_current_during_group_before_is_retained_for_after() {
+    let settings = Settings::default();
+    let incoming = reply(&settings);
+    let mut context = view(&settings);
+    context.rendition = Rendition::Camera;
+    context.overview_rendition = Some(Rendition::Camera);
+    let decision = classify(Completion::Current, &incoming, &context);
+    assert!(decision.retain_pixels && decision.update_photo);
+    assert_eq!(decision.destination, Ok(Destination::Overview));
+    context.rendition = Rendition::Current;
+    context.overview_rendition = Some(Rendition::Current);
+    assert_eq!(
+        classify(Completion::Current, &incoming, &context).destination,
+        Ok(Destination::Active)
+    );
 }

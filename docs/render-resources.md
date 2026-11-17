@@ -53,7 +53,7 @@ RGB scopes preserve working primaries; RGB luminance uses matching sRGB or Adobe
 
 Images and textures are immutable owned snapshots. Their storage stays reserved for their lifetime, including during subsequent renders. Export resources must belong to the exporting engine.
 
-The render result shares original metadata through `Arc`. `Source` owns decoded CPU samples; retain it for reprocessing settings. The GUI retains one decoded source and its selected artifact, while coalescing pending requests and waiting for GPU completion on the worker. Interactive sessions retain one active edit's unchanged continuation boundary, with processing-owned keys and invalidation.
+The render result shares original metadata through `Arc`. `Source` owns decoded CPU samples. The GUI retains per-photo processing sessions and selected artifacts, coalesces pending requests and waits for GPU completion on the worker. Native sessions retain their sources, while sealed reduced sessions retain source-free dependencies. Scoped execution claims protect sessions independently of foreground recency. Interactive caches retain each photo's useful unchanged continuation boundary, with processing-owned keys and invalidation.
 
 A render session may also retain one Merrill camera-repair preparation for its immutable source. `RenderSession::cached_preparation_bytes()` reports its logical CPU retention, including the slot, shared-object header, and vector capacities, up to 4 MiB. This excludes allocator overhead and graph-version keys. `cached_bytes()` continues to report retained GPU buffers separately. Switching engines clears both session caches.
 

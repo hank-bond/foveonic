@@ -16,11 +16,14 @@ The [public renderer](../render.rs) owns the engine and display/export entry poi
 
 ### Source files
 
+- **[allocation.rs](./allocation.rs)** Bounds GPU allocations for audited resolved operations before additional work is admitted.
 - **[artifacts.rs](./artifacts.rs)** Collects requested graph outputs as owned images or diagnostic tables.
 - **[banding_controls.rs](./banding_controls.rs)** Stores independent native-pixel widths and strengths for Merrill directional band cleanup.
 - **[capabilities.rs](./capabilities.rs)** Resolves supported photographic adjustments and compatible defaults at family boundaries.
+- **[driver.rs](./driver.rs)** Drives shared graph execution and claimed session renders through preparation and settlement.
 - **[edits.rs](./edits.rs)** Shares scoped recipes, user defaults and camera-derived numeric editing values.
 - **[execute.rs](./execute.rs)** Executes typed graph operations with selective outputs and guarded GPU storage.
+- **[experimental.rs](./experimental.rs)** Groups shared session executions behind opt-in submission windows.
 - **[memory.rs](./memory.rs)** Inventories shared processing owners and trims optional history under one caller-set budget.
 - **[preparation.rs](./preparation.rs)** Reuses bounded immutable metadata preparation independently of decoded sensor ownership.
 - **[quality.rs](./quality.rs)** Separates photographic processing quality from the image's working resolution.
@@ -29,6 +32,6 @@ The [public renderer](../render.rs) owns the engine and display/export entry poi
 - **[settings.rs](./settings.rs)** Defines shared photographic settings and validates their values.
 - **[source_preparation.rs](./source_preparation.rs)** Retains the two source-derived calibration statistics without owning sensor samples.
 - **[speckle_controls.rs](./speckle_controls.rs)** Defines Merrill speckle detection thresholds and compact-neighborhood support.
-- **[working_set.rs](./working_set.rs)** Retains native and reduced processing sessions in one foreground-aware history.
+- **[working_set.rs](./working_set.rs)** Retains native and reduced sessions with separate foreground recency and execution protection.
 
 <!-- INDEX:END -->

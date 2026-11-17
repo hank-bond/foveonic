@@ -17,6 +17,7 @@ class WorkloadTests(unittest.TestCase):
                         '/tmp/target/release/examples/profile_checkpoints cases.json report.jsonl',
                         '/tmp/target/release/examples/profile_noise_resources cases.json',
                         '/tmp/target/release/examples/profile_smart_preview photo.x3f',
+                        '/tmp/frozen-wide-bin/profile_wide output grouped 2 a.x3f b.x3f',
                         '/tmp/target/release/deps/foveonic-abc --ignored']:
             self.assertTrue(is_workload(command), command)
 

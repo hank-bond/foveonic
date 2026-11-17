@@ -10,8 +10,8 @@ use foveonic::{
     inspection::Content,
     profile::{report, Mode, Profile},
     render::{
-        ControlCapabilities, Engine, ProcessingWorkingSet, ReducedPreparation, ReducedRender,
-        RenderSession, Scale, SessionKey, SessionKind, SessionUse, Settings,
+        ControlCapabilities, Engine, ProcessingWorkingSet, ReducedPreparation, RenderSession,
+        Scale, SessionKey, SessionKind, SessionRender, SessionUse, Settings,
     },
     source::{Result, Source},
 };
@@ -291,7 +291,7 @@ fn render(
                 &mut profile,
             )?;
             let outcome = match outcome {
-                None | Some(ReducedRender::NeedsOriginal(_)) => {
+                None | Some(SessionRender::NeedsOriginal(_)) => {
                     reduced_reloaded = true;
                     let original = Source::open(&photo.source)?;
                     if working.contains(SessionKey {
@@ -343,7 +343,7 @@ fn render(
             if let Some(texture) = &photo.texture {
                 reservation.exclusive_bytes += texture.description().byte_len();
             }
-            if let ReducedRender::Rendered(artifacts) = &outcome {
+            if let SessionRender::Rendered(artifacts) = &outcome {
                 for artifact in artifacts {
                     if let Content::Image(image) = &artifact.content {
                         reservation.add_image(image);
@@ -354,11 +354,11 @@ fn render(
                 .engine
                 .trim_memory(&mut working, *budget, &reservation);
             match outcome {
-                ReducedRender::Rendered(artifacts) => artifacts,
-                ReducedRender::NeedsOriginal(reason) => {
+                SessionRender::Rendered(artifacts) => artifacts,
+                SessionRender::NeedsOriginal(reason) => {
                     return Err(format!("reduced edit requires original: {reason:?}").into())
                 }
-                ReducedRender::Superseded => return Err("render superseded".into()),
+                SessionRender::Superseded => return Err("render superseded".into()),
             }
         }
     };

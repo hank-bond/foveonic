@@ -261,3 +261,41 @@ fn learned_repairs_follow_serial_switches_bypasses_and_cached_rendering() {
         assert!(engine.readback_image(&image).unwrap() == baseline);
     }
 }
+
+#[test]
+fn retained_inventory_includes_spare_capacity_and_initialized_signature() {
+    let mut calibration = profile();
+    let initial = calibration.retained_bytes();
+    assert!(calibration.signature.get().is_none());
+    let prior = calibration.captures[0].path.capacity();
+    calibration.captures[0].path.reserve(128);
+    assert_eq!(
+        calibration.retained_bytes() - initial,
+        calibration.captures[0].path.capacity() - prior
+    );
+    let prior_bytes = calibration.retained_bytes();
+    let prior_capacity = calibration.defects[0].points.capacity();
+    calibration.defects[0].points.reserve(32);
+    assert_eq!(
+        calibration.retained_bytes() - prior_bytes,
+        (calibration.defects[0].points.capacity() - prior_capacity) * size_of::<Defect>(),
+    );
+    let prior_bytes = calibration.retained_bytes();
+    let prior_capacity = calibration.model.shield_tables.capacity();
+    calibration.model.shield_tables.reserve(64);
+    assert_eq!(
+        calibration.retained_bytes() - prior_bytes,
+        (calibration.model.shield_tables.capacity() - prior_capacity) * size_of::<f32>(),
+    );
+    let before_signature = calibration.retained_bytes();
+    calibration.signature();
+    assert_eq!(
+        calibration.retained_bytes() - before_signature,
+        calibration.signature.get().unwrap().capacity()
+    );
+    let owner = std::sync::Arc::new(calibration);
+    let mut retained = crate::recipe::RetainedBytes::default();
+    assert!(retained.owner(owner.clone(), owner.retained_bytes()));
+    assert!(!retained.owner(owner.clone(), owner.retained_bytes()));
+    assert_eq!(retained.bytes(), owner.retained_bytes());
+}

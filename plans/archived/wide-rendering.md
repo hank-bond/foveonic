@@ -1,16 +1,20 @@
 ---
 summary: "Compare serial, threaded and stage-interleaved rendering in an isolated probe with exact outputs and bounded resource ownership."
+status: archived
 ---
 
 # Wide-rendering investigation
 
-The owner authorized this isolated investigation after the viewport functional slices passed native acceptance. The selected probe lives on `experiment/wide-render-probe`, starting from `65ae1cf`, whose core execution matches the functional application baseline. Application execution and defaults remain unchanged. The probe tests the hypothesis before any proposal to integrate wider execution. Follow the [performance and input contract](../docs/specs/performance-diagnostics.md) and retain the frozen serial baseline.
+This completed initial probe is historical evidence. Its design notes describe that checkpoint. Application integration and the final shared execution migration are recorded in [wide integration](wide-rendering-integration.md) and [wide cleanup](wide-rendering-cleanup.md). Current ownership and completion policy are documented in the [architecture map](../../docs/interactive-rendering-architecture.md).
+
+
+The owner authorized this isolated investigation after the viewport functional slices passed native acceptance. The selected probe lives on `experiment/wide-render-probe`, starting from `65ae1cf`, whose core execution matches the functional application baseline. At that checkpoint, application execution and defaults remained unchanged. The probe tested the hypothesis before wider execution was integrated. Follow the [performance and input contract](../../docs/specs/performance-diagnostics.md) and retain the frozen serial baseline.
 
 ## Hypothesis
 
 Advancing ready operations across several photographs may reduce multi-edit latency compared with completing each whole graph serially. Separate traversal order, CPU concurrency and completion-wait grouping. Submission grouping and packing photographs into shader dispatches remain later mechanisms. Single-photo execution uses the same operation runtime as a one-photo group.
 
-## Findings to retain
+## Initial observations
 
 - The executor keeps per-photo graph/cache, live-value, scratch and progress state. Every executed operation waits when a cancellation callback exists, including one that always returns false. Changing the outer loop alone does not remove those waits.
 - GPU helpers submit internally. Stage interleaving does not automatically combine submissions.
@@ -18,13 +22,13 @@ Advancing ready operations across several photographs may reduce multi-edit late
 - The processing working set protects one active entry. Several in-flight sessions need explicit protection until submitted operations retire, within their existing resource ownership.
 - Recipes and cache hits differ. Advance independent ready work without aligning graph ordinals or imposing an all-photo stage barrier. Preserve per-photo source identity, cache outcomes, errors and settlement.
 
-Sources: [executor](../crates/foveonic/src/render/execute.rs), [GPU facade](../crates/foveonic/src/gpu.rs), [interactive sessions](../crates/foveonic/src/interactive.rs), [processing working set](../crates/foveonic/src/render/working_set.rs) and the [overhead investigation](./coordination-overhead-profile.md).
+Sources: [executor](../../crates/foveonic/src/render/execute.rs), [GPU facade](../../crates/foveonic/src/gpu.rs), [interactive sessions](../../crates/foveonic/src/interactive.rs), [processing working set](../../crates/foveonic/src/render/working_set.rs) and the [overhead investigation](../coordination-overhead-profile.md).
 
-## Selected implementation slice
+## Initial cursor design
 
-Extract a private `GraphExecution` from `execute_controlled`. It owns the next-node position, live values, cache/required masks, dependency reads, consumer counts, scratch, trace, progress and diagnostic state. Its step borrows the graph, input context, `Execution` and profile, then advances one required operation. Keep the operation dispatcher in one place. Ordinary `execute_controlled` drives the same state to completion.
+The initial slice extracted a private `GraphExecution` from the former `execute_controlled` runner. It owns the next-node position, live values, cache/required masks, dependency reads, consumer counts, scratch, trace, progress and diagnostic state. Its step borrows the graph, input context, `Execution` and profile, then advances one required operation. Keep the operation dispatcher in one place. The ordinary runner drove the same state to completion. Both were later consolidated by the shared-driver cleanup.
 
-Separate existing [recipe preparation](../crates/foveonic/src/render/recipes/mod.rs) and [artifact planning/packaging](../crates/foveonic/src/render/artifacts.rs) around that cursor. Each probe photo owns its prepared recipe, session, cursor, profile and result identity. Plan checkpoints once, retain each output through existing cache rules, and commit/finish each photo independently on success, cancellation or failure. Avoid self-referential job types and duplicate recipe builders.
+Separate existing [recipe preparation](../../crates/foveonic/src/render/recipes/mod.rs) and [artifact planning/packaging](../../crates/foveonic/src/render/artifacts.rs) around that cursor. Each probe photo owns its prepared recipe, session, cursor, profile and result identity. Plan checkpoints once, retain each output through existing cache rules, and commit/finish each photo independently on success, cancellation or failure. Avoid self-referential job types and duplicate recipe builders.
 
 Use a single-thread round-robin loop over admitted photos. Advance each photo's next executable operation, regardless of its ordinal or operation name. Settle a completed photo and admit another without waiting for the entire group. Start with individually owned `ReducedSession`s prepared through existing APIs. Preserve each session's engine/source identity and hold admitted owners through submitted-work completion. The probe did not widen the then-existing `ReducedWorkingSet`.
 
@@ -62,7 +66,7 @@ This probe can attribute gains to traversal, CPU overlap or fewer completion bou
 
 Measurements ran on an Apple M1 Pro with 16 GiB RAM and macOS 26.6.2. The isolated `profile_wide` harness prepares individually owned reduced sessions, renders a base photograph, then measures one changed edit through completed display textures. Source opening and base preparation are outside the interval. Recipe preparation, cache settlement and display completion are inside it. Images and textures remain retained through measurement. Serial and interleaved modes use the same owners and effective settings. The frozen control uses core revision `65ae1cf` with the API-only `profile_wide_stock` harness. Both harnesses are retained on the experiment branch.
 
-The eight Merrill inputs, in order, are blue-parking-sign, glossy-leaves-and-buds, low-light-speaker-and-desk, low-light-spider-and-web, merrill-hazy-coast, paper-and-recycling-can, rocks-and-tree-shadows and sunlit-metal-latch. The mixed set is blue-parking-sign, merrill-hazy-coast, dp0-quattro, sd-quattro, sd-quattro-h, sd9, sd10 and sd14. Resolve owner photographs through the existing example sync and other originals through the [external sample manifest](../scripts/profiling/external_raw_samples.json). Exposure changes by +0.25 EV with automatic exposure disabled. The upstream Merrill edit changes reconstruction chroma from zero to one. These use camera defaults, not owner sidecars.
+The eight Merrill inputs, in order, are blue-parking-sign, glossy-leaves-and-buds, low-light-speaker-and-desk, low-light-spider-and-web, merrill-hazy-coast, paper-and-recycling-can, rocks-and-tree-shadows and sunlit-metal-latch. The mixed set is blue-parking-sign, merrill-hazy-coast, dp0-quattro, sd-quattro, sd-quattro-h, sd9, sd10 and sd14. Resolve owner photographs through the existing example sync and other originals through the [external sample manifest](../../scripts/profiling/external_raw_samples.json). Exposure changes by +0.25 EV with automatic exposure disabled. The upstream Merrill edit changes reconstruction chroma from zero to one. These use camera defaults, not owner sidecars.
 
 Each latency case has five Off trials, with mode order rotated across trials. The first mixed trial overlapped CPU work and was replaced with a clean repeat. It remains excluded from latency statistics. Merrill exposure has 50 Off groups and four separate Wall captures. All eight outputs in every group matched the frozen control's float-file SHA-256, storage/view geometry and effective settings. Mixed and noise width-one gates passed before their 30 measured groups each. Eight cancellation/failure cases cover ordinary and grouped waits at widths one and eight. Each suppresses the affected photo's completion, settles all seven peers exactly, and verifies an exact replacement after peers finish. These injections establish recovery, not priority replacement latency.
 
@@ -97,7 +101,7 @@ The measured binaries are identified by SHA-256. The follow-up pair adds the mix
 
 Retain the reviewed experiment on its isolated branch. Pure interleaving provides no useful group-latency improvement in these measurements and substantially delays the first result. The useful mechanism is grouping completion waits. Width two is the promising next evaluation point for this workload order, with smaller first-result costs than widths four or eight. It is not an application default recommendation.
 
-Any next slice should isolate bounded completion grouping and protect active-photo latency, then validate live resource limits and real foreground interruption before application integration. The present grouped mode still fences each display texture separately, uses device-wide waits with no competing producer, and replaces cancelled work only after peers settle. Mixed-camera recipe preparation also contributes to the first-result delay. These limitations prevent treating the throughput gains as predicted GUI responsiveness or justification to merge the cursor extraction now.
+The later application experiments and shared-driver cleanup supersede this initial recommendation. The remaining eight-photo native measurement gap and experimental memory limits are recorded in [the cleanup findings](wide-rendering-cleanup.md) and [render orchestration](../../docs/specs/render-orchestration.md).
 
 ## Primary API evidence
 

@@ -32,6 +32,8 @@ fn metadata() -> Metadata {
 
 fn request() -> Request {
     Request {
+        auxiliary_preview: false,
+
         detail: false,
         framing_preview: false,
         calibration: None,
@@ -204,4 +206,75 @@ fn output_resize_and_photographic_options_preserve_resolved_preview_grid() {
     request.apply_preview(&mut settings, &metadata()).unwrap();
     assert_eq!(settings.output_size, None);
     assert_eq!(settings.working_scale, Scale::NATIVE);
+}
+
+#[test]
+fn auxiliary_preview_bounds_processing_without_changing_authored_output_size() {
+    let mut request = request();
+    request.auxiliary_preview = true;
+    request.preview_scale = Scale::new(8).unwrap();
+    request.processing_quality = ProcessingQuality::Speed;
+    request.settings.output_size = Some([6000, 4000]);
+    request.settings.preview_region = Some([100, 100, 400, 300]);
+    let mut effective = request.settings.clone();
+    request.apply_preview(&mut effective, &metadata()).unwrap();
+    assert_eq!(request.purpose(), Purpose::Preview);
+    assert!(request.uses_reduced_session());
+    assert_eq!(effective.working_scale, Scale::new(8).unwrap());
+    assert_eq!(effective.processing_quality, ProcessingQuality::Speed);
+    assert_eq!(effective.output_size, None);
+    assert_eq!(effective.preview_region, None);
+    assert_eq!(request.settings.output_size, Some([6000, 4000]));
+}
+
+#[test]
+fn native_coverage_reuses_overscan_until_visible_pixels_leave_the_patch() {
+    let mut first = request();
+    first.detail = true;
+    first.preview_scale = Scale::NATIVE;
+    first.settings.preview_region = Some([36, 36, 464, 364]);
+    let existing = Refinement {
+        first,
+        visible_region: Some([100, 100, 400, 300]),
+        preview: None,
+        whole: None,
+    };
+    let mut pan = existing.clone();
+    pan.first.revision += 1;
+    pan.first.settings.preview_region = Some([100, 100, 528, 428]);
+    pan.visible_region = Some([164, 164, 464, 364]);
+    assert!(existing.same_sequence(&pan));
+    assert!(
+        existing.covers(&pan),
+        "changed overscan is not uncovered visible demand"
+    );
+    pan.visible_region = Some([165, 164, 465, 364]);
+    assert!(
+        !existing.covers(&pan),
+        "one uncovered visible column needs native detail"
+    );
+    pan.visible_region = Some([0, 0, 300, 200]);
+    assert!(!existing.covers(&pan), "coverage must hold on every edge");
+    pan.first.settings.exposure += 0.5;
+    assert!(!existing.same_sequence(&pan));
+    let mut whole = existing;
+    whole.first.settings.preview_region = None;
+    assert!(whole.covers(&pan));
+}
+
+#[test]
+fn whole_before_refinement_tracks_increased_sampling_demand() {
+    let mut first = request();
+    first.rendition = crate::editor::Rendition::Camera;
+    first.preview_scale = Scale::new(8).unwrap();
+    let reduced = Refinement {
+        first,
+        visible_region: None,
+        preview: None,
+        whole: None,
+    };
+    let mut finer = reduced.clone();
+    finer.first.preview_scale = Scale::new(4).unwrap();
+    assert!(!reduced.same_sequence(&finer));
+    assert!(reduced.same_sequence(&reduced.clone()));
 }
