@@ -3,6 +3,9 @@
 use super::*;
 use std::io::Cursor;
 
+#[path = "../../tests/common/capture_exif.rs"]
+mod exif_checks;
+
 fn metadata() -> crate::source::Metadata {
     crate::source::Metadata {
         width: 17,
@@ -128,14 +131,16 @@ fn uncompressed_tiff_strips_match_whole_image_encoding() {
         let mut encoder = tiff::encoder::TiffEncoder::new(&mut expected).unwrap();
         let metadata = metadata();
         let capture = crate::capture_metadata::Capture::new(&metadata);
-        let exif = capture.write_exif(&mut encoder, [width, height]).unwrap();
+        let exif = capture
+            .write_exif(&mut encoder, [width, height], ExifOutput::Tiff(space))
+            .unwrap();
         let mut image = encoder
             .new_image::<tiff::encoder::colortype::RGB16>(width, height)
             .unwrap();
         capture.write_primary(image.encoder(), exif).unwrap();
         image
             .encoder()
-            .write_tag(tiff::tags::Tag::Unknown(34675), space.profile())
+            .write_tag(tiff::tags::Tag::Unknown(34675), Undefined(space.profile()))
             .unwrap();
         image
             .encoder()
@@ -727,7 +732,7 @@ fn tiff_tag(bytes: &[u8], ifd: usize, tag: u16) -> Option<Vec<u8>> {
     None
 }
 
-fn check_capture_tiff(bytes: &[u8]) {
+fn check_capture_tiff(bytes: &[u8], embedded: bool) {
     assert_eq!(&bytes[..4], b"II\x2a\0");
     let u32v = |v: Vec<u8>| u32::from_le_bytes(v.try_into().unwrap());
     let root = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
@@ -744,8 +749,15 @@ fn check_capture_tiff(bytes: &[u8]) {
         tiff_tag(bytes, exif, 0x9004).unwrap(),
         b"2020:01:02 03:04:05\0"
     );
-    assert_eq!(u32v(tiff_tag(bytes, exif, 0xa002).unwrap()), 17);
-    assert_eq!(u32v(tiff_tag(bytes, exif, 0xa003).unwrap()), 9);
+    if embedded {
+        assert_eq!(u32v(tiff_tag(bytes, exif, 0xa002).unwrap()), 17);
+        assert_eq!(u32v(tiff_tag(bytes, exif, 0xa003).unwrap()), 9);
+    } else {
+        assert!(tiff_tag(bytes, exif, 0xa002).is_none());
+        assert!(tiff_tag(bytes, exif, 0xa003).is_none());
+    }
+    assert_eq!(tiff_tag(bytes, exif, 0xa001).unwrap(), 1_u16.to_le_bytes());
+    assert_eq!(tiff_tag(bytes, exif, 0xa000).unwrap(), b"0100");
     assert!(tiff_tag(bytes, exif, 0x927c).is_none());
     let gps = u32v(tiff_tag(bytes, root, 0x8825).unwrap()) as usize;
     assert_eq!(tiff_tag(bytes, gps, 1).unwrap(), b"N\0");
@@ -771,7 +783,7 @@ fn encode_capture(format: Format) -> Vec<u8> {
 
 #[test]
 fn tiff_exports_capture_metadata() {
-    check_capture_tiff(&encode_capture(Format::Tiff));
+    check_capture_tiff(&encode_capture(Format::Tiff), false);
 }
 
 #[test]
@@ -779,7 +791,7 @@ fn jpeg_exports_capture_metadata() {
     use image::ImageDecoder;
     let bytes = encode_capture(Format::Jpeg);
     let mut decoder = image::codecs::jpeg::JpegDecoder::new(Cursor::new(bytes)).unwrap();
-    check_capture_tiff(&decoder.exif_metadata().unwrap().unwrap());
+    check_capture_tiff(&decoder.exif_metadata().unwrap().unwrap(), true);
 }
 
 #[test]
@@ -787,7 +799,7 @@ fn png_exports_capture_metadata() {
     use image::ImageDecoder;
     let bytes = encode_capture(Format::Png);
     let mut decoder = image::codecs::png::PngDecoder::new(Cursor::new(bytes)).unwrap();
-    check_capture_tiff(&decoder.exif_metadata().unwrap().unwrap());
+    check_capture_tiff(&decoder.exif_metadata().unwrap().unwrap(), true);
 }
 
 #[test]
@@ -799,7 +811,7 @@ fn jxl_exports_capture_metadata() {
         assert!(size >= 8 && offset + size <= bytes.len());
         if &bytes[offset + 4..offset + 8] == b"Exif" {
             assert_eq!(&bytes[offset + 8..offset + 12], &[0; 4]);
-            check_capture_tiff(&bytes[offset + 12..offset + size]);
+            check_capture_tiff(&bytes[offset + 12..offset + size], true);
             return;
         }
         offset += size;
@@ -815,7 +827,11 @@ fn jpeg_rejects_oversized_exif_without_writing_a_corrupt_segment() {
         id: 0x9286,
         kind: 7,
         count: 65_500,
-        data: vec![42; 65_500],
+        data: {
+            let mut value = vec![42; 65_500];
+            value[..8].copy_from_slice(b"ASCII\0\0\0");
+            value
+        },
     };
     metadata.properties.insert(
         "EXIF_CAPTURE_TAGS".into(),
@@ -894,10 +910,15 @@ fn x3f_embedded_capture_reaches_every_photographic_encoder() {
             tiff_tag(&bytes, exif, 0x8827).unwrap(),
             400_u16.to_le_bytes()
         );
-        assert_eq!(
-            tiff_tag(&bytes, exif, 0xa002).unwrap(),
-            17_u32.to_le_bytes()
-        );
+        if format == Format::Tiff {
+            assert!(tiff_tag(&bytes, exif, 0xa002).is_none());
+            assert_eq!(tiff_tag(&bytes, root, 256).unwrap(), 17_u32.to_le_bytes());
+        } else {
+            assert_eq!(
+                tiff_tag(&bytes, exif, 0xa002).unwrap(),
+                17_u32.to_le_bytes()
+            );
+        }
     }
 }
 
@@ -965,4 +986,179 @@ fn jxl_streams_multiple_chunks_and_propagates_writer_errors() {
     )
     .unwrap_err();
     assert_eq!(error.to_string(), "injected failure");
+}
+
+#[test]
+fn exif_color_declarations_match_each_destination_space() {
+    use image::ImageDecoder;
+    for space in TiffColorSpace::ALL {
+        for format in [Format::Tiff, Format::Jpeg, Format::Png, Format::Jxl] {
+            let file = encoded(format, Default::default(), space);
+            let bytes = match format {
+                Format::Tiff => file,
+                Format::Jpeg => image::codecs::jpeg::JpegDecoder::new(Cursor::new(file))
+                    .unwrap()
+                    .exif_metadata()
+                    .unwrap()
+                    .unwrap(),
+                Format::Png => image::codecs::png::PngDecoder::new(Cursor::new(file))
+                    .unwrap()
+                    .exif_metadata()
+                    .unwrap()
+                    .unwrap(),
+                Format::Jxl => {
+                    let mut p = 0;
+                    loop {
+                        let size = u32::from_be_bytes(file[p..p + 4].try_into().unwrap()) as usize;
+                        assert!(size >= 8 && p + size <= file.len());
+                        if &file[p + 4..p + 8] == b"Exif" {
+                            break file[p + 12..p + size].to_vec();
+                        }
+                        p += size;
+                    }
+                }
+                Format::Dng => unreachable!(),
+            };
+            let root = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+            let exif =
+                u32::from_le_bytes(tiff_tag(&bytes, root, 0x8769).unwrap().try_into().unwrap())
+                    as usize;
+            let expected = if space == TiffColorSpace::Srgb {
+                1_u16
+            } else {
+                65535
+            };
+            assert_eq!(
+                tiff_tag(&bytes, exif, 0xa001).unwrap(),
+                expected.to_le_bytes()
+            );
+            if format == Format::Jpeg {
+                assert_eq!(tiff_tag(&bytes, exif, 0x9101).unwrap(), [1, 2, 3, 0]);
+                assert_eq!(tiff_tag(&bytes, root, 0x0213).unwrap(), 1_u16.to_le_bytes());
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires ExifTool, no GPU or originals"]
+fn encoding_options_have_clean_capture_exif() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut choices = Vec::new();
+    for tiff_compression in TiffCompression::ALL {
+        choices.push((
+            Format::Tiff,
+            EncodingOptions {
+                tiff_compression,
+                ..Default::default()
+            },
+        ));
+    }
+    for jpeg_quality in [1, 95, 100] {
+        choices.push((
+            Format::Jpeg,
+            EncodingOptions {
+                jpeg_quality,
+                ..Default::default()
+            },
+        ));
+    }
+    for png_depth in [BitDepth::Eight, BitDepth::Sixteen] {
+        choices.push((
+            Format::Png,
+            EncodingOptions {
+                png_depth,
+                ..Default::default()
+            },
+        ));
+    }
+    for (jxl_lossless, jxl_quality) in [(true, 90), (false, 90), (false, 100)] {
+        choices.push((
+            Format::Jxl,
+            EncodingOptions {
+                jxl_lossless,
+                jxl_quality,
+                jxl_effort: 1,
+                ..Default::default()
+            },
+        ));
+    }
+    for space in TiffColorSpace::ALL {
+        for (index, &(format, options)) in choices.iter().enumerate() {
+            let path =
+                directory
+                    .path()
+                    .join(format!("{}-{index}.{}", space.label(), format.extension()));
+            std::fs::write(&path, encoded(format, options, space)).unwrap();
+            exif_checks::check_export(&path, (1, 100));
+        }
+    }
+}
+
+#[test]
+fn tiff_directories_and_external_values_align_after_odd_data() {
+    use tiff::{encoder::TiffEncoder, tags::Tag};
+    let mut out = Cursor::new(Vec::new());
+    {
+        let mut encoder = TiffEncoder::new(&mut out).unwrap();
+        for label in ["first", "second"] {
+            let mut directory = encoder.image_directory().unwrap();
+            directory.write_data(&[123_u8][..]).unwrap();
+            directory.write_tag(Tag::Software, label).unwrap();
+            directory.write_data(&[124_u8][..]).unwrap();
+            directory.finish().unwrap();
+        }
+    }
+    let bytes = out.into_inner();
+    let mut offset = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    for label in [b"first\0".as_slice(), b"second\0".as_slice()] {
+        assert!(offset.is_multiple_of(2));
+        let count = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
+        assert_eq!(count, 1);
+        let p = offset + 2;
+        assert_eq!(u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap()), 305);
+        let n = u32::from_le_bytes(bytes[p + 4..p + 8].try_into().unwrap()) as usize;
+        let value = u32::from_le_bytes(bytes[p + 8..p + 12].try_into().unwrap()) as usize;
+        assert!(value.is_multiple_of(2));
+        assert_eq!(&bytes[value..value + n], label);
+        offset = u32::from_le_bytes(bytes[p + 12..p + 16].try_into().unwrap()) as usize;
+    }
+    assert_eq!(offset, 0);
+}
+
+#[test]
+fn compressed_tiff_aligns_directory_after_odd_strip() {
+    use tiff::encoder::{colortype::RGB16, compression::DeflateLevel, Compression, TiffEncoder};
+    for (compression, expected) in [
+        (Compression::Lzw, [0_u16, 1, 2]),
+        (Compression::Deflate(DeflateLevel::Best), [0_u16; 3]),
+    ] {
+        let mut out = Cursor::new(Vec::new());
+        {
+            let mut encoder = TiffEncoder::new(&mut out)
+                .unwrap()
+                .with_compression(compression);
+            encoder
+                .new_image::<RGB16>(1, 1)
+                .unwrap()
+                .write_data(&expected)
+                .unwrap();
+        }
+        let bytes = out.into_inner();
+        let root = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let strip = u32::from_le_bytes(tiff_tag(&bytes, root, 273).unwrap().try_into().unwrap());
+        let count = u32::from_le_bytes(tiff_tag(&bytes, root, 279).unwrap().try_into().unwrap());
+        assert!(
+            !count.is_multiple_of(2),
+            "fixture must force an odd compressed-strip endpoint"
+        );
+        assert!(strip.is_multiple_of(2));
+        assert!((strip + count) as usize <= root);
+        assert!(root.is_multiple_of(2));
+        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(bytes)).unwrap();
+        let tiff::decoder::DecodingResult::U16(samples) = decoder.read_image().unwrap() else {
+            panic!("expected RGB16")
+        };
+        assert_eq!(samples, expected);
+    }
 }

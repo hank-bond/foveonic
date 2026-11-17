@@ -9,7 +9,7 @@ The [acceptance catalog](../scripts/profiling/acceptance_cases.json) maps user p
 
 The [Rust smoke modules](../crates/foveonic-gui/src/smoke/AGENTS.md) own native actions, observations and scenario expectations. Feature suites keep their readiness checks with their actions and assertions. Python's [scenario checks](../scripts/profiling/scenario_checks.py) validate intended edits before [image replay](../scripts/profiling/image_replay.py) checks capture identity and compares fresh renders. Shared results stay in `results.py`, isolated input staging in `inputs.py`, and workload identity and UI timing in `interaction_latency.py`. Runnable scripts and adjacent portable tests retain the existing commands and discovery pattern.
 
-The [external RAW sample manifest](../scripts/profiling/external_raw_samples.json) pins the seven Classic, Quattro and Quattro H originals used by the numerical matrix. Each entry records its local filename, publisher download URL, SHA-256, byte length, camera family and source-reported license and notes. Fetch these photographs directly from RAW Pixls rather than adding them to the project's example release. SD9 and SD10 are listed under CC BY-NC-SA 4.0, while the other five are CC0. The manifest preserves those different terms. The owner's photographs, including Hazy Coast, remain in the [example release](https://github.com/hank-bond/foveonic/releases/tag/example-photographs).
+The [external RAW sample manifest](../scripts/profiling/external_raw_samples.json) pins nine Classic, Quattro and Quattro H originals used by the numerical matrix and capture metadata tests. Each entry records its local filename, publisher download URL, SHA-256, byte length, camera family and source-reported license and notes. Fetch these photographs directly from RAW Pixls rather than adding them to the project's example release. SD9, SD10 and DP1s are listed under CC BY-NC-SA 4.0, while the other six are CC0. The manifest preserves those different terms. The owner's photographs, including Hazy Coast, remain in the [example release](https://github.com/hank-bond/foveonic/releases/tag/example-photographs).
 
 Prepare both original collections from the repository root:
 
@@ -20,7 +20,7 @@ python3 scripts/profiling/fetch_samples.py
 
 Both commands use `.local/example-photographs` by default. The external fetcher verifies every existing sample's byte length and SHA-256 before starting downloads. It leaves mismatched originals untouched and fails. Downloads are staged, verified and linked into place without overwriting another file. Use `--offline` to verify cached external samples without network access, or `--directory PATH` for a separate sample cache.
 
-The [test input definitions](../scripts/profiling/test_inputs.json) track the ten-source numerical matrix, eight-photo interaction recipes, mixed-choice recipes and five slider fixtures. They name originals without personal paths. The seven external identities remain in their existing manifest. Other originals have pinned hashes in the test definitions. The Quattro H fixture explicitly aliases one original rather than claiming two independent photographs.
+The [test input definitions](../scripts/profiling/test_inputs.json) track the ten-source numerical matrix, eight-photo interaction recipes, mixed-choice recipes and five slider fixtures. They name originals without personal paths. The external identities remain in their existing manifest. Other originals have pinned hashes in the test definitions. The Quattro H fixture explicitly aliases one original rather than claiming two independent photographs.
 
 The [input setup command](../scripts/profiling/prepare_inputs.py) syncs both collections through their existing commands, verifies all declared originals and generates runner-compatible JSON plus aliases in a new directory:
 
@@ -79,16 +79,22 @@ $env:CXXFLAGS = '-DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS'
 
 ## Capture metadata exports
 
-The headless [capture export tests](../crates/foveonic/tests/capture_export.rs) process five real-image cases: Merrill TIFF and JPEG XL, Classic JPEG, Quattro PNG, and Quattro H DNG. Each checks the source against the maintained sample hashes, compares metadata-only loading with full decoding, removes a disposable source copy before exporting, and independently reads the exported capture details and geometry with ExifTool. Cases apply a quarter turn and centered half crop. All outputs resize to 96×64. The originals and saved editing recipes remain untouched. These checks cover the processing and export APIs, not desktop UI interactions.
+The headless [capture export tests](../crates/foveonic/tests/capture_export.rs) exercise seven real photographs through all five formats (35 exports): Merrill, Classic SD9 and SD15, DP1s, Quattro, Quattro with a descriptive lens name, and Quattro H. Each checks the source against maintained sample hashes, compares metadata-only loading with full decoding, removes a disposable source copy before exporting, and independently reads capture details and geometry with ExifTool. Cases apply a quarter turn and centered half crop, then resize to 96×64. The originals and saved editing recipes remain untouched. These checks cover processing and export APIs, not desktop UI interactions.
 
 Requirements: a working GPU, the example collections prepared above, and `exiftool` on `PATH`. Use the [test environment setup command](#test-environment-setup) to check or explicitly install it. A missing photograph, changed source hash or unavailable ExifTool fails the selected test.
 
-Run all five cases serially from the repository root:
+Run all seven groups serially from the repository root:
 
 ```sh
-cargo test --offline --release -p foveonic --test capture_export -- --ignored --test-threads=1
+cargo test --offline --release -p foveonic --test capture_export -- --ignored --nocapture --test-threads=1
 ```
 
-The default source directory is `.local/example-photographs`. Set `FOVEONIC_FIXTURE_DIR` to use another prepared collection. Normal workspace runs list these file/GPU-dependent cases as ignored. The command above explicitly runs them. Existing synthetic encoder tests separately check decoded pixel values, precision and color declarations.
+A separate CPU-only encoder test checks 33 combinations of destination color space, TIFF compression, JPEG quality, PNG depth and JPEG XL quality/lossless mode. It requires ExifTool, with no originals or GPU:
 
-These five cases verify exported metadata and container dimensions. They do not establish pixel-level crop/rotation correctness or full-image decoder interoperability. Existing numerical geometry and encoder tests provide separate evidence for those behaviors.
+```sh
+cargo test --offline --release -p foveonic --lib encoding_options_have_clean_capture_exif -- --ignored --nocapture --test-threads=1
+```
+
+These checks inspect the stored shutter numerator/denominator pair, TIFF ICC tag type, and stock ExifTool validation with user configuration disabled. Warning decisions and explanations come from [the shared capture EXIF checks](../crates/foveonic/tests/common/capture_exif.rs). `--nocapture` displays the explanation generated from that code immediately beneath each reviewed warning. Ordinary synthetic tests cover rational bounds and reduction, standard-field precedence, malformed comments, Unicode byte order, fixed-size image identifiers, TIFF directory/value alignment, destination color declarations and exact decoded samples. Alignment checks force odd-length data and compressed-strip endpoints before inspecting directory links and offsets.
+
+The default source directory is `.local/example-photographs`. Set `FOVEONIC_FIXTURE_DIR` to use another prepared collection. Normal workspace runs list these dependency-specific cases as ignored. The commands above explicitly run them. These metadata checks do not establish pixel-level crop/rotation correctness or full-image decoder interoperability. Existing numerical geometry and encoder tests provide separate evidence for those behaviors.

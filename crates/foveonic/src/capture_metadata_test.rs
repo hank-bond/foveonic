@@ -33,7 +33,13 @@ fn encoded(properties: &[(&str, &str)]) -> Decoder<Cursor<Vec<u8>>> {
     let mut output = Cursor::new(Vec::new());
     {
         let mut encoder = TiffEncoder::new(&mut output).unwrap();
-        let exif = capture.write_exif(&mut encoder, [2, 1]).unwrap();
+        let exif = capture
+            .write_exif(
+                &mut encoder,
+                [2, 1],
+                ExifOutput::Embedded(TiffColorSpace::Srgb),
+            )
+            .unwrap();
         // RGB permits independent decoding of the same directory-writing helpers.
         let mut image = encoder.new_image::<RGB16>(2, 1).unwrap();
         capture.write_primary(image.encoder(), exif).unwrap();
@@ -339,5 +345,277 @@ fn exif_version_is_validated_and_never_downgraded() {
             exif.get_tag_u8_vec(Tag::Unknown(EXIF_VERSION)).unwrap(),
             expected
         );
+    }
+}
+
+#[test]
+fn capture_rationals_keep_simple_camera_fractions() {
+    for (value, n, d) in [
+        (1. / 250., 1, 250),
+        (1. / 30., 1, 30),
+        (1.3, 13, 10),
+        (4., 4, 1),
+        (6.3, 63, 10),
+        (16.6, 83, 5),
+        (0.016666, 8333, 500000),
+    ] {
+        let value = unsigned_rationals(&[value]).unwrap().remove(0);
+        assert_eq!((value.n, value.d), (n, d));
+    }
+    for (value, n, d) in [(-0.3, -3, 10), (0., 0, 1), (1. / 3., 1, 3)] {
+        let value = signed_rationals(&[value]).unwrap().remove(0);
+        assert_eq!((value.n, value.d), (n, d));
+    }
+    for value in [
+        0.,
+        -1.,
+        f64::NAN,
+        f64::INFINITY,
+        1e-30,
+        u32::MAX as f64 + 1.,
+    ] {
+        assert!(unsigned_rationals(&[value]).is_err());
+    }
+}
+
+#[test]
+fn bounded_fractions_match_an_independent_exhaustive_oracle() {
+    for max_n in 1..=12 {
+        for max_d in 1..=12 {
+            for k in 0..=max_n * 17 {
+                let value = f64::from(k) / 17.;
+                let (n, d) = fraction(value, max_n, max_d);
+                assert!(n <= max_n && (1..=max_d).contains(&d));
+                assert_eq!(gcd(n, d), 1);
+                let error = (f64::from(n) / f64::from(d) - value).abs();
+                for reference_n in 0..=max_n {
+                    for reference_d in 1..=max_d {
+                        let reference_error =
+                            (f64::from(reference_n) / f64::from(reference_d) - value).abs();
+                        assert!(error <= reference_error + f64::EPSILON * value.max(1.) * 4., "{value} bounds {max_n}/{max_d}: {n}/{d} versus {reference_n}/{reference_d}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn standard_capture_values_take_precedence_over_conflicting_properties() {
+    let tags = [
+        EmbeddedTag {
+            ifd: 1,
+            id: EXPOSURE_TIME,
+            kind: 5,
+            count: 1,
+            data: [2_u32, 60].into_iter().flat_map(u32::to_ne_bytes).collect(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: EXPOSURE_BIAS,
+            kind: 10,
+            count: 1,
+            data: [-2_i32, 6].into_iter().flat_map(i32::to_ne_bytes).collect(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: METERING_MODE,
+            kind: 3,
+            count: 1,
+            data: 3_u16.to_ne_bytes().to_vec(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: LENS_MODEL,
+            kind: 2,
+            count: 10,
+            data: b"30mm F2.8\0".to_vec(),
+        },
+    ];
+    let json = serde_json::to_string(&tags).unwrap();
+    let mut decoder = encoded(&[
+        ("EXIF_CAPTURE_TAGS", &json),
+        ("SH_DESC", "1/250"),
+        ("EXPCOMP", "0.3"),
+        ("AEMODE", "C"),
+        ("LENSMODEL", "1007"),
+    ]);
+    let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
+    let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
+    let mut exif = decoder.read_directory_tags(&directory);
+    assert!(matches!(
+        exif.get_tag(Tag::Unknown(EXPOSURE_TIME)).unwrap(),
+        Value::Rational(1, 30)
+    ));
+    assert!(matches!(
+        exif.get_tag(Tag::Unknown(EXPOSURE_BIAS)).unwrap(),
+        Value::SRational(-1, 3)
+    ));
+    assert_eq!(exif.get_tag_u32(Tag::Unknown(METERING_MODE)).unwrap(), 3);
+    assert_eq!(
+        exif.get_tag_ascii_string(Tag::Unknown(LENS_MODEL)).unwrap(),
+        "30mm F2.8"
+    );
+}
+
+#[test]
+fn source_comments_require_a_supported_encoding_prefix() {
+    let valid = |data: Vec<u8>| {
+        EmbeddedTag {
+            ifd: 1,
+            id: 0x9286,
+            kind: 7,
+            count: data.len(),
+            data,
+        }
+        .valid()
+    };
+    assert!(valid(b"ASCII\0\0\0A valid comment\0".to_vec()));
+    assert!(valid([b"UNICODE\0".as_slice(), &[65, 0, 0, 0]].concat()));
+    assert!(valid([&[0; 8][..], b"unspecified"].concat()));
+    assert!(!valid(b"ight\0\0\0\0Standard\0".to_vec()));
+    assert!(!valid(b"ASCII\0\0\0\xff".to_vec()));
+    assert!(!valid(b"UNICODE\0x".to_vec()));
+    for body in [&[0xff, 0xfe, 0x00, 0xd8][..], &[0xfe, 0xff, 0xd8, 0x00][..]] {
+        assert!(!valid([b"UNICODE\0".as_slice(), body].concat()));
+    }
+    assert!(valid(
+        [b"UNICODE\0".as_slice(), &[0xfe, 0xff, 0, 65]].concat()
+    ));
+    assert!(valid(
+        [b"UNICODE\0".as_slice(), &[0xff, 0xfe, 0x3d, 0xd8, 0, 0xde]].concat()
+    ));
+}
+
+#[test]
+fn malformed_standard_values_do_not_block_camera_fallbacks() {
+    let tags = [
+        EmbeddedTag {
+            ifd: 1,
+            id: EXPOSURE_TIME,
+            kind: 5,
+            count: 1,
+            data: [0_u32, 1].into_iter().flat_map(u32::to_ne_bytes).collect(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: F_NUMBER,
+            kind: 5,
+            count: 1,
+            data: [0_u32, 1].into_iter().flat_map(u32::to_ne_bytes).collect(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: ISO_SPEED_RATINGS,
+            kind: 3,
+            count: 1,
+            data: 0_u16.to_ne_bytes().to_vec(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: LENS_MODEL,
+            kind: 2,
+            count: 1,
+            data: vec![0],
+        },
+    ];
+    let json = serde_json::to_string(&tags).unwrap();
+    let mut decoder = encoded(&[
+        ("EXIF_CAPTURE_TAGS", &json),
+        ("SH_DESC", "1/250"),
+        ("AP_DESC", "8"),
+        ("ISO", "200"),
+        ("LENSMODEL", "a known lens"),
+    ]);
+    let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
+    let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
+    let mut exif = decoder.read_directory_tags(&directory);
+    assert!(matches!(
+        exif.get_tag(Tag::Unknown(EXPOSURE_TIME)).unwrap(),
+        Value::Rational(1, 250)
+    ));
+    assert!(matches!(
+        exif.get_tag(Tag::Unknown(F_NUMBER)).unwrap(),
+        Value::Rational(8, 1)
+    ));
+    assert_eq!(
+        exif.get_tag_u32(Tag::Unknown(ISO_SPEED_RATINGS)).unwrap(),
+        200
+    );
+    assert_eq!(
+        exif.get_tag_ascii_string(Tag::Unknown(LENS_MODEL)).unwrap(),
+        "a known lens"
+    );
+}
+
+#[test]
+fn missing_iso_rating_uses_standard_speed_before_camera_fallback() {
+    let tags = [
+        EmbeddedTag {
+            ifd: 1,
+            id: ISO_SPEED,
+            kind: 4,
+            count: 1,
+            data: 102400_u32.to_ne_bytes().to_vec(),
+        },
+        EmbeddedTag {
+            ifd: 1,
+            id: SENSITIVITY_TYPE,
+            kind: 3,
+            count: 1,
+            data: 3_u16.to_ne_bytes().to_vec(),
+        },
+    ];
+    let json = serde_json::to_string(&tags).unwrap();
+    let mut decoder = encoded(&[("ISO", "200"), ("EXIF_CAPTURE_TAGS", &json)]);
+    let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
+    let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
+    let mut exif = decoder.read_directory_tags(&directory);
+    assert_eq!(
+        exif.get_tag_u32(Tag::Unknown(ISO_SPEED_RATINGS)).unwrap(),
+        65535
+    );
+    assert_eq!(exif.get_tag_u32(Tag::Unknown(ISO_SPEED)).unwrap(), 102400);
+    assert_eq!(exif.get_tag_u32(Tag::Unknown(SENSITIVITY_TYPE)).unwrap(), 3);
+}
+
+#[test]
+fn unique_ids_remove_only_valid_trailing_padding() {
+    let id = b"30313030313831340FE6DD4B31383132";
+    for padding in [1, 2, 4] {
+        let data = [id.as_slice(), vec![0; padding].as_slice()].concat();
+        let tags = [EmbeddedTag {
+            ifd: 1,
+            id: 0xa420,
+            kind: 2,
+            count: data.len(),
+            data,
+        }];
+        let json = serde_json::to_string(&tags).unwrap();
+        let mut decoder = encoded(&[("EXIF_CAPTURE_TAGS", &json)]);
+        let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
+        let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
+        let mut exif = decoder.read_directory_tags(&directory);
+        assert_eq!(
+            exif.get_tag_ascii_string(Tag::Unknown(0xa420))
+                .unwrap()
+                .as_bytes(),
+            id
+        );
+    }
+    for data in [
+        b"not a hex identifier\0".to_vec(),
+        [id.as_slice(), b"X\0"].concat(),
+        vec![b'x'; 33],
+    ] {
+        let mut tag = EmbeddedTag {
+            ifd: 1,
+            id: 0xa420,
+            kind: 2,
+            count: data.len(),
+            data,
+        };
+        tag.normalize_unique_id();
+        assert!(!tag.valid());
     }
 }

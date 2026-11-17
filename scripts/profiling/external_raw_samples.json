@@ -93,6 +93,32 @@
         "url": "https://creativecommons.org/publicdomain/zero/1.0/"
       },
       "source_note": "Lens: ART 135 mm"
+    },
+    {
+      "file": "dp1s.x3f",
+      "family": "classic",
+      "camera": "Sigma DP1s",
+      "url": "https://raw.pixls.us/getfile.php/616/nice/Sigma%20-%20Sigma%20DP1s.X3F",
+      "sha256": "dc667efc0c9314124c95c2b9d67a5ba9e6c372f77a9bbea81cae559e3a99436f",
+      "size_bytes": 14289348,
+      "license": {
+        "id": "CC-BY-NC-SA-4.0",
+        "url": "http://creativecommons.org/licenses/by-nc-sa/4.0/"
+      },
+      "source_note": "Import from rawsamples.ch"
+    },
+    {
+      "file": "sd15.x3f",
+      "family": "classic",
+      "camera": "Sigma SD15",
+      "url": "https://raw.pixls.us/getfile.php/1863/nice/Sigma%20-%20SIGMA%20SD15%20-%203:2.X3F",
+      "sha256": "e9bf8ca29bb9c533b764a4af7830bcf029ee6792323bad3e4179d0e5c29389c0",
+      "size_bytes": 16373048,
+      "license": {
+        "id": "CC0-1.0",
+        "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+      },
+      "source_note": "Without built-in IR filter but with Hoya UV-IR filter in front of Sigma 18-35 DC F1.8"
     }
   ]
 }

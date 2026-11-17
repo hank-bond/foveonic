@@ -8,6 +8,9 @@ use foveonic::{
     source::{read_capture_properties, Source},
 };
 use serde_json::{json, Value};
+
+#[path = "common/capture_exif.rs"]
+mod exif_checks;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -25,7 +28,15 @@ fn examples() -> PathBuf {
 
 fn inspect(path: &Path) -> Value {
     let output = Command::new("exiftool")
-        .args(["-j", "-n", "-EXIF:all", "-ImageWidth", "-ImageHeight"])
+        .args([
+            "-config",
+            "",
+            "-j",
+            "-n",
+            "-EXIF:all",
+            "-ImageWidth",
+            "-ImageHeight",
+        ])
         .arg(path)
         .output()
         .expect("install ExifTool to run capture-export tests");
@@ -38,7 +49,7 @@ fn inspect(path: &Path) -> Value {
     records.into_iter().next().unwrap()
 }
 
-fn run(format: Format, file: &str, expected: Value) {
+fn run(format: Format, file: &str, expected: Value, shutter: (u32, u32)) {
     let path = examples().join(file);
     // Reuse the maintained input identities rather than accepting whichever
     // photograph happens to have the expected filename.
@@ -138,8 +149,6 @@ fn run(format: Format, file: &str, expected: Value) {
     }
     for (key, expected) in [
         ("Orientation", 1),
-        ("ExifImageWidth", size[0]),
-        ("ExifImageHeight", size[1]),
         ("ImageWidth", size[0]),
         ("ImageHeight", size[1]),
     ] {
@@ -150,6 +159,20 @@ fn run(format: Format, file: &str, expected: Value) {
             format.label()
         );
     }
+    if format == Format::Tiff {
+        assert!(tags.get("ExifImageWidth").is_none());
+        assert!(tags.get("ExifImageHeight").is_none());
+    } else {
+        assert_eq!(tags["ExifImageWidth"], size[0]);
+        assert_eq!(tags["ExifImageHeight"], size[1]);
+    }
+    if file == "sd15.x3f" {
+        assert!(
+            tags.get("UserComment").is_none(),
+            "malformed source comment must be omitted"
+        );
+    }
+    exif_checks::check_export(&destination, shutter);
     assert_eq!(tags["Software"], "Foveonic GPU");
     if format != Format::Dng {
         assert!(tags.get("DNGVersion").is_none());
@@ -162,42 +185,86 @@ fn merrill() -> Value {
 
 #[test]
 #[ignore = "uses cached example X3Fs, GPU and ExifTool; see docs/testing-coverage.md"]
-fn tiff_preserves_merrill_capture_after_rotation_crop_and_resize() {
-    run(Format::Tiff, "blue-parking-sign.x3f", merrill());
+fn all_formats_preserve_merrill_capture_after_geometry_edits() {
+    for format in Format::ALL {
+        run(format, "blue-parking-sign.x3f", merrill(), (1, 100));
+    }
 }
 
 #[test]
 #[ignore = "uses cached example X3Fs, GPU and ExifTool; see docs/testing-coverage.md"]
-fn jpeg_preserves_classic_capture_after_rotation_crop_and_resize() {
-    run(
-        Format::Jpeg,
-        "sd9.x3f",
-        json!({"Make":"SIGMA", "Model":"SIGMA SD9", "ISO":100, "DateTimeOriginal":"2003:04:12 12:40:05", "ExposureTime":1.0/30.0, "FNumber":4.5, "FocalLength":53, "ExposureProgram":2, "MeteringMode":2, "SerialNumber":"01004355"}),
-    );
+fn all_formats_preserve_classic_capture_after_geometry_edits() {
+    for format in Format::ALL {
+        run(
+            format,
+            "sd9.x3f",
+            json!({"Make":"SIGMA", "Model":"SIGMA SD9", "ISO":100, "DateTimeOriginal":"2003:04:12 12:40:05", "ExposureTime":1.0/30.0, "FNumber":4.5, "FocalLength":53, "ExposureProgram":2, "MeteringMode":2, "SerialNumber":"01004355"}),
+            (1, 30),
+        );
+    }
 }
 
 #[test]
 #[ignore = "uses cached example X3Fs, GPU and ExifTool; see docs/testing-coverage.md"]
-fn png_preserves_quattro_embedded_capture_after_geometry_edits() {
-    run(
-        Format::Png,
-        "dp0-quattro.x3f",
-        json!({"Make":"SIGMA", "Model":"SIGMA dp0 Quattro", "ISO":100, "DateTimeOriginal":"2017:02:03 16:07:55", "ExposureTime":1.3, "FNumber":6.3, "FocalLength":14, "ExposureProgram":1, "SerialNumber":91002254, "Flash":0}),
-    );
+fn all_formats_preserve_quattro_capture_after_geometry_edits() {
+    for format in Format::ALL {
+        run(
+            format,
+            "dp0-quattro.x3f",
+            json!({"Make":"SIGMA", "Model":"SIGMA dp0 Quattro", "ISO":100, "DateTimeOriginal":"2017:02:03 16:07:55", "ExposureTime":1.3, "FNumber":6.3, "FocalLength":14, "ExposureProgram":1, "SerialNumber":91002254, "Flash":0}),
+            (13, 10),
+        );
+    }
 }
 
 #[test]
 #[ignore = "uses cached example X3Fs, GPU and ExifTool; see docs/testing-coverage.md"]
-fn jxl_preserves_merrill_capture_after_rotation_crop_and_resize() {
-    run(Format::Jxl, "blue-parking-sign.x3f", merrill());
+fn all_formats_keep_descriptive_quattro_lens_names() {
+    for format in Format::ALL {
+        run(
+            format,
+            "dp2-quattro.x3f",
+            json!({"Model":"SIGMA dp2 Quattro","ExposureTime":1.0/60.0,"FNumber":2.8,"FocalLength":30,"LensModel":"30mm F2.8","MeteringMode":2}),
+            (1, 60),
+        );
+    }
 }
 
 #[test]
 #[ignore = "uses cached example X3Fs, GPU and ExifTool; see docs/testing-coverage.md"]
-fn dng_preserves_quattro_h_capture_after_rotation_crop_and_resize() {
-    run(
-        Format::Dng,
-        "sd-quattro-h.x3f",
-        json!({"Make":"SIGMA", "Model":"sd Quattro H", "ISO":100, "DateTimeOriginal":"2018:04:09 11:49:15", "ExposureTime":0.00025, "FNumber":2.8, "FocalLength":135, "ExposureCompensation":0.3, "ExposureProgram":3, "SerialNumber":91203029, "Flash":0}),
-    );
+fn all_formats_preserve_quattro_h_capture_after_geometry_edits() {
+    for format in Format::ALL {
+        run(
+            format,
+            "sd-quattro-h.x3f",
+            json!({"Make":"SIGMA", "Model":"sd Quattro H", "ISO":100, "DateTimeOriginal":"2018:04:09 11:49:15", "ExposureTime":0.00025, "FNumber":2.8, "FocalLength":135, "ExposureCompensation":0.3, "ExposureProgram":3, "SerialNumber":91203029, "Flash":0,"LensModel":"135mm F1.8 DG HSM | Art 017 "}),
+            (1, 4000),
+        );
+    }
+}
+
+#[test]
+#[ignore = "uses cached example X3Fs, GPU and ExifTool; see docs/testing-coverage.md"]
+fn all_formats_reject_malformed_sd15_comment() {
+    for format in Format::ALL {
+        run(
+            format,
+            "sd15.x3f",
+            json!({"Model":"SIGMA SD15", "ExposureTime":0.003125, "FNumber":4, "ISO":50, "FocalLength":18, "MeteringMode":5}),
+            (1, 320),
+        );
+    }
+}
+
+#[test]
+#[ignore = "uses cached example X3Fs, GPU and ExifTool; see docs/testing-coverage.md"]
+fn all_formats_preserve_dp1s_standard_metering() {
+    for format in Format::ALL {
+        run(
+            format,
+            "dp1s.x3f",
+            json!({"Model":"SIGMA DP1S", "ExposureTime":1.0/60.0, "FNumber":8, "ISO":50, "FocalLength":16.6, "MeteringMode":3}),
+            (1, 60),
+        );
+    }
 }

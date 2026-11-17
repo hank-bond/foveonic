@@ -377,13 +377,22 @@ fn embedded_tags(t: &Tiff<'_>, root: usize) -> Vec<crate::capture_metadata::Embe
                     part.reverse();
                 }
             }
-            let entry = crate::capture_metadata::EmbeddedTag {
+            // UNDEFINED data otherwise has no byte order. Keep Unicode comments
+            // readable when their source TIFF order differs from the new file.
+            if ifd == 1 && id == 0x9286 && data.starts_with(b"UNICODE\0") {
+                let body = &data[8..];
+                if !body.starts_with(&[0xfe, 0xff]) && !body.starts_with(&[0xff, 0xfe]) {
+                    data.splice(8..8, if t.big { [0xfe, 0xff] } else { [0xff, 0xfe] });
+                }
+            }
+            let mut entry = crate::capture_metadata::EmbeddedTag {
                 ifd,
                 id,
                 kind,
-                count,
+                count: data.len() / unit,
                 data,
             };
+            entry.normalize_unique_id();
             if entry.valid() {
                 result.push(entry);
             }
@@ -472,6 +481,100 @@ fn tiff_properties(bytes: &[u8]) -> Option<BTreeMap<String, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn padded_unique_id_is_normalized_before_source_validation() {
+        let id = b"30313030313831340FE6DD4B31383132";
+        let mut bytes = b"II\x2a\0".to_vec();
+        bytes.extend(8_u32.to_le_bytes());
+        bytes.extend(1_u16.to_le_bytes());
+        bytes.extend(EXIF_IFD_TAG.to_le_bytes());
+        bytes.extend(4_u16.to_le_bytes());
+        bytes.extend(1_u32.to_le_bytes());
+        bytes.extend(26_u32.to_le_bytes());
+        bytes.extend(0_u32.to_le_bytes());
+        bytes.extend(1_u16.to_le_bytes());
+        bytes.extend(0xa420_u16.to_le_bytes());
+        bytes.extend(2_u16.to_le_bytes());
+        bytes.extend(36_u32.to_le_bytes());
+        bytes.extend(44_u32.to_le_bytes());
+        bytes.extend(0_u32.to_le_bytes());
+        bytes.extend(id);
+        bytes.extend([0; 4]);
+        let tags = embedded_tags(
+            &Tiff {
+                bytes: &bytes,
+                big: false,
+            },
+            8,
+        );
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].count, 33);
+        assert_eq!(&tags[0].data[..32], id);
+        assert_eq!(tags[0].data[32], 0);
+        bytes[44] = b'g';
+        assert!(embedded_tags(
+            &Tiff {
+                bytes: &bytes,
+                big: false
+            },
+            8
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn unicode_comment_retains_source_byte_order() {
+        for big in [false, true] {
+            for bom in [false, true] {
+                let word = |v: u16| {
+                    if big {
+                        v.to_be_bytes()
+                    } else {
+                        v.to_le_bytes()
+                    }
+                };
+                let long = |v: u32| {
+                    if big {
+                        v.to_be_bytes()
+                    } else {
+                        v.to_le_bytes()
+                    }
+                };
+                let mut data = b"UNICODE\0".to_vec();
+                if bom {
+                    data.extend(word(0xfeff));
+                }
+                data.extend(word(0x4e2d));
+                data.extend(word(0));
+                let mut bytes = Vec::new();
+                bytes.extend(if big { b"MM" } else { b"II" });
+                bytes.extend(word(TIFF_MAGIC));
+                bytes.extend(long(8));
+                bytes.extend(word(1));
+                bytes.extend(word(EXIF_IFD_TAG));
+                bytes.extend(word(4));
+                bytes.extend(long(1));
+                bytes.extend(long(26));
+                bytes.extend(long(0));
+                bytes.extend(word(1));
+                bytes.extend(word(0x9286));
+                bytes.extend(word(7));
+                bytes.extend(long(data.len() as u32));
+                bytes.extend(long(44));
+                bytes.extend(long(0));
+                bytes.extend(data);
+                let tags = embedded_tags(&Tiff { bytes: &bytes, big }, 8);
+                assert_eq!(tags.len(), 1);
+                let mut expected = b"UNICODE\0".to_vec();
+                expected.extend(word(0xfeff));
+                expected.extend(word(0x4e2d));
+                expected.extend(word(0));
+                assert_eq!(tags[0].data, expected);
+                assert_eq!(tags[0].count, expected.len());
+            }
+        }
+    }
 
     #[test]
     fn jpeg_color_tags_identify_srgb_and_adobe_in_both_byte_orders() {
@@ -569,7 +672,12 @@ mod tests {
             lists: Default::default(),
         };
         let tiff = crate::capture_metadata::Capture::new(&metadata)
-            .payload([1, 1])
+            .payload(
+                [1, 1],
+                crate::capture_metadata::ExifOutput::Embedded(
+                    crate::color_space::TiffColorSpace::Srgb,
+                ),
+            )
             .unwrap();
         let mut jpeg = vec![0xff, 0xd8, 0xff, 0xff, 0x01, 0xff, 0xd0];
         for _ in 0..3 {

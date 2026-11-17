@@ -22,6 +22,7 @@ read_when: "Read first when entering the repository."
 - Keep scope grounded in Merrill X3F requirements.
 - Defer advanced logging and production hardening to a dedicated later phase.
 - Use Rust for core code. Supporting scripts may use Python.
+- For export-validator warning decisions and justifications, consult [the capture EXIF checks](./crates/foveonic/tests/common/capture_exif.rs).
 - Follow the [test-input reproducibility contract](./docs/specs/performance-diagnostics.md#reproducible-test-inputs) when adding or changing maintained tests.
 - Before a release, run all maintained correctness tests, including GPU/original-file checks and native GUI acceptance suites, using the [test inventory](./docs/testing-coverage.md). Workspace unit tests alone are insufficient. Record skipped, unavailable and failed checks explicitly and discuss unresolved release blockers with the owner.
 - Before publishing each release, compare the previous published app and the candidate for latency and memory on matched hardware, inputs, recipes, cache policy and display geometry. Follow the [release performance checks](./docs/releases.md#compare-performance-before-publication). `acceptance.py --full` excludes latency jobs. Run the latency domain separately, sample memory outside latency runs, and review per-workflow regressions and unavailable comparisons before publication. Passing correctness checks does not establish acceptable performance.

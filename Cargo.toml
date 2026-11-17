@@ -1,13 +1,14 @@
 [workspace]
 resolver = "2"
 members = ["crates/docs-index", "crates/foveonic", "crates/foveonic-gui", "crates/xtask"]
-exclude = ["vendor/egui-wgpu"]
+exclude = ["vendor/egui-wgpu", "vendor/tiff"]
 
 [patch.crates-io]
 egui-wgpu = { path = "vendor/egui-wgpu" }
+tiff = { path = "vendor/tiff" }
 
 [workspace.package]
-version = "0.8.3"
+version = "0.8.4"
 
 [profile.release.package.foveonic]
 debug = 1

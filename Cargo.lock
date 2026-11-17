@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "foveonic"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "foveonic-gui"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "bytemuck",
  "crossbeam-channel",
@@ -3424,8 +3424,6 @@ dependencies = [
 [[package]]
 name = "tiff"
 version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af9605de7fee8d9551863fd692cce7637f548dbd9db9180fcc07ccc6d26c336f"
 dependencies = [
  "fax",
  "flate2",

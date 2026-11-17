@@ -5,6 +5,18 @@ kind: reference
 
 # Changelog
 
+## 0.8.4
+
+Improve capture metadata and exported-file compatibility across supported cameras.
+
+### Changes
+
+- Store exposure and lens values in compact EXIF form for better compatibility with photo viewers and websites.
+- Preserve descriptive lens names, metering modes and ISO values from standard camera metadata.
+- Write the required format and color declarations for each export type.
+- Fix TIFF directory and metadata alignment, normalize padded image identifiers and omit malformed comments.
+- Preserve Unicode comment byte order when exporting.
+
 ## 0.8.3
 
 Faster Classic highlight recovery.

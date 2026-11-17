@@ -11,24 +11,17 @@ use tiff::{
     tags::Tag,
 };
 
-use crate::capture_metadata::Capture;
+use crate::capture_metadata::{Capture, ExifOutput};
 
 const ROWS_PER_STRIP: u32 = 32;
 const DENOMINATOR: u32 = 1_000_000;
 
-/// The TIFF directory API leaves alignment to us. Odd-length text or history
-/// would put later values and the directory on an invalid byte boundary.
-/// Add padding outside the declared count so it does not become tag data.
 fn tag<W: Write + Seek, T: TiffValue>(
     directory: &mut DirectoryEncoder<'_, W, TiffKindStandard>,
     number: u16,
     value: T,
 ) -> Result<()> {
-    let bytes = value.bytes();
     directory.write_tag(Tag::Unknown(number), value)?;
-    if bytes > 4 && !bytes.is_multiple_of(2) {
-        directory.write_data(&[0_u8][..])?;
-    }
     Ok(())
 }
 
@@ -130,7 +123,7 @@ pub(super) fn write<W: Write + Seek>(
     let [width, height] = size;
     let mut encoder = TiffEncoder::new(&mut out)?;
     let capture = Capture::new(metadata);
-    let exif = capture.write_exif(&mut encoder, size)?;
+    let exif = capture.write_exif(&mut encoder, size, ExifOutput::Dng)?;
     let mut directory = encoder.image_directory()?;
     samples(&mut directory, packed, size)?;
     capture.write_primary(&mut directory, exif)?;

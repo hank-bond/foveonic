@@ -1,6 +1,7 @@
 //! Packages photographic RGB samples with destination colors and shared capture metadata.
 
 use crate::{
+    capture_metadata::{ExifOutput, Undefined},
     nodes::sensor::calibration::EncodeParams,
     render::TiffColorSpace,
     source::{Metadata, Result},
@@ -213,12 +214,13 @@ pub fn write<W: Write + Seek>(
             let mut encoder = tiff::encoder::TiffEncoder::new(&mut writer)?
                 .with_compression(compression)
                 .with_predictor(predictor);
-            let exif = capture.write_exif(&mut encoder, [width, height])?;
+            let exif =
+                capture.write_exif(&mut encoder, [width, height], ExifOutput::Tiff(space))?;
             let mut image = encoder.new_image::<tiff::encoder::colortype::RGB16>(width, height)?;
             capture.write_primary(image.encoder(), exif)?;
             image
                 .encoder()
-                .write_tag(tiff::tags::Tag::Unknown(34675), space.profile())?;
+                .write_tag(tiff::tags::Tag::Unknown(34675), Undefined(space.profile()))?;
             image
                 .encoder()
                 .write_tag(tiff::tags::Tag::Orientation, 1_u16)?;
@@ -243,7 +245,7 @@ pub fn write<W: Write + Seek>(
             start
         }
         Format::Jpeg => {
-            let exif = capture.payload([width, height])?;
+            let exif = capture.payload([width, height], ExifOutput::Jpeg(space))?;
             if exif.len() > 65_527 {
                 return Err("EXIF metadata exceeds JPEG APP1 capacity".into());
             }
@@ -263,8 +265,9 @@ pub fn write<W: Write + Seek>(
                 let start = std::time::Instant::now();
                 let mut info = png::Info::with_size(width, height);
                 info.icc_profile = Some(std::borrow::Cow::Borrowed(space.profile()));
-                info.exif_metadata =
-                    Some(std::borrow::Cow::Owned(capture.payload([width, height])?));
+                info.exif_metadata = Some(std::borrow::Cow::Owned(
+                    capture.payload([width, height], ExifOutput::Embedded(space))?,
+                ));
                 let mut encoder = png::Encoder::with_info(&mut writer, info)?;
                 encoder.set_color(png::ColorType::Rgb);
                 encoder.set_depth(png::BitDepth::Sixteen);
@@ -295,7 +298,9 @@ pub fn write<W: Write + Seek>(
                     FilterType::Adaptive,
                 );
                 encoder.set_icc_profile(space.profile().to_vec())?;
-                encoder.set_exif_metadata(capture.payload([width, height])?)?;
+                encoder.set_exif_metadata(
+                    capture.payload([width, height], ExifOutput::Embedded(space))?,
+                )?;
                 encoder.write_image(&rgb8, width, height, image::ExtendedColorType::Rgb8)?;
                 start
             }
@@ -310,7 +315,7 @@ pub fn write<W: Write + Seek>(
                 height,
                 space,
                 options,
-                &capture.payload([width, height])?,
+                &capture.payload([width, height], ExifOutput::Embedded(space))?,
             )?;
             start
         }

@@ -1602,7 +1602,10 @@ pub(crate) fn small_x3f_with_exif() -> Vec<u8> {
         lists: Default::default(),
     };
     let exif = crate::capture_metadata::Capture::new(&metadata)
-        .payload([8, 6])
+        .payload(
+            [8, 6],
+            crate::capture_metadata::ExifOutput::Embedded(crate::color_space::TiffColorSpace::Srgb),
+        )
         .unwrap();
     let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
     jpeg.extend(((exif.len() + 8) as u16).to_be_bytes());

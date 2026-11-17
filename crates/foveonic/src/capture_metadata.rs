@@ -1,6 +1,9 @@
 //! Translates source capture details into shared EXIF directories for all exports.
 
-use crate::source::{Metadata, Result};
+use crate::{
+    color_space::TiffColorSpace,
+    source::{Metadata, Result},
+};
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -16,12 +19,51 @@ fn tag<W: Write + Seek, T: TiffValue>(
     number: u16,
     value: T,
 ) -> Result<()> {
-    let bytes = value.bytes();
     directory.write_tag(Tag::Unknown(number), value)?;
-    if bytes > 4 && !bytes.is_multiple_of(2) {
-        directory.write_data(&[0_u8][..])?;
-    }
     Ok(())
+}
+
+fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+// Continued fractions retain simple camera values such as 1/30 and 63/10.
+// At the integer limits, choose the nearest representable fraction instead.
+fn fraction(value: f64, max_n: u32, max_d: u32) -> (u32, u32) {
+    let (mut p0, mut q0, mut p1, mut q1) = (0_u64, 1_u64, 1_u64, 0_u64);
+    let mut rest = value;
+    loop {
+        let limit = (u64::from(max_n) - p0)
+            .checked_div(p1)
+            .unwrap_or(u64::MAX)
+            .min((u64::from(max_d) - q0).checked_div(q1).unwrap_or(u64::MAX));
+        let a = rest.floor();
+        let bounded = a > limit as f64;
+        let k = if bounded { limit } else { a as u64 };
+        let (p2, q2) = (p0 + k * p1, q0 + k * q1);
+        if bounded {
+            let error = |p: u64, q: u64| {
+                if q == 0 {
+                    f64::INFINITY
+                } else {
+                    (p as f64 / q as f64 - value).abs()
+                }
+            };
+            return if error(p1, q1) < error(p2, q2) || (error(p1, q1) == error(p2, q2) && q1 < q2) {
+                (p1 as u32, q1 as u32)
+            } else {
+                (p2 as u32, q2 as u32)
+            };
+        }
+        if p2 as f64 / q2 as f64 == value || rest == a {
+            return (p2 as u32, q2 as u32);
+        }
+        (p0, q0, p1, q1) = (p1, q1, p2, q2);
+        rest = 1. / (rest - a);
+    }
 }
 
 fn unsigned_rationals(values: &[f64]) -> Result<Vec<Rational>> {
@@ -31,8 +73,7 @@ fn unsigned_rationals(values: &[f64]) -> Result<Vec<Rational>> {
             if !v.is_finite() || v <= 0. || v > u32::MAX as f64 {
                 return Err("unrepresentable capture rational".into());
             }
-            let d = (u32::MAX as f64 / v).min(1_000_000_000.).floor().max(1.) as u32;
-            let n = (v * f64::from(d)).round() as u32;
+            let (n, d) = fraction(v, u32::MAX, u32::MAX);
             if n == 0 {
                 return Err("unrepresentable capture rational".into());
             }
@@ -47,13 +88,10 @@ fn signed_rationals(values: &[f64]) -> Result<Vec<SRational>> {
             if !v.is_finite() || v.abs() > i32::MAX as f64 {
                 return Err("unrepresentable capture rational".into());
             }
-            let d = (i32::MAX as f64 / v.abs().max(1.))
-                .min(1_000_000_000.)
-                .floor()
-                .max(1.) as i32;
+            let (n, d) = fraction(v.abs(), i32::MAX as u32, i32::MAX as u32);
             Ok(SRational {
-                n: (v * f64::from(d)).round() as i32,
-                d,
+                n: if v < 0. { -(n as i32) } else { n as i32 },
+                d: d as i32,
             })
         })
         .collect()
@@ -86,15 +124,33 @@ const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 // Last second representable by EXIF's four-digit year.
 const MAX_TIMESTAMP: u64 = 253_402_300_799;
 
-struct ExifVersion(&'static [u8; 4]);
-impl TiffValue for ExifVersion {
+pub(crate) struct Undefined<'a>(pub &'a [u8]);
+impl TiffValue for Undefined<'_> {
     const BYTE_LEN: u8 = 1;
     const FIELD_TYPE: Type = Type::UNDEFINED;
     fn count(&self) -> usize {
-        4
+        self.0.len()
     }
     fn data(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(self.0)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ExifOutput {
+    Tiff(TiffColorSpace),
+    Jpeg(TiffColorSpace),
+    Embedded(TiffColorSpace),
+    Dng,
+}
+impl ExifOutput {
+    fn color_space(self) -> u16 {
+        match self {
+            Self::Tiff(TiffColorSpace::Srgb)
+            | Self::Jpeg(TiffColorSpace::Srgb)
+            | Self::Embedded(TiffColorSpace::Srgb) => 1,
+            _ => 65535,
+        }
     }
 }
 
@@ -109,6 +165,19 @@ pub(crate) struct EmbeddedTag {
 }
 
 impl EmbeddedTag {
+    pub(crate) fn normalize_unique_id(&mut self) {
+        // Some camera previews pad this fixed-size ASCII value with extra NULs.
+        if (self.ifd, self.id, self.kind) == (1, 0xa420, 2)
+            && self.count == self.data.len()
+            && self.data.len() >= 33
+            && self.data[..32].iter().all(u8::is_ascii_hexdigit)
+            && self.data[32..].iter().all(|b| *b == 0)
+        {
+            self.data.truncate(33);
+            self.count = 33;
+        }
+    }
+
     pub(crate) fn valid(&self) -> bool {
         if !crate::x3f::exif::retained(self.ifd, self.id) {
             return false;
@@ -136,6 +205,26 @@ impl EmbeddedTag {
                 .0
                 .iter()
                 .any(|x| x[4..] == [0; 4])
+        {
+            return false;
+        }
+        if self.ifd == 1
+            && matches!(self.id, EXPOSURE_TIME | F_NUMBER | FOCAL_LENGTH)
+            && self.data.get(..4).is_some_and(|n| n == [0; 4])
+        {
+            return false;
+        }
+        if self.ifd == 1
+            && matches!(self.id, ISO_SPEED_RATINGS | ISO_SPEED)
+            && self.data.iter().all(|b| *b == 0)
+        {
+            return false;
+        }
+        if matches!(
+            (self.ifd, self.id),
+            (0, 0x010f | 0x0110) | (1, BODY_SERIAL_NUMBER | LENS_MODEL)
+        ) && std::str::from_utf8(&self.data)
+            .is_ok_and(|s| s.split('\0').next().unwrap_or("").trim().is_empty())
         {
             return false;
         }
@@ -168,6 +257,7 @@ impl EmbeddedTag {
             (1, 0x8831..=0x8835) => (4, Some(1)),
             (1, 0x9000) => (7, Some(4)),
             (1, 0xa300 | 0xa301) => (7, Some(1)),
+            (1, 0xa420) => (2, Some(33)),
             (1, 0x8828 | 0x9286 | 0xa20c | 0xa40b) => (7, None),
             (1, _) => (2, None),
             (2, 0) => (1, Some(4)),
@@ -184,13 +274,74 @@ impl EmbeddedTag {
         if self.kind != expected.0 || expected.1.is_some_and(|n| self.count != n) {
             return false;
         }
+        if self.ifd == 1 && self.id == 0xa420 && !self.data[..32].iter().all(u8::is_ascii_hexdigit)
+        {
+            return false;
+        }
         if self.ifd == 1 && self.id == EXIF_VERSION && !self.data.iter().all(u8::is_ascii_digit) {
             return false;
         }
         if matches!((self.ifd, self.id), (0, 0x0132) | (1, 0x9003 | 0x9004)) {
             return self.count == 20 && std::str::from_utf8(&self.data[..19]).is_ok_and(valid_date);
         }
+        if self.ifd == 1 && self.id == 0x9286 {
+            let Some(prefix) = self.data.get(..8) else {
+                return false;
+            };
+            return match prefix {
+                b"ASCII\0\0\0" => self.data[8..].is_ascii(),
+                b"UNICODE\0" => {
+                    let body = &self.data[8..];
+                    if !body.len().is_multiple_of(2) {
+                        return false;
+                    }
+                    let big = match body.get(..2) {
+                        Some([0xfe, 0xff]) => true,
+                        Some([0xff, 0xfe]) => false,
+                        _ => cfg!(target_endian = "big"),
+                    };
+                    char::decode_utf16(body.as_chunks::<2>().0.iter().map(|b| {
+                        let word = [b[0], b[1]];
+                        if big {
+                            u16::from_be_bytes(word)
+                        } else {
+                            u16::from_le_bytes(word)
+                        }
+                    }))
+                    .all(|c| c.is_ok())
+                }
+                b"JIS\0\0\0\0\0" | b"\0\0\0\0\0\0\0\0" => true,
+                _ => false,
+            };
+        }
         true
+    }
+
+    fn reduce_rationals(&mut self) {
+        if !matches!(self.kind, 5 | 10) {
+            return;
+        }
+        for pair in self.data.as_chunks_mut::<8>().0 {
+            let n = u32::from_ne_bytes(pair[..4].try_into().unwrap());
+            let d = u32::from_ne_bytes(pair[4..].try_into().unwrap());
+            let (n, d) = if self.kind == 5 {
+                let g = gcd(n, d);
+                (n / g, d / g)
+            } else {
+                let (n, d) = (i64::from(n as i32), i64::from(d as i32));
+                let g = i64::from(gcd(n.unsigned_abs() as u32, d.unsigned_abs() as u32));
+                let (mut n, mut d) = (n / g, d / g);
+                if n == 0 {
+                    d = 1;
+                } else if d < 0 && -n <= i64::from(i32::MAX) && -d <= i64::from(i32::MAX) {
+                    n = -n;
+                    d = -d;
+                }
+                (n as i32 as u32, d as i32 as u32)
+            };
+            pair[..4].copy_from_slice(&n.to_ne_bytes());
+            pair[4..].copy_from_slice(&d.to_ne_bytes());
+        }
     }
 }
 
@@ -261,7 +412,18 @@ impl<'a> Capture<'a> {
             .filter(|s| s.len() <= 1_000_000)
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
-        let embedded = embedded.into_iter().filter(EmbeddedTag::valid).collect();
+        let embedded = embedded
+            .into_iter()
+            .map(|mut entry| {
+                entry.normalize_unique_id();
+                entry
+            })
+            .filter(EmbeddedTag::valid)
+            .map(|mut e| {
+                e.reduce_rationals();
+                e
+            })
+            .collect();
         Self {
             properties,
             date,
@@ -269,15 +431,18 @@ impl<'a> Capture<'a> {
         }
     }
 
-    pub fn payload(&self, size: [u32; 2]) -> Result<Vec<u8>> {
+    pub fn payload(&self, size: [u32; 2], output: ExifOutput) -> Result<Vec<u8>> {
         let mut out = std::io::Cursor::new(Vec::new());
         {
             let mut encoder = TiffEncoder::new(&mut out)?;
-            let exif = self.write_exif(&mut encoder, size)?;
+            let exif = self.write_exif(&mut encoder, size, output)?;
             let mut directory = encoder.image_directory()?;
             self.write_primary(&mut directory, exif)?;
             tag(&mut directory, 274, 1_u16)?;
             tag(&mut directory, 305, "Foveonic GPU")?;
+            if matches!(output, ExifOutput::Jpeg(_)) {
+                tag(&mut directory, 0x0213, 1_u16)?;
+            }
             directory.finish()?;
         }
         Ok(out.into_inner())
@@ -297,6 +462,11 @@ impl<'a> Capture<'a> {
     }
     fn positive(&self, key: &str) -> Option<f64> {
         self.number(key).filter(|v| *v > 0.)
+    }
+    fn has(&self, ifd: u8, id: u16) -> bool {
+        self.embedded
+            .iter()
+            .any(|entry| entry.ifd == ifd && entry.id == id)
     }
     fn shutter(&self) -> Option<f64> {
         self.text("SH_DESC")
@@ -319,6 +489,7 @@ impl<'a> Capture<'a> {
         &self,
         encoder: &mut TiffEncoder<W>,
         size: [u32; 2],
+        output: ExifOutput,
     ) -> Result<(u32, Option<u32>)> {
         let gps = if self.embedded.iter().any(|entry| entry.ifd == 2) {
             let mut directory = encoder.extra_directory()?;
@@ -354,7 +525,12 @@ impl<'a> Capture<'a> {
             .iter()
             .find(|e| e.ifd == 1 && e.id == EXIF_VERSION);
         if version.is_none_or(|e| e.data.as_slice() < minimum.as_slice()) {
-            tag(&mut directory, EXIF_VERSION, ExifVersion(minimum))?;
+            tag(&mut directory, EXIF_VERSION, Undefined(minimum))?;
+        }
+        tag(&mut directory, 0xa000, Undefined(b"0100"))?;
+        tag(&mut directory, 0xa001, output.color_space())?;
+        if matches!(output, ExifOutput::Jpeg(_)) {
+            tag(&mut directory, 0x9101, Undefined(&[1, 2, 3, 0]))?;
         }
         for (id, value) in [
             (EXPOSURE_TIME, self.shutter()),
@@ -366,6 +542,9 @@ impl<'a> Capture<'a> {
             ),
             (FOCAL_LENGTH, self.number("FLENGTH")),
         ] {
+            if self.has(1, id) {
+                continue;
+            }
             if let Some(values) = value
                 .filter(|v| *v > 0.)
                 .and_then(|v| unsigned_rationals(&[v]).ok())
@@ -377,18 +556,19 @@ impl<'a> Capture<'a> {
             .number("EXIF_EXPOSURE_BIAS")
             .or_else(|| self.number("EXPCOMP"))
             .and_then(|v| signed_rationals(&[v]).ok())
+            .filter(|_| !self.has(1, EXPOSURE_BIAS))
         {
             tag(&mut directory, EXPOSURE_BIAS, values.as_slice())?;
         }
-        if let Some(iso) = self
-            .number("ISO")
-            .filter(|_| {
-                !self.properties.contains_key("EXIF_PREVIEW_ISO")
-                    || !self
-                        .embedded
-                        .iter()
-                        .any(|entry| entry.ifd == 1 && entry.id == ISO_SPEED_RATINGS)
-            })
+        let standard_iso = self
+            .embedded
+            .iter()
+            .find(|e| e.ifd == 1 && e.id == ISO_SPEED)
+            .map(|e| u32::from_ne_bytes(e.data.as_slice().try_into().unwrap()));
+        if let Some(iso) = standard_iso
+            .map(f64::from)
+            .or_else(|| self.number("ISO"))
+            .filter(|_| !self.has(1, ISO_SPEED_RATINGS))
             .filter(|v| v.fract() == 0. && (1. ..=u32::MAX as f64).contains(v))
         {
             let iso = iso as u32;
@@ -397,8 +577,12 @@ impl<'a> Capture<'a> {
                 ISO_SPEED_RATINGS,
                 iso.min(u16::MAX as u32) as u16,
             )?;
-            tag(&mut directory, SENSITIVITY_TYPE, 3_u16)?; // ISO speed.
-            tag(&mut directory, ISO_SPEED, iso)?;
+            if !self.has(1, SENSITIVITY_TYPE) {
+                tag(&mut directory, SENSITIVITY_TYPE, 3_u16)?;
+            }
+            if !self.has(1, ISO_SPEED) {
+                tag(&mut directory, ISO_SPEED, iso)?;
+            }
         }
         if let Some(date) = &self.date {
             for id in [DATE_TIME_ORIGINAL, DATE_TIME_DIGITIZED] {
@@ -418,7 +602,9 @@ impl<'a> Capture<'a> {
             "S" => Some(4),
             _ => None,
         }) {
-            tag(&mut directory, EXPOSURE_PROGRAM, program)?;
+            if !self.has(1, EXPOSURE_PROGRAM) {
+                tag(&mut directory, EXPOSURE_PROGRAM, program)?;
+            }
         }
         if let Some(mode) = self.text("AEMODE").and_then(|v| match v {
             "A" => Some(1_u16),
@@ -426,19 +612,22 @@ impl<'a> Capture<'a> {
             "8" => Some(5),
             _ => None,
         }) {
-            tag(&mut directory, METERING_MODE, mode)?;
+            if !self.has(1, METERING_MODE) {
+                tag(&mut directory, METERING_MODE, mode)?;
+            }
         }
         for (id, key) in [(BODY_SERIAL_NUMBER, "CAMSERIAL"), (LENS_MODEL, "LENSMODEL")] {
-            if let Some(value) = self.text(key) {
+            if let Some(value) = self.text(key).filter(|_| !self.has(1, id)) {
                 tag(&mut directory, id, value)?;
             }
         }
-        if let Some(firmware) = self.text("FIRMVERS") {
+        if let Some(firmware) = self.text("FIRMVERS").filter(|_| !self.has(1, 0xa439)) {
             tag(&mut directory, 0xa439, firmware)?;
         }
         if let Some(value) = self
             .number("FLEQ35MM")
             .filter(|v| v.fract() == 0. && (1. ..=u16::MAX as f64).contains(v))
+            .filter(|_| !self.has(1, FOCAL_LENGTH_35MM))
         {
             tag(&mut directory, FOCAL_LENGTH_35MM, value as u16)?;
         }
@@ -485,8 +674,10 @@ impl<'a> Capture<'a> {
             }
         }
         // EXIF geometry describes the exported, already-oriented image.
-        tag(&mut directory, PIXEL_X_DIMENSION, size[0])?;
-        tag(&mut directory, PIXEL_Y_DIMENSION, size[1])?;
+        if !matches!(output, ExifOutput::Tiff(_)) {
+            tag(&mut directory, PIXEL_X_DIMENSION, size[0])?;
+            tag(&mut directory, PIXEL_Y_DIMENSION, size[1])?;
+        }
         Ok((directory.finish_with_offsets()?.offset, gps))
     }
 
@@ -502,23 +693,17 @@ impl<'a> Capture<'a> {
         if let Some(gps) = offsets.1 {
             tag(directory, 0x8825, gps)?;
         }
-        if let Some(make) = self.text("CAMMANUF") {
-            tag(directory, 271, make)?;
-        } else if !self
-            .embedded
-            .iter()
-            .any(|entry| entry.ifd == 0 && entry.id == 271)
-        {
-            tag(directory, 271, "SIGMA")?;
+        if !self.has(0, 271) {
+            tag(directory, 271, self.text("CAMMANUF").unwrap_or("SIGMA"))?;
         }
-        if let Some(model) = self.text("CAMMODEL") {
+        if let Some(model) = self.text("CAMMODEL").filter(|_| !self.has(0, 272)) {
             tag(directory, 272, model)?;
         }
-        if let Some(date) = &self.date {
+        if let Some(date) = self.date.as_ref().filter(|_| !self.has(0, DATE_TIME)) {
             tag(directory, DATE_TIME, date.as_str())?;
         }
         for (id, key) in [(ARTIST, "ARTIST"), (COPYRIGHT, "COPYRIGHT")] {
-            if let Some(value) = self.text(key) {
+            if let Some(value) = self.text(key).filter(|_| !self.has(0, id)) {
                 tag(directory, id, value)?;
             }
         }

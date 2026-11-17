@@ -1,5 +1,5 @@
 ---
-summary: "Carry supported X3F capture metadata into every 0.8.1 export."
+summary: "Audit and preserve X3F capture metadata across all supported export formats."
 ---
 
 # Export capture metadata
@@ -31,3 +31,32 @@ The owner requested headless scenarios using the cached example photographs, wit
 The owner requested a repeatable environment setup path. `scripts/setup_tests.py` checks the headless test tool requirements, supports explicit installation of missing macOS packages/Rust components, and delegates image preparation to the existing sync and pinned-sample verifier. Default checks do not install or download. Bootstrap toolchains, GPU access and native app prerequisites remain explicit. Installer decisions and offline forwarding have portable unit coverage.
 
 Setup verification passes: 11 portable setup tests, the existing profiling Python suite, dependency checks, explicit-install no-op, offline verification of 13 release examples and seven external samples, and documentation checks. Astra’s final review found no remaining issues.
+
+## Cross-architecture audit and warning cleanup
+
+The owner requested deeper capture-value testing after an SD15 forum upload showed shutter `4000000/1000000000s`, numerically 1/250 s. The shared writer generated these fractions across architectures. Existing tests checked numeric quotients but not stored pairs. An isolated audit exported all 27 cached originals to TIFF, JPEG, PNG and JPEG XL, plus eight representative DNGs, using the production processing and export APIs.
+
+The audit found descriptive lens names overwritten by numeric IDs, a DP1s standard metering value overwritten by a conflicting maker property, container-specific declaration defects and an invalid source SD15 comment. The patch preserves valid standard fields before camera fallbacks, canonicalizes rational storage, fixes the declarations, rejects malformed comments and preserves Unicode byte order. Maintained checks cover seven pinned real photographs through all five formats, plus 33 encoder-option/color-space combinations. SD15 and DP1s were added to the existing download manifest with publisher identities and license terms.
+
+The final capture-value audit has no missing values or mismatches in 1,624 checks, including ImageUniqueID. All 116 published-code image codestreams and all eight DNG tone/look arrays remain byte-identical. Representative stored shutter pairs are SD15 1/320, SD9 1/30, Merrill 1/100, dp0 Quattro 13/10 and Quattro H 1/4000. The reported screenshot's 1/250 case also has direct raw-pair coverage.
+
+## Adobe SDK reader checks
+
+The owner requested independent SDK checks. The published SDK archive SHA-256 is `e9bb04e956da3605d8ef4f821bdb979a250c22546b0332b7f81a93b11da7cceb`. It was built with its bundled XMP, JPEG and JPEG XL libraries. The supplied `dng_validate` requires a DNG. A small adapter uses the unmodified `dng_info` and `dng_read_image` APIs for photographic TIFF, and `dng_jxl_decoder::Decode` with EXIF container-box parsing for JPEG XL.
+
+Adobe reported two structural defects that ExifTool had not flagged: odd TIFF directory offsets and source-padded ImageUniqueID counts. Valid padded IDs are now normalized in both source parsing and cached-tag loading. A [pinned TIFF dependency patch](../vendor/tiff/FOVEONIC.md) fixes directory and external-value alignment. Existing caller padding was removed so the dependency owns alignment consistently.
+
+The corrected candidate passes SDK parsing/decoding without warnings or errors for 125 real files: 90 TIFFs, eight DNGs and 27 lossless JPEG XL exports. All 2,304,000 uint16 components match independently extracted expected samples. All 63 TIFF-variant strip payloads are byte-identical before and after the structural fixes. These checks establish parsing and sample decoding, not application color-management or visual appearance acceptance. Standalone JPEG and PNG were not tested through the SDK.
+
+## Warning decisions and final checks
+
+The owner approved cataloguing the reviewed warnings, then required one maintained source to prevent drift. Exact warning matches, acceptance conditions and justifications live only in [the shared capture EXIF checks](../crates/foveonic/tests/common/capture_exif.rs). Test output is generated from those records. Guidance elsewhere only links there.
+
+- [x] Audit and correct capture values across all supported architecture routes and output containers.
+- [x] Add raw-storage, precedence, comment, identifier, alignment and validator checks.
+- [x] Verify unchanged image codestreams, compressed strips and DNG profile arrays.
+- [x] Run independent SDK parsing/decoding and compare samples exactly.
+- [x] Review implementation and dependency changes with Sol and make the source patch and audit exports available for owner testing.
+- [x] Run all 33 encoder-option combinations and 35 real-source exports with the reviewed warning decisions.
+
+All 645 active core tests, the integration target's two hardware-free warning-context tests, 35 real-source exports and 33 encoder-option combinations pass. Strict processor Clippy, formatting, documentation/index and diff checks pass. The profiling-tool Python suite passed 199 tests with one existing platform-specific skip. Sol's implementation reviews found no remaining issues. Changes remain uncommitted.
