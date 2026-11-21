@@ -9,7 +9,7 @@ pub use common::adaptive_limits;
 mod dehaze;
 mod merrill;
 mod quattro;
-mod saturation;
+pub(crate) mod saturation;
 mod sections;
 
 use crate::preferences::EditingSection;

@@ -618,6 +618,7 @@ impl Worker {
     pub fn busy(&self) -> bool {
         self.runtime.busy()
     }
+    #[cfg(test)]
     pub fn is_settled_and_admitted(&self, frame: &RenderResult) -> bool {
         self.runtime.is_settled_and_admitted(frame)
     }

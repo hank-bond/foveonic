@@ -1,12 +1,12 @@
 //! Owns render coordination on a dedicated thread and publishes bounded UI updates.
 
+#[cfg(test)]
+use super::coordinator::TaskId;
 use super::{
-    coordinator::{Photos, RenderCoordinator, TaskId, WorkPlan},
+    coordinator::{Photos, RenderCoordinator, WorkPlan},
     request::RenderRequest,
     view_plan::{ImageState, Planned},
-    worker::{
-        self, ColorPickRequest, MemoryTarget, Pending, PreparationConfig, ScopeRequest, Update,
-    },
+    worker::{ColorPickRequest, MemoryTarget, Pending, PreparationConfig, ScopeRequest, Update},
 };
 use crate::rendering::request::RequestId;
 use crossbeam_channel::{Receiver, Select, Sender};
@@ -38,6 +38,8 @@ enum Command {
 struct Status {
     processed: u64,
     busy: bool,
+    /// For worker tests that check admission without a view plan.
+    #[cfg(test)]
     admitted: Vec<(TaskId, RequestId)>,
 }
 
@@ -133,7 +135,8 @@ impl Handle {
         }
     }
 
-    pub fn is_settled_and_admitted(&self, frame: &worker::RenderResult) -> bool {
+    #[cfg(test)]
+    pub fn is_settled_and_admitted(&self, frame: &super::worker::RenderResult) -> bool {
         let status = self.status();
         self.pending.get() <= status.processed
             && status
@@ -567,6 +570,7 @@ impl Runtime {
         *self.status.lock().unwrap() = Arc::new(Status {
             processed: self.processed,
             busy: self.coordinator.busy(),
+            #[cfg(test)]
             admitted: self.coordinator.admitted_images(),
         });
         self.slot.1.notify_one();

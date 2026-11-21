@@ -1,6 +1,8 @@
 //! Exercises recipe persistence and import review in the running application.
 
+use super::scenarios::number_edit;
 use super::{App, Smoke};
+use crate::multi_edit_controls::NumberChange;
 use eframe::egui;
 use foveonic::render::Settings;
 use serde_json::{json, Value};
@@ -172,9 +174,22 @@ impl LifecycleJourney {
                 let mut saved = baseline.clone();
                 saved.exposure += 0.125;
                 saved.saturation = 0.75;
-                app.settings.saturation = 0.75;
                 self.saved = Some(saved);
-                super::scenarios::apply_exposure(app, 0.125);
+                super::scenarios::apply_edits(
+                    app,
+                    &[
+                        number_edit(
+                            "/exposure",
+                            NumberChange::Relative(0.125),
+                            super::scenarios::EXPOSURE_RANGE,
+                        ),
+                        number_edit(
+                            "/saturation",
+                            NumberChange::Set(0.75),
+                            reference_saturation_range(),
+                        ),
+                    ],
+                );
                 app.browser.set_actions(vec![(
                     crate::shortcuts::BrowserAction::Arrow(egui::Key::ArrowRight),
                     egui::Modifiers::NONE,
@@ -672,4 +687,9 @@ fn process_button() -> Option<crate::automation::Button> {
         .buttons
         .into_iter()
         .find(|button| button.label == "Process")
+}
+
+fn reference_saturation_range() -> [f64; 2] {
+    let range = crate::controls::saturation::REFERENCE_SATURATION_RANGE;
+    [f64::from(*range.start()), f64::from(*range.end())]
 }

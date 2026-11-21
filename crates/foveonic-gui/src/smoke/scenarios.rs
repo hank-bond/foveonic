@@ -1345,7 +1345,7 @@ impl Scenario {
                                     "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
                                     "presentation_revision":frame.request.id,"requested":frame.request.settings,
                                     "scale_divisor":frame.artifact.settings.working_scale.divisor(),
-                                    "admitted":app.worker.is_settled_and_admitted(frame),
+                                    "current_view":app.shows_current_view(frame),
                                     "matches_expected_final":self.matches(app,path,frame,self.minimum_revision),
                                 })),
                             })).collect::<Vec<_>>(),
@@ -2113,16 +2113,38 @@ impl App {
     }
 }
 
+pub(super) const EXPOSURE_RANGE: [f64; 2] = [-4., 4.];
+
 pub(super) fn apply_exposure(app: &mut App, delta: f64) {
-    let edits = [Edit::Number {
-        pointer: "/exposure".into(),
-        change: NumberChange::Relative(delta),
-        range: [-4., 4.],
+    apply_edits(
+        app,
+        &[number_edit(
+            "/exposure",
+            NumberChange::Relative(delta),
+            EXPOSURE_RANGE,
+        )],
+    );
+}
+
+pub(super) fn number_edit(pointer: &str, change: NumberChange, range: [f64; 2]) -> Edit {
+    Edit::Number {
+        pointer: pointer.into(),
+        change,
+        range,
         mapping: Mapping::Identity,
-    }];
-    if !app.multi_edit.apply_edits(&edits, &mut app.sidecars) {
-        return;
     }
+}
+
+/// Edits the editing selection as its controls do.
+pub(super) fn apply_edits(app: &mut App, edits: &[Edit]) {
+    assert!(
+        app.multi_edit.editable_ready(),
+        "edit before the editing selection was ready"
+    );
+    assert!(
+        app.multi_edit.apply_edits(edits, &mut app.sidecars),
+        "edit changed no photo"
+    );
     app.settings = app
         .multi_edit
         .settings(app.selected.as_ref().unwrap())

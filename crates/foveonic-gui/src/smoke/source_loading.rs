@@ -121,7 +121,7 @@ impl SourceLoading {
                 };
                 if frame.diagnostic_task.revision <= self.previous_revision
                     || frame.request.settings.exposure != self.model.exposures()[1]
-                    || !app.worker.is_settled_and_admitted(frame)
+                    || !app.shows_current_view(frame)
                 {
                     return Ok(false);
                 }

@@ -321,6 +321,7 @@ impl RenderCoordinator {
     pub fn is_settled_and_admitted(&self, id: TaskId, request_id: RequestId) -> bool {
         self.admitted_images().contains(&(id, request_id))
     }
+    #[cfg(test)]
     pub fn admitted_images(&self) -> Vec<(TaskId, RequestId)> {
         self.desired
             .iter()

@@ -5,6 +5,9 @@ use crate::preferences::EditingSection;
 use eframe::egui;
 use foveonic::render::{PhotographicMethod, Settings};
 
+/// Reference saturation's amount, which multiplies chroma.
+pub(crate) const REFERENCE_SATURATION_RANGE: std::ops::RangeInclusive<f32> = 0. ..=2.;
+
 pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
     let mut changed = common::section_header(
         ui,
@@ -28,7 +31,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                     "/saturation",
                     ("Reference saturation", "Amount"),
                     &mut settings.saturation,
-                    0. ..=2.,
+                    REFERENCE_SATURATION_RANGE,
                     1.,
                 );
             } else {

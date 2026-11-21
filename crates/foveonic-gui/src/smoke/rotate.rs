@@ -1,7 +1,6 @@
 //! Keeps rotation smoke gestures, readiness and assertions with their capture steps.
 
 use super::{App, Smoke};
-use crate::rendering::request::RequestId;
 use crate::{rendering::worker::RenderResult, viewport::Viewport};
 use eframe::egui;
 use foveonic::render::ProcessingQuality;
@@ -264,8 +263,7 @@ pub(super) fn ready(
     ctx: &egui::Context,
     smoke: &Smoke,
     settings: &Settings,
-    frame: Option<&RenderResult>,
-    revision: u64,
+    current_frame: Option<&RenderResult>,
 ) -> bool {
     smoke.preview_pending()
         || (smoke.direct_events.is_empty()
@@ -286,12 +284,8 @@ pub(super) fn ready(
                 }
                 _ => true,
             }
-            && frame.is_some_and(|f| {
-                f.request.id == RequestId(revision)
-                    && crate::rendering::matching::same_authored_edits(
-                        &f.request.settings,
-                        settings,
-                    )
+            && current_frame.is_some_and(|f| {
+                crate::rendering::matching::same_authored_edits(&f.request.settings, settings)
                     && f.request.framing_preview
                         == matches!(
                             smoke.targets[smoke.index],

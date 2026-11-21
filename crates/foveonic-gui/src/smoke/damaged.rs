@@ -157,7 +157,7 @@ impl DamagedRecovery {
                 };
                 // Planning follows the smoke step within the frame, so the image
                 // for the restored edits is requested only after the edits load.
-                if !app.worker.is_settled_and_admitted(frame)
+                if !app.shows_current_view(frame)
                     || !crate::rendering::matching::same_authored_edits(
                         &frame.request.settings,
                         &app.settings,

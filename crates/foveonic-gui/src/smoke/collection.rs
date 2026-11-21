@@ -111,11 +111,20 @@ impl CollectionJourney {
                 if !frames_ready(app, &self.aliases[..LIMIT], &self.exposures) {
                     return Ok(false);
                 }
-                if self.aliases[LIMIT..]
+                // Viewport photos outside the editing targets render too; photos
+                // past the viewport's tiles do not.
+                let planned = app.planned_photos();
+                if let Some((path, frame)) = self.aliases[LIMIT..]
                     .iter()
-                    .any(|path| app.photo_layers(path)[0].is_some())
+                    .filter(|path| !planned.contains(path))
+                    .find_map(|path| app.photo_layers(path)[0].map(|frame| (path, frame)))
                 {
-                    return Err("unexpected editable frame outside bounded targets".into());
+                    return Err(format!(
+                        "unexpected frame for a photo the viewport does not draw: {} request {:?} scale {}",
+                        path.display(),
+                        frame.request.id,
+                        frame.artifact.settings.working_scale.divisor()
+                    ));
                 }
                 let progress = app
                     .worker
@@ -234,7 +243,7 @@ fn frames_ready(app: &App, paths: &[PathBuf], exposures: &[f32]) -> bool {
             .or_else(|| (app.selected.as_ref() == Some(path)).then_some(&app.settings));
         frame.is_some_and(|frame| {
             frame.request.rendition == crate::editor::Rendition::Current
-                && app.worker.is_settled_and_admitted(frame)
+                && app.shows_current_view(frame)
                 && frame.request.settings.exposure == *expected
                 && !frame.artifact.settings.exposure_auto
                 && frame.artifact.settings.exposure == *expected

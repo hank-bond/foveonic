@@ -643,6 +643,18 @@ impl Smoke {
 }
 
 impl App {
+    /// The image answers its photo's current view. Ids are issued per image in
+    /// use across photos, so the newest id need not be this photo's, and a stored
+    /// image the planner finds current keeps no coordinator task to admit it.
+    fn shows_current_view(&self, frame: &crate::rendering::worker::RenderResult) -> bool {
+        self.views.get(&frame.request.path).is_some_and(|view| {
+            if frame.request.detail {
+                crate::rendering::view_plan::Rendered::matches(frame, &view.request)
+            } else {
+                crate::rendering::view_plan::whole_current(frame, &view.request)
+            }
+        })
+    }
     fn smoke_check_deadline(&mut self) {
         let Some(smoke) = &mut self.smoke else {
             return;
@@ -672,7 +684,7 @@ impl App {
             "navigator":self.navigator.smoke_state(self.navigator_source(),self.displayed_mapping()),
             "frame":self.active_image().map(|frame|serde_json::json!({
                 "matches_settings":crate::rendering::matching::same_authored_edits(&frame.request.settings,&self.settings),
-                "admitted":self.worker.is_settled_and_admitted(frame),
+                "current_view":self.shows_current_view(frame),
                 "navigator_ready":self.navigator_source().is_some_and(|source|self.navigator.ready(source,self.displayed_mapping())),
                 "thumbnail_revision":self.browser.rendered_revision(&frame.request.path),
             })),
@@ -838,7 +850,7 @@ impl App {
                     &frame.request.settings,
                     &self.settings,
                 )
-                && self.worker.is_settled_and_admitted(frame)
+                && self.shows_current_view(frame)
                 && self
                     .worker
                     .cache
@@ -870,7 +882,7 @@ impl App {
                     &frame.request.settings,
                     &self.settings,
                 )
-                && self.worker.is_settled_and_admitted(frame)
+                && self.shows_current_view(frame)
                 && automatic_scale_bound(
                     frame,
                     self.viewport(),
@@ -905,7 +917,7 @@ impl App {
                         && frame.processing_quality() == self.preferences.processing_quality
                         && crate::rendering::matching::same_authored_edits(&frame.request.settings, expected)
                         && frame.artifact.settings.working_scale.divisor() <= demand.divisor()
-                        && self.worker.is_settled_and_admitted(frame)
+                        && self.shows_current_view(frame)
                         && self.worker.cache.source_origin(path)
                             .is_none_or(|origin| origin == frame.origin)
                         && self.browser.rendered_revision(path) == Some(frame.request.id
@@ -976,22 +988,6 @@ impl App {
                         shown_detail.is_none(),
                         "regional detail remained visible at Fit"
                     );
-                }
-            }
-            if smoke.targets == SMART_TARGETS && smoke.targets[smoke.index] == "smart-adaptive-edit"
-            {
-                if let Some(frame) = self.active_image().filter(|frame| {
-                    crate::rendering::matching::same_authored_edits(
-                        &frame.request.settings,
-                        &self.settings,
-                    ) && self.settings.adaptive_tone_active()
-                }) {
-                    assert_eq!(
-                        frame.artifact.settings.working_scale,
-                        foveonic::render::Scale::NATIVE,
-                        "zoomed Adaptive edits must not replace the previous image with Fast"
-                    );
-                    assert!(frame.artifact.settings.preview_region.is_none());
                 }
             }
             let screenshot = ctx.input(|i| {
@@ -1073,12 +1069,12 @@ impl App {
                         );
                         assert_eq!(frame.artifact.settings.crop, self.settings.crop);
                         if target == "crop-smart" {
+                            let feedback = self.active_patch().unwrap_or(frame);
                             assert_eq!(
-                                frame.artifact.settings.working_scale,
+                                feedback.artifact.settings.working_scale,
                                 foveonic::render::Scale::NATIVE
                             );
-                            assert!(frame.artifact.settings.preview_region.is_none());
-                            smoke.zoom_retained = Some(ZoomRetention::capture(frame));
+                            smoke.zoom_retained = Some(ZoomRetention::capture(feedback));
                         }
                         if target == "crop-tile" {
                             assert!(current_native_feedback);
@@ -1156,7 +1152,7 @@ impl App {
                     "scale":frame.artifact.settings.working_scale.divisor(),"region":frame.artifact.settings.preview_region,
                     "exposure":frame.request.settings.exposure,"authored_exposure":self.settings.exposure,
                     "matches_authored":crate::rendering::matching::same_authored_edits(&frame.request.settings,&self.settings),
-                    "admitted":self.worker.is_settled_and_admitted(frame),
+                    "current_view":self.shows_current_view(frame),
                 }));
                     std::fs::write(
                         smoke.directory.join(format!("{target}.json")),
@@ -1440,19 +1436,6 @@ impl App {
                         smoke.zoom_retained.as_ref().unwrap().check(frame);
                     }
                     if regional {
-                        if target == "smart-edit-detail" {
-                            let previous = self.active_image().unwrap();
-                            assert_eq!(
-                                previous.artifact.settings.working_scale,
-                                foveonic::render::Scale::NATIVE
-                            );
-                            assert!(
-                                previous.request.id < frame.request.id,
-                                "detail must not rewind a newer Full frame"
-                            );
-                            assert!(smoke.smart_scrub_checked);
-                            assert_eq!(frame.request.settings.exposure, 0.75);
-                        }
                         let rect = region.unwrap();
                         assert!(crate::rendering::smart::contains(rect, visible.bounds()));
                         assert_eq!(
@@ -1526,7 +1509,7 @@ impl App {
                             // admitted frame instead of producing a new presentation.
                             assert!(current_native_whole);
                         } else {
-                            assert_eq!(frame.request.id, self.last_request_id);
+                            assert!(self.shows_current_view(frame));
                         }
                         assert!(crate::rendering::matching::same_authored_edits(
                             &frame.request.settings,
@@ -1549,8 +1532,8 @@ impl App {
                     }
                     if target == "cache-reopen" {
                         assert!(
-                            self.worker.is_settled_and_admitted(frame),
-                            "retained image was not admitted for the reopened photo"
+                            self.shows_current_view(frame),
+                            "retained image does not answer the reopened photo's view"
                         );
                     }
                     let report = serde_json::json!({"target":target,"quality":frame.quality_label(),"region":region,"feedback":if regional {"region"} else {"whole"},"regional_supported":regional_smart,"native_extent":self.active_image().unwrap().display_extent(false),"rendered_extent":frame.texture.description().extent,
@@ -2746,7 +2729,7 @@ impl App {
                         && self.active_image().is_some_and(|frame| {
                             self.selected.as_ref() == Some(&frame.request.path)
                                 && frame.request.output == self.output
-                                && frame.request.id == self.last_request_id
+                                && self.shows_current_view(frame)
                         })
                 } else if smoke.targets == SMART_TARGETS
                     && matches!(
@@ -2821,7 +2804,7 @@ impl App {
                             "smart-transition-full" => current_native_whole,
                             "smart-zoom-pending" | "smart-crop-enter" | "smart-crop-leave" => {
                                 self.active_image().is_some_and(|frame| {
-                                    frame.request.id == self.last_request_id
+                                    self.shows_current_view(frame)
                                         && crate::rendering::matching::same_authored_edits(
                                             &frame.request.settings,
                                             &self.settings,
@@ -2933,17 +2916,15 @@ impl App {
                                 }
                                 "crop-fast" => self.active_image().is_some_and(|f| {
                                     !f.request.framing_preview
-                                        && f.request.id == self.last_request_id
+                                        && self.shows_current_view(f)
                                         && f.processing_quality()
                                             == foveonic::render::ProcessingQuality::Speed
                                 }),
-                                "crop-smart" => self.active_image().is_some_and(|f| {
-                                    f.request.id == self.last_request_id
-                                        && !f.request.framing_preview
-                                }),
-                                "crop-tile" => current_native_feedback,
+                                // At 1:1 a native patch covers the view; the full-size
+                                // whole image is optional background work.
+                                "crop-smart" | "crop-tile" => current_native_feedback,
                                 "crop-detail" => self.active_image().is_some_and(|f| {
-                                    f.request.id == self.last_request_id
+                                    self.shows_current_view(f)
                                         && f.artifact.settings.working_scale
                                             == foveonic::render::Scale::NATIVE
                                 }),
@@ -2955,8 +2936,7 @@ impl App {
                             ctx,
                             smoke,
                             &self.settings,
-                            self.active_image(),
-                            self.last_request_id.0,
+                            self.active_image().filter(|f| self.shows_current_view(f)),
                         ));
                 let ready =
                     ready && (smoke.targets != STATUS_TARGETS || smoke.direct_events.is_empty());

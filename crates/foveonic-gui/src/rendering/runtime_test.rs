@@ -4,6 +4,7 @@ use super::*;
 use crate::rendering::coordinator::Task;
 use crate::rendering::request::RequestId;
 use crate::rendering::view_plan::ImageState;
+use crate::rendering::worker;
 use foveonic::render::ProcessingQuality;
 use foveonic::render::Settings;
 use std::{path::PathBuf, time::Duration};

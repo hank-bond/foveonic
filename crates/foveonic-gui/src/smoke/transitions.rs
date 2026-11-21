@@ -339,7 +339,7 @@ impl TransitionJourney {
         let base = app.current_image(path)?;
         let current = |frame: &RenderResult| {
             crate::rendering::matching::same_authored_edits(&frame.request.settings, settings)
-                && app.worker.is_settled_and_admitted(frame)
+                && app.shows_current_view(frame)
                 && app
                     .worker
                     .cache
@@ -1603,7 +1603,7 @@ impl TransitionJourney {
                     }
                     self.events.push(serde_json::json!({"observed":"Quality inspector with Speed background overviews"}));
                 }
-                if !app.worker.is_settled_and_admitted(frame) {
+                if !app.shows_current_view(frame) {
                     return Err("overview refresh retired the active inspection request".into());
                 }
             }

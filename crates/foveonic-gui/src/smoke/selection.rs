@@ -6,6 +6,10 @@ use std::path::PathBuf;
 
 use crate::App;
 
+/// The stages that edit, which wait for the editing selection to be ready.
+/// Stage 1 waits on a delivery hold instead.
+const EDIT_STAGES: [usize; 4] = [0, 2, 3, 5];
+
 pub(super) struct SelectionJourney {
     pub(super) model: super::journey::ExposureJourney,
     stage: usize,
@@ -128,6 +132,10 @@ impl SelectionJourney {
             return Err("journey requires matching paths and at least two exposures".into());
         }
         if !smoke.direct_events.is_empty() {
+            return Ok(false);
+        }
+        // The editor accepts edits once the selection's automatic values arrive.
+        if EDIT_STAGES.contains(&self.stage) && !app.multi_edit.editable_ready() {
             return Ok(false);
         }
         match self.stage {
