@@ -323,6 +323,10 @@ impl Browser {
             .map(|(index, path)| (path, index))
             .collect();
     }
+    /// The photo arrow keys move from: the browser's cursor, else the app's selected photo.
+    pub fn arrow_origin<'a>(&'a self, selected: Option<&'a Path>) -> Option<&'a Path> {
+        self.cursor.as_deref().or(selected)
+    }
     pub fn set_actions(&mut self, actions: Vec<(BrowserAction, egui::Modifiers)>) {
         self.actions = actions;
     }
@@ -888,9 +892,7 @@ impl Browser {
         let files = &view.files;
         let layout = &view.layout;
         let mut active = self
-            .cursor
-            .as_deref()
-            .or(selected)
+            .arrow_origin(selected)
             .and_then(|path| files.iter().position(|p| p == path));
         let actions = std::mem::take(&mut self.actions);
         if !actions.is_empty() {

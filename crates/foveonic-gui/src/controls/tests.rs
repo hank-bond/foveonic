@@ -1,6 +1,6 @@
 //! Checks family panel composition, shared widgets, and editing interactions.
 
-use super::common::{adjustment, adjustment_with_nudge, automatic_adjustment};
+use super::common::{adjustment, automatic_adjustment};
 use super::merrill::{highlight_choice, select_highlight, HIGHLIGHT_METHODS};
 use super::*;
 use crate::help;
@@ -225,7 +225,6 @@ fn band_sizes_use_odd_steps_and_shared_double_click_reset() {
                         &mut size,
                         3..=119,
                         27,
-                        2.,
                         super::common::RowControls {
                             step: Some(2.),
                             step_origin: 1.,
@@ -2321,13 +2320,13 @@ fn noise_checkbox_enables_only_noise_and_preserves_inactive_settings() {
     assert_eq!(settings.exposure, 0.);
 }
 
-fn nudge_frame<T: egui::emath::Numeric>(
+/// Draws one adjustment row with these events and returns whether it changed.
+fn row_frame<T>(
     ctx: &egui::Context,
     value: &mut T,
-    range: RangeInclusive<T>,
-    step: Option<f64>,
     time: f64,
     events: Vec<egui::Event>,
+    row: impl Fn(&mut egui::Ui, &mut T) -> bool,
 ) -> bool {
     let mut changed = false;
     let _ = ctx.run(
@@ -2341,16 +2340,47 @@ fn nudge_frame<T: egui::emath::Numeric>(
             ..Default::default()
         },
         |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                changed = if let Some(step) = step {
-                    adjustment_with_nudge(ui, "Value", value, range.clone(), T::from_f64(1.), step)
-                } else {
-                    adjustment(ui, "Value", value, range.clone(), T::from_f64(1.))
-                };
-            });
+            egui::CentralPanel::default().show(ctx, |ui| changed = row(ui, value));
         },
     );
     changed
+}
+/// Clicks the row's value box so it has keyboard focus.
+fn focus_row<T>(ctx: &egui::Context, value: &mut T, row: impl Fn(&mut egui::Ui, &mut T) -> bool) {
+    row_frame(ctx, value, 0., vec![], &row);
+    let pos = egui::pos2(362., 18.);
+    for (time, pressed) in [(0.1, true), (0.2, false)] {
+        let click = vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            },
+        ];
+        row_frame(ctx, value, time, click, &row);
+    }
+}
+fn nudge_frame<T: egui::emath::Numeric>(
+    ctx: &egui::Context,
+    value: &mut T,
+    range: RangeInclusive<T>,
+    time: f64,
+    events: Vec<egui::Event>,
+) -> bool {
+    row_frame(ctx, value, time, events, |ui, value| {
+        adjustment(ui, "Value", value, range.clone(), T::from_f64(1.))
+    })
+}
+fn focus_nudge<T: egui::emath::Numeric>(
+    ctx: &egui::Context,
+    value: &mut T,
+    range: RangeInclusive<T>,
+) {
+    focus_row(ctx, value, |ui, value| {
+        adjustment(ui, "Value", value, range.clone(), T::from_f64(1.))
+    });
 }
 fn arrow(key: egui::Key, repeat: bool) -> egui::Event {
     egui::Event::Key {
@@ -2361,52 +2391,32 @@ fn arrow(key: egui::Key, repeat: bool) -> egui::Event {
         modifiers: Default::default(),
     }
 }
-fn focus_nudge<T: egui::emath::Numeric>(
-    ctx: &egui::Context,
-    value: &mut T,
-    range: RangeInclusive<T>,
-    step: Option<f64>,
-) {
-    nudge_frame(ctx, value, range.clone(), step, 0., vec![]);
-    let pos = egui::pos2(362., 18.);
-    for (time, pressed) in [(0.1, true), (0.2, false)] {
-        nudge_frame(
-            ctx,
-            value,
-            range.clone(),
-            step,
-            time,
-            vec![
-                egui::Event::PointerMoved(pos),
-                egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: Default::default(),
-                },
-            ],
-        );
+fn option_arrow(key: egui::Key) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::ALT,
     }
 }
 #[test]
-fn focused_float_values_nudge_by_a_tenth_preserve_precision_and_stop_at_bounds() {
+fn nudges_apply_only_to_a_focused_value_and_stop_at_bounds() {
     let ctx = egui::Context::default();
     let mut value = 1.05_f32;
     assert!(!nudge_frame(
         &ctx,
         &mut value,
         0. ..=2.,
-        None,
         0.,
         vec![arrow(egui::Key::ArrowUp, false)]
     ));
     assert_eq!(value, 1.05); // unfocused value stays unchanged
-    focus_nudge(&ctx, &mut value, 0. ..=2., None);
+    focus_nudge(&ctx, &mut value, 0. ..=2.);
     assert!(nudge_frame(
         &ctx,
         &mut value,
         0. ..=2.,
-        None,
         0.3,
         vec![arrow(egui::Key::ArrowUp, false)]
     ));
@@ -2415,7 +2425,6 @@ fn focused_float_values_nudge_by_a_tenth_preserve_precision_and_stop_at_bounds()
         &ctx,
         &mut value,
         0. ..=2.,
-        None,
         0.4,
         vec![arrow(egui::Key::ArrowDown, false)]
     ));
@@ -2424,7 +2433,6 @@ fn focused_float_values_nudge_by_a_tenth_preserve_precision_and_stop_at_bounds()
         &ctx,
         &mut value,
         0. ..=2.,
-        None,
         0.5,
         vec![arrow(egui::Key::ArrowDown, true)]
     ));
@@ -2434,7 +2442,6 @@ fn focused_float_values_nudge_by_a_tenth_preserve_precision_and_stop_at_bounds()
         &ctx,
         &mut value,
         0. ..=2.,
-        None,
         0.6,
         vec![arrow(egui::Key::ArrowUp, true)]
     ));
@@ -2443,7 +2450,6 @@ fn focused_float_values_nudge_by_a_tenth_preserve_precision_and_stop_at_bounds()
         &ctx,
         &mut value,
         0. ..=2.,
-        None,
         0.7,
         vec![arrow(egui::Key::ArrowDown, false)]
     ));
@@ -2453,46 +2459,108 @@ fn focused_float_values_nudge_by_a_tenth_preserve_precision_and_stop_at_bounds()
         &ctx,
         &mut value,
         0. ..=2.,
-        None,
         0.8,
         vec![arrow(egui::Key::ArrowDown, true)]
     ));
     assert_eq!(value, 0.);
 }
 #[test]
-fn parameter_nudge_overrides_and_integer_steps_are_respected() {
+fn option_arrows_nudge_a_focused_value_by_its_last_shown_digit() {
     let ctx = egui::Context::default();
-    let mut value = 1_f32;
-    focus_nudge(&ctx, &mut value, 0. ..=2., Some(0.25));
-    assert!(nudge_frame(
+    let mut value = 1.05_f32;
+    let frame = |value: &mut f32, time, key| {
+        nudge_frame(&ctx, value, 0. ..=2., time, vec![option_arrow(key)])
+    };
+    focus_nudge(&ctx, &mut value, 0. ..=2.);
+    assert!(frame(&mut value, 0.3, egui::Key::ArrowUp));
+    assert!((value - 1.06).abs() < 0.00001, "{value}");
+    assert!(frame(&mut value, 0.4, egui::Key::ArrowDown));
+    assert!((value - 1.05).abs() < 0.00001, "{value}");
+    value = 2.;
+    assert!(
+        !frame(&mut value, 0.5, egui::Key::ArrowUp),
+        "a nudge at the bound changes nothing"
+    );
+    assert_eq!(value, 2.);
+}
+#[test]
+fn option_arrows_on_a_stepped_value_move_by_whole_steps() {
+    let ctx = egui::Context::default();
+    let mut value = 0.5_f32;
+    let row = |ui: &mut egui::Ui, value: &mut f32| {
+        super::common::stepped_adjustment(ui, "Value", value, 0. ..=1., 0.5, 0.25)
+    };
+    focus_row(&ctx, &mut value, row);
+    let changed = row_frame(
         &ctx,
         &mut value,
-        0. ..=2.,
-        Some(0.25),
         0.3,
-        vec![arrow(egui::Key::ArrowUp, false)]
-    ));
-    assert_eq!(value, 1.25);
-    let ctx = egui::Context::default();
-    let mut value = 1_f32;
-    focus_nudge(&ctx, &mut value, 0. ..=2., Some(0.001));
-    assert!(nudge_frame(
-        &ctx,
-        &mut value,
-        0. ..=2.,
-        Some(0.001),
-        0.3,
-        vec![arrow(egui::Key::ArrowUp, false)]
-    ));
-    assert!((value - 1.001).abs() < 0.000001);
+        vec![option_arrow(egui::Key::ArrowUp)],
+        row,
+    );
+    assert!(changed && value == 0.75, "{changed} {value}");
+}
+#[test]
+fn nudges_start_from_the_shown_digits_and_land_on_them() {
+    let bounds = [-10_000., 10_000.];
+    let float =
+        |value, coarse, fine| super::common::nudged(value, coarse, fine, None, false, bounds);
+    for (value, coarse, fine, expected) in [
+        (10.04, 0., -1., 9.9), // shown "10.0": hidden digits stay hidden
+        (10.04, -1., 0., 9.0),
+        (100.4, -1., 0., 90.),
+        (9.96, 1., 0., 10.1),
+        (0., -1., 0., -0.1),
+        (-0.05, 1., 0., 0.05),
+        (-25., 0., 1., -24.9),
+        (1234., 1., 0., 1330.), // shown "1.23e3"
+    ] {
+        let next = float(value, coarse, fine);
+        assert!(
+            (next - expected).abs() < 1e-9,
+            "{value} {coarse} {fine} -> {next}, expected {expected}"
+        );
+    }
+    let integer = |value, coarse| super::common::nudged(value, coarse, 0., None, true, bounds);
+    assert_eq!(integer(1000., -1.), 999.);
+    assert_eq!(integer(8., 1.), 9.);
+    assert_eq!(
+        super::common::nudged(0.5, 1., 0., Some(0.25), false, bounds),
+        0.75
+    );
+    assert_eq!(super::common::nudged(2., 1., 0., None, false, [0., 2.]), 2.);
+}
+
+#[test]
+fn nudges_follow_the_shown_digits_and_integers_move_by_one() {
+    for (start, event, expected) in [
+        (25.0_f32, arrow(egui::Key::ArrowUp, false), 26.),
+        (25.0, option_arrow(egui::Key::ArrowUp), 25.1),
+        (0.012, arrow(egui::Key::ArrowUp, false), 0.11),
+        (9.96, arrow(egui::Key::ArrowUp, false), 10.1),
+    ] {
+        let ctx = egui::Context::default();
+        let mut value = start;
+        focus_nudge(&ctx, &mut value, -100. ..=100.);
+        assert!(nudge_frame(
+            &ctx,
+            &mut value,
+            -100. ..=100.,
+            0.3,
+            vec![event]
+        ));
+        assert!(
+            (value - expected).abs() < 1e-4,
+            "{start} -> {value}, expected {expected}"
+        );
+    }
     let ctx = egui::Context::default();
     let mut value = 8_u32;
-    focus_nudge(&ctx, &mut value, 0..=15, None);
+    focus_nudge(&ctx, &mut value, 0..=15);
     assert!(nudge_frame(
         &ctx,
         &mut value,
         0..=15,
-        None,
         0.3,
         vec![arrow(egui::Key::ArrowUp, false)]
     ));
@@ -2501,9 +2569,8 @@ fn parameter_nudge_overrides_and_integer_steps_are_respected() {
         &ctx,
         &mut value,
         0..=15,
-        None,
         0.4,
-        vec![arrow(egui::Key::ArrowDown, false)]
+        vec![option_arrow(egui::Key::ArrowDown)]
     ));
     assert_eq!(value, 8);
 }

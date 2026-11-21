@@ -285,7 +285,6 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                                 &mut settings.color_field.selectivity,
                                 0. ..=1.,
                                 0.,
-                                0.1,
                                 column.row_controls("Threshold"),
                             )
                         });

@@ -2208,10 +2208,10 @@ impl TransitionJourney {
             }
             Step::Single => {
                 let active = app
-                    .selected
-                    .as_ref()
+                    .browser
+                    .arrow_origin(app.selected.as_deref())
                     .and_then(|p| paths.iter().position(|v| v == p))
-                    .ok_or("active photo outside journey")?;
+                    .ok_or("arrow origin outside journey")?;
                 let next = if active + 1 < paths.len() {
                     active + 1
                 } else {

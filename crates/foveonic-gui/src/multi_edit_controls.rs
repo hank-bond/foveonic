@@ -579,120 +579,311 @@ pub fn number(ctx: &egui::Context, change: NumberChange, range: [f64; 2]) {
     }
 }
 
-/// A mixed slider moves the whole interval. Saturated photos remain at their own bound.
+/// The editing slider for one photo or several. Several photos also record
+/// the change as an edit for each of them; saturated photos stay at their bound.
 pub fn slider<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     value: &mut T,
     range: RangeInclusive<T>,
     default: T,
     step: Option<f64>,
-    nudge: f64,
-) -> Option<egui::Response> {
-    let (_, numbers) = numeric_values(ui.ctx())?;
-    let fallback = [range.start().to_f64(), range.end().to_f64()];
-    let bounds = property(ui.ctx())
-        .and_then(|p| {
-            ui.ctx()
-                .data_mut(|d| d.get_temp::<State>(id()))
-                .and_then(|s| s.ranges.get(&p.pointer).copied())
-        })
-        .unwrap_or(fallback);
-    let low = numbers
+) -> egui::Response {
+    let values =
+        numeric_values(ui.ctx()).map_or_else(|| vec![value.to_f64()], |(_, numbers)| numbers);
+    let bounds = [range.start().to_f64(), range.end().to_f64()];
+    let step = step.or(T::INTEGRAL.then_some(1.));
+    let (mut response, change) = selection_slider(ui, &values, bounds, step, default.to_f64());
+    if let Some(change) = change {
+        *value = T::from_f64(change.applied(value.to_f64(), bounds));
+        number(ui.ctx(), change, bounds);
+        response.mark_changed();
+    }
+    response
+}
+
+impl NumberChange {
+    /// The value after this change, within `bounds`.
+    fn applied(self, value: f64, bounds: [f64; 2]) -> f64 {
+        match self {
+            Self::Relative(delta) => value + delta,
+            Self::Set(value) | Self::Reset(value) => value,
+        }
+        .clamp(bounds[0], bounds[1])
+    }
+}
+
+/// Presses within this radius of a handle grab it instead of moving it.
+const HANDLE_RADIUS: f32 = 6.;
+const TRACK_HEIGHT: f32 = 6.;
+
+/// Where a drag began and how far it has moved the photos so far.
+#[derive(Clone, Copy)]
+struct Drag {
+    start_x: f32,
+    applied: f64,
+}
+
+/// Shows the photos' values as a range that collapses to one handle when they
+/// agree. A press outside the range moves the nearer handle there and every
+/// photo by the same offset, so with one photo it is an ordinary slider; a
+/// press inside the range or on a handle grabs it. A drag then shifts every
+/// photo by the pointer's travel, and a double-click resets. Changes snap to
+/// `step`, or else to round values within a pixel, like egui's slider.
+fn selection_slider(
+    ui: &mut egui::Ui,
+    values: &[f64],
+    bounds: [f64; 2],
+    step: Option<f64>,
+    default: f64,
+) -> (egui::Response, Option<NumberChange>) {
+    let span = bounds[1] - bounds[0];
+    let low = values
         .iter()
         .copied()
         .fold(f64::INFINITY, f64::min)
         .clamp(bounds[0], bounds[1]);
-    let high = numbers
+    let high = values
         .iter()
         .copied()
         .fold(f64::NEG_INFINITY, f64::max)
         .clamp(bounds[0], bounds[1]);
-    let (rect, mut response) = ui.allocate_exact_size(
+    // Sensing only drags lets a press move the value at once; sensing clicks too
+    // would make egui wait to tell a click from a drag.
+    let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.spacing().slider_width, ui.spacing().interact_size.y),
-        egui::Sense::click_and_drag(),
+        egui::Sense::drag(),
     );
-    let track =
-        egui::Rect::from_center_size(rect.center(), egui::vec2((rect.width() - 12.).max(1.), 6.));
-    let x =
-        |v: f64| track.left() + ((v - bounds[0]) / (bounds[1] - bounds[0])) as f32 * track.width();
+    response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), low, ""));
+    let track = egui::Rect::from_center_size(
+        rect.center(),
+        egui::vec2((rect.width() - 2. * HANDLE_RADIUS).max(1.), TRACK_HEIGHT),
+    );
+    let x = |v: f64| track.left() + ((v - bounds[0]) / span) as f32 * track.width();
+    let value_at = |pos_x: f32| f64::from((pos_x - track.left()) / track.width()) * span;
+    let half_pixel = span / f64::from(track.width()) * 0.5;
+    let snap = |delta: f64| match step {
+        Some(step) => (delta / step).round() * step,
+        None => egui::emath::smart_aim::best_in_range_f64(delta - half_pixel, delta + half_pixel),
+    };
     let color = ui.style().interact(&response).fg_stroke.color;
-    ui.painter()
-        .rect_filled(track, 3., crate::widgets::slider_track_fill(ui.visuals()));
+    let rounding = TRACK_HEIGHT / 2.;
+    ui.painter().rect_filled(
+        track,
+        rounding,
+        crate::widgets::slider_track_fill(ui.visuals()),
+    );
     ui.painter().rect_filled(
         egui::Rect::from_min_max(
             egui::pos2(x(low), track.top()),
             egui::pos2(x(high), track.bottom()),
         ),
-        3.,
+        rounding,
         ui.visuals().selection.bg_fill,
     );
-    for v in [low, high] {
+    let handles: &[f64] = if low == high { &[low] } else { &[low, high] };
+    for &v in handles {
         ui.painter().circle(
             egui::pos2(x(v), track.center().y),
-            6.,
+            HANDLE_RADIUS,
             ui.visuals().widgets.inactive.bg_fill,
             egui::Stroke::new(1_f32, color),
         );
     }
-    let mut change = None;
-    let delta_id = response.id.with("relative travel");
-    if response.double_clicked() {
-        change = Some(NumberChange::Reset(default.to_f64()));
-    } else if response.dragged() {
-        let movement = f64::from(response.drag_delta().x / track.width()) * (bounds[1] - bounds[0]);
-        let delta = if let Some(step) = step.or(T::INTEGRAL.then_some(1.)) {
-            let pending = ui.data_mut(|d| d.get_temp::<f64>(delta_id)).unwrap_or(0.);
-            let total = pending + movement;
-            let rounded = (total / step).round() * step;
-            ui.data_mut(|d| d.insert_temp(delta_id, total - rounded));
-            rounded
-        } else {
-            movement
-        };
-        if delta != 0. {
-            change = Some(NumberChange::Relative(delta));
-        }
-    } else if response.clicked() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            let target = bounds[0]
-                + f64::from((pos.x - track.left()) / track.width()).clamp(0., 1.)
-                    * (bounds[1] - bounds[0]);
-            change = Some(NumberChange::Relative(target - (low + high) * 0.5));
-        }
-    }
-    if response.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
-        ui.data_mut(|d| d.remove::<f64>(delta_id));
-    }
-    if response.has_focus() {
-        let direction = ui.input(|i| {
-            i.num_presses(egui::Key::ArrowRight) as f64 - i.num_presses(egui::Key::ArrowLeft) as f64
+    let drag_id = response.id.with("drag");
+    let double_clicked = response.hovered()
+        && ui.input(|i| {
+            i.pointer
+                .button_double_clicked(egui::PointerButton::Primary)
         });
-        if direction != 0. {
-            change = Some(NumberChange::Relative(direction * nudge));
+    let change = if double_clicked {
+        Some(NumberChange::Reset(default))
+    } else if response.drag_started() {
+        let pos = response.interact_pointer_pos();
+        if let Some(pos) = pos {
+            ui.data_mut(|d| {
+                d.insert_temp(
+                    drag_id,
+                    Drag {
+                        start_x: pos.x,
+                        applied: 0.,
+                    },
+                )
+            });
         }
+        pos.filter(|pos| pos.x < x(low) - HANDLE_RADIUS || pos.x > x(high) + HANDLE_RADIUS)
+            .map(|pos| {
+                let target = (bounds[0] + value_at(pos.x)).clamp(bounds[0], bounds[1]);
+                let nearest = if target < low { low } else { high };
+                NumberChange::Relative(snap(target - nearest))
+            })
+    } else if response.dragged() {
+        let drag = ui.data_mut(|d| d.get_temp::<Drag>(drag_id));
+        drag.zip(response.interact_pointer_pos())
+            .map(|(drag, pos)| {
+                // Measuring from the press, not frame to frame, keeps snapping from
+                // adding up and leaves the photos under the pointer.
+                let total = snap(value_at(pos.x) - value_at(drag.start_x));
+                ui.data_mut(|d| {
+                    d.insert_temp(
+                        drag_id,
+                        Drag {
+                            applied: total,
+                            ..drag
+                        },
+                    )
+                });
+                NumberChange::Relative(total - drag.applied)
+            })
+    } else {
+        None
+    };
+    if response.drag_stopped() {
+        ui.data_mut(|d| d.remove::<Drag>(drag_id));
     }
-    if let Some(change) = change {
-        let change = match (change, step.or(T::INTEGRAL.then_some(1.))) {
-            (NumberChange::Relative(delta), Some(step)) => {
-                NumberChange::Relative((delta / step).round() * step)
-            }
-            (change, _) => change,
-        };
-        let next = match change {
-            NumberChange::Relative(delta) => value.to_f64() + delta,
-            NumberChange::Set(v) | NumberChange::Reset(v) => v,
-        }
-        .clamp(bounds[0], bounds[1]);
-        *value = T::from_f64(next);
-        number(ui.ctx(), change, bounds);
-        response.mark_changed();
-    }
-    Some(response)
+    let change = change.filter(|change| !matches!(change, NumberChange::Relative(0.)));
+    (response, change)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Draw a slider for `values` in [0, 1] with these events and return its rect and change.
+    fn slider_frame(
+        ctx: &egui::Context,
+        values: &[f64],
+        events: Vec<egui::Event>,
+    ) -> (egui::Rect, Option<NumberChange>) {
+        stepped_slider_frame(ctx, values, None, events)
+    }
+    fn stepped_slider_frame(
+        ctx: &egui::Context,
+        values: &[f64],
+        step: Option<f64>,
+        events: Vec<egui::Event>,
+    ) -> (egui::Rect, Option<NumberChange>) {
+        let mut out = (egui::Rect::NOTHING, None);
+        let _ = ctx.run(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (response, change) = selection_slider(ui, values, [0., 1.], step, 0.5);
+                    out = (response.rect, change);
+                });
+            },
+        );
+        out
+    }
+    fn button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+    /// The track position of `value`, matching the slider's 6-point inset.
+    fn at(rect: egui::Rect, value: f32) -> egui::Pos2 {
+        egui::pos2(
+            rect.left() + 6. + (rect.width() - 12.) * value,
+            rect.center().y,
+        )
+    }
+    fn relative(change: Option<NumberChange>) -> f64 {
+        match change {
+            Some(NumberChange::Relative(delta)) => delta,
+            other => panic!("expected a relative change, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_press_moves_the_nearer_handle_at_once_and_every_photo_by_that_offset() {
+        let ctx = egui::Context::default();
+        let (rect, _) = slider_frame(&ctx, &[0.5], vec![]);
+        let press = at(rect, 0.9);
+        let (_, change) = slider_frame(
+            &ctx,
+            &[0.5],
+            vec![egui::Event::PointerMoved(press), button(press, true)],
+        );
+        assert!(
+            (relative(change) - 0.4).abs() < 1e-3,
+            "one photo jumps on press"
+        );
+        slider_frame(&ctx, &[0.9], vec![button(press, false)]);
+
+        let range = [0.2, 0.6];
+        let low_press = at(rect, 0.1);
+        let (_, change) = slider_frame(
+            &ctx,
+            &range,
+            vec![
+                egui::Event::PointerMoved(low_press),
+                button(low_press, true),
+            ],
+        );
+        assert!(
+            (relative(change) + 0.1).abs() < 1e-3,
+            "the low handle is nearer, so every photo moves down by its offset"
+        );
+    }
+
+    #[test]
+    fn a_stepped_press_closer_than_half_a_step_changes_nothing() {
+        let ctx = egui::Context::default();
+        let slider = |events| stepped_slider_frame(&ctx, &[0.5], Some(0.25), events);
+        let (rect, _) = slider(vec![]);
+        let press = at(rect, 0.6);
+        let (_, change) = slider(vec![egui::Event::PointerMoved(press), button(press, true)]);
+        assert!(change.is_none(), "{change:?}");
+    }
+
+    #[test]
+    fn a_press_inside_the_range_or_on_a_handle_does_not_move_it() {
+        // A fresh context per case, so the two presses are not a double-click.
+        for (values, point) in [(&[0.2, 0.6][..], 0.4), (&[0.5][..], 0.5)] {
+            let ctx = egui::Context::default();
+            let (rect, _) = slider_frame(&ctx, values, vec![]);
+            let press = at(rect, point);
+            let (_, change) = slider_frame(
+                &ctx,
+                values,
+                vec![egui::Event::PointerMoved(press), button(press, true)],
+            );
+            assert!(change.is_none(), "{values:?} pressed at {point}");
+            let (_, change) = slider_frame(&ctx, values, vec![button(press, false)]);
+            assert!(change.is_none(), "{values:?} released at {point}");
+        }
+    }
+
+    #[test]
+    fn a_drag_shifts_every_photo_from_the_press_and_a_double_click_resets() {
+        let ctx = egui::Context::default();
+        let (rect, _) = slider_frame(&ctx, &[0.5], vec![]);
+        let start = at(rect, 0.5);
+        slider_frame(
+            &ctx,
+            &[0.5],
+            vec![egui::Event::PointerMoved(start), button(start, true)],
+        );
+        let (_, change) =
+            slider_frame(&ctx, &[0.5], vec![egui::Event::PointerMoved(at(rect, 0.7))]);
+        assert!(
+            (relative(change) - 0.2).abs() < 1e-3,
+            "the drag moves by its travel"
+        );
+        slider_frame(&ctx, &[0.7], vec![button(at(rect, 0.7), false)]);
+        let point = at(rect, 0.7);
+        slider_frame(&ctx, &[0.7], vec![button(point, true)]);
+        slider_frame(&ctx, &[0.7], vec![button(point, false)]);
+        slider_frame(&ctx, &[0.7], vec![button(point, true)]);
+        let (_, change) = slider_frame(&ctx, &[0.7], vec![button(point, false)]);
+        assert!(matches!(change, Some(NumberChange::Reset(v)) if v == 0.5));
+    }
+
     #[test]
     fn relative_edits_compress_at_limits_and_preserve_unrelated_settings() {
         let mut a = Settings::new("Sunlight", "Standard");
@@ -765,7 +956,7 @@ mod tests {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.spacing_mut().slider_width = 300.;
                         field(ui, "/exposure", |ui| {
-                            slider(ui, &mut value, -4. ..=4., 0., None, 0.1).unwrap();
+                            slider(ui, &mut value, -4. ..=4., 0., None);
                         });
                     });
                     edits = finish(ctx);
@@ -856,7 +1047,7 @@ mod tests {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.spacing_mut().slider_width = 300.;
                         field(ui, "/exposure", |ui| {
-                            slider(ui, &mut value, -4. ..=4., 0., Some(1.), 1.).unwrap();
+                            slider(ui, &mut value, -4. ..=4., 0., Some(1.));
                         });
                     });
                     edits = finish(ctx);

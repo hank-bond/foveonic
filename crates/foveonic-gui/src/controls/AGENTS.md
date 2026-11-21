@@ -6,7 +6,7 @@ summary: "Family panels compose shared editing widgets while the processor defin
 
 Choose the processing family once in the parent dispatcher. Each family panel owns its layout and includes the controls that describe its processing. Shared rows own widget behavior and photographic controls. Keep photographic processing and capability/default resolution in `foveonic`.
 
-Construct numeric controls through `widgets::slider` and `widgets::drag_value`. These install the shared display policy of at most three significant digits and two decimal places. Do not instantiate raw egui numeric widgets or override their formatter in production call sites. A source-boundary test enforces this. Preserve stored precision and measure the same shared text when reserving value-field width. Both themes use the policy and suppress built-in full-precision hints.
+Adjustment rows use the editing slider in `multi_edit_controls::slider` for one photo or several. Construct other numeric controls through `widgets::slider` and `widgets::drag_value`. These install the shared display policy of at most three significant digits and two decimal places. Do not instantiate raw egui numeric widgets or override their formatter in production call sites. A source-boundary test enforces this. Preserve stored precision and measure the same shared text when reserving value-field width. Both themes use the policy and suppress built-in full-precision hints.
 
 Ordinary icon controls use `widgets::icon_button`, `widgets::icon_menu_button` and `widgets::icon_rect` for shared sizing, padding and states. Compact header actions retain their dedicated layout.
 

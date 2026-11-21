@@ -375,7 +375,6 @@ fn band_axis(
                             &mut axis.bands[index].size,
                             range.clone(),
                             default.size.clamp(*range.start(), *range.end()),
-                            2.,
                             RowControls {
                                 step: Some(2.),
                                 step_origin: 1.,

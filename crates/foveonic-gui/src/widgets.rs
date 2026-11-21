@@ -59,7 +59,7 @@ pub fn section_spacing(ui: &egui::Ui) -> f32 {
 }
 
 const VALUE_SIGNIFICANT_DIGITS: usize = 3;
-const VALUE_DECIMAL_PLACES: usize = 2;
+pub(crate) const VALUE_DECIMAL_PLACES: usize = 2;
 
 /// Photographic adjustment widgets and their layout measurements share this policy.
 pub(crate) fn format_numeric_value(value: f64, integral: bool) -> String {
@@ -139,14 +139,7 @@ pub(crate) fn format_parameter_value(value: f64) -> String {
     if !value.is_finite() {
         return value.to_string();
     }
-    // Read the exponent after rounding so carries such as 9.999 -> 10.0
-    // choose the correct number of decimal places too.
-    let scientific = format!(
-        "{value:.precision$e}",
-        precision = VALUE_SIGNIFICANT_DIGITS - 1
-    );
-    let (mantissa, exponent) = scientific.split_once('e').expect("formatted exponent");
-    let exponent: i32 = exponent.parse().expect("numeric exponent");
+    let (mantissa, exponent) = rounded_scientific(value);
     if !(-3..VALUE_SIGNIFICANT_DIGITS as i32).contains(&exponent) {
         return format!(
             "{}e{exponent}",
@@ -156,6 +149,33 @@ pub(crate) fn format_parameter_value(value: f64) -> String {
     let decimals =
         ((VALUE_SIGNIFICANT_DIGITS as i32 - 1 - exponent) as usize).min(VALUE_DECIMAL_PLACES);
     format!("{value:.decimals$}")
+}
+
+/// The mantissa and exponent of `value` rounded to the shown significant digits.
+/// Reading the exponent after rounding lets carries such as 9.999 -> 10.0
+/// choose the correct number of decimal places too.
+fn rounded_scientific(value: f64) -> (String, i32) {
+    let scientific = format!(
+        "{value:.precision$e}",
+        precision = VALUE_SIGNIFICANT_DIGITS - 1
+    );
+    let (mantissa, exponent) = scientific.split_once('e').expect("formatted exponent");
+    (mantissa.into(), exponent.parse().expect("numeric exponent"))
+}
+
+/// The place value of the last digit `format_numeric_value` shows for `value`.
+pub(crate) fn last_shown_digit(value: f64, integral: bool) -> f64 {
+    if integral && value.abs() < 1000. {
+        return 1.;
+    }
+    let smallest = 10_f64.powi(-(VALUE_DECIMAL_PLACES as i32));
+    if !value.is_finite() || value.abs() < 0.5 * smallest {
+        return smallest;
+    }
+    let (_, exponent) = rounded_scientific(value);
+    10_f64
+        .powi(exponent - (VALUE_SIGNIFICANT_DIGITS as i32 - 1))
+        .max(smallest)
 }
 
 const RADIUS: u8 = 4;

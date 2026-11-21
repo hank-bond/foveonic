@@ -1062,11 +1062,12 @@ impl Driver {
             app.sidecars.apply(path.clone(), settings.clone());
             app.multi_edit.observe_requested(path, settings);
         }
+        let origin = app.browser.arrow_origin(app.selected.as_deref());
         let index = app
             .browser
             .files
             .iter()
-            .position(|path| app.selected.as_ref() == Some(path))
+            .position(|path| origin == Some(path.as_path()))
             .unwrap();
         let key = if index + 1 < app.browser.files.len() {
             egui::Key::ArrowDown

@@ -167,7 +167,6 @@ impl LabelColumn {
             value,
             range,
             default,
-            if T::INTEGRAL { 1. } else { 0.1 },
             self.row_controls(label.1),
         )
     }
@@ -230,34 +229,7 @@ pub fn adjustment<T: egui::emath::Numeric>(
     range: RangeInclusive<T>,
     default: T,
 ) -> bool {
-    adjustment_with_nudge(
-        ui,
-        label,
-        value,
-        range,
-        default,
-        if T::INTEGRAL { 1. } else { 0.1 },
-    )
-}
-
-/// Set the focused value box's arrow-key step independently of mouse-drag sensitivity.
-pub fn adjustment_with_nudge<T: egui::emath::Numeric>(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &mut T,
-    range: RangeInclusive<T>,
-    default: T,
-    nudge: f64,
-) -> bool {
-    adjustment_row(
-        ui,
-        label,
-        value,
-        range,
-        default,
-        nudge,
-        RowControls::default(),
-    )
+    adjustment_row(ui, label, value, range, default, RowControls::default())
 }
 
 /// Snap the slider and value box to the same discrete parameter positions.
@@ -275,12 +247,39 @@ pub fn stepped_adjustment(
         value,
         range,
         default,
-        step,
         RowControls {
             step: Some(step),
             ..Default::default()
         },
     )
+}
+
+/// Up/Down nudges the shown digit before the last, which Option+Up/Down nudges.
+const COARSE_NUDGE_FACTOR: f64 = 10.;
+
+/// A focused value box's nudge from `value`: floats move by their shown
+/// digits and land on them, stepped rows by whole steps, integers by one.
+pub(super) fn nudged(
+    value: f64,
+    coarse_nudges: f64,
+    fine_nudges: f64,
+    step: Option<f64>,
+    integral: bool,
+    bounds: [f64; 2],
+) -> f64 {
+    let next = match step {
+        Some(step) => value + (coarse_nudges + fine_nudges) * step,
+        None if integral => value + coarse_nudges + fine_nudges,
+        None => {
+            // Start from the shown value, so digits the box hides stay hidden.
+            let last = crate::widgets::last_shown_digit(value, false);
+            let shown = (value / last).round() * last;
+            let moved = shown + coarse_nudges * last * COARSE_NUDGE_FACTOR + fine_nudges * last;
+            let grid = crate::widgets::last_shown_digit(moved, false);
+            (moved / grid).round() * grid
+        }
+    };
+    next.clamp(bounds[0], bounds[1])
 }
 
 pub(super) struct Automatic<'a> {
@@ -318,7 +317,6 @@ pub fn automatic_adjustment<T: egui::emath::Numeric>(
         &mut value,
         range,
         default,
-        if T::INTEGRAL { 1. } else { 0.1 },
         RowControls {
             automatic: Some(Automatic {
                 active: &mut automatic,
@@ -341,7 +339,6 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
     value: &mut T,
     range: RangeInclusive<T>,
     default: T,
-    nudge: f64,
     controls: RowControls<'_>,
 ) -> bool {
     let RowControls {
@@ -364,11 +361,6 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
     let label_width = label_override.map(|(_, column)| column.width_at(ui));
     let before = value.to_f64();
     let mut toggled = false;
-    let decimals = if T::INTEGRAL {
-        0
-    } else {
-        (-nudge.abs().log10()).ceil().clamp(2., 15.) as usize
-    };
     ui.push_id(label, |ui| {
         ui.horizontal(|ui| {
             let enabled = if let Some(enabled) = enabled {
@@ -402,33 +394,14 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                             ui.visuals_mut().widgets.inactive.bg_fill =
                                 crate::widgets::slider_track_fill(ui.visuals());
                             let before_slider = value.to_f64();
-                            let response = if let Some(response) =
-                                crate::multi_edit_controls::slider(
-                                    ui,
-                                    value,
-                                    range.clone(),
-                                    default,
-                                    step,
-                                    nudge,
-                                ) {
-                                response
-                            } else {
-                                let mut slider =
-                                    crate::widgets::slider(value, range.clone()).show_value(false);
-                                if let Some(step) = step.filter(|_| step_origin == 0.) {
-                                    slider = slider.step_by(step);
-                                }
-                                let response =
-                                    ui.add(slider).interact(egui::Sense::click_and_drag());
-                                if response.double_clicked() {
-                                    *value = default;
-                                }
-                                response
-                            };
-                            if response.changed()
-                                || response.double_clicked()
-                                || before_slider != value.to_f64()
-                            {
+                            let response = crate::multi_edit_controls::slider(
+                                ui,
+                                value,
+                                range.clone(),
+                                default,
+                                step,
+                            );
+                            if response.changed() || before_slider != value.to_f64() {
                                 if let Some(auto) = automatic.as_mut().filter(|a| a.editable) {
                                     *auto.active = false;
                                 }
@@ -476,20 +449,58 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                                     if unresolved {
                                         return ui.add(egui::Label::new("Auto"));
                                     }
-                                    let focused =
-                                        ui.memory(|memory| memory.has_focus(ui.next_auto_id()));
-                                    ui.add(
+                                    let id = ui.next_auto_id();
+                                    let focused = ui.memory(|memory| memory.has_focus(id));
+                                    // Taking the arrows before egui's value box replaces
+                                    // its fixed nudge with one that follows the shown digits.
+                                    let (coarse_nudges, fine_nudges) = if focused {
+                                        ui.input_mut(|input| {
+                                            let mut count = |modifiers| {
+                                                input.count_and_consume_key(
+                                                    modifiers,
+                                                    egui::Key::ArrowUp,
+                                                )
+                                                    as f64
+                                                    - input.count_and_consume_key(
+                                                        modifiers,
+                                                        egui::Key::ArrowDown,
+                                                    )
+                                                        as f64
+                                            };
+                                            // Unmodified keys match Option too, so count it first.
+                                            let fine = count(egui::Modifiers::ALT);
+                                            (count(egui::Modifiers::NONE), fine)
+                                        })
+                                    } else {
+                                        (0., 0.)
+                                    };
+                                    let before_nudge = value.to_f64();
+                                    if coarse_nudges != 0. || fine_nudges != 0. {
+                                        *value = T::from_f64(nudged(
+                                            before_nudge,
+                                            coarse_nudges,
+                                            fine_nudges,
+                                            step,
+                                            T::INTEGRAL,
+                                            [range.start().to_f64(), range.end().to_f64()],
+                                        ));
+                                    }
+                                    let nudge_changed = value.to_f64() != before_nudge;
+                                    if nudge_changed {
+                                        // Show the new value instead of the text being edited.
+                                        ui.data_mut(|data| data.remove::<String>(id));
+                                    }
+                                    let mut response = ui.add(
                                         crate::widgets::mixed_drag_value(value, mixed && !focused)
                                             .range(range.clone())
-                                            .speed(if focused {
-                                                nudge
-                                            } else if T::INTEGRAL {
-                                                1.
-                                            } else {
-                                                0.01
-                                            })
-                                            .fixed_decimals(decimals),
-                                    )
+                                            .speed(if T::INTEGRAL { 1. } else { 0.01 })
+                                            // Shift-drags add a decimal; keep them to the shown ones.
+                                            .max_decimals(crate::widgets::VALUE_DECIMAL_PLACES),
+                                    );
+                                    if nudge_changed {
+                                        response.mark_changed();
+                                    }
+                                    response
                                 },
                             )
                             .inner
@@ -796,7 +807,6 @@ fn exposure_row(
             &mut value,
             range,
             0.,
-            0.1,
             RowControls {
                 automatic: Some(Automatic {
                     active: &mut settings.exposure_auto,
@@ -1029,7 +1039,6 @@ pub(super) fn sharpening_with_range(
                                 &mut sharp.threshold,
                                 0. ..=0.2,
                                 0.01,
-                                0.001,
                                 column.row_controls("Threshold"),
                             )
                         },
