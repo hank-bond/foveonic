@@ -155,7 +155,14 @@ impl DamagedRecovery {
                 else {
                     return Ok(false);
                 };
-                if !app.worker.is_settled_and_admitted(frame) {
+                // Planning follows the smoke step within the frame, so the image
+                // for the restored edits is requested only after the edits load.
+                if !app.worker.is_settled_and_admitted(frame)
+                    || !crate::rendering::matching::same_authored_edits(
+                        &frame.request.settings,
+                        &app.settings,
+                    )
+                {
                     return Ok(false);
                 }
                 let matches =
@@ -164,7 +171,8 @@ impl DamagedRecovery {
                         expected,
                     ) && crate::rendering::matching::same_authored_edits(&app.settings, expected)
                         && !app.activity.unread_errors();
-                self.checks.push(json!({"check":"valid-raw-recovers-latest-frame","passed":matches,"source":source,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"unread_errors":app.activity.unread_errors()}));
+                self.checks.push(json!({"check":"valid-raw-recovers-latest-frame","passed":matches,"source":source,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"unread_errors":app.activity.unread_errors(),
+                    "expected_exposure":expected.exposure,"restored_exposure":app.settings.exposure}));
                 if !matches {
                     return Err(
                         "valid RAW did not restore its expected edits without a new error".into(),

@@ -128,8 +128,8 @@ impl Drag {
             ));
         }
         let [left, top, right, bottom] = control.slider;
-        let travel = f64::from((right - left) * fraction / ((right - left) - 12.).max(1.))
-            * (control.range[1] - control.range[0]);
+        let (track_width, span) = track(control);
+        let travel = f64::from((right - left) * fraction / track_width) * span;
         if initial
             .iter()
             .any(|value| control.mapping.control(*value) + travel > control.range[1] + 1e-6)
@@ -138,7 +138,17 @@ impl Drag {
                 "{pointer} starts too near its upper limit for this gesture: {initial:?}"
             ));
         }
-        let start = egui::pos2((left + right) * 0.5, (top + bottom) * 0.5);
+        // Grab the lower handle: a press elsewhere outside the range would move
+        // the photos before the drag, and this gesture measures relative travel.
+        let low = initial
+            .iter()
+            .map(|value| control.mapping.control(*value))
+            .fold(f64::INFINITY, f64::min)
+            .clamp(control.range[0], control.range[1]);
+        let low_x = left
+            + crate::multi_edit_controls::HANDLE_RADIUS
+            + ((low - control.range[0]) / span) as f32 * track_width;
+        let start = egui::pos2(low_x, (top + bottom) * 0.5);
         let end = start + egui::vec2((right - left) * fraction, 0.);
         if end.x >= right - 4. {
             return Err("drag extends beyond the slider".into());
@@ -224,11 +234,11 @@ impl Drag {
         let start_slider = first.slider;
         let start_readout = first.readout;
         let start_panel = self.frames[0].panel;
+        let (track_width, span) = track(first);
         let min_changes = first.step.map_or(3, |step| {
-            let travel = f64::from(
-                (self.events.last().unwrap()[0] - self.events[0][0])
-                    / (first.slider[2] - first.slider[0] - 12.).max(1.),
-            ) * (first.range[1] - first.range[0]);
+            let travel =
+                f64::from((self.events.last().unwrap()[0] - self.events[0][0]) / track_width)
+                    * span;
             ((travel / step).floor() as usize).clamp(1, 3)
         });
         let mut changes = vec![0usize; self.initial.len()];
@@ -332,7 +342,9 @@ impl Drag {
                 "relative changes disagree across selected photos: {shifts:?}"
             ));
         }
-        let tolerance = first.step.map_or(1e-4, |step| step * 0.5 + 1e-4);
+        // Continuous drags land on round values within half a pixel of the travel.
+        let half_pixel = span / f64::from(track_width) * 0.5;
+        let tolerance = first.step.map_or(half_pixel, |step| step * 0.5) + 1e-4;
         if shifts
             .iter()
             .any(|shift| (shift - expected_travel).abs() > tolerance)
@@ -357,6 +369,15 @@ fn values(app: &App, paths: &[PathBuf], pointer: &str) -> Vec<Option<f64>> {
                 .and_then(|settings| settings.pointer(pointer).and_then(|value| value.as_f64()))
         })
         .collect()
+}
+
+/// The slider's track width in points, inside its handle insets, and the
+/// control range it spans.
+fn track(control: &automation::Control) -> (f32, f64) {
+    let width =
+        (control.slider[2] - control.slider[0] - 2. * crate::multi_edit_controls::HANDLE_RADIUS)
+            .max(1.);
+    (width, control.range[1] - control.range[0])
 }
 
 fn same_rect(a: [f32; 4], b: [f32; 4]) -> bool {

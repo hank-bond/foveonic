@@ -612,8 +612,9 @@ impl NumberChange {
     }
 }
 
-/// Presses within this radius of a handle grab it instead of moving it.
-const HANDLE_RADIUS: f32 = 6.;
+/// A slider handle's radius. It insets the track at both ends, and presses
+/// within it of a handle grab the handle instead of moving it.
+pub(crate) const HANDLE_RADIUS: f32 = 6.;
 const TRACK_HEIGHT: f32 = 6.;
 
 /// Where a drag began and how far it has moved the photos so far.

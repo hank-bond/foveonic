@@ -92,12 +92,13 @@ pub(crate) fn can_share_pixel_work(a: &RenderRequest, b: &RenderRequest) -> bool
                 && a.settings.preview_region == b.settings.preview_region))
 }
 
-/// Coalescing an unchanged delivery also requires exact requested settings.
-/// Request ids and source identity are left to the coordinator.
+/// Coalescing an unchanged delivery also requires the same requested settings,
+/// apart from labels that do not change the image. Request ids and source
+/// identity are left to the coordinator.
 pub(crate) fn same_delivery_request(a: &RenderRequest, b: &RenderRequest) -> bool {
     same_request_context(a, b)
         && a.framing_preview == b.framing_preview
-        && a.settings == b.settings
+        && same_render_settings(&a.settings, &b.settings)
         && a.preview_scale == b.preview_scale
 }
 
@@ -183,6 +184,14 @@ mod tests {
         b.settings.output_size = Some([640, 480]);
         assert!(!same_pixel_settings(&a.settings, &b.settings));
         assert!(!can_share_pixel_work(&a, &b));
+    }
+
+    #[test]
+    fn renaming_a_color_range_preserves_delivery() {
+        let a = request();
+        let mut b = a.clone();
+        b.settings.photographic.color_editor.advanced.ranges[0].name = "Petals".try_into().unwrap();
+        assert!(same_delivery_request(&a, &b));
     }
 
     #[test]
