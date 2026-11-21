@@ -391,7 +391,6 @@ impl Runtime {
                             planned.speculative,
                         );
                     }
-                    new_work |= planned.state == ImageState::Waiting;
                     if let Some(place) = planned.tracked {
                         tracked.push((place, target, planned.request.id, planned.state));
                     }
@@ -406,6 +405,7 @@ impl Runtime {
                 }
                 let in_use: Vec<_> = planned.into_iter().map(|planned| planned.request).collect();
                 self.coordinator.reconcile(&photos, &in_use);
+                self.coordinator.order_as(&in_use);
             }
             Command::Scopes(request) => self.coordinator.scopes(*request),
             Command::Pick(request, image_request_id, origin) => {
@@ -495,7 +495,6 @@ impl Runtime {
             .map(|(target, planned_id, state)| {
                 let (request_id, state) = match state {
                     ImageState::Ready => (*planned_id, SectionState::Ready),
-                    ImageState::Waiting => (*planned_id, SectionState::Waiting),
                     ImageState::Render => match self.coordinator.target_progress(target) {
                         Some((id, _, true)) => (id, SectionState::Failed),
                         Some((id, true, false)) => (id, SectionState::Done),

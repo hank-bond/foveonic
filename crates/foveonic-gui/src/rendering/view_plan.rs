@@ -74,10 +74,8 @@ pub(crate) struct Use {
 pub(crate) enum ImageState {
     /// A stored image is current; the coordinator keeps the work that made it.
     Ready,
-    /// Rendered now.
+    /// Rendered in the plan's order.
     Render,
-    /// A whole image waiting its turn behind other photos' patches.
-    Waiting,
 }
 
 /// An image in use as published to the coordinator.

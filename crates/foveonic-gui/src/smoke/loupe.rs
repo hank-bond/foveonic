@@ -790,7 +790,7 @@ impl Driver {
                 self.begin_single(app);
             }
             Phase::SingleReady => {
-                if app.multi_photo_overview() || app.view_busy() || !app.sidecars.ready() {
+                if app.multi_photo_overview() || app.view_busy() || !app.selection_loaded() {
                     return Ok(false);
                 }
                 let path = app

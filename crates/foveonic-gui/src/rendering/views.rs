@@ -34,18 +34,12 @@ impl App {
     /// What the photo shows: its look, and for the active photo its output,
     /// comparison and the crop and rotation plane.
     pub(crate) fn image_key(&self, path: &Path) -> ImageKey {
-        self.key_for(path, self.photo_rendition(path))
+        self.key_for(path, self.photo_look(path))
     }
 
     /// What the photo shows with this look.
     fn key_for(&self, path: &Path, look: Rendition) -> ImageKey {
         let active = self.selected.as_deref() == Some(path);
-        let look = if look != Rendition::Current && self.photo_view_settings(path).is_none() {
-            // Camera and Defaults need capture metadata, which a Current image brings.
-            Rendition::Current
-        } else {
-            look
-        };
         let output = if look == Rendition::Current {
             self.photo_output(path)
         } else {
@@ -94,11 +88,11 @@ impl App {
         }
     }
 
-    /// The photo's saved edits, once loaded. The selected photo's settings are a
-    /// placeholder until its sidecar loads.
+    /// The photo's edits, once loaded. The selected photo's are `App::settings`
+    /// once they hold its loaded settings.
     pub(crate) fn authored_settings(&self, path: &Path) -> Option<&foveonic::render::Settings> {
         if self.selected.as_deref() == Some(path) {
-            self.sidecars.ready().then_some(&self.settings)
+            self.selection_loaded().then_some(&self.settings)
         } else {
             self.multi_edit.settings(path)
         }
@@ -229,7 +223,6 @@ impl App {
                     Placement::Fit
                 };
                 PhotoInputs {
-                    failed: self.multi_edit.failed(&path),
                     window: images.whole.map(|whole| whole.display_window(false)),
                     path,
                     request,

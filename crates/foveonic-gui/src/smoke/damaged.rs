@@ -97,7 +97,7 @@ impl DamagedRecovery {
                 let broken = self.broken.as_ref().unwrap();
                 if app.folder_loader.loading()
                     || app.selected.as_deref() != Some(broken.as_path())
-                    || !app.sidecars.ready()
+                    || !app.selection_loaded()
                     || app.view_busy()
                     || !app.import.smoke_ready(false)
                     || !app.activity.unread_errors()
@@ -144,7 +144,7 @@ impl DamagedRecovery {
             Phase::Recovery => {
                 if app.folder_loader.loading()
                     || app.selected.as_deref() != Some(source)
-                    || !app.sidecars.ready()
+                    || !app.selection_loaded()
                     || app.view_busy()
                 {
                     return Ok(false);

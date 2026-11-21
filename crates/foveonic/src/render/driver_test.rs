@@ -265,7 +265,7 @@ fn session_execution_matches_ordinary_pixels_geometry_and_completed_progress_und
         assert!(!profile.graphs.is_empty());
         assert!(engine.memory_resources(&working, &retained).total_bytes > 1);
     }
-    working.set_visible([PhotoKey {
+    working.set_eviction_protected([PhotoKey {
         photo: 1,
         resolution: Resolution::Reduced,
     }]);

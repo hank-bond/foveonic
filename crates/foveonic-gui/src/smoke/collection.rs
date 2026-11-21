@@ -89,7 +89,7 @@ impl CollectionJourney {
                     || app.browser.root.as_ref() != Some(&self.directory)
                     || !app.browser.import_mode
                     || app.view_busy()
-                    || !app.sidecars.ready()
+                    || !app.selection_loaded()
                 {
                     return Ok(false);
                 }
@@ -177,7 +177,7 @@ impl CollectionJourney {
                 if app.folder_loader.loading()
                     || app.browser.files != self.original
                     || app.view_busy()
-                    || !app.sidecars.ready()
+                    || !app.selection_loaded()
                 {
                     return Ok(false);
                 }

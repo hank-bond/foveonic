@@ -247,7 +247,7 @@ fn native_fine_edits_keep_their_restart_frontier_under_memory_pressure() {
         photo: 1,
         resolution: Resolution::Native,
     };
-    reduced.set_visible([key]);
+    reduced.set_eviction_protected([key]);
     let mut settings = super::super::Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
     settings.sharpen_amount = Some(0.75);
@@ -286,7 +286,7 @@ fn native_fine_edits_keep_their_restart_frontier_under_memory_pressure() {
         }
         let mut reservation = MemoryReservation::default();
         reservation.add_image(&image);
-        // A target too small for the visible photo reports the overage rather
+        // A target too small for the protected photo reports the overage rather
         // than dropping the latest edit's inputs after every render.
         let trim = engine.trim_memory(&mut reduced, 0, &reservation);
         assert!(trim.over_target_bytes > 0);

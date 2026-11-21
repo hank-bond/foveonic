@@ -678,7 +678,7 @@ impl App {
         let mut state = self.diagnostic_state();
         state["smoke_readiness"] = serde_json::json!({
             "target":target,"app_busy":self.busy,"opening":self.opening.is_some(),
-            "sidecars_ready":self.sidecars.ready(),
+            "selection_loaded":self.selection_loaded(),
             "scope_key":self.scope_key.map(|key|(key.request_id,key.region)),
             "scope_snapshot":self.scope_snapshot.as_ref().map(|snapshot|(snapshot.key.request_id,snapshot.key.region)),
             "navigator":self.navigator.smoke_state(self.navigator_source(),self.displayed_mapping()),
@@ -2313,7 +2313,6 @@ impl App {
                     "import-copied" => {
                         self.processing_open = false;
                         self.preferences.import_processing.copy_only = true;
-                        self.sidecars.refresh(&self.settings);
                         self.process();
                     }
                     "readme" => {
@@ -2433,17 +2432,12 @@ impl App {
                             thumbnail_revision,
                         });
                         let path = self.selected.clone().unwrap();
-                        // This fixture authors edits directly, so seed its nonpersistent recipe.
-                        self.sidecars.set_memory_only(true);
-                        self.sidecars.apply(path.clone(), self.settings.clone());
-                        self.multi_edit.observe_requested(&path, &self.settings);
-                        self.select(path.clone(), false);
-                        assert!(!self.sidecars.ready());
+                        self.select(path, false);
                         let selection_revision = self.last_request_id;
                         self.submit_photos();
                         assert_eq!(
                             self.last_request_id, selection_revision,
-                            "cached photo submitted before its selected recipe was ready"
+                            "reselecting the same photo submitted new work"
                         );
                     }
                     "fast" | "fast-again" => {
@@ -2719,7 +2713,7 @@ impl App {
                 } else if smoke.targets == COMPARISON_TARGETS && self.multi_edit.multiple() {
                     !self.busy
                         && !self.worker.busy()
-                        && self.sidecars.ready()
+                        && self.selection_loaded()
                         && self.multi_edit.editable_ready()
                         && comparison_auxiliary_disabled
                         && comparison_tiles.as_ref().is_some_and(|(ready, _)| *ready)

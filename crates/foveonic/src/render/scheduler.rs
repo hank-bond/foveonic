@@ -24,6 +24,11 @@ pub trait Job {
     fn photo(&self) -> Option<&std::path::Path> {
         None
     }
+    /// The job's place within its tier. Lower ranks start first, and equal ranks
+    /// start in submission order.
+    fn rank(&self) -> usize {
+        0
+    }
 }
 
 /// What starting a job needs next.
@@ -156,9 +161,9 @@ impl<J: Job> Scheduler<J> {
         self.memory_changed();
     }
 
-    /// Working photos that viewports render from, which trimming never evicts.
-    pub fn set_visible(&mut self, keys: impl IntoIterator<Item = PhotoKey>) {
-        self.working.set_visible(keys);
+    /// Working photos that trimming never evicts.
+    pub fn set_eviction_protected(&mut self, keys: impl IntoIterator<Item = PhotoKey>) {
+        self.working.set_eviction_protected(keys);
     }
 
     /// The host freed memory, for example by trimming, so deferred jobs may fit now.
@@ -196,6 +201,12 @@ impl<J: Job> Scheduler<J> {
             .find(|admitted| admitted.job.target() == job.target())
             .map(|admitted| admitted.order);
         self.queue.submit(job, running);
+    }
+
+    /// Change queued jobs in place, such as their rank, keeping whether each is
+    /// waiting for its input or deferred.
+    pub fn update_queued(&mut self, update: impl FnMut(&mut J)) {
+        self.queue.update(update);
     }
 
     /// Drop queued jobs the host no longer wants. Admitted jobs learn of it

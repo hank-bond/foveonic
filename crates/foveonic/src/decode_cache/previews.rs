@@ -43,6 +43,7 @@ impl Key {
             source: Identity::read(path)?,
             default_recipe: None,
             recipe: sidecar::load(path)?
+                .settings()
                 .as_ref()
                 .map(sidecar::encode)
                 .transpose()?,

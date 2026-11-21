@@ -111,7 +111,9 @@ struct App {
     metadata: Option<Arc<Metadata>>,
     selected: Option<PathBuf>,
     settings: Settings,
-    camera_overrides: [String; 2],
+    /// The photo whose loaded settings `settings` holds. Until the selected
+    /// photo's settings load, `settings` is a placeholder that nothing saves.
+    settings_photo: Option<PathBuf>,
     output: String,
     channel: i32,
     comparison: inspect::Comparison,
@@ -246,7 +248,6 @@ impl App {
             mut preferences,
             target,
             path,
-            settings,
         } = input;
         let _context = foveonic::diagnostics::enter(foveonic::diagnostics::Context {
             purpose: "startup",
@@ -283,7 +284,6 @@ impl App {
         } else {
             engine
         };
-        let overrides = [settings.white_balance.clone(), settings.color_mode.clone()];
         let smoke = smoke::Smoke::from_env();
         if let Some(smoke) = &smoke {
             smoke.configure_cache(&mut preferences.decode_cache);
@@ -349,8 +349,8 @@ impl App {
             worker,
             metadata: None,
             selected: None,
-            settings,
-            camera_overrides: overrides,
+            settings: Settings::new("", ""),
+            settings_photo: None,
             output: "final".into(),
             channel: -1,
             comparison: Default::default(),
@@ -417,8 +417,15 @@ impl App {
         match self.browser.finish_open(reply) {
             Ok((selected, mode, canonical)) => {
                 // The old source-write policy stays in force until discovery succeeds.
+                let review_ended = self.browser.import_mode;
                 self.browser.import_mode = mode == FolderMode::Import;
                 self.sidecars.set_memory_only(self.browser.import_mode);
+                if review_ended {
+                    // Import review's edits were held only in memory. The session
+                    // dropped them above, so the reload reads the saved recipes.
+                    self.multi_edit.forget_settings(&mut self.sidecars);
+                    self.settings_photo = None;
+                }
                 if let Some(folder) = canonical {
                     self.preferences.last_folder = Some(folder);
                     self.preferences.last_folder_mode = mode;
@@ -446,7 +453,7 @@ impl App {
             .sync_browser(&[], self.preferences.multi_edit_limit);
         self.multi_edit.clear();
         self.opening = None;
-        self.sidecars.clear();
+        self.settings_photo = None;
         self.sidecars.resolve_settings(&[]);
         self.capture.select(None);
         self.metadata = None;
@@ -510,19 +517,66 @@ impl App {
             began,
         });
         self.capture.select(Some(path.clone()));
-        self.sidecars.select(path.clone());
         self.metadata = self.multi_edit.metadata(&path);
-        self.settings = self
-            .multi_edit
-            .settings(&path)
-            .cloned()
-            .unwrap_or_else(|| Settings::new("", ""));
+        self.settings = Settings::new("", "");
+        self.settings_photo = None;
         self.selected = Some(path);
         self.last_request_id = self.last_request_id.next();
         self.output = "final".into();
         self.channel = -1;
         self.scope_key = None;
         viewport::clear(&self.render_state);
+        self.adopt_selected_settings();
+    }
+    /// The selected photo, once `settings` holds its loaded settings.
+    pub(crate) fn loaded_selection(&self) -> Option<&std::path::Path> {
+        self.selected
+            .as_deref()
+            .filter(|path| self.settings_photo.as_deref() == Some(*path))
+    }
+    /// Whether `settings` holds the selected photo's loaded settings.
+    pub(crate) fn selection_loaded(&self) -> bool {
+        self.loaded_selection().is_some()
+    }
+    /// Record the selected photo's edited `settings` in the editing runtime and
+    /// save them, once they are its loaded settings.
+    #[must_use]
+    pub(crate) fn commit_settings(&mut self) -> bool {
+        let Some(path) = self.loaded_selection().map(std::path::Path::to_path_buf) else {
+            return false;
+        };
+        self.multi_edit
+            .observe_active(&path, &self.settings, self.metadata.as_ref());
+        self.sidecars.apply(path, self.settings.clone());
+        true
+    }
+    /// Take the selected photo's settings from the editing runtime once they load.
+    fn adopt_selected_settings(&mut self) {
+        let Some(path) = self.selected.clone() else {
+            return;
+        };
+        if self.settings_photo.as_ref() == Some(&path) {
+            return;
+        }
+        let Some(settings) = self.multi_edit.settings(&path) else {
+            return;
+        };
+        if let Some(opening) = &self.opening {
+            timing::selection_ready(self.last_request_id.0, &path, opening.began);
+        }
+        self.settings = settings.clone();
+        self.settings_photo = Some(path);
+        inspect::normalize(
+            &self.settings,
+            &mut self.output,
+            &mut self.channel,
+            self.metadata.as_deref(),
+            self.capture
+                .properties
+                .as_ref()
+                .and_then(|p| p.get("CAMMODEL"))
+                .and_then(|model| foveonic::source::ProcessingFamily::from_camera_model(model)),
+        );
     }
     pub(crate) fn navigator_source(&self) -> Option<&worker::RenderResult> {
         self.active_image()
@@ -785,8 +839,6 @@ impl App {
         self.scope_key = Some(key);
     }
     fn process(&mut self) {
-        // Freeze edits before either executor receives the job.
-        self.sidecars.refresh(&self.settings);
         self.import.submit(
             self.preferences.adaptive_tone_tuning,
             &self.browser,
@@ -817,8 +869,7 @@ impl App {
                     changed |= self.photo_toolbar(ui);
                     return;
                 }
-                let export_ready = self.sidecars.ready()
-                    && self.selected.is_some()
+                let export_ready = self.selection_loaded()
                     && toolbar::can_export(&self.settings, self.metadata.as_deref());
                 let only_current = self
                     .browser
@@ -968,7 +1019,7 @@ impl App {
                     && self.output == "final"
                     && self.before.active == editor::Rendition::Current
                     && !self.comparison.requested()
-                    && self.sidecars.ready()
+                    && self.selection_loaded()
                     && self.edit_selection.contains(&f.request.path)
             })
             .map(|frame| self.settings.rotation.extent(frame.camera_extent()));
@@ -1019,7 +1070,7 @@ impl App {
             Section::Editing => {
                 let mut changed = false;
                 ui.add_enabled_ui(
-                    self.sidecars.ready()
+                    self.selection_loaded()
                         && !self.edit_selection.paths().is_empty()
                         && self.multi_edit.editable_ready(),
                     |ui| {
@@ -1083,7 +1134,7 @@ impl App {
                                             .ok()
                                             .map(|c| c.family)
                                     })
-                                    .filter(|_| self.sidecars.ready()),
+                                    .filter(|_| self.selection_loaded()),
                                 library: &self.preferences.editor,
                                 state: &mut self.editor_ui,
                             }
@@ -1316,7 +1367,7 @@ impl App {
         self.selected
             .as_deref()
             .is_some_and(|path| self.edit_selection.contains(path))
-            && self.sidecars.ready()
+            && self.selection_loaded()
             && self.before.active == editor::Rendition::Current
             && self.output == "final"
             && !mapping.input
@@ -1337,7 +1388,7 @@ impl App {
                 .is_some_and(|path| self.edit_selection.contains(path));
         self.viewport_mut().group_target = group_target;
         let allowed = self.photo_interaction_available(mapping);
-        let framing_active = self.framing_preview_active() && self.sidecars.ready();
+        let framing_active = self.framing_preview_active() && self.selection_loaded();
         let crop_active = framing_active && crop_tool::active(ui.ctx());
         self.viewport_mut().framing = self
             .active_image()
@@ -1518,27 +1569,8 @@ impl eframe::App for App {
             });
         }
         photo_tools::source(ctx, self.selected.as_deref());
-        if let Some(saved) = self.sidecars.receive() {
-            if let Some(path) = &self.selected {
-                if let Some(opening) = &self.opening {
-                    timing::selection_ready(self.last_request_id.0, path, opening.began);
-                }
-                self.settings = sidecars::selection_settings(saved, &self.camera_overrides);
-                inspect::normalize(
-                    &self.settings,
-                    &mut self.output,
-                    &mut self.channel,
-                    self.metadata.as_deref(),
-                    self.capture
-                        .properties
-                        .as_ref()
-                        .and_then(|p| p.get("CAMMODEL"))
-                        .and_then(|model| {
-                            foveonic::source::ProcessingFamily::from_camera_model(model)
-                        }),
-                );
-            }
-        }
+        self.sidecars.receive();
+        self.adopt_selected_settings();
         if self
             .smoke
             .as_ref()
@@ -1571,7 +1603,6 @@ impl eframe::App for App {
             self.metadata.as_deref(),
             self.capture.properties.as_ref(),
         );
-        self.sidecars.refresh(&self.settings);
         editor::advanced_color::sync_photo(ctx, self.selected.as_deref());
         let previous_settings = self.settings.clone();
         let previous_selection = self.selected.clone();
@@ -1762,16 +1793,10 @@ impl eframe::App for App {
             self.viewport_mut().reset();
             changed = true;
         }
-        if self.sidecars.ready() {
-            if let Some(path) = &self.selected {
-                self.multi_edit
-                    .observe_active(path, &self.settings, self.metadata.as_ref());
-            }
-        }
-        if previous_selection == self.selected && (normalized || previous_settings != self.settings)
-        {
+        let edited = previous_selection == self.selected
+            && (normalized || previous_settings != self.settings);
+        if edited && self.commit_settings() {
             self.exit_before();
-            self.sidecars.edited(&self.settings);
         }
         self.preferences.direct_color = editor::direct_color::configuration(ctx);
         // A tile click this frame selects next frame; it must not leave Before now.
@@ -1790,7 +1815,6 @@ impl eframe::App for App {
             .configure_preparation(worker::PreparationConfig {
                 processing_quality: self.preferences.processing_quality,
                 recipes: self.sidecars.cached_recipes(&preparation_paths),
-                overrides: self.camera_overrides.clone(),
                 calibration: self
                     .noise_calibration
                     .selected(self.preferences.noise_profile),
@@ -1823,7 +1847,6 @@ impl eframe::App for App {
                 serde_json::json!({
                     "source":self.selected.as_deref().map(crate::support::path),"revision":self.last_request_id,
                     "settings":foveonic::support::settings_snapshot(&self.settings),"quality":self.preferences.processing_quality,"output":self.output,
-                    "camera_overrides":self.camera_overrides,
                 }),
             );
             self.support_context_due = None;
@@ -1891,17 +1914,11 @@ fn show_startup_error(message: &str) {
 fn run() -> eframe::Result {
     let startup_began = std::time::Instant::now();
     timing::configure().map_err(eframe::Error::AppCreation)?;
-    let mut args = std::env::args().skip(1);
     let mut path = None;
-    let mut settings = Settings::new("", "");
-    while let Some(arg) = args.next() {
+    for arg in std::env::args().skip(1) {
         match arg.as_str() {
-            "--wb" => settings.white_balance = args.next().unwrap_or_default(),
-            "--mode" => settings.color_mode = args.next().unwrap_or_default(),
             "--help" => {
-                println!(
-                    "foveonic-gui [X3F_OR_FOLDER] [--wb NAME --mode NAME]\nWB and color mode default to the loaded X3F's recorded settings; --wb/--mode override them."
-                );
+                println!("foveonic-gui [X3F_OR_FOLDER]");
                 return Ok(());
             }
             _ => {
@@ -1918,7 +1935,7 @@ fn run() -> eframe::Result {
     let startup_observations = startup::Observations::new(startup_began);
     foveonic::support::update_context(
         "startup_request",
-        serde_json::json!({"source":path.as_deref().map(|path|path.to_string_lossy()),"settings":foveonic::support::settings_snapshot(&settings)}),
+        serde_json::json!({"source":path.as_deref().map(|path|path.to_string_lossy())}),
     );
     startup_observations.record(
         "startup.entry_to_arguments",
@@ -2016,7 +2033,6 @@ fn run() -> eframe::Result {
             Ok(Box::new(startup::Startup::new(
                 cc,
                 path,
-                settings,
                 startup_capture,
                 startup_observations,
                 workspace,
@@ -2037,26 +2053,5 @@ mod tests {
         channel = 1;
         super::inspect::normalize(&settings, &mut output, &mut channel, None, None);
         assert_eq!((&*output, channel), ("calibration.layers", 1));
-    }
-    #[test]
-    fn image_defaults_and_saved_recipes_do_not_carry_other_photo_edits() {
-        let mut saved = foveonic::render::Settings::new("Shade", "Vivid");
-        saved.exposure = 1.;
-        let overrides = [String::new(), String::new()];
-        assert_eq!(
-            super::sidecars::selection_settings(saved.clone(), &overrides),
-            saved
-        );
-        let fresh = super::sidecars::selection_settings(
-            foveonic::render::Settings::new("", ""),
-            &overrides,
-        );
-        assert_eq!(fresh.exposure, 0.);
-        assert!(fresh.white_balance.is_empty() && fresh.color_mode.is_empty());
-        let explicit =
-            super::sidecars::selection_settings(saved, &["Auto".into(), "Neutral".into()]);
-        assert_eq!(explicit.white_balance, "Auto");
-        assert_eq!(explicit.color_mode, "Neutral");
-        assert_eq!(explicit.exposure, 1.);
     }
 }

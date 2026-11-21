@@ -41,7 +41,7 @@ impl App {
             shortcuts::Availability {
                 browser: !self.browser.files.is_empty(),
                 import: self.browser.import_mode,
-                settings: self.selected.is_some() && self.sidecars.ready(),
+                settings: self.selection_loaded(),
                 viewport_hovered,
                 framing_active: crate::crop_tool::active(ctx) || crate::rotate_tool::active(ctx),
             },
@@ -111,7 +111,7 @@ impl App {
             return false;
         }
         // A folder picker can change readiness after capture.
-        if !self.sidecars.ready() || self.selected.is_none() {
+        if !self.selection_loaded() {
             self.actions.clear();
             return false;
         }

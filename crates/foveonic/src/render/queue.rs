@@ -1,4 +1,4 @@
-//! Orders submitted jobs by priority tier, then by when each target was first submitted.
+//! Orders submitted jobs by priority tier, then by rank, then by when each target was first submitted.
 
 use super::scheduler::Job;
 use crate::priority::Priority;
@@ -73,6 +73,12 @@ impl<J: Job> Queue<J> {
             .any(|queued| queued.job.target() == target)
     }
 
+    pub fn update(&mut self, mut update: impl FnMut(&mut J)) {
+        for queued in &mut self.entries {
+            update(&mut queued.job);
+        }
+    }
+
     pub fn retain(&mut self, mut keep: impl FnMut(&J) -> bool) {
         self.entries.retain(|queued| keep(&queued.job));
     }
@@ -91,7 +97,7 @@ impl<J: Job> Queue<J> {
             .min()
     }
 
-    /// The first job of this tier, in submission order, that can start now.
+    /// The first job of this tier, by rank then submission order, that can start now.
     pub fn next(
         &self,
         tier: Priority,
@@ -102,7 +108,7 @@ impl<J: Job> Queue<J> {
             .filter(|queued| {
                 !queued.deferred && queued.job.purpose().priority() == tier && can_start(queued)
             })
-            .min_by_key(|queued| queued.order)
+            .min_by_key(|queued| (queued.job.rank(), queued.order))
     }
 
     pub fn take(&mut self, target: &J::Target) -> Option<Queued<J>> {

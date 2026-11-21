@@ -49,8 +49,6 @@ impl Snapshot {
 pub enum SectionState {
     /// Already current when the update began.
     Ready,
-    /// A whole image waiting for patches to finish.
-    Waiting,
     Running,
     Done,
     Failed,
@@ -100,7 +98,6 @@ impl Tracker {
         };
         let fraction = |section: &Section| match section.state {
             SectionState::Ready | SectionState::Done => 1.,
-            SectionState::Waiting => 0.,
             SectionState::Running | SectionState::Failed => reported(section),
         };
         let total = shared.sections.len().max(1) as f32;
@@ -262,21 +259,20 @@ mod tests {
     }
 
     #[test]
-    fn ready_and_done_sections_are_full_waiting_ones_empty_and_failures_mark_the_bar() {
+    fn ready_and_done_sections_are_full_and_failures_mark_the_bar() {
         let tracker = Tracker::default();
         tracker.publish(
             vec![
                 section(1, SectionState::Ready),
                 section(2, SectionState::Done),
-                section(3, SectionState::Waiting),
-                section(4, SectionState::Failed),
+                section(3, SectionState::Failed),
             ],
             Instant::now(),
             None,
         );
         let snapshot = tracker.snapshot().unwrap();
-        assert_eq!(snapshot.checkpoints, 4);
-        assert_eq!(snapshot.fraction, 0.5);
+        assert_eq!(snapshot.checkpoints, 3);
+        assert!((snapshot.fraction - 2. / 3.).abs() < 1e-6);
         assert!(snapshot.failed && snapshot.running());
         assert_eq!(snapshot.request_id, 1, "the first section leads the pass");
     }

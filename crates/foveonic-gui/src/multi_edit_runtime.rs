@@ -15,7 +15,6 @@ struct Photo {
     numeric_settings: Option<Settings>,
     reset_settings: Option<Settings>,
     defaults_basis: Option<Settings>,
-    error: Option<String>,
 }
 
 #[derive(Default)]
@@ -59,13 +58,7 @@ impl Runtime {
         limit: usize,
         sidecars: &mut sidecars::Session,
     ) -> bool {
-        let mut loaded = paths.to_vec();
-        loaded.extend(
-            viewport
-                .iter()
-                .filter(|path| !paths.contains(path))
-                .cloned(),
-        );
+        let loaded = loaded_paths(paths, viewport);
         let limit = limit.max(loaded.len());
         if self.editing_paths == paths && self.viewport == viewport && self.photos.len() <= limit {
             return false;
@@ -93,30 +86,12 @@ impl Runtime {
         sidecars.resolve_settings(&missing);
         true
     }
-    pub fn resolve(
-        &mut self,
-        replies: Vec<sidecars::Resolved>,
-        overrides: &[String; 2],
-    ) -> Vec<String> {
-        let mut errors = Vec::new();
+    pub fn resolve(&mut self, replies: Vec<sidecars::Resolved>) {
         for reply in replies {
-            let Some(photo) = self.photos.get_mut(&reply.path) else {
-                continue;
-            };
-            if photo.settings.is_some() {
-                continue;
-            }
-            match reply.settings {
-                Ok(settings) => {
-                    photo.settings = Some(sidecars::selection_settings(settings, overrides));
-                }
-                Err(error) => {
-                    photo.error = Some(error.clone());
-                    errors.push(format!("{}: {error}", reply.path.display()));
-                }
+            if let Some(photo) = self.photos.get_mut(&reply.path) {
+                photo.settings.get_or_insert(reply.settings);
             }
         }
-        errors
     }
     pub fn observe_active(
         &mut self,
@@ -128,8 +103,6 @@ impl Runtime {
             if photo.settings.as_ref() != Some(settings) {
                 photo.settings = Some(settings.clone());
             }
-            // Changed settings may render where the last attempt failed.
-            photo.error = None;
             if let Some(metadata) = metadata {
                 photo.metadata = Some(metadata.clone());
             }
@@ -146,8 +119,7 @@ impl Runtime {
         self.editing_paths.len() > 1
     }
     pub fn ready(&self) -> bool {
-        self.targets()
-            .all(|photo| photo.settings.is_some() && photo.error.is_none())
+        self.targets().all(|photo| photo.settings.is_some())
     }
     pub fn editable_ready(&self) -> bool {
         self.ready() && self.targets().all(|photo| photo.numeric_settings.is_some())
@@ -364,12 +336,6 @@ impl Runtime {
         }
         changed
     }
-    /// The photo's settings could not be resolved from its sidecar.
-    pub fn failed(&self, path: &Path) -> bool {
-        self.photos
-            .get(path)
-            .is_some_and(|photo| photo.error.is_some())
-    }
     /// The photo's settings are loaded or loading, so it can render.
     pub fn loaded(&self, path: &Path) -> bool {
         self.photos.contains_key(path)
@@ -398,6 +364,26 @@ impl Runtime {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
+    /// Reload every photo's settings, as when Import review's in-memory edits end.
+    pub fn forget_settings(&mut self, sidecars: &mut sidecars::Session) {
+        for photo in self.photos.values_mut() {
+            photo.settings = None;
+        }
+        sidecars.resolve_settings(&loaded_paths(&self.editing_paths, &self.viewport));
+    }
+}
+
+/// The photos whose settings stay loaded: the editing selection, then the
+/// viewport photos outside it.
+fn loaded_paths(editing: &[PathBuf], viewport: &[PathBuf]) -> Vec<PathBuf> {
+    let mut loaded = editing.to_vec();
+    loaded.extend(
+        viewport
+            .iter()
+            .filter(|path| !editing.contains(path))
+            .cloned(),
+    );
+    loaded
 }
 
 fn default_ready(photo: &Photo, pointer: &str) -> bool {
@@ -617,18 +603,11 @@ impl crate::App {
                 }
             }
         }
-        if self.sidecars.ready() {
-            if let Some(path) = &self.selected {
-                self.multi_edit
-                    .observe_active(path, &self.settings, self.metadata.as_ref());
-            }
+        if let Some(path) = self.loaded_selection().map(Path::to_path_buf) {
+            self.multi_edit
+                .observe_active(&path, &self.settings, self.metadata.as_ref());
         }
-        for error in self
-            .multi_edit
-            .resolve(self.sidecars.take_resolved(), &self.camera_overrides)
-        {
-            self.fail(format!("Cannot load editing target: {error}"));
-        }
+        self.multi_edit.resolve(self.sidecars.take_resolved());
     }
 }
 
@@ -754,23 +733,31 @@ mod tests {
     }
 
     #[test]
-    fn authoritative_active_recipe_recovers_a_failed_background_resolution() {
+    fn forgotten_review_edits_reload_instead_of_lingering() {
         let mut runtime = runtime();
-        let path = runtime.editing_paths[0].clone();
-        runtime.photos.get_mut(&path).unwrap().settings = None;
-        runtime.resolve(
-            vec![sidecars::Resolved {
-                path: path.clone(),
-                settings: Err("old recipe failure".into()),
-            }],
-            &[String::new(), String::new()],
+        let mut sidecars = session();
+        let a = PathBuf::from("a.x3f");
+        assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
+        let edited = runtime.settings(&a).unwrap().clone();
+        sidecars.set_memory_only(false);
+        runtime.forget_settings(&mut sidecars);
+        assert!(!runtime.ready(), "settings reload before editing resumes");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !runtime.ready() {
+            sidecars.receive();
+            runtime.resolve(sidecars.take_resolved());
+            assert!(
+                std::time::Instant::now() < deadline,
+                "settings did not reload"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_ne!(runtime.settings(&a), Some(&edited));
+        assert_eq!(
+            runtime.settings(&a),
+            Some(&Settings::default()),
+            "a session without recipes reloads the camera defaults"
         );
-        assert!(runtime.failed(&path));
-        let restored = Settings::new("", "");
-        runtime.observe_active(&path, &restored, None);
-        assert!(runtime.photos[&path].error.is_none());
-        assert!(!runtime.failed(&path));
-        assert_eq!(runtime.settings(&path), Some(&restored));
     }
 
     #[test]
@@ -832,13 +819,7 @@ mod tests {
         let mut runtime = runtime();
         let mut sidecars = session();
         let inactive = PathBuf::from("inactive.x3f");
-        runtime.photos.insert(
-            inactive.clone(),
-            Box::new(Photo {
-                error: Some("old load failed".into()),
-                ..Default::default()
-            }),
-        );
+        runtime.photos.insert(inactive.clone(), Box::default());
         assert!(runtime.editable_ready());
         assert_eq!(runtime.snapshots().len(), 2);
         assert_eq!(runtime.numeric_snapshots().len(), 2);

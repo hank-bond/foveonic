@@ -47,8 +47,6 @@ pub(crate) struct PhotoInputs<'a, T> {
     pub path: PathBuf,
     /// The request its images are planned from; `None` until its settings load.
     pub request: Option<RenderRequest>,
-    /// Its settings could not be resolved.
-    pub failed: bool,
     pub images: PhotoImages<'a, T>,
     /// Whether the photo's rendered image supports regional patches for its
     /// request; `None` while it has no image.
@@ -74,7 +72,7 @@ pub(crate) struct Publication {
     pub photos: Photos,
     pub planned: Vec<Planned>,
     pub views: HashMap<PathBuf, PhotoView>,
-    /// Each loading or failed photo with its reason, for diagnostics.
+    /// Each loading photo with its reason, for diagnostics.
     pub unplanned: Vec<(PathBuf, &'static str)>,
     pub last_request_id: RequestId,
     /// The selected photo's first image, which leads the progress pass.
@@ -113,12 +111,6 @@ pub(crate) fn plan_photos<T: Rendered>(
             }
             settled
         };
-        // A photo whose settings could not be read plans nothing, so its work stops.
-        if input.failed {
-            unplanned.push((path.clone(), "failed"));
-            viewport.push(path);
-            continue;
-        }
         // A loading photo keeps its work and draws from its last view.
         let Some(mut request) = input.request.clone() else {
             if let Some(view) = previous_views.remove(&path) {
@@ -178,31 +170,20 @@ pub(crate) fn plan_photos<T: Rendered>(
     }
     // A photo that zooms in again starts without motion, so its first patch is immediate.
     motion.retain(|path, _| keep_motion.contains(path));
-    // The coordinator keeps a replaced request's place in its queue, so whole
-    // images wait until no viewport photo needs a patch.
-    let patches_needed = patches.iter().any(|patch| !patch.ready);
+    // The executor starts images in this order within a priority tier, and
+    // passes over one waiting for its original, so a read holds back nothing.
     patches.sort_by_key(|patch| planning.selected != Some(patch.request.path.as_path()));
     let planned = patches
         .into_iter()
-        .map(|image| (image, false, true))
-        .chain(
-            wholes
-                .into_iter()
-                .map(|image| (image, false, !patches_needed)),
-        )
-        .chain(
-            fulls
-                .into_iter()
-                .map(|image| (image, true, !patches_needed)),
-        )
-        .map(|(image, speculative, turn)| Planned {
+        .chain(wholes)
+        .map(|image| (image, false))
+        .chain(fulls.into_iter().map(|image| (image, true)))
+        .map(|(image, speculative)| Planned {
             tracked: tracked.iter().position(|id| *id == image.request.id),
             state: if image.ready {
                 ImageState::Ready
-            } else if turn {
-                ImageState::Render
             } else {
-                ImageState::Waiting
+                ImageState::Render
             },
             request: image.request,
             speculative,
@@ -213,6 +194,12 @@ pub(crate) fn plan_photos<T: Rendered>(
             planned: viewport,
             loading,
             history: Vec::new(),
+            eviction_protected: planning
+                .selected
+                .map(Path::to_path_buf)
+                .into_iter()
+                .chain(planning.editing.iter().cloned())
+                .collect(),
         },
         planned,
         views,

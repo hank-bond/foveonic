@@ -40,9 +40,14 @@ pub(super) enum Work {
     Prepare(Arc<super::PreparationConfig>),
 }
 
+/// Picks, scopes and idle preparation follow the planned renders of their tier.
+const AFTER_PLAN: usize = usize::MAX;
+
 pub(super) struct WorkJob {
     target: JobTarget,
     purpose: Purpose,
+    /// The render's place in the latest work plan, which lists the planner's order.
+    rank: usize,
     work: Work,
 }
 
@@ -62,6 +67,9 @@ impl Job for WorkJob {
             Work::Render(render) => Some(&render.task.request.path),
             _ => None,
         }
+    }
+    fn rank(&self) -> usize {
+        self.rank
     }
 }
 
@@ -91,8 +99,7 @@ pub(super) struct WorkerHost {
     pub(super) target: MemoryTarget,
     pub(super) pending_images: Vec<crate::memory::PendingImage>,
     preparation: super::preparation::Preparation,
-    /// Idle preparation found nothing to do for this configuration and cache generation.
-    preparation_exhausted: Option<(Arc<super::PreparationConfig>, u64)>,
+    preparation_exhausted: Option<super::preparation::Exhausted>,
     pub(super) sources: crate::rendering::source_loader::Handle,
     slot: Slot,
     tx: crossbeam_channel::Sender<Update>,
@@ -114,8 +121,8 @@ pub(super) struct WorkerHost {
     pub(super) disconnected: bool,
     /// A job finished since the last trim, so memory may need restoring to the target.
     finished_since_trim: bool,
-    /// The working photo each viewport task last rendered from.
-    viewport_keys: HashMap<crate::rendering::coordinator::Target, PhotoKey>,
+    /// The working photo each target last rendered from, kept while it is loaded.
+    rendered_from: HashMap<crate::rendering::coordinator::Target, PhotoKey>,
     image_cache: foveonic::render::ImageCache,
     #[cfg(test)]
     pub(super) observations: Arc<super::Checks>,
@@ -151,7 +158,7 @@ impl WorkerHost {
             context,
             diagnostic_work,
             served: HashSet::new(),
-            viewport_keys: HashMap::new(),
+            rendered_from: HashMap::new(),
             served_pick: None,
             served_scopes: None,
             resubmit: Vec::new(),
@@ -182,8 +189,9 @@ impl WorkerHost {
     pub(super) fn sync(&mut self, scheduler: &mut Scheduler<WorkJob>) {
         let state = self.slot.0.lock().unwrap();
         let plan = state.plan.clone();
-        self.viewport_keys
-            .retain(|target, _| plan.wanted.contains(target));
+        let photos = &self.photos;
+        self.rendered_from
+            .retain(|target, _| photos.id(&target.path).is_some());
         self.served
             .retain(|stamp| plan.tasks.iter().any(|task| task.stamp == *stamp));
         let served = &self.served;
@@ -205,7 +213,20 @@ impl WorkerHost {
                 .as_ref()
                 .is_some_and(|current| Arc::ptr_eq(current, config)),
         });
-        for task in &plan.tasks {
+        // Queued renders take their place in the new plan without losing
+        // whether they wait for an original or were deferred.
+        scheduler.update_queued(|job| {
+            if let Work::Render(render) = &job.work {
+                if let Some(rank) = plan
+                    .tasks
+                    .iter()
+                    .position(|task| task.stamp == render.task.stamp)
+                {
+                    job.rank = rank;
+                }
+            }
+        });
+        for (rank, task) in plan.tasks.iter().enumerate() {
             if self.served.contains(&task.stamp) {
                 continue;
             }
@@ -220,6 +241,7 @@ impl WorkerHost {
                 scheduler.submit(WorkJob {
                     target: JobTarget::Render(task.stamp.target.clone()),
                     purpose,
+                    rank,
                     work: Work::Render(RenderWork {
                         task: task.clone(),
                         refresh: false,
@@ -237,6 +259,7 @@ impl WorkerHost {
                 scheduler.submit(WorkJob {
                     target: JobTarget::Pick,
                     purpose: Purpose::View,
+                    rank: AFTER_PLAN,
                     work: Work::Pick(pick.clone()),
                 });
             }
@@ -253,16 +276,17 @@ impl WorkerHost {
                 scheduler.submit(WorkJob {
                     target: JobTarget::Scopes,
                     purpose: Purpose::Auxiliary,
+                    rank: AFTER_PLAN,
                     work: Work::Scopes(scopes.clone()),
                 });
             }
         }
         if let Some(config) = state.preparation.clone() {
-            let generation = self.cache.preparation_window().0;
+            let window = self.cache.preparation_window();
             let exhausted = self
                 .preparation_exhausted
                 .as_ref()
-                .is_some_and(|(done, at)| Arc::ptr_eq(done, &config) && *at == generation);
+                .is_some_and(|done| done.covers(&config, &window));
             if !exhausted
                 && !scheduler
                     .queued()
@@ -271,6 +295,7 @@ impl WorkerHost {
                 scheduler.submit(WorkJob {
                     target: JobTarget::Prepare,
                     purpose: Purpose::Speculative,
+                    rank: AFTER_PLAN,
                     work: Work::Prepare(config),
                 });
             }
@@ -292,13 +317,19 @@ impl WorkerHost {
     }
 
     /// Trim to the target and publish memory status after a job finishes or while
-    /// nothing is admitted. Visibility is refreshed first, so a photo loaded during
+    /// nothing is admitted. Protection is refreshed first, so a photo loaded during
     /// this tick is already protected.
     pub(super) fn trim(&mut self, scheduler: &mut Scheduler<WorkJob>) {
         if !std::mem::take(&mut self.finished_since_trim) && scheduler.admitted().next().is_some() {
             return;
         }
-        scheduler.set_visible(self.viewport_keys.values().copied());
+        let plan = self.slot.0.lock().unwrap().plan.clone();
+        scheduler.set_eviction_protected(
+            self.rendered_from
+                .iter()
+                .filter(|(target, _)| plan.eviction_protected.contains(target))
+                .map(|(_, key)| *key),
+        );
         let target = self.target.bytes;
         let inventory = memory_inventory(
             &self.presented,
@@ -465,7 +496,7 @@ impl WorkerHost {
                 native.source().origin().clone(),
             )
         };
-        self.viewport_keys.insert(task.stamp.target.clone(), key);
+        self.rendered_from.insert(task.stamp.target.clone(), key);
         reporter.loaded(foveonic::source::LoadStage::Decoded);
         let (mut settings, defaults_errors) = resolve_settings(request, &metadata, None)?;
         if let Some(quality) = composition_quality {
@@ -882,7 +913,7 @@ impl WorkerHost {
                     .as_ref()
                     .is_none_or(|current| !Arc::ptr_eq(current, config))
         };
-        let generation = self.cache.preparation_window().0;
+        let window = self.cache.preparation_window();
         if !self.preparation.run_one(
             config,
             &self.cache,
@@ -893,7 +924,8 @@ impl WorkerHost {
             self.target.bytes,
             &pending,
         ) {
-            self.preparation_exhausted = Some((config.clone(), generation));
+            self.preparation_exhausted =
+                Some(super::preparation::Exhausted::new(config.clone(), window));
         }
         Start::Finished
     }
@@ -1081,6 +1113,7 @@ impl foveonic::render::Host<WorkJob> for WorkerHost {
         let WorkJob {
             target,
             purpose,
+            rank,
             work,
         } = job;
         let Work::Render(mut render) = work else {
@@ -1102,6 +1135,7 @@ impl foveonic::render::Host<WorkJob> for WorkerHost {
                 self.resubmit.push(WorkJob {
                     target,
                     purpose,
+                    rank,
                     work: Work::Render(render),
                 });
             }

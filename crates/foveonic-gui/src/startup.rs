@@ -2,7 +2,7 @@
 
 use crate::{diagnostics, display, preferences, timing, widgets, App};
 use eframe::{egui, egui_wgpu};
-use foveonic::{diagnostics as trace, render::Settings};
+use foveonic::diagnostics as trace;
 use std::{
     path::PathBuf,
     sync::{
@@ -119,7 +119,6 @@ pub(crate) struct Inputs {
     pub preferences: preferences::Preferences,
     pub target: display::Target,
     pub path: Option<PathBuf>,
-    pub settings: Settings,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -333,7 +332,6 @@ impl Startup {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         path: Option<PathBuf>,
-        settings: Settings,
         mut capture: Capture,
         observations: Arc<Observations>,
         workspace: egui::ViewportBuilder,
@@ -377,7 +375,6 @@ impl Startup {
             preferences: preferences.clone(),
             target: display.target,
             path,
-            settings,
         };
         let observed = observations.clone();
         let preparation = Preparation::new(move |progress| {

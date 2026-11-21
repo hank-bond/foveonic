@@ -73,7 +73,7 @@ fn copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_err
         Some(photo.rating)
     );
     assert_eq!(
-        foveonic::sidecar::load(&original).unwrap(),
+        foveonic::sidecar::load(&original).unwrap().settings(),
         Some(settings.clone())
     );
     photo.settings.exposure = 1.25;
@@ -90,10 +90,15 @@ fn copy_only_import_honors_overwrite_and_rename_and_keeps_completed_files_on_err
     .unwrap();
     assert_eq!(renamed, PathBuf::from("blue-parking-sign-1.x3f"));
     assert_eq!(
-        foveonic::sidecar::load(&destination.path().join(renamed)).unwrap(),
+        foveonic::sidecar::load(&destination.path().join(renamed))
+            .unwrap()
+            .settings(),
         Some(photo.settings)
     );
-    assert_eq!(foveonic::sidecar::load(&original).unwrap(), Some(settings));
+    assert_eq!(
+        foveonic::sidecar::load(&original).unwrap().settings(),
+        Some(settings)
+    );
     assert_eq!(
         serde_json::to_value(engine.gpu_activity()).unwrap(),
         before,
@@ -223,7 +228,7 @@ fn scanning_restores_destination_decisions_without_decoding_originals() {
 }
 
 #[test]
-fn history_matching_and_hidden_identity_do_not_require_a_readable_editing_recipe() {
+fn history_matching_and_hidden_identity_do_not_require_a_usable_editing_recipe() {
     let source = tempfile::tempdir().unwrap();
     let destination = tempfile::tempdir().unwrap();
     let path = source.path().join("image.x3f");
@@ -256,7 +261,14 @@ fn history_matching_and_hidden_identity_do_not_require_a_readable_editing_recipe
         files: vec![path.clone()],
     };
     let scan = read_settings(&scan, &cache, || false).unwrap();
-    assert_eq!(scan.errors.len(), 1);
+    // The malformed recipe is reported and the photo falls back to source
+    // defaults, which these placeholder bytes cannot provide.
+    assert_eq!(scan.errors.len(), 2, "{:?}", scan.errors);
+    assert!(
+        scan.errors[0].contains(".foveonic.json"),
+        "{:?}",
+        scan.errors
+    );
     assert_eq!(scan.sources[&path].identity, identity);
     assert!(scan.sources[&path].settings.is_err());
     assert!(matches!(recorded.dispositions[&path], Disposition::Hidden));
@@ -388,7 +400,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
     }
     let original = destination.join("x3f").join(path.file_name().unwrap());
     assert_eq!(
-        foveonic::sidecar::load(&original).unwrap(),
+        foveonic::sidecar::load(&original).unwrap().settings(),
         Some(frozen.clone())
     );
     assert_eq!(Identity::read(&original).unwrap(), identity);

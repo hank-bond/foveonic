@@ -257,7 +257,6 @@ pub(super) struct Scenario {
     action: Option<Action>,
     step: u64,
     began: Instant,
-    minimum_revision: u64,
     observed: BTreeMap<PathBuf, u64>,
     results: Vec<serde_json::Value>,
     rapid_left: usize,
@@ -536,7 +535,6 @@ impl Scenario {
             action: None,
             step: 0,
             began: Instant::now(),
-            minimum_revision: 0,
             observed: BTreeMap::new(),
             results: vec![],
             rapid_left: 0,
@@ -629,7 +627,7 @@ impl Scenario {
         }
         match self.phase {
             Phase::Setup => {
-                if app.view_busy() || !app.sidecars.ready() || app.active_image().is_none() {
+                if app.view_busy() || !app.selection_loaded() || app.active_image().is_none() {
                     return;
                 }
                 app.preferences.multi_edit_limit = self.config.photo_count;
@@ -693,7 +691,7 @@ impl Scenario {
             Phase::Folder => {
                 if app.folder_loader.loading()
                     || app.browser.import_mode != (self.config.folder_mode == FolderMode::Import)
-                    || !app.sidecars.ready()
+                    || !app.selection_loaded()
                     || app.view_busy()
                 {
                     return;
@@ -718,7 +716,7 @@ impl Scenario {
                     }
                     return;
                 }
-                if app.view_busy() || !app.sidecars.ready() {
+                if app.view_busy() || !app.selection_loaded() {
                     return;
                 }
                 let ready = app.worker.cache.status().ready;
@@ -1023,7 +1021,6 @@ impl Scenario {
                     {
                         return;
                     }
-                    self.minimum_revision = app.last_request_id.next().0;
                     self.journey.as_mut().unwrap().model.adjust_exposure(0.0625);
                     apply_exposure(app, 0.0625);
                     self.update_journey_expectations();
@@ -1128,7 +1125,7 @@ impl Scenario {
                 for path in &self.targets {
                     if let Some(frame) = self
                         .frame(app, path)
-                        .filter(|frame| self.matches(app, path, frame, self.minimum_revision))
+                        .filter(|frame| self.matches(app, path, frame))
                     {
                         if !self.observed.contains_key(path) {
                             self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.request.id,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.expected_frame_quality()), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
@@ -1136,7 +1133,7 @@ impl Scenario {
                         }
                     }
                 }
-                if !self.ready(app, self.minimum_revision) {
+                if !self.ready(app) {
                     self.ready_time = None;
                     return;
                 }
@@ -1336,7 +1333,6 @@ impl Scenario {
                         "pending":self.failed.as_ref().map(|_|serde_json::json!({
                             "application":app.diagnostic_state(),
                             "action":self.action.map(Action::name),
-                            "minimum_revision":self.minimum_revision,
                             "targets":self.targets.iter().map(|path|serde_json::json!({
                                 "source":path,"expected_final":self.expected.get(path),
                                 "editor_requested":app.multi_edit.settings(path),
@@ -1346,7 +1342,7 @@ impl Scenario {
                                     "presentation_revision":frame.request.id,"requested":frame.request.settings,
                                     "scale_divisor":frame.artifact.settings.working_scale.divisor(),
                                     "current_view":app.shows_current_view(frame),
-                                    "matches_expected_final":self.matches(app,path,frame,self.minimum_revision),
+                                    "matches_expected_final":self.matches(app,path,frame),
                                 })),
                             })).collect::<Vec<_>>(),
                         })),
@@ -1599,11 +1595,10 @@ impl Scenario {
         app: &App,
         path: &PathBuf,
         frame: &crate::rendering::worker::RenderResult,
-        minimum: u64,
     ) -> bool {
+        // An image already current for the view counts, as the planner reuses it.
         frame.request.rendition == crate::editor::Rendition::Current
-            && (matches!(self.action, Some(Action::CacheWorkflow))
-                || frame.diagnostic_task.revision >= minimum)
+            && (matches!(self.action, Some(Action::CacheWorkflow)) || app.shows_current_view(frame))
             && (matches!(self.action, Some(Action::CacheWorkflow))
                 || frame.processing_quality() == self.expected_frame_quality()
                     && frame.artifact.settings.working_scale.divisor()
@@ -1617,15 +1612,15 @@ impl Scenario {
                     .unwrap_or_else(|| self.settings(app, path)),
             )
     }
-    fn ready(&self, app: &App, minimum: u64) -> bool {
+    fn ready(&self, app: &App) -> bool {
         !app.view_busy()
             // Coordinator idleness can become visible before the UI settles progress.
             && app.worker.progress.snapshot().is_none_or(|progress| !progress.running())
-            && app.sidecars.ready()
+            && app.selection_loaded()
             && app.multi_edit.editable_ready()
             && self.targets.iter().all(|path| {
                 self.frame(app, path)
-                    .is_some_and(|frame| self.matches(app, path, frame, minimum))
+                    .is_some_and(|frame| self.matches(app, path, frame))
             })
     }
     fn edit(&mut self, app: &mut App, delta: f64) {
@@ -1670,7 +1665,6 @@ impl Scenario {
         self.observed.clear();
         self.ready_time = None;
         self.began = Instant::now();
-        self.minimum_revision = 0;
         self.ui_started.get_or_insert_with(Instant::now);
         self.observe_ui(app, ctx);
         match action {
@@ -1773,7 +1767,6 @@ impl Scenario {
         self.marker("begin", expectation);
         match action {
             Action::Initial => {
-                self.minimum_revision = app.last_request_id.next().0;
                 if self.config.name != Case::PrefetchedSelection {
                     // Start cold: no work and no images to reuse.
                     app.worker.clear_all();
@@ -1788,11 +1781,9 @@ impl Scenario {
                 }
             }
             Action::Edit(delta) => {
-                self.minimum_revision = app.last_request_id.next().0;
                 self.edit(app, delta);
             }
             Action::PrepareGrid => {
-                self.minimum_revision = app.last_request_id.next().0;
                 self.edit(app, 0.125);
             }
             Action::Switch(index) => self.click(app, ctx, smoke, index, egui::Modifiers::NONE),
@@ -1802,7 +1793,6 @@ impl Scenario {
             }
             Action::Readd => self.click(app, ctx, smoke, 1, egui::Modifiers::ALT),
             Action::Rapid => {
-                self.minimum_revision = app.last_request_id.next().0;
                 self.rapid_left = self.config.rapid_edits;
             }
             Action::Pressure => {

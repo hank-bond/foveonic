@@ -110,10 +110,13 @@ fn photographic_shadow_limit_sweep() {
     std::fs::create_dir_all(&directory).unwrap();
     let source = Arc::new(Source::open(&path).unwrap());
     let caps = ControlCapabilities::from_metadata(&source.metadata).unwrap();
-    let mut settings = crate::sidecar::load(&path).unwrap().unwrap_or_else(|| {
-        caps.editing_defaults(&source.metadata, Rendering::Color)
-            .unwrap()
-    });
+    let mut settings = crate::sidecar::load(&path)
+        .unwrap()
+        .settings()
+        .unwrap_or_else(|| {
+            caps.editing_defaults(&source.metadata, Rendering::Color)
+                .unwrap()
+        });
     settings.processing_quality = ProcessingQuality::Speed;
     if settings.white_balance.is_empty() {
         settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();

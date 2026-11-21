@@ -138,7 +138,7 @@ def cancelled_prefetch_reads(events):
             if scope['name'] == 'cache.processing.prefetch':
                 outcome = outcomes.get(parent)
                 if (outcome and outcome['args'].get('outcome') == 'interrupted'
-                        and miss and miss['args'].get('reason') == 'background prefetch interrupted'
+                        and miss and miss['args'].get('reason') == 'lower-priority work interrupted'
                         and fields.get('source')
                         and outcome['args'].get('source') == fields['source']
                         and miss['args'].get('source') == fields['source']):

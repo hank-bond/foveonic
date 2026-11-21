@@ -9,7 +9,7 @@ impl App {
         if self.editor_ui.actions.is_empty() {
             return false;
         }
-        if !self.sidecars.ready() {
+        if !self.selection_loaded() {
             self.editor_ui.actions.clear();
             return false;
         }

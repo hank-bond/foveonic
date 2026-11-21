@@ -16,32 +16,28 @@ mod tests;
 
 #[derive(Default)]
 struct Pending {
-    load: Option<(u64, PathBuf, foveonic::render::RecipeDefaults)>,
     saves: BTreeMap<PathBuf, Settings>,
     resolve: VecDeque<(u64, PathBuf, foveonic::render::RecipeDefaults)>,
     stop: bool,
 }
 enum Reply {
-    Loaded(
-        u64,
-        PathBuf,
-        Result<Option<Settings>, String>,
-        Box<Settings>,
-    ),
     Saved(PathBuf, Settings, Result<(), String>),
-    Resolved(u64, PathBuf, Result<Settings, String>),
+    Resolved(u64, PathBuf, Settings, Option<String>),
 }
 pub struct Resolved {
     pub path: PathBuf,
-    pub settings: Result<Settings, String>,
+    pub settings: Settings,
 }
+/// A photo's saved recipe, or its source defaults when it has none, with a
+/// warning when the recipe could not be used. A malformed recipe opens with
+/// defaults and the next edit replaces it. A recipe file that cannot be read
+/// also opens with defaults, but saving will not replace it.
 fn restore(
     path: &std::path::Path,
-    recent: Option<Settings>,
     defaults: &foveonic::render::RecipeDefaults,
     enabled: bool,
     cache: &foveonic::decode_cache::Cache,
-) -> (Result<Option<Settings>, String>, Settings) {
+) -> (Settings, Option<String>) {
     let _restore = trace::scope_with(trace::Category::Cpu, "sidecars.restore", |fields| {
         fields
             .str("source", &path.to_string_lossy())
@@ -55,33 +51,45 @@ fn restore(
             fields.bool("hit", cached.is_some());
         },
     );
-    let result = if enabled {
-        (if let Some(cached) = &cached {
-            Ok(cached.settings.clone())
-        } else {
-            sidecar::load(path)
-        })
-        .map(|saved| recent.or(saved))
-        .map_err(|error| {
-            foveonic::support::report_error(
-                "sidecar.load",
-                error.as_ref(),
-                foveonic::support::OperationContext {
-                    source: Some(path.to_string_lossy().into_owned()),
-                    phase: Some("restore edits".into()),
-                    ..Default::default()
-                },
-            );
-            error.to_string()
-        })
+    let report = |error: &(dyn std::error::Error + 'static)| {
+        foveonic::support::report_error(
+            "sidecar.load",
+            error,
+            foveonic::support::OperationContext {
+                source: Some(path.to_string_lossy().into_owned()),
+                phase: Some("restore edits".into()),
+                ..Default::default()
+            },
+        );
+    };
+    let (saved, warning) = if !enabled {
+        (None, None)
+    } else if let Some(cached) = &cached {
+        (cached.settings.clone(), None)
     } else {
-        Ok(None)
+        match sidecar::load(path) {
+            Ok(sidecar::Saved::Malformed(error)) => {
+                report(error.as_ref());
+                (
+                    None,
+                    Some(format!("Recipe malformed or from a newer version; opened with defaults, and the next edit replaces it: {error}")),
+                )
+            }
+            Ok(saved) => (saved.settings(), None),
+            Err(error) => {
+                report(error.as_ref());
+                (
+                    None,
+                    Some(format!(
+                        "Recipe unreadable; opened with defaults, and edits are not saved over it: {error}"
+                    )),
+                )
+            }
+        }
     };
     // Only a missing recipe gets source defaults. Saved recipes,
     // including explicit neutral values, are complete edits.
-    let fresh = if matches!(&result, Ok(Some(_))) {
-        Settings::default()
-    } else {
+    let settings = saved.unwrap_or_else(|| {
         cached
             .map(|s| s.properties)
             .map(Ok)
@@ -89,8 +97,8 @@ fn restore(
             .ok()
             .and_then(|properties| source_defaults(properties, defaults).ok())
             .unwrap_or_default()
-    };
-    (result, fresh)
+    });
+    (settings, warning)
 }
 
 /// An immutable recipe snapshot for optional work on already-local sources.
@@ -141,30 +149,18 @@ impl Store {
         let builder = std::thread::Builder::new().name("sidecars".into());
         let thread = builder.spawn(move || loop {
             enum Job {
-                Load(
-                    u64,
-                    PathBuf,
-                    Option<Settings>,
-                    foveonic::render::RecipeDefaults,
-                ),
-                Save(PathBuf, Settings),
+                // Boxed so the queue's job stays small beside resolutions.
+                Save(PathBuf, Box<Settings>),
                 Resolve(u64, PathBuf, foveonic::render::RecipeDefaults),
             }
             let job = {
                 let (lock, wake) = &*slot;
                 let mut state = lock.lock().unwrap();
-                while state.load.is_none()
-                    && state.saves.is_empty()
-                    && state.resolve.is_empty()
-                    && !state.stop
-                {
+                while state.saves.is_empty() && state.resolve.is_empty() && !state.stop {
                     state = wake.wait(state).unwrap();
                 }
-                if let Some((generation, path, defaults)) = state.load.take() {
-                    let recent = state.saves.get(&path).cloned();
-                    Job::Load(generation, path, recent, defaults)
-                } else if let Some((path, settings)) = state.saves.pop_first() {
-                    Job::Save(path, settings)
+                if let Some((path, settings)) = state.saves.pop_first() {
+                    Job::Save(path, Box::new(settings))
                 } else if let Some((generation, path, defaults)) = state.resolve.pop_front() {
                     Job::Resolve(generation, path, defaults)
                 } else {
@@ -187,40 +183,8 @@ impl Store {
                                 .u64("generation", generation)
                                 .str("source", &path.to_string_lossy());
                         });
-                    let (saved, fresh) = restore(&path, None, &defaults, enabled, &cache);
-                    trace::event(
-                        trace::Category::Coordinator,
-                        "sidecars.resolve_result",
-                        |fields| {
-                            fields.bool("success", saved.is_ok());
-                        },
-                    );
-                    Reply::Resolved(generation, path, saved.map(|saved| saved.unwrap_or(fresh)))
-                }
-                Job::Load(generation, path, recent, defaults) => {
-                    let _context = trace::enabled().then(|| {
-                        trace::enter(crate::timing::context_for(
-                            0,
-                            generation,
-                            &path,
-                            "sidecar_load",
-                        ))
-                    });
-                    let _job =
-                        trace::scope_with(trace::Category::Cpu, "sidecars.load_job", |fields| {
-                            fields
-                                .u64("generation", generation)
-                                .str("source", &path.to_string_lossy());
-                        });
-                    let (result, fresh) = restore(&path, recent, &defaults, enabled, &cache);
-                    trace::event(
-                        trace::Category::Coordinator,
-                        "sidecars.load_result",
-                        |fields| {
-                            fields.bool("success", result.is_ok());
-                        },
-                    );
-                    Reply::Loaded(generation, path, result, Box::new(fresh))
+                    let (settings, warning) = restore(&path, &defaults, enabled, &cache);
+                    Reply::Resolved(generation, path, settings, warning)
                 }
                 Job::Save(path, settings) => {
                     let _context = trace::enabled().then(|| {
@@ -252,7 +216,7 @@ impl Store {
                     if let Err(error) = &result {
                         eprintln!("Cannot save edits for {}: {error}", path.display());
                     }
-                    Reply::Saved(path, settings, result)
+                    Reply::Saved(path, *settings, result)
                 }
             };
             let _ = sender.send(reply);
@@ -265,20 +229,6 @@ impl Store {
             thread: Some(thread),
         }
     }
-    fn load(&self, generation: u64, path: PathBuf, defaults: foveonic::render::RecipeDefaults) {
-        trace::event(
-            trace::Category::Coordinator,
-            "sidecars.load_requested",
-            |fields| {
-                fields
-                    .u64("generation", generation)
-                    .str("source", &path.to_string_lossy());
-            },
-        );
-        let (lock, wake) = &*self.pending;
-        lock.lock().unwrap().load = Some((generation, path, defaults));
-        wake.notify_one();
-    }
     fn save(&self, path: PathBuf, settings: Settings) {
         let (lock, wake) = &*self.pending;
         lock.lock().unwrap().saves.insert(path, settings);
@@ -289,12 +239,11 @@ impl Drop for Store {
     fn drop(&mut self) {
         let (lock, wake) = &*self.pending;
         let mut state = lock.lock().unwrap();
-        state.load = None;
         state.resolve.clear();
         state.stop = true;
         wake.notify_one();
         drop(state);
-        // Switching photos does not cancel unsaved edits. Finish requested writes
+        // Changing photos does not cancel unsaved edits. Finish requested writes
         // on shutdown so the latest settings are not lost when the window closes.
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -306,12 +255,6 @@ pub struct Session {
     defaults: foveonic::render::RecipeDefaults,
     store: Store,
     enabled: bool,
-    generation: u64,
-    selected: Option<PathBuf>,
-    ready: bool,
-    writable: bool,
-    dirty: bool,
-    last_queued: Option<Settings>,
     unsaved: BTreeMap<PathBuf, Settings>,
     errors: BTreeMap<PathBuf, String>,
     memory_only: bool,
@@ -329,12 +272,6 @@ impl Session {
             defaults: Default::default(),
             store: Store::new(ctx, enabled, cache),
             enabled,
-            generation: 0,
-            selected: None,
-            ready: false,
-            writable: false,
-            dirty: false,
-            last_queued: None,
             unsaved: BTreeMap::new(),
             errors: BTreeMap::new(),
             memory_only: false,
@@ -343,29 +280,6 @@ impl Session {
             resolved: Vec::new(),
         }
     }
-    pub fn select(&mut self, path: PathBuf) {
-        self.generation += 1;
-        self.selected = Some(path.clone());
-        self.ready = false;
-        self.writable = false;
-        self.dirty = false;
-        self.last_queued = None;
-        self.store
-            .load(self.generation, path, self.defaults.clone());
-    }
-    pub fn clear(&mut self) {
-        self.generation += 1;
-        self.selected = None;
-        self.ready = false;
-        self.writable = false;
-        self.dirty = false;
-        self.last_queued = None;
-        self.store.pending.0.lock().unwrap().load = None;
-    }
-    pub fn ready(&self) -> bool {
-        self.ready
-    }
-
     pub fn set_defaults(&mut self, defaults: &foveonic::render::RecipeDefaults) {
         self.defaults = defaults.clone();
     }
@@ -373,7 +287,6 @@ impl Session {
     /// Import review retains requested edits until another folder is opened.
     /// Already queued ordinary-folder saves still finish on the existing writer.
     pub fn set_memory_only(&mut self, enabled: bool) {
-        self.clear();
         self.memory_only = enabled;
         self.requested.clear();
         self.resolve_settings(&[]);
@@ -407,7 +320,7 @@ impl Session {
             if let Some(settings) = self.requested_settings(path).cloned() {
                 self.resolved.push(Resolved {
                     path: path.clone(),
-                    settings: Ok(settings),
+                    settings,
                 });
             } else {
                 pending.push_back((self.resolve_generation, path.clone(), self.defaults.clone()));
@@ -421,14 +334,18 @@ impl Session {
         std::mem::take(&mut self.resolved)
     }
 
-    /// An older load must not replace the settings for the photo now selected.
-    pub fn receive(&mut self) -> Option<Settings> {
-        let mut loaded = None;
+    /// Collect finished resolutions and saves. An older resolution is ignored.
+    pub fn receive(&mut self) {
         while let Ok(reply) = self.store.replies.try_recv() {
             match reply {
-                Reply::Resolved(generation, path, settings)
+                Reply::Resolved(generation, path, settings, warning)
                     if generation == self.resolve_generation =>
                 {
+                    if let Some(warning) = warning {
+                        self.errors.insert(path.clone(), warning);
+                    } else if !self.unsaved.contains_key(&path) {
+                        self.errors.remove(&path);
+                    }
                     trace::event(
                         trace::Category::Coordinator,
                         "sidecars.resolve_received",
@@ -439,53 +356,8 @@ impl Session {
                         },
                     );
                     // An edit can arrive while a background read is completing.
-                    let settings = self
-                        .requested_settings(&path)
-                        .cloned()
-                        .map(Ok)
-                        .unwrap_or(settings);
+                    let settings = self.requested_settings(&path).cloned().unwrap_or(settings);
                     self.resolved.push(Resolved { path, settings });
-                }
-                Reply::Loaded(generation, path, result, fresh)
-                    if generation == self.generation && self.selected.as_ref() == Some(&path) =>
-                {
-                    trace::event(
-                        trace::Category::Coordinator,
-                        "sidecars.load_received",
-                        |fields| {
-                            fields
-                                .u64("generation", generation)
-                                .str("source", &path.to_string_lossy());
-                        },
-                    );
-                    self.ready = true;
-                    match result {
-                        Ok(saved) => {
-                            self.writable = true;
-                            if !self.unsaved.contains_key(&path) {
-                                self.errors.remove(&path);
-                            }
-                            loaded = Some(
-                                self.requested
-                                    .get(&path)
-                                    .filter(|_| self.memory_only)
-                                    .cloned()
-                                    .or_else(|| self.unsaved.get(&path).cloned())
-                                    .or(saved)
-                                    .unwrap_or(*fresh),
-                            );
-                        }
-                        Err(error) => {
-                            self.writable = false;
-                            self.errors.insert(
-                                path,
-                                format!(
-                                    "Cannot restore edits; automatic saving is disabled: {error}"
-                                ),
-                            );
-                            loaded = Some(*fresh);
-                        }
-                    }
                 }
                 Reply::Saved(path, settings, result)
                     if self.unsaved.get(&path) == Some(&settings) =>
@@ -511,54 +383,16 @@ impl Session {
                 _ => {}
             }
         }
-        loaded
     }
-    /// A completed frame can lag behind the controls. Save the requested edits
-    /// so a quick switch or shutdown does not lose the latest slider value.
-    pub fn edited(&mut self, settings: &Settings) {
-        if self.ready {
-            self.dirty = true;
-        }
-        self.refresh(settings);
-    }
-
-    /// Apply an explicit edit to a browser target. Unviewed photos use the same
-    /// coalescing writer and malformed-recipe protection as the active photo.
+    /// Record a photo's edited settings and save them through the coalescing writer.
     pub fn apply(&mut self, path: PathBuf, settings: Settings) {
-        if self.selected.as_ref() == Some(&path) {
-            self.edited(&settings);
+        if self.requested.get(&path) == Some(&settings) {
             return;
         }
         self.requested.insert(path.clone(), settings.clone());
         if self.enabled && !self.memory_only {
             self.unsaved.insert(path.clone(), settings.clone());
             self.store.save(path, settings);
-        }
-    }
-    /// Resolve recorded camera choices after metadata arrives without losing pre-load edits.
-    pub fn refresh(&mut self, settings: &Settings) {
-        if self.ready {
-            if let Some(path) = &self.selected {
-                if self.requested.get(path) != Some(settings) {
-                    self.requested.insert(path.clone(), settings.clone());
-                }
-            }
-        }
-        if self.memory_only {
-            return;
-        }
-        if !self.enabled
-            || !self.ready
-            || !self.writable
-            || !self.dirty
-            || self.last_queued.as_ref() == Some(settings)
-        {
-            return;
-        }
-        if let Some(path) = &self.selected {
-            self.last_queued = Some(settings.clone());
-            self.unsaved.insert(path.clone(), settings.clone());
-            self.store.save(path.clone(), settings.clone());
         }
     }
     pub fn warning(&self) -> Option<String> {
@@ -570,16 +404,12 @@ impl Session {
             .map(|(path, error)| format!("{}: {error}", path.display()))
     }
     pub fn can_retry(&self) -> bool {
-        self.errors.keys().any(|path| {
-            self.unsaved.contains_key(path)
-                && (self.selected.as_deref() != Some(path.as_path()) || self.writable)
-        })
+        self.errors
+            .keys()
+            .any(|path| self.unsaved.contains_key(path))
     }
     pub fn retry(&mut self) {
         for path in self.errors.keys() {
-            if self.selected.as_deref() == Some(path.as_path()) && !self.writable {
-                continue;
-            }
             if let Some(settings) = self.unsaved.get(path) {
                 self.store.save(path.clone(), settings.clone());
             }
@@ -600,19 +430,4 @@ pub(crate) fn capture_defaults(
         return Ok(Settings::default());
     }
     foveonic::render::camera_settings_from_properties(properties)
-}
-
-/// Restored edits must not be replaced by per-photo defaults. Only explicit
-/// launch choices override their WB or mode.
-pub fn selection_settings(saved: Settings, overrides: &[String; 2]) -> Settings {
-    let mut settings = saved;
-    for (value, explicit) in [
-        (&mut settings.white_balance, &overrides[0]),
-        (&mut settings.color_mode, &overrides[1]),
-    ] {
-        if !explicit.is_empty() {
-            value.clone_from(explicit);
-        }
-    }
-    settings
 }

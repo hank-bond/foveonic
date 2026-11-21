@@ -283,14 +283,8 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
         std::thread::sleep(Duration::from_millis(5));
     }
     let mut sidecars = sidecars::Session::new(context.clone(), true, cache.clone());
-    sidecars.select(paths[0].clone());
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while sidecars.receive().is_none() {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(1));
-    }
     recipes[0].exposure = 1.2;
-    sidecars.edited(&recipes[0]);
+    sidecars.apply(paths[0].clone(), recipes[0].clone());
     let priority = cache.priority().demand(Priority::Viewport);
     let mut options = processing::Settings {
         format: ExportFormat::Tiff,
@@ -305,7 +299,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
     assert_eq!(options.conflict, ConflictPolicy::Rename);
     let mut later = recipes[0].clone();
     later.exposure = 2.2;
-    sidecars.edited(&later);
+    sidecars.apply(paths[0].clone(), later);
     browser.files.clear();
     review.prepare_browse(&browser, None);
     let source = Arc::new(foveonic::source::Source::open(&fixture).unwrap());

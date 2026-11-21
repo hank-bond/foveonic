@@ -57,16 +57,45 @@ impl App {
                 .flatten()
         })
     }
+    /// The look a photo shows: its rendition, or Current while Camera or
+    /// Defaults cannot be resolved yet, as before capture metadata arrives with
+    /// a Current image.
+    pub(crate) fn photo_look(&self, path: &std::path::Path) -> Rendition {
+        self.shown_look(path).0
+    }
+    /// The settings a photo's view renders, for its look.
     pub(crate) fn photo_view_settings(
         &self,
         path: &std::path::Path,
     ) -> Option<foveonic::render::Settings> {
+        self.shown_look(path).1
+    }
+    fn shown_look(
+        &self,
+        path: &std::path::Path,
+    ) -> (Rendition, Option<foveonic::render::Settings>) {
+        let rendition = self.photo_rendition(path);
+        if rendition != Rendition::Current {
+            if let Some(settings) = self.look_settings(path, rendition) {
+                return (rendition, Some(settings));
+            }
+        }
+        (
+            Rendition::Current,
+            self.look_settings(path, Rendition::Current),
+        )
+    }
+    fn look_settings(
+        &self,
+        path: &std::path::Path,
+        look: Rendition,
+    ) -> Option<foveonic::render::Settings> {
         let current = self.authored_settings(path)?;
-        let settings = if self.photo_rendition(path) == Rendition::Current {
+        let settings = if look == Rendition::Current {
             current.clone()
         } else {
             let metadata = self.photo_metadata(path);
-            self.before
+            Before { active: look }
                 .settings(
                     current,
                     metadata.as_deref(),
@@ -78,7 +107,7 @@ impl App {
     }
     /// Show the editing selection with `target`, or return to Current when it is already shown.
     pub(crate) fn toggle_before(&mut self, target: Rendition) {
-        if self.edit_selection.paths().is_empty() || !self.sidecars.ready() {
+        if self.edit_selection.paths().is_empty() || !self.selection_loaded() {
             return;
         }
         self.before.active = if self.before.active == target {

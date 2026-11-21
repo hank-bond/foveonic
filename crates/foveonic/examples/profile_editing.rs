@@ -346,7 +346,7 @@ fn render(
                 }
             }
             // The edited photo is the one a viewport shows, as in the application.
-            working.set_visible([PhotoKey {
+            working.set_eviction_protected([PhotoKey {
                 photo: *id,
                 resolution: Resolution::Reduced,
             }]);
@@ -474,7 +474,7 @@ fn main() -> Result<()> {
             let load_ms = began.elapsed().as_secs_f64() * 1000.;
             let capabilities = ControlCapabilities::from_metadata(&source.metadata)?;
             let mut initial = if run.sidecars {
-                foveonic::sidecar::load(path)?.ok_or_else(|| {
+                foveonic::sidecar::load(path)?.settings().ok_or_else(|| {
                     format!("--sidecars requires a saved recipe for {}", path.display())
                 })?
             } else {
@@ -531,7 +531,7 @@ fn main() -> Result<()> {
                         let id = photos.len() as u64;
                         let mut working = reduced_working.lock().unwrap();
                         working.insert_reduced(id, session, &photo_engine, Purpose::View)?;
-                        working.set_visible([PhotoKey {
+                        working.set_eviction_protected([PhotoKey {
                             photo: id,
                             resolution: Resolution::Reduced,
                         }]);

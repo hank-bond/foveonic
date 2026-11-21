@@ -141,7 +141,7 @@ impl Engine {
 
     /// Trim obsolete, then optional checkpoints and preparation no retained photo
     /// owns. Then drop whatever was used longest ago: one edit's restart inputs or a
-    /// whole working photo. Visible and guarded photos are never evicted. When they
+    /// whole working photo. Eviction-protected and guarded photos are never evicted. When they
     /// alone exceed the target, the overage is reported instead of rebuilding them
     /// after every render.
     pub fn trim_memory(

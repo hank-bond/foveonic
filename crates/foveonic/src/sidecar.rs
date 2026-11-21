@@ -150,45 +150,64 @@ fn schema_fields(
     }
 }
 
-/// A missing sidecar means start with defaults. Other errors need to reach the
-/// caller so an unreadable or newer recipe is not silently replaced.
-pub fn load(input: &Path) -> Result<Option<Settings>> {
+/// A photo's saved recipe as read from disk.
+#[derive(Debug)]
+pub enum Saved {
+    Missing,
+    Recipe(Box<Settings>),
+    /// Malformed or from a newer version. The photo opens with defaults and
+    /// the next save replaces it (owner, before 1.0).
+    Malformed(Box<dyn std::error::Error + Send + Sync>),
+}
+impl Saved {
+    /// The recipe's settings. `None` means the photo starts from defaults.
+    pub fn settings(self) -> Option<Settings> {
+        match self {
+            Self::Recipe(settings) => Some(*settings),
+            Self::Missing | Self::Malformed(_) => None,
+        }
+    }
+}
+
+/// Read a photo's recipe. Failing to read the file is an error, and `save`
+/// will not replace a recipe it could not read.
+pub fn load(input: &Path) -> Result<Saved> {
     load_at(&path(input))
 }
 
-fn load_at(destination: &Path) -> Result<Option<Settings>> {
+fn load_at(destination: &Path) -> Result<Saved> {
+    let unreadable = |error: std::io::Error| -> Box<dyn std::error::Error + Send + Sync> {
+        Box::new(SidecarError {
+            path: destination.into(),
+            source: Box::new(error),
+        })
+    };
     let file = match File::open(destination) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(Box::new(SidecarError {
-                path: destination.into(),
-                source: Box::new(error),
-            }))
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Saved::Missing),
+        Err(error) => return Err(unreadable(error)),
     };
     let mut bytes = Vec::new();
     file.take(MAX_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| SidecarError {
-            path: destination.into(),
-            source: Box::new(error),
-        })?;
-    decode(&bytes).map(Some).map_err(|error| {
-        Box::new(SidecarError {
+        .map_err(unreadable)?;
+    Ok(match decode(&bytes) {
+        Ok(settings) => Saved::Recipe(Box::new(settings)),
+        Err(error) => Saved::Malformed(Box::new(SidecarError {
             path: destination.into(),
             source: error,
-        }) as _
+        })),
     })
 }
 
-/// Do not overwrite a recipe we cannot read. A temporary file beside the
-/// destination lets replacement stay atomic and keeps the old recipe on failure.
-/// The original X3F is never opened for writing.
+/// Replace the photo's recipe, including a malformed one. A recipe file that
+/// cannot be read is kept. A temporary file beside the destination lets
+/// replacement stay atomic and keeps the old recipe on failure. The original
+/// X3F is never opened for writing.
 pub fn save(input: &Path, settings: &Settings) -> Result<()> {
     let bytes = encode(settings)?;
-    load(input)?;
     let destination = path(input);
+    load_at(&destination)?;
     // Create only our direct child. A missing source folder remains an error.
     match fs::create_dir(destination.parent().unwrap()) {
         Ok(()) => (),

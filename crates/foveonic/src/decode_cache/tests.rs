@@ -1706,3 +1706,17 @@ fn legacy_decode_survives_missing_or_changed_original() {
         assert!(!source.metadata.properties.contains_key("EXIF_CAPTURE_TAGS"));
     }
 }
+
+#[test]
+fn a_malformed_recipe_is_never_recorded_in_a_cached_selection() {
+    let fixture = Fixture::new();
+    let recorded = || super::selection::recorded_recipe(&fixture.source);
+    assert_eq!(
+        recorded().unwrap(),
+        None,
+        "a missing recipe records defaults"
+    );
+    fs::create_dir_all(crate::sidecar::path(&fixture.source).parent().unwrap()).unwrap();
+    fs::write(crate::sidecar::path(&fixture.source), b"malformed").unwrap();
+    assert!(recorded().is_err(), "readers must find and report it");
+}

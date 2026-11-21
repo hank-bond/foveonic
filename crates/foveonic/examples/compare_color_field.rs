@@ -105,7 +105,7 @@ fn main() -> Result<()> {
             continue;
         }
         let source = Source::open(&input)?;
-        let saved = sidecar::load(&input)?;
+        let saved = sidecar::load(&input)?.settings();
         let sidecar_used = saved.is_some();
         let base = saved.unwrap_or_else(|| {
             let mut s = Settings::new("Sunlight", "Standard");

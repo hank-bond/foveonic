@@ -93,7 +93,7 @@ Memory accounting is unchanged by this step: shown images are reported through t
 
 Rows apply to every look and output: an inspection output or comparison zoomed in uses a patch, because that is what is viewed. Until regional rendering of inspection outputs and comparisons is verified, they count as without regional support and use full size. It uses the processing quality the view policy selects for it.
 
-Until an image with the current look arrives, the stored image of that kind stays as a placeholder; a look or output with no image yet shows the photo's Current image and places its patch from it. A viewport photo keeps only the images for what it shows, what it shows with Before off, and its Current image, so outputs it no longer shows do not hold memory and turning Before off is immediate. Across views, patches come first with the selected photo's first, whole images once no view needs a patch, then full size.
+Until an image with the current look arrives, the stored image of that kind stays as a placeholder; a look or output with no image yet shows the photo's Current image and places its patch from it. A viewport photo keeps only the images for what it shows, what it shows with Before off, and its Current image, so outputs it no longer shows do not hold memory and turning Before off is immediate. Across views, patches come first with the selected photo's first, then whole images, then full size. That is an order, not a gate: rendering starts the first image that can run, so an image whose original is still being read holds back no other photo.
 
 ### Reconciling
 

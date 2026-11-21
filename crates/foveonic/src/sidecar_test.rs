@@ -353,24 +353,30 @@ fn recovery_threshold_keeps_auto_manual_and_disabled_recipes() {
 }
 
 #[test]
-fn atomic_save_preserves_x3f_and_rejects_corrupt_existing_recipes() {
+fn atomic_save_preserves_x3f_and_replaces_malformed_or_newer_recipes() {
     let directory = Directory::new();
     let input = directory.input();
     fs::write(&input, b"immutable source").unwrap();
-    assert!(load(&input).unwrap().is_none());
+    assert!(matches!(load(&input).unwrap(), Saved::Missing));
     assert_eq!(path(&input).file_name().unwrap(), "photo.X3F.foveonic.json");
     save(&input, &edited()).unwrap();
-    assert_eq!(load(&input).unwrap(), Some(edited()));
+    assert_eq!(load(&input).unwrap().settings(), Some(edited()));
     save(&input, &Settings::new("Auto", "Standard")).unwrap();
     assert_eq!(
-        load(&input).unwrap(),
+        load(&input).unwrap().settings(),
         Some(Settings::new("Auto", "Standard"))
     );
     assert_eq!(fs::read(&input).unwrap(), b"immutable source");
     assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 2);
-    fs::write(path(&input), b"invalid recipe").unwrap();
-    assert!(save(&input, &edited()).is_err());
-    assert_eq!(fs::read(path(&input)).unwrap(), b"invalid recipe");
+    for unusable in [
+        &b"invalid recipe"[..],
+        br#"{"format":"foveonic-editing","version":2,"settings":{}}"#,
+    ] {
+        fs::write(path(&input), unusable).unwrap();
+        assert!(matches!(load(&input).unwrap(), Saved::Malformed(_)));
+        save(&input, &edited()).unwrap();
+        assert_eq!(load(&input).unwrap().settings(), Some(edited()));
+    }
     assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 2);
 }
 
@@ -381,6 +387,23 @@ fn missing_parent_or_unreadable_destination_cannot_create_a_recipe() {
     fs::create_dir(path(&directory.input())).unwrap();
     assert!(load(&directory.input()).is_err());
     assert!(save(&directory.input(), &edited()).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn save_keeps_a_recipe_file_it_cannot_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = Directory::new();
+    let input = directory.input();
+    save(&input, &edited()).unwrap();
+    fs::set_permissions(path(&input), fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(path(&input)).is_ok() {
+        return; // Permissions do not restrict this user, such as root.
+    }
+    assert!(load(&input).is_err());
+    assert!(save(&input, &Settings::default()).is_err());
+    fs::set_permissions(path(&input), fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(load(&input).unwrap().settings(), Some(edited()));
 }
 
 #[cfg(unix)]

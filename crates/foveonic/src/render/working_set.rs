@@ -125,8 +125,8 @@ pub(super) struct Guard {
 #[derive(Default)]
 pub struct WorkingSet {
     entries: Vec<Entry>,
-    /// Working photos that viewports render from. Trimming never evicts them.
-    visible: std::collections::HashSet<PhotoKey>,
+    /// Working photos that trimming never evicts.
+    eviction_protected: std::collections::HashSet<PhotoKey>,
 }
 
 /// What one trimming step dropped.
@@ -150,8 +150,8 @@ impl WorkingSet {
             .filter(|entry| entry.key.resolution == Resolution::Native)
             .count()
     }
-    pub fn set_visible(&mut self, keys: impl IntoIterator<Item = PhotoKey>) {
-        self.visible = keys.into_iter().collect();
+    pub fn set_eviction_protected(&mut self, keys: impl IntoIterator<Item = PhotoKey>) {
+        self.eviction_protected = keys.into_iter().collect();
     }
     pub fn contains(&self, key: PhotoKey) -> bool {
         self.entries.iter().any(|entry| entry.key == key)
@@ -385,7 +385,7 @@ impl WorkingSet {
         })
     }
     /// Drop whatever was used longest ago: one edit's restart input or a whole
-    /// working photo. Visible photos are never evicted and keep their latest
+    /// working photo. Eviction-protected photos are never evicted and keep their latest
     /// edit's inputs.
     pub(super) fn trim_least_recent(&mut self) -> Option<Trimmed> {
         let idle = || {
@@ -396,23 +396,23 @@ impl WorkingSet {
         };
         let input = idle()
             .filter_map(|(index, entry)| {
-                let visible = self.visible.contains(&entry.key);
-                Some((entry.session.cache().oldest_restart_use(visible)?, index))
+                let protected = self.eviction_protected.contains(&entry.key);
+                Some((entry.session.cache().oldest_restart_use(protected)?, index))
             })
             .min();
         let photo = idle()
-            .filter(|(_, entry)| !self.visible.contains(&entry.key))
+            .filter(|(_, entry)| !self.eviction_protected.contains(&entry.key))
             .map(|(index, entry)| (entry.last_use, index))
             .min();
         if let Some((edit_use, index)) = input {
             // A photo is never older than its own inputs, so on a tie its inputs
             // go first and its sensor data, which needs a decode to rebuild, last.
             if photo.is_none_or(|(last_use, _)| edit_use <= last_use) {
-                let visible = self.visible.contains(&self.entries[index].key);
+                let protected = self.eviction_protected.contains(&self.entries[index].key);
                 self.entries[index]
                     .session
                     .cache_mut()
-                    .drop_oldest_restart_input(visible);
+                    .drop_oldest_restart_input(protected);
                 return Some(Trimmed::RestartInput);
             }
         }
@@ -632,7 +632,7 @@ mod tests {
     }
 
     /// Two photos whose last uses and restart inputs carry explicit stamps.
-    fn stamped_photos(gpu: &crate::gpu::Gpu, visible: bool) -> WorkingSet {
+    fn stamped_photos(gpu: &crate::gpu::Gpu, protected: bool) -> WorkingSet {
         let mut working = WorkingSet::new();
         for (photo, last_use, inputs) in [(1, 4, &[("old", 1), ("newer", 4)][..]), (2, 2, &[][..])]
         {
@@ -647,8 +647,8 @@ mod tests {
                 .unwrap();
             working.get_mut(native(photo)).unwrap().last_use = last_use;
         }
-        if visible {
-            working.set_visible([native(1)]);
+        if protected {
+            working.set_eviction_protected([native(1)]);
         }
         working
     }
@@ -685,7 +685,7 @@ mod tests {
         );
         assert!(
             working.trim_least_recent().is_none(),
-            "a visible photo keeps its latest edit's inputs"
+            "an eviction-protected photo keeps its latest edit's inputs"
         );
         assert_eq!(
             working.native(1).unwrap().cache.oldest_restart_use(false),
@@ -723,14 +723,14 @@ mod tests {
     fn guards_protect_several_photos_and_recency_orders_eviction() {
         let mut working = retained_photos();
         working.record_use(native(3), Purpose::Edit);
-        working.set_visible([native(3)]);
+        working.set_eviction_protected([native(3)]);
         let first = working.guard(native(1)).unwrap();
         let second = working.guard(native(2)).unwrap();
         assert_eq!(working.retained_inputs().count(), 3);
         assert_eq!(
             working.evict_least_recent(),
             None,
-            "the visible photo stays and the others are guarded"
+            "the eviction-protected photo stays and the others are guarded"
         );
         drop(first);
         assert_eq!(working.evict_least_recent(), Some(native(1)));
@@ -931,8 +931,8 @@ mod tests {
             panic!("image");
         };
         assert_eq!(engine.readback_image(&image).unwrap(), images[0]);
-        // A visible photo stays even when nothing fits.
-        working.set_visible([key(1)]);
+        // An eviction-protected photo stays even when nothing fits.
+        working.set_eviction_protected([key(1)]);
         let trim = engine.trim_memory(&mut working, 0, &Default::default());
         assert_eq!(trim.evicted_photos, vec![key(2)]);
         assert!(working.reduced(1).is_some());

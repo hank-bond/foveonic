@@ -493,18 +493,18 @@ fn shared_working_set_orders_native_reduced_and_speculative_owners() {
         !engine.readback_image(&image).unwrap().is_empty(),
         "eviction preserves delivered pixels"
     );
-    working.set_visible([edited]);
+    working.set_eviction_protected([edited]);
     assert_eq!(
         working.evict_least_recent(),
         None,
-        "a visible photo is never evicted"
+        "an eviction-protected photo is never evicted"
     );
     assert!(working.contains(edited));
 }
 
 #[test]
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
-fn visible_reduced_photo_keeps_its_sensor_data_under_pressure() {
+fn eviction_protected_reduced_photo_keeps_its_sensor_data_under_pressure() {
     use crate::render::{MemoryReservation, PhotoKey, Purpose, Resolution, WorkingSet};
     let source = Arc::new(Source::open(std::env::var_os("SMALL_PREVIEW_X3F").unwrap()).unwrap());
     let weak = Arc::downgrade(&source);
@@ -535,7 +535,7 @@ fn visible_reduced_photo_keeps_its_sensor_data_under_pressure() {
     working
         .insert_reduced(7, session, &engine, Purpose::Edit)
         .unwrap();
-    working.set_visible([PhotoKey {
+    working.set_eviction_protected([PhotoKey {
         photo: 7,
         resolution: Resolution::Reduced,
     }]);
@@ -569,10 +569,10 @@ fn visible_reduced_photo_keeps_its_sensor_data_under_pressure() {
                 .cache
                 .sensor_data_buffers()
                 .any(|new| old.shares_storage(new))),
-            "a visible photo keeps its sensor data under pressure"
+            "an eviction-protected photo keeps its sensor data under pressure"
         );
     }
-    // A visible photo stays even when nothing fits.
+    // An eviction-protected photo stays even when nothing fits.
     let trim = engine.trim_memory(&mut working, 0, &MemoryReservation::default());
     assert!(trim.evicted_photos.is_empty());
     assert!(working.contains(key));

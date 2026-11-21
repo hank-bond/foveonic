@@ -308,6 +308,7 @@ fn check_real_inputs(full: bool) {
         let source = Source::open(directory.join(name)).unwrap();
         let settings = crate::sidecar::load(&directory.join(name))
             .unwrap()
+            .settings()
             .unwrap_or_else(|| Settings::new("Sunlight", "Standard"));
         let metadata = &source.metadata;
         let calibration =

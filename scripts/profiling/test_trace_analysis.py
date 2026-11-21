@@ -431,7 +431,7 @@ class PrefetchCancellationTests(unittest.TestCase):
                 'task': 0, 'photo': 1, 'purpose': 'thumb_prefetch', 'source': 'A.x3f', 'storage': 'decoded-cache',
                 'read_operations': 1, 'bytes': 64, 'read_errors': 0, 'complete': False}},
             {'id': '5', 'parent_id': '2', 'name': 'cache.decoded.miss',
-             'args': {'source': 'A.x3f', 'reason': 'background prefetch interrupted'}},
+             'args': {'source': 'A.x3f', 'reason': 'lower-priority work interrupted'}},
             {'id': '4', 'parent_id': '1', 'name': 'cache.processing.prefetch_result',
              'args': {'source': 'A.x3f', 'outcome': 'interrupted'}},
         ]

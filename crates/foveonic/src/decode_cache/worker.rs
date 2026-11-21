@@ -662,7 +662,7 @@ pub(super) fn refresh(
             if state == EntryState::Ready && Identity::read(&path).is_ok() {
                 if let Some((identity, _)) = families.get(&path) {
                     let previous = control.lock().unwrap().recipes.get(&path).cloned();
-                    if let Ok(recipe) = crate::sidecar::load(&path) {
+                    if let Ok(recipe) = super::selection::recorded_recipe(&path) {
                         let updated = super::selection::update_recipe(
                             root,
                             identity,

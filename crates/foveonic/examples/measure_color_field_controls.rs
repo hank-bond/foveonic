@@ -264,7 +264,7 @@ fn main() -> Result<()> {
         if selected.as_ref().is_some_and(|s| !s.contains(&stem)) {
             continue;
         }
-        let saved = sidecar::load(&path)?;
+        let saved = sidecar::load(&path)?.settings();
         let mut base = saved.clone().unwrap_or_else(|| {
             let mut s = Settings::new("Sunlight", "Standard");
             s.exposure = -1.5;

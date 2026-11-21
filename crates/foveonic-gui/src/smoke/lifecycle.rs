@@ -89,7 +89,7 @@ impl LifecycleJourney {
     }
     fn ready(app: &App, path: &PathBuf) -> bool {
         !app.folder_loader.loading()
-            && app.sidecars.ready()
+            && app.selection_loaded()
             && !app.view_busy()
             && app.selected.as_ref() == Some(path)
     }
@@ -120,7 +120,11 @@ impl LifecycleJourney {
         self.last_read = Some(Instant::now());
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(foveonic::sidecar::load(&path).map_err(|e| e.to_string()));
+            let _ = tx.send(
+                foveonic::sidecar::load(&path)
+                    .map(foveonic::sidecar::Saved::settings)
+                    .map_err(|e| e.to_string()),
+            );
         });
         self.read = Some(rx);
         None
@@ -148,7 +152,7 @@ impl LifecycleJourney {
             Phase::Browse => {
                 if app.folder_loader.loading()
                     || app.browser.import_mode
-                    || !app.sidecars.ready()
+                    || !app.selection_loaded()
                     || app.view_busy()
                 {
                     return Ok(false);
@@ -236,7 +240,7 @@ impl LifecycleJourney {
             Phase::ReopenImport => {
                 if app.folder_loader.loading()
                     || !app.browser.import_mode
-                    || !app.sidecars.ready()
+                    || !app.selection_loaded()
                     || app.view_busy()
                 {
                     return Ok(false);
@@ -358,7 +362,10 @@ impl LifecycleJourney {
                     app.settings.saturation == 0.75,
                     json!({"expected":0.75,"actual":app.settings.saturation}),
                 )?;
-                app.sidecars.edited(&app.settings);
+                assert!(
+                    app.commit_settings(),
+                    "the selected photo has loaded settings"
+                );
                 app.submit_photos();
                 self.phase = Phase::DefaultReset;
             }
@@ -377,7 +384,10 @@ impl LifecycleJourney {
                     app.settings.saturation == 0.75,
                     json!({"expected":0.75,"actual":app.settings.saturation}),
                 )?;
-                app.sidecars.edited(&app.settings);
+                assert!(
+                    app.commit_settings(),
+                    "the selected photo has loaded settings"
+                );
                 app.submit_photos();
                 self.phase = Phase::Paste;
             }
@@ -391,7 +401,10 @@ impl LifecycleJourney {
                 ));
                 let changed = app.dispatch_actions(ctx);
                 self.check("paste-copied-settings", changed && Self::matches(&app.settings, self.review.as_ref().unwrap()), json!({"actual_exposure":app.settings.exposure,"expected_exposure":self.review.as_ref().unwrap().exposure}))?;
-                app.sidecars.edited(&app.settings);
+                assert!(
+                    app.commit_settings(),
+                    "the selected photo has loaded settings"
+                );
                 app.submit_photos();
                 self.phase = Phase::InvalidPaste;
             }
@@ -560,7 +573,9 @@ impl LifecycleJourney {
                                 break true;
                             }
                         };
-                        let recipe = foveonic::sidecar::load(&output).map_err(|e| e.to_string())?;
+                        let recipe = foveonic::sidecar::load(&output)
+                            .map(foveonic::sidecar::Saved::settings)
+                            .map_err(|e| e.to_string())?;
                         Ok(
                             json!({"source":source,"output":output,"bytes_equal":bytes_equal,"recipe_equal":recipe.as_ref().is_some_and(|s| Self::matches(s, &expected)),"expected_exposure":expected.exposure,"copied_exposure":recipe.as_ref().map(|s| s.exposure)}),
                         )
@@ -631,7 +646,7 @@ impl LifecycleJourney {
             Phase::ReopenBrowse => {
                 if app.folder_loader.loading()
                     || app.browser.import_mode
-                    || !app.sidecars.ready()
+                    || !app.selection_loaded()
                     || app.view_busy()
                 {
                     return Ok(false);

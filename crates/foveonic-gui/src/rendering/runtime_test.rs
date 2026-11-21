@@ -247,7 +247,6 @@ fn idle_preparation_mode_changes_replace_the_config_while_identical_values_coale
     let mut config = PreparationConfig {
         processing_quality: ProcessingQuality::Quality,
         recipes: sidecars.cached_recipes(&[]),
-        overrides: Default::default(),
         calibration: None,
     };
     rig.handle.preparation(config.clone());

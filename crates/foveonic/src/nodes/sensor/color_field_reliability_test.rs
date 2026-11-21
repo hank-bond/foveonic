@@ -109,6 +109,7 @@ fn gpu_color_field_reliability_quantization_matches_original_sensor_codes() {
     let source = Source::open(&path).unwrap();
     let settings = crate::sidecar::load(&path)
         .unwrap()
+        .settings()
         .unwrap_or_else(|| Settings::new("Sunlight", "Standard"));
     let engine = Engine::new().unwrap();
     let values = engine

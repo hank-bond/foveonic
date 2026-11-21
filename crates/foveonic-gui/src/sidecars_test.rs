@@ -1,4 +1,4 @@
-//! Checks that restored and unsaved edits survive photo switches, failures, and shutdown.
+//! Checks that restored and unsaved edits survive reloading, failures, and shutdown.
 
 use super::*;
 use std::{
@@ -61,41 +61,61 @@ impl Drop for Directory {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-fn receive(session: &mut Session) -> Settings {
+/// A photo's settings as the editing runtime resolves them.
+fn load(session: &mut Session, path: &std::path::Path) -> Settings {
+    session.resolve_settings(&[path.to_path_buf()]);
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Some(settings) = session.receive() {
-            return settings;
+        session.receive();
+        if let Some(reply) = session.take_resolved().pop() {
+            assert_eq!(reply.path, path);
+            return reply.settings;
         }
-        assert!(Instant::now() < deadline, "recipe load did not complete");
+        assert!(
+            Instant::now() < deadline,
+            "recipe resolution did not complete"
+        );
         std::thread::sleep(Duration::from_millis(1));
     }
 }
 fn failure(session: &mut Session) {
+    wait(session, "missing visible save failure", |session| {
+        session
+            .warning()
+            .is_some_and(|warning| warning.contains("Edits are not saved"))
+    });
+}
+fn settle_saves(session: &mut Session) {
+    wait(session, "saves did not finish", |session| {
+        session.unsaved.is_empty()
+    });
+}
+fn wait(session: &mut Session, message: &str, done: impl Fn(&Session) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         session.receive();
-        if session.warning().is_some() {
+        if done(session) {
             return;
         }
-        assert!(Instant::now() < deadline, "missing visible save failure");
+        assert!(Instant::now() < deadline, "{message}");
         std::thread::sleep(Duration::from_millis(1));
     }
 }
+fn session(enabled: bool) -> Session {
+    Session::new(
+        egui::Context::default(),
+        enabled,
+        Arc::new(foveonic::decode_cache::Cache::new()),
+    )
+}
 
 #[test]
-fn pasted_settings_reach_active_and_unviewed_photos_and_freeze_independently() {
+fn pasted_settings_reach_every_photo_and_freeze_independently() {
     let directory = Directory::new();
     let paths: Vec<_> = ["a.x3f", "b.x3f", "c.x3f"]
         .map(|name| directory.input(name))
         .into();
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(paths[0].clone());
-    receive(&mut session);
+    let mut session = session(true);
     let mut copied = Settings::new("Shade", "Vivid");
     copied.exposure = 0.7;
     for path in &paths {
@@ -103,35 +123,30 @@ fn pasted_settings_reach_active_and_unviewed_photos_and_freeze_independently() {
     }
     let frozen = session.requested_settings(&paths[1]).unwrap().clone();
     copied.exposure = 1.4;
-    session.edited(&copied);
-    session.select(paths[1].clone());
-    assert_eq!(receive(&mut session), frozen);
+    session.apply(paths[0].clone(), copied.clone());
+    assert_eq!(load(&mut session, &paths[1]), frozen);
     drop(session);
-    assert_eq!(sidecar::load(&paths[0]).unwrap(), Some(copied));
+    assert_eq!(sidecar::load(&paths[0]).unwrap().settings(), Some(copied));
     for path in &paths[1..] {
-        assert_eq!(sidecar::load(path).unwrap(), Some(frozen.clone()));
+        assert_eq!(
+            sidecar::load(path).unwrap().settings(),
+            Some(frozen.clone())
+        );
     }
 }
 
 #[test]
-fn pasted_import_settings_survive_selection_without_source_writes() {
+fn pasted_import_settings_stay_in_memory_without_source_writes() {
     let directory = Directory::new();
     let a = directory.input("a.x3f");
     let b = directory.input("b.x3f");
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
+    let mut session = session(true);
     session.set_memory_only(true);
-    session.select(a.clone());
-    receive(&mut session);
     let mut copied = Settings::new("Shade", "Vivid");
     copied.exposure = 0.7;
     session.apply(a.clone(), copied.clone());
     session.apply(b.clone(), copied.clone());
-    session.select(b.clone());
-    assert_eq!(receive(&mut session), copied);
+    assert_eq!(load(&mut session, &b), copied);
     assert_eq!(session.requested_settings(&a), Some(&copied));
     drop(session);
     assert!(!sidecar::path(&a).exists());
@@ -139,55 +154,22 @@ fn pasted_import_settings_survive_selection_without_source_writes() {
 }
 
 #[test]
-fn pasting_to_an_unviewed_malformed_recipe_preserves_it_and_reports_the_error() {
-    let directory = Directory::new();
-    let path = directory.input("protected.x3f");
-    fs::write(sidecar::path(&path), "unreadable recipe").unwrap();
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.apply(path.clone(), Settings::new("Shade", "Vivid"));
-    failure(&mut session);
-    assert!(session.warning().unwrap().contains("protected.x3f"));
-    assert!(session.can_retry());
-    drop(session);
-    assert_eq!(
-        fs::read_to_string(sidecar::path(&path)).unwrap(),
-        "unreadable recipe"
-    );
-}
-
-#[test]
-fn import_edits_survive_photo_switches_without_writes_and_are_discarded_on_exit() {
+fn import_edits_stay_in_memory_and_are_discarded_on_exit() {
     let directory = Directory::new();
     let a = directory.input("a.x3f");
-    let b = directory.input("b.x3f");
     let saved = Settings::new("Shade", "Vivid");
     sidecar::save(&a, &saved).unwrap();
     let before = fs::read(sidecar::path(&a)).unwrap();
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
+    let mut session = session(true);
     session.set_memory_only(true);
-    session.select(a.clone());
-    let mut edited = receive(&mut session);
+    let mut edited = load(&mut session, &a);
     edited.exposure = 2.;
-    session.edited(&edited);
-    session.select(b.clone());
-    receive(&mut session);
-    session.select(a.clone());
-    assert_eq!(receive(&mut session), edited);
-    assert_eq!(session.requested_settings(&a), Some(&edited));
+    session.apply(a.clone(), edited.clone());
+    assert_eq!(load(&mut session, &a), edited);
     session.set_memory_only(false);
-    session.select(a.clone());
-    assert_eq!(receive(&mut session), saved);
+    assert_eq!(load(&mut session, &a), saved);
     drop(session);
     assert_eq!(fs::read(sidecar::path(&a)).unwrap(), before);
-    assert!(!sidecar::path(&b).exists());
 }
 
 #[test]
@@ -199,65 +181,43 @@ fn restore_per_photo_choices_and_do_not_write_just_by_viewing() {
     saved.exposure = 1.5;
     sidecar::save(&a, &saved).unwrap();
     let before = fs::read(sidecar::path(&a)).unwrap();
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(a.clone());
-    assert_eq!(receive(&mut session), saved);
-    session.refresh(&saved);
-    session.select(b.clone());
-    assert_eq!(receive(&mut session), Settings::new("", ""));
-    session.refresh(&Settings::new("Sunlight", "Standard"));
+    let mut session = session(true);
+    assert_eq!(load(&mut session, &a), saved);
+    assert_eq!(load(&mut session, &b), Settings::new("", ""));
     drop(session);
     assert_eq!(fs::read(sidecar::path(&a)).unwrap(), before);
     assert!(!sidecar::path(&b).exists());
 }
 
 #[test]
-fn requested_latest_edits_survive_photo_switches_and_orderly_shutdown() {
+fn latest_edits_survive_reloading_and_orderly_shutdown() {
     let directory = Directory::new();
     let a = directory.input("a.x3f");
     let b = directory.input("b.x3f");
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(a.clone());
-    let mut a_settings = receive(&mut session);
+    let mut session = session(true);
+    let mut a_settings = load(&mut session, &a);
     for step in 0..100 {
         a_settings.exposure = step as f32 * 0.01;
-        session.edited(&a_settings);
+        session.apply(a.clone(), a_settings.clone());
     }
-    // An edit can happen before metadata arrives. Saving a completed frame
-    // instead of the requested controls would lose that newer edit.
-    a_settings.white_balance = "Sunlight".into();
-    a_settings.color_mode = "Standard".into();
-    session.refresh(&a_settings);
-    session.select(b.clone());
-    let mut b_settings = receive(&mut session);
+    let mut b_settings = load(&mut session, &b);
     b_settings.saturation = 1.7;
-    session.edited(&b_settings);
-    session.select(a.clone());
-    assert_eq!(receive(&mut session), a_settings);
-    session.clear();
+    session.apply(b.clone(), b_settings.clone());
+    // A save may still be in flight. The reload must see the latest edit.
+    assert_eq!(load(&mut session, &a), a_settings);
     drop(session);
-    assert_eq!(sidecar::load(&a).unwrap(), Some(a_settings));
-    assert_eq!(sidecar::load(&b).unwrap(), Some(b_settings));
+    assert_eq!(sidecar::load(&a).unwrap().settings(), Some(a_settings));
+    assert_eq!(sidecar::load(&b).unwrap().settings(), Some(b_settings));
 }
 
 #[test]
 fn batch_recipes_retain_latest_browse_edits_after_save_and_freeze_independently() {
     let directory = Directory::new();
     let path = directory.input("photo.x3f");
-    let cache = Arc::new(foveonic::decode_cache::Cache::new());
-    let mut session = Session::new(egui::Context::default(), true, cache);
-    session.select(path.clone());
-    let mut settings = receive(&mut session);
+    let mut session = session(true);
+    let mut settings = load(&mut session, &path);
     settings.exposure = 0.7;
-    session.edited(&settings);
+    session.apply(path.clone(), settings.clone());
     let deadline = Instant::now() + Duration::from_secs(5);
     while !session.unsaved.is_empty() {
         session.receive();
@@ -267,87 +227,35 @@ fn batch_recipes_retain_latest_browse_edits_after_save_and_freeze_independently(
     assert_eq!(session.requested_settings(&path), Some(&settings));
     let frozen = session.requested_settings(&path).unwrap().clone();
     settings.exposure = 1.4;
-    session.edited(&settings);
+    session.apply(path.clone(), settings.clone());
     assert_eq!(frozen.exposure, 0.7);
-    session.select(directory.input("other.x3f"));
-    receive(&mut session);
     assert_eq!(session.requested_settings(&path), Some(&settings));
     session.set_memory_only(false);
     assert!(session.requested.is_empty());
 }
 
 #[test]
-fn replaced_loads_cannot_initialize_a_new_selection() {
-    let directory = Directory::new();
-    let a = directory.input("a.x3f");
-    let b = directory.input("b.x3f");
-    sidecar::save(&a, &Settings::new("Shade", "Vivid")).unwrap();
-    sidecar::save(&b, &Settings::new("Sunlight", "Standard")).unwrap();
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(a);
-    session.select(b);
-    assert_eq!(receive(&mut session), Settings::new("Sunlight", "Standard"));
-    session.clear();
-    assert!(!session.ready());
-    assert!(session.receive().is_none());
-}
-
-#[test]
-fn corrupt_or_future_recipes_stay_visible_and_cannot_be_overwritten() {
+fn failed_saves_remain_visible_and_can_retry_latest_edits() {
     let directory = Directory::new();
     let input = directory.input("a.x3f");
-    let bytes = b"{\"format\":\"foveonic-editing\",\"version\":2}";
-    fs::write(sidecar::path(&input), bytes).unwrap();
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(input.clone());
-    assert_eq!(receive(&mut session), Settings::new("", ""));
-    assert!(session
-        .warning()
-        .unwrap()
-        .contains("automatic saving is disabled"));
-    session.edited(&Settings::new("Shade", "Vivid"));
-    assert!(!session.can_retry());
-    drop(session);
-    assert_eq!(fs::read(sidecar::path(&input)).unwrap(), bytes);
-}
-
-#[test]
-fn failed_saves_remain_visible_after_selection_changes_and_can_retry_latest_edits() {
-    let directory = Directory::new();
-    let input = directory.input("a.x3f");
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(input.clone());
-    let mut settings = receive(&mut session);
+    let mut session = session(true);
+    let mut settings = load(&mut session, &input);
     fs::create_dir(sidecar::path(&input)).unwrap();
     settings.exposure = 1.;
-    session.edited(&settings);
+    session.apply(input.clone(), settings.clone());
     failure(&mut session);
     assert!(session.can_retry());
-    session.select(directory.input("b.x3f"));
-    receive(&mut session);
+    load(&mut session, &directory.input("b.x3f"));
     assert!(session.warning().is_some());
     fs::remove_dir(sidecar::path(&input)).unwrap();
-    session.select(input.clone());
-    assert_eq!(receive(&mut session), settings);
+    assert_eq!(load(&mut session, &input), settings);
     assert!(
         session.warning().is_some(),
-        "reselecting must not hide an unsaved recipe"
+        "reloading must not hide an unsaved recipe"
     );
     session.retry();
     drop(session);
-    assert_eq!(sidecar::load(&input).unwrap(), Some(settings));
+    assert_eq!(sidecar::load(&input).unwrap().settings(), Some(settings));
 }
 
 #[test]
@@ -355,15 +263,10 @@ fn smoke_sessions_neither_read_nor_write_fixture_recipes() {
     let directory = Directory::new();
     let input = directory.input("a.x3f");
     fs::write(sidecar::path(&input), b"fixture recipe").unwrap();
-    let mut session = Session::new(
-        egui::Context::default(),
-        false,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(input.clone());
-    assert_eq!(receive(&mut session), Settings::new("", ""));
+    let mut session = session(false);
+    assert_eq!(load(&mut session, &input), Settings::new("", ""));
     assert!(session.warning().is_none());
-    session.edited(&Settings::new("Sunlight", "Standard"));
+    session.apply(input.clone(), Settings::new("Sunlight", "Standard"));
     drop(session);
     assert_eq!(fs::read(sidecar::path(&input)).unwrap(), b"fixture recipe");
 }
@@ -378,72 +281,39 @@ fn fresh_merrill_capture_defaults_enable_noise_before_rendering() {
     ] {
         let fresh = capture_defaults([("CAMMODEL".into(), model.into())].into()).unwrap();
         assert_eq!(fresh.reconstruction, Some(Default::default()), "{model}");
-        let selected = selection_settings(fresh.clone(), &["Shade".into(), "Vivid".into()]);
-        assert_eq!(selected.reconstruction, fresh.reconstruction);
     }
 }
 
 #[test]
 #[ignore = "requires MERRILL_X3F"]
-fn merrill_preview_scale_does_not_save_defaults_or_reenable_saved_off() {
+fn merrill_capture_defaults_are_not_saved_and_saved_off_stays_off() {
     let directory = Directory::new();
     let path = directory.input("merrill.x3f");
     fs::hard_link(std::env::var_os("MERRILL_X3F").unwrap(), &path).unwrap();
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(path.clone());
-    let mut settings = receive(&mut session);
+    let mut session = session(true);
+    let mut settings = load(&mut session, &path);
     assert!(settings.reconstruction.is_some());
-    for quality in [
-        foveonic::render::Scale::new(2).unwrap(),
-        foveonic::render::Scale::NATIVE,
-    ] {
-        settings.working_scale = quality;
-        session.refresh(&settings);
-    }
     drop(session);
     assert!(
         !sidecar::path(&path).exists(),
         "viewing must not create a recipe"
     );
 
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(path.clone());
-    settings = receive(&mut session);
+    let mut session = self::session(true);
     settings.reconstruction = None;
-    session.edited(&settings);
+    session.apply(path.clone(), settings);
     drop(session);
     let saved = fs::read(sidecar::path(&path)).unwrap();
     assert_eq!(sidecar::decode(&saved).unwrap().reconstruction, None);
 
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(path.clone());
-    let mut restored = receive(&mut session);
-    assert_eq!(restored.reconstruction, None);
-    for quality in [
-        foveonic::render::Scale::new(2).unwrap(),
-        foveonic::render::Scale::NATIVE,
-    ] {
-        restored.working_scale = quality;
-        session.refresh(&restored);
-    }
+    let mut session = self::session(true);
+    assert_eq!(load(&mut session, &path).reconstruction, None);
     drop(session);
     assert_eq!(fs::read(sidecar::path(&path)).unwrap(), saved);
 }
 
 #[test]
-fn fresh_capture_defaults_precede_launch_choices_and_early_edits() {
+fn fresh_capture_defaults_follow_the_recorded_adjustments() {
     let properties = [
         ("CAMMODEL".into(), "SIGMA dp2 Quattro".into()),
         ("X3F_ADJUSTMENT_EXPOSURE".into(), "0.75".into()),
@@ -453,17 +323,10 @@ fn fresh_capture_defaults_precede_launch_choices_and_early_edits() {
     ]
     .into();
     let fresh = capture_defaults(properties).unwrap();
-    let mut selected = selection_settings(fresh, &["Shade".into(), "Vivid".into()]);
-    assert_eq!(selected.white_balance, "Shade");
-    assert_eq!(selected.color_mode, "Vivid");
-    assert_eq!(selected.exposure, 0.75);
-    assert_eq!(selected.tone.contrast, -0.5);
-    assert_eq!(selected.saturation, 1.5);
-    assert_eq!(selected.sharpen_amount, None);
-    selected.exposure = 0.;
-    // Selection does not interpret explicit neutral edits as missing defaults.
-    let restored = selection_settings(selected.clone(), &[String::new(), String::new()]);
-    assert_eq!(restored, selected);
+    assert_eq!(fresh.exposure, 0.75);
+    assert_eq!(fresh.tone.contrast, -0.5);
+    assert_eq!(fresh.saturation, 1.5);
+    assert_eq!(fresh.sharpen_amount, None);
 }
 
 #[test]
@@ -472,13 +335,8 @@ fn neutral_saved_recipe_is_not_reinitialized_from_capture() {
     let path = directory.input("neutral.x3f");
     let saved = Settings::default();
     sidecar::save(&path, &saved).unwrap();
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.select(path);
-    assert_eq!(receive(&mut session), saved);
+    let mut session = session(true);
+    assert_eq!(load(&mut session, &path), saved);
 }
 
 #[test]
@@ -498,8 +356,8 @@ fn fresh_monochrome_marks_select_monochrome_saved_tones() {
 }
 
 #[test]
-fn saved_mixer_edits_override_fresh_capture_mixture() {
-    let mut fresh = capture_defaults(
+fn fresh_capture_defaults_read_the_recorded_mixture() {
+    let fresh = capture_defaults(
         [
             ("CAMMODEL".into(), "SIGMA sd Quattro".into()),
             ("X3F_ADJUSTMENT_MONO_MIX_RED".into(), "10813".into()),
@@ -512,13 +370,6 @@ fn saved_mixer_edits_override_fresh_capture_mixture() {
     assert_eq!(
         fresh.monochrome.mix,
         [10813. / 32768., 10813. / 32768., 11142. / 32768.]
-    );
-    fresh.monochrome.mix = [1., 0., 0.];
-    assert_eq!(
-        selection_settings(fresh, &[String::new(), String::new()])
-            .monochrome
-            .mix,
-        [1., 0., 0.]
     );
 }
 
@@ -550,41 +401,70 @@ fn editing_subset_resolution_replaces_old_reads_and_keeps_import_edits_in_memory
     };
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].path, b);
-    assert_eq!(resolved[0].settings.as_ref().unwrap(), &saved);
+    assert_eq!(resolved[0].settings, saved);
     session.set_memory_only(true);
     let mut edited = saved.clone();
     edited.exposure = 1.7;
     session.apply(b.clone(), edited.clone());
     session.resolve_settings(std::slice::from_ref(&b));
     let resolved = session.take_resolved();
-    assert_eq!(resolved[0].settings.as_ref().unwrap(), &edited);
+    assert_eq!(resolved[0].settings, edited);
     drop(session);
-    assert_eq!(sidecar::load(&b).unwrap(), Some(saved));
+    assert_eq!(sidecar::load(&b).unwrap().settings(), Some(saved));
 }
 
 #[test]
-fn malformed_target_recipe_is_reported_without_replacing_its_bytes() {
+fn malformed_recipes_open_with_defaults_and_a_warning_until_the_next_edit_replaces_them() {
     let directory = Directory::new();
-    let target = directory.input("bad.x3f");
-    let path = sidecar::path(&target);
-    fs::write(&path, b"broken recipe").unwrap();
-    let mut session = Session::new(
-        egui::Context::default(),
-        true,
-        Arc::new(foveonic::decode_cache::Cache::new()),
-    );
-    session.resolve_settings(std::slice::from_ref(&target));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        session.receive();
-        if let Some(reply) = session.take_resolved().pop() {
-            assert_eq!(reply.path, target);
-            assert!(reply.settings.is_err());
-            break;
-        }
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(1));
+    for (name, bytes) in [
+        ("broken.x3f", b"broken recipe".as_slice()),
+        (
+            "future.x3f",
+            b"{\"format\":\"foveonic-editing\",\"version\":2}".as_slice(),
+        ),
+    ] {
+        let input = directory.input(name);
+        fs::write(sidecar::path(&input), bytes).unwrap();
+        let mut session = session(true);
+        assert_eq!(load(&mut session, &input), Settings::new("", ""), "{name}");
+        assert!(
+            session
+                .warning()
+                .is_some_and(|warning| warning.contains("opened with defaults")),
+            "{name}"
+        );
+        let edited = Settings::new("Shade", "Vivid");
+        session.apply(input.clone(), edited.clone());
+        settle_saves(&mut session);
+        assert!(session.warning().is_none(), "{name}: the edit replaced it");
+        drop(session);
+        assert_eq!(
+            sidecar::load(&input).unwrap().settings(),
+            Some(edited),
+            "{name}"
+        );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_recipe_that_cannot_be_read_opens_with_defaults_and_is_not_replaced() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = Directory::new();
+    let input = directory.input("a.x3f");
+    let saved = Settings::new("Shade", "Vivid");
+    sidecar::save(&input, &saved).unwrap();
+    let recipe = sidecar::path(&input);
+    fs::set_permissions(&recipe, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&recipe).is_ok() {
+        return; // Permissions do not restrict this user, such as root.
+    }
+    let mut session = session(true);
+    assert_eq!(load(&mut session, &input), Settings::new("", ""));
+    assert!(session.warning().is_some());
+    session.apply(input.clone(), Settings::new("Sunlight", "Standard"));
+    failure(&mut session);
     drop(session);
-    assert_eq!(fs::read(path).unwrap(), b"broken recipe");
+    fs::set_permissions(&recipe, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(sidecar::load(&input).unwrap().settings(), Some(saved));
 }

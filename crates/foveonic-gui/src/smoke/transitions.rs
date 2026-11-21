@@ -1162,7 +1162,7 @@ impl TransitionJourney {
         if self.pending && self.steps[self.index] == Step::SmartGroupEdit {
             self.observe_smart_edit(app, paths)?;
         }
-        if !smoke.direct_events.is_empty() || !app.sidecars.ready() || app.view_busy() {
+        if !smoke.direct_events.is_empty() || !app.selection_loaded() || app.view_busy() {
             return Ok(false);
         }
         if self.pending {
@@ -1560,7 +1560,14 @@ impl TransitionJourney {
                 {
                     return Err("Smart display demand left the Before rendition".into());
                 }
-                if frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE {
+                // A zoomed view's native detail is its patch. The full-size whole
+                // image is background work that memory may not allow, and a
+                // Current patch can stand in until the Camera patch arrives.
+                let detail = app.active_patch().unwrap_or(frame);
+                if detail.request.rendition != crate::editor::Rendition::Camera
+                    || detail.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
+                    || !app.shows_current_view(detail)
+                {
                     return Ok(false);
                 }
             }
@@ -2278,9 +2285,10 @@ impl TransitionJourney {
                 self.composition = Some((index, crop, rotation));
                 app.settings.crop = crop;
                 app.settings.rotation = rotation;
-                app.sidecars.edited(&app.settings);
-                app.multi_edit
-                    .observe_active(&paths[index], &app.settings, app.metadata.as_ref());
+                assert!(
+                    app.commit_settings(),
+                    "the selected photo has loaded settings"
+                );
                 app.submit_photos();
             }
             Step::Before => {

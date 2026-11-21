@@ -1,4 +1,4 @@
-//! Checks tier order, submission order, replacement and waiting jobs.
+//! Checks tier order, rank, submission order, replacement and waiting jobs.
 
 use super::*;
 use crate::render::Purpose;
@@ -8,6 +8,7 @@ struct Work {
     target: &'static str,
     priority: Priority,
     revision: u32,
+    rank: usize,
 }
 
 impl Job for Work {
@@ -24,6 +25,9 @@ impl Job for Work {
             Priority::Speculative => Purpose::Speculative,
         }
     }
+    fn rank(&self) -> usize {
+        self.rank
+    }
 }
 
 fn work(target: &'static str, priority: Priority, revision: u32) -> Work {
@@ -31,6 +35,7 @@ fn work(target: &'static str, priority: Priority, revision: u32) -> Work {
         target,
         priority,
         revision,
+        rank: 0,
     }
 }
 
@@ -52,6 +57,41 @@ fn higher_tiers_come_first_then_submission_order() {
     assert_eq!(next(&queue), Some(("a", 1)));
     queue.take(&"a");
     assert_eq!(next(&queue), Some(("thumb", 1)));
+}
+
+#[test]
+fn rank_orders_a_tier_before_submission_and_follows_replacement() {
+    let ranked = |target, revision, rank| Work {
+        rank,
+        ..work(target, Priority::Viewport, revision)
+    };
+    let mut queue = Queue::new();
+    queue.submit(ranked("whole", 1, 1), None);
+    queue.submit(ranked("patch", 1, 0), None);
+    assert_eq!(
+        next(&queue),
+        Some(("patch", 1)),
+        "the better rank starts first"
+    );
+    queue.submit(ranked("whole", 2, 0), None);
+    queue.submit(ranked("patch", 2, 1), None);
+    assert_eq!(
+        next(&queue),
+        Some(("whole", 2)),
+        "a resubmission takes its new rank"
+    );
+}
+
+#[test]
+fn reranking_in_place_keeps_a_waiting_job_waiting() {
+    let mut queue = Queue::new();
+    queue.submit(work("a", Priority::Viewport, 1), None);
+    queue.submit(work("b", Priority::Viewport, 1), None);
+    let mut a = queue.take(&"a").unwrap();
+    a.waiting = true;
+    queue.put_back(a);
+    queue.update(|job| job.rank = if job.target == "a" { 0 } else { 1 });
+    assert_eq!(next(&queue), Some(("b", 1)), "a still waits for its input");
 }
 
 #[test]

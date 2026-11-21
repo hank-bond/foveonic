@@ -19,6 +19,9 @@ pub(crate) struct Photos {
     pub loading: Vec<PathBuf>,
     /// History photos: they left the viewport and keep finished images.
     pub history: Vec<PathBuf>,
+    /// The viewed photo and the editing selection. Their working photos are
+    /// protected from eviction between edits.
+    pub eviction_protected: Vec<PathBuf>,
 }
 
 /// What a task renders for: a photo's whole image or patch for one purpose.
@@ -73,9 +76,11 @@ pub struct WorkPlan {
     pub tasks: Vec<Arc<Task>>,
     pub scopes: Option<Arc<ScopeTask>>,
     pub pick: Option<Arc<PickTask>>,
-    /// Targets still wanted, finished or not. The working photos they render
-    /// from are visible.
-    pub wanted: Vec<Target>,
+    /// Targets whose working photos are protected from eviction: the viewed
+    /// and editing photos' images in use, and unfinished work. Another photo shown only
+    /// with finished images may lose its working photo under memory pressure.
+    /// Its next render reloads it.
+    pub eviction_protected: Vec<Target>,
 }
 impl WorkPlan {
     pub fn task(&self, target: &Target) -> Option<&Arc<Task>> {
@@ -137,6 +142,9 @@ fn retired(entry: &Desired, reason: &'static str) {
 pub struct RenderCoordinator {
     next_id: u64,
     desired: Vec<Desired>,
+    /// The images in use for the viewed and editing photos, whether or not
+    /// they have work.
+    protected_in_use: Vec<Target>,
     scopes: Option<Arc<ScopeTask>>,
     pick: Option<Arc<PickTask>>,
 }
@@ -160,6 +168,11 @@ impl RenderCoordinator {
     /// image in use, a loading photo keeps its work, a history photo keeps only
     /// finished images, and all other work stops.
     pub fn reconcile(&mut self, photos: &Photos, in_use: &[RenderRequest]) {
+        self.protected_in_use = in_use
+            .iter()
+            .filter(|request| photos.eviction_protected.contains(&request.path))
+            .map(Target::of)
+            .collect();
         self.desired.retain(|entry| {
             let target = &entry.task.stamp.target;
             let (keep, reason) = if photos.loading.contains(&target.path) {
@@ -183,6 +196,17 @@ impl RenderCoordinator {
                 retired(entry, reason);
             }
             keep
+        });
+    }
+
+    /// List work in the planner's order, which the executor follows within a
+    /// priority tier. Work for loading photos, which the plan omits, goes last.
+    pub fn order_as(&mut self, in_use: &[RenderRequest]) {
+        self.desired.sort_by_key(|entry| {
+            in_use
+                .iter()
+                .position(|request| Target::of(request) == entry.task.stamp.target)
+                .unwrap_or(in_use.len())
         });
     }
 
@@ -305,10 +329,17 @@ impl RenderCoordinator {
                 .collect(),
             scopes: self.scopes.clone(),
             pick: self.pick.clone(),
-            wanted: self
-                .desired
+            eviction_protected: self
+                .protected_in_use
                 .iter()
-                .map(|entry| entry.task.stamp.target.clone())
+                .cloned()
+                .chain(
+                    self.desired
+                        .iter()
+                        .filter(|entry| !entry.settled)
+                        .map(|entry| entry.task.stamp.target.clone())
+                        .filter(|target| !self.protected_in_use.contains(target)),
+                )
                 .collect(),
         })
     }

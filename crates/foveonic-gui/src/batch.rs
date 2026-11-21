@@ -520,7 +520,17 @@ fn read_settings(scan: &Scan, cache: &Cache, superseded: impl Fn() -> bool) -> O
                     .map(Ok)
                     .unwrap_or_else(|| scan.defaults.from_properties(&selection.properties))
             } else {
-                foveonic::sidecar::load(&path)?.map(Ok).unwrap_or_else(|| {
+                let saved = foveonic::sidecar::load(&path)?;
+                if let foveonic::sidecar::Saved::Malformed(error) = &saved {
+                    scan_failure(
+                        "load-editing-settings-using-defaults",
+                        &path,
+                        scan.generation,
+                        error.as_ref(),
+                    );
+                    result.errors.push(format!("{}: {error}", path.display()));
+                }
+                saved.settings().map(Ok).unwrap_or_else(|| {
                     scan.defaults
                         .from_properties(&cache.capture_properties(&path)?)
                 })

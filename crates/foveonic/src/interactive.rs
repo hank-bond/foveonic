@@ -1086,7 +1086,7 @@ impl Cache {
             .min_by_key(|(_, edit_use)| *edit_use)
     }
     /// The edit use of this photo's least recently used restart input.
-    /// `keep_latest` leaves out the latest edit's inputs, which a visible photo
+    /// `keep_latest` leaves out the latest edit's inputs, which an eviction-protected photo
     /// keeps so the edit in progress never restarts from the file.
     pub(crate) fn oldest_restart_use(&self, keep_latest: bool) -> Option<u64> {
         self.oldest_restart_input(keep_latest)

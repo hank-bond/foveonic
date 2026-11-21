@@ -147,7 +147,7 @@ pub(super) fn prepare_assets(
     metadata: &Metadata,
     original: &[u8],
 ) -> Result<PreparedSelection> {
-    let recipe = sidecar::load(path)?;
+    let recipe = recorded_recipe(path)?;
     crate::decode_pool::cpu(|| prepare_assets_cpu(path, identity, metadata, original, recipe))
 }
 
@@ -227,7 +227,7 @@ pub(super) fn publish(
     let snapshot_current = || {
         current()
             && Identity::read(path).is_ok_and(|now| now == identity)
-            && sidecar::load(path).is_ok_and(|now| now == recipe)
+            && recorded_recipe(path).is_ok_and(|now| now == recipe)
     };
     if !snapshot_current() {
         return Err("source or saved recipe changed during cache preparation".into());
@@ -237,6 +237,16 @@ pub(super) fn publish(
         previews::publish(root, preview, settings, nearby, current)?;
     }
     publish_record(root, &identity, record, settings, nearby, &snapshot_current)
+}
+
+/// The recipe a cached selection records. A selection cannot say that its
+/// recipe was malformed, so such a photo stays uncached and readers that fall
+/// back to the sidecar report the recipe.
+pub(super) fn recorded_recipe(path: &Path) -> Result<Option<render::Settings>> {
+    match sidecar::load(path)? {
+        sidecar::Saved::Malformed(error) => Err(error),
+        saved => Ok(saved.settings()),
+    }
 }
 
 pub(super) fn update_recipe(

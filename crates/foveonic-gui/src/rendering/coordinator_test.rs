@@ -473,25 +473,6 @@ fn each_task_maps_to_one_scheduler_purpose() {
 }
 
 #[test]
-fn settled_viewport_targets_stay_visible() {
-    let mut coordinator = RenderCoordinator::default();
-    let current = request("a.x3f", 1, 0.);
-    let stamp = desire(&mut coordinator, current.clone());
-    assert!(coordinator.plan().wanted.contains(&stamp.target));
-    let mut failed = render_result(stamp.clone(), &current);
-    failed.result = crate::rendering::worker::RenderOutcome::Failed("cannot decode source".into());
-    coordinator.handle_result(&failed);
-    assert!(
-        coordinator.plan().tasks.is_empty(),
-        "the finished render leaves the work plan"
-    );
-    assert!(
-        coordinator.plan().wanted.contains(&stamp.target),
-        "the photo it shows is still visible"
-    );
-}
-
-#[test]
 fn finished_images_in_use_keep_their_work_and_others_stop() {
     let mut coordinator = RenderCoordinator::default();
     let origin = SourceOrigin::default();
@@ -515,7 +496,7 @@ fn finished_images_in_use_keep_their_work_and_others_stop() {
     );
     assert!(
         coordinator.desired(&target).is_some(),
-        "a finished patch in use keeps its photo visible"
+        "a finished patch in use stays desired"
     );
     coordinator.reconcile(
         &Photos {
@@ -559,5 +540,55 @@ fn a_late_image_from_a_replaced_file_does_not_bind_its_origin_to_newer_work() {
     assert!(
         coordinator.admit(&second, &new),
         "the newer request's image, from the replaced file, is admitted"
+    );
+}
+
+#[test]
+fn work_follows_the_plan_order_not_when_it_was_first_desired() {
+    let mut coordinator = RenderCoordinator::default();
+    let whole = request("b.x3f", 1, 0.);
+    desire(&mut coordinator, whole.clone());
+    let mut patch = (*request("a.x3f", 2, 0.)).clone();
+    patch.detail = true;
+    patch.settings.preview_region = Some([0, 0, 64, 64]);
+    let patch = Arc::new(patch);
+    desire(&mut coordinator, patch.clone());
+    coordinator.order_as(&[(*patch).clone(), (*whole).clone()]);
+    let order: Vec<_> = coordinator
+        .plan()
+        .tasks
+        .iter()
+        .map(|task| task.stamp.target.clone())
+        .collect();
+    assert_eq!(order, [Target::of(&patch), Target::of(&whole)]);
+}
+
+#[test]
+fn the_viewed_and_editing_photos_images_and_unfinished_work_are_eviction_protected() {
+    let mut coordinator = RenderCoordinator::default();
+    let (edited, shown) = (request("a.x3f", 1, 0.), request("b.x3f", 2, 0.));
+    // The viewed photo's image is current, so it has no work and no task.
+    let viewed = request("c.x3f", 3, 0.);
+    let edited_stamp = desire(&mut coordinator, edited.clone());
+    let shown_stamp = desire(&mut coordinator, shown.clone());
+    let in_use = [(*edited).clone(), (*shown).clone(), (*viewed).clone()];
+    let photos = Photos {
+        planned: vec![edited.path.clone(), shown.path.clone(), viewed.path.clone()],
+        eviction_protected: vec![viewed.path.clone(), edited.path.clone()],
+        ..Default::default()
+    };
+    coordinator.reconcile(&photos, &in_use);
+    let protected = |coordinator: &RenderCoordinator| coordinator.plan().eviction_protected.clone();
+    assert_eq!(
+        protected(&coordinator),
+        [Target::of(&edited), Target::of(&viewed), Target::of(&shown)],
+        "unfinished work keeps the shown photo too"
+    );
+    coordinator.finish(&edited_stamp);
+    coordinator.finish(&shown_stamp);
+    assert_eq!(
+        protected(&coordinator),
+        [Target::of(&edited), Target::of(&viewed)],
+        "a finished photo that is only shown can release its working photo"
     );
 }

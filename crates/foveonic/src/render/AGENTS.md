@@ -27,7 +27,7 @@ The [public renderer](../render.rs) owns the engine and display/export entry poi
 - **[memory.rs](./memory.rs)** Inventories shared processing owners and trims retained memory back to one caller-set target.
 - **[preparation.rs](./preparation.rs)** Reuses bounded immutable metadata preparation independently of decoded sensor ownership.
 - **[quality.rs](./quality.rs)** Separates photographic processing quality from the image's working resolution.
-- **[queue.rs](./queue.rs)** Orders submitted jobs by priority tier, then by when each target was first submitted.
+- **[queue.rs](./queue.rs)** Orders submitted jobs by priority tier, then by rank, then by when each target was first submitted.
 - **[reduced.rs](./reduced.rs)** Prepares sensor data downsampled to the working scale and renders reduced working photos.
 - **[scale.rs](./scale.rs)** Describes power-of-two sensor sampling and the covered, padded working grid.
 - **[scheduler.rs](./scheduler.rs)** Owns the job queue, the working set and admission, and advances admitted jobs together one step per tick.

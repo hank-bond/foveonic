@@ -220,7 +220,7 @@ impl App {
         if target == "multi-open" {
             return !self.folder_loader.loading()
                 && self.browser.import_mode
-                && self.sidecars.ready()
+                && self.selection_loaded()
                 && !self.worker.busy();
         }
         if !smoke.direct_events.is_empty() || self.worker.busy() {

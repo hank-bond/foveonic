@@ -19,16 +19,30 @@ use std::{path::PathBuf, sync::Arc};
 pub struct Config {
     pub processing_quality: ProcessingQuality,
     pub recipes: CachedRecipes,
-    pub overrides: [String; 2],
     pub calibration: Option<Arc<Calibration>>,
 }
 impl PartialEq for Config {
     fn eq(&self, other: &Self) -> bool {
         self.processing_quality == other.processing_quality
             && self.recipes == other.recipes
-            && self.overrides == other.overrides
             && self.calibration.as_ref().map(|c| c.signature())
                 == other.calibration.as_ref().map(|c| c.signature())
+    }
+}
+
+/// What idle preparation last found nothing to do for: a configuration and the
+/// cache's preparation window. The window grows within one generation as
+/// prefetched copies are verified, so its contents count, not only its generation.
+pub struct Exhausted {
+    config: Arc<Config>,
+    window: (u64, Vec<PathBuf>),
+}
+impl Exhausted {
+    pub fn new(config: Arc<Config>, window: (u64, Vec<PathBuf>)) -> Self {
+        Self { config, window }
+    }
+    pub fn covers(&self, config: &Arc<Config>, window: &(u64, Vec<PathBuf>)) -> bool {
+        Arc::ptr_eq(&self.config, config) && &self.window == window
     }
 }
 
@@ -112,10 +126,7 @@ impl Preparation {
                 let Some(selection) = cache.selection(&path) else {
                     return Ok(false);
                 };
-                let mut settings = crate::sidecars::selection_settings(
-                    config.recipes.resolve(&path, selection)?,
-                    &config.overrides,
-                );
+                let mut settings = config.recipes.resolve(&path, selection)?;
                 settings.processing_quality = config.processing_quality;
                 let Some(source) = photos
                     .shared_source(working, &path, &origin)
@@ -177,5 +188,31 @@ impl Preparation {
             self.attempted.push((path, origin));
         }
         ran.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_window_that_grows_within_its_generation_is_prepared_again() {
+        let sidecars = crate::sidecars::Session::new(
+            eframe::egui::Context::default(),
+            false,
+            Arc::new(Cache::new()),
+        );
+        let config = Arc::new(Config {
+            processing_quality: ProcessingQuality::Quality,
+            recipes: sidecars.cached_recipes(&[]),
+            calibration: None,
+        });
+        let exhausted = Exhausted::new(config.clone(), (2, Vec::new()));
+        assert!(exhausted.covers(&config, &(2, Vec::new())));
+        assert!(
+            !exhausted.covers(&config, &(2, vec![PathBuf::from("verified.x3f")])),
+            "a newly verified neighbor needs preparing"
+        );
+        assert!(!exhausted.covers(&Arc::new((*config).clone()), &(2, Vec::new())));
     }
 }

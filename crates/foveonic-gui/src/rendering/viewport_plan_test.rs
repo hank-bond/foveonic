@@ -63,7 +63,6 @@ fn photo<'a>(path: &str, exposure: f32) -> PhotoInputs<'a, Image> {
     PhotoInputs {
         path: path.into(),
         request: Some(request(path, exposure)),
-        failed: false,
         images: PhotoImages {
             whole: None,
             patch: None,
@@ -144,22 +143,6 @@ fn a_photo_whose_settings_are_loading_waits_and_keeps_its_last_view() {
 }
 
 #[test]
-fn a_photo_whose_settings_failed_plans_nothing_so_its_work_stops() {
-    let mut failed = photo("a.x3f", 0.);
-    failed.failed = true;
-    // Settings that fail to load leave no request, as when they are loading.
-    failed.request = None;
-    let publication = run(vec![failed, photo("b.x3f", 0.)], None);
-    assert_eq!(paths(&publication.photos.planned), ["a.x3f", "b.x3f"]);
-    assert!(publication.photos.loading.is_empty());
-    assert_eq!(publication.unplanned, [(PathBuf::from("a.x3f"), "failed")]);
-    assert!(publication
-        .planned
-        .iter()
-        .all(|planned| planned.request.path == Path::new("b.x3f")));
-}
-
-#[test]
 fn a_request_that_failed_to_render_is_not_rendered_again() {
     let publication = run_with(vec![photo("a.x3f", 0.)], None, HashMap::new(), |_| true);
     assert_eq!(publication.planned.len(), 1);
@@ -187,7 +170,7 @@ fn each_image_gets_its_own_id_and_the_selected_photos_first_image_is_tracked() {
 }
 
 #[test]
-fn a_zoomed_photo_plans_its_patch_first_and_its_whole_image_waits_its_turn() {
+fn a_zoomed_photo_plans_its_patch_before_its_whole_image() {
     let stale = whole(0.);
     let mut zoomed = photo("a.x3f", 1.);
     zoomed.images.whole = Some(&stale);
@@ -209,8 +192,8 @@ fn a_zoomed_photo_plans_its_patch_first_and_its_whole_image_waits_its_turn() {
     assert!(!whole.request.detail);
     assert_eq!(
         whole.state,
-        ImageState::Waiting,
-        "whole images wait until no patch is needed"
+        ImageState::Render,
+        "a whole image follows the patch in order instead of waiting for it"
     );
     assert_eq!(patch.tracked, Some(0));
 }
@@ -350,5 +333,20 @@ fn the_progress_pass_follows_every_edited_photos_first_image_selected_first() {
         selected.tracked,
         Some(0),
         "the selected photo leads the pass"
+    );
+}
+
+#[test]
+fn the_viewed_photo_and_the_editing_selection_are_eviction_protected() {
+    let publication = run_editing(
+        vec![photo("a.x3f", 0.), photo("b.x3f", 0.), photo("c.x3f", 0.)],
+        Some("a.x3f"),
+        &[PathBuf::from("b.x3f")],
+        HashMap::new(),
+        |_| false,
+    );
+    assert_eq!(
+        paths(&publication.photos.eviction_protected),
+        ["a.x3f", "b.x3f"]
     );
 }
