@@ -1637,3 +1637,31 @@ fn viewport_tools_leave_browser_selection_and_pointer_behavior_ordinary() {
         }
     }
 }
+
+#[test]
+fn shift_down_keeps_extending_when_the_app_selects_another_photo() {
+    let mut fixture = Fixture::new(Organizer::List);
+    fixture.select_first();
+    let shift_down = || {
+        vec![egui::Event::Key {
+            key: egui::Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::SHIFT,
+        }]
+    };
+    for _ in 0..8 {
+        fixture.frame(shift_down());
+    }
+    assert_eq!(fixture.browser.highlighted.len(), 9);
+    // Beyond the editing limit the app selects the first edited photo instead.
+    fixture.selected = Some(fixture.browser.files[0].clone());
+    fixture.frame(vec![]);
+    fixture.frame(shift_down());
+    assert_eq!(
+        fixture.browser.highlighted.len(),
+        10,
+        "the range keeps growing from the browser's own cursor"
+    );
+}

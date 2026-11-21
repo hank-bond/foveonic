@@ -205,6 +205,12 @@ impl Browser {
         self.refresh_filter();
     }
 
+    /// Start a new range at this photo: both its anchor and the cursor.
+    pub(super) fn restart_range(&mut self, path: &Path) {
+        self.anchor = Some(path.to_owned());
+        self.cursor = Some(path.to_owned());
+    }
+
     pub(super) fn highlight(&mut self, path: &Path, files: &[PathBuf], modifiers: egui::Modifiers) {
         self.selection_generation = self.selection_generation.wrapping_add(1);
         if modifiers.shift {
@@ -219,6 +225,7 @@ impl Browser {
                 }
                 self.highlighted
                     .extend(files[start.min(end)..=start.max(end)].iter().cloned());
+                self.cursor = Some(path.to_owned());
                 return;
             }
         }
@@ -230,7 +237,7 @@ impl Browser {
             self.highlighted.clear();
             self.highlighted.insert(path.to_owned());
         }
-        self.anchor = Some(path.to_owned());
+        self.restart_range(path);
     }
 
     pub(super) fn toggle_highlighted(&mut self, files: &[PathBuf]) {

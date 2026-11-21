@@ -124,6 +124,9 @@ pub struct Browser {
     actions: Vec<(BrowserAction, egui::Modifiers)>,
     highlighted: HashSet<PathBuf>,
     anchor: Option<PathBuf>,
+    /// Where arrow keys move from: the browser's own position, so the app
+    /// choosing another photo within the selection does not move it.
+    cursor: Option<PathBuf>,
     last_active: Option<PathBuf>,
     review_clicked: bool,
     focus_requested: bool,
@@ -219,6 +222,7 @@ impl Browser {
             actions: Vec::new(),
             highlighted: HashSet::new(),
             anchor: None,
+            cursor: None,
             last_active: None,
             review_clicked: false,
             focus_requested: false,
@@ -292,6 +296,7 @@ impl Browser {
         self.excluded.clear();
         self.highlighted.clear();
         self.anchor = None;
+        self.cursor = None;
         self.last_active = None;
         self.clear_selection = false;
         self.decode_states = Arc::new(HashMap::new());
@@ -790,11 +795,13 @@ impl Browser {
         let focus_requested = std::mem::take(&mut self.focus_requested);
         if self.last_active.as_deref() != selected {
             if let Some(path) = selected.filter(|path| !self.excluded.contains(*path)) {
+                // A photo outside the selection replaces it and moves the cursor;
+                // one within it leaves the cursor where the user put it.
                 if !self.highlighted.contains(path) {
                     self.highlighted.clear();
                     self.highlighted.insert(path.to_owned());
                     self.selection_generation = self.selection_generation.wrapping_add(1);
-                    self.anchor = Some(path.to_owned());
+                    self.restart_range(path);
                 }
             }
             self.last_active = selected.map(Path::to_owned);
@@ -880,7 +887,11 @@ impl Browser {
             });
         let files = &view.files;
         let layout = &view.layout;
-        let mut active = selected.and_then(|path| files.iter().position(|p| p == path));
+        let mut active = self
+            .cursor
+            .as_deref()
+            .or(selected)
+            .and_then(|path| files.iter().position(|p| p == path));
         let actions = std::mem::take(&mut self.actions);
         if !actions.is_empty() {
             ui.ctx().request_repaint();
@@ -901,7 +912,7 @@ impl Browser {
                                     self.highlighted.insert(path.to_owned());
                                     self.selection_generation =
                                         self.selection_generation.wrapping_add(1);
-                                    self.anchor = Some(path.to_owned());
+                                    self.restart_range(path);
                                 }
                             }
                             if matches!(action, BrowserAction::TogglePick) {
@@ -1076,7 +1087,7 @@ impl Browser {
             self.selection_generation = self.selection_generation.wrapping_add(1);
             if let Some(next) = &chosen {
                 self.highlighted.insert(next.path.clone());
-                self.anchor = Some(next.path.clone());
+                self.restart_range(&next.path);
             }
             self.clear_selection = chosen.is_none();
             ui.ctx().request_repaint();
