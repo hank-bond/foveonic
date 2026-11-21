@@ -356,9 +356,10 @@ impl Settings {
             Some(crate::source::ProcessingFamily::Quattro) => {
                 self.is_monochrome() == other.is_monochrome()
             }
+            // Color Auto follows the noise tables; monochrome uses a fixed base.
             Some(crate::source::ProcessingFamily::Merrill) => {
                 self.is_monochrome() == other.is_monochrome()
-                    && (!self.is_monochrome() || self.automatic_color_dq_matches(other))
+                    && (self.is_monochrome() || self.automatic_color_dq_matches(other))
             }
             None => false,
         }

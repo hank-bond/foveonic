@@ -436,6 +436,9 @@ pub(super) fn prepare_dng_appearance(
     Ok(prepared)
 }
 
+/// The original's fixed black-and-white sharpening base.
+const MERRILL_MONOCHROME_SHARPEN_BASE: f32 = 1.25;
+
 /// Keep source-derived sharpening policy beside each family's recipe.
 pub(super) fn default_sharpen_amount(
     settings: &Settings,
@@ -445,7 +448,9 @@ pub(super) fn default_sharpen_amount(
     match metadata.processing_family().ok() {
         Some(ProcessingFamily::Classic) => Ok(1.),
         Some(ProcessingFamily::Quattro) => quattro::default_sharpen_amount(settings, metadata),
-        Some(ProcessingFamily::Merrill) if !settings.is_monochrome() => Ok(0.),
+        Some(ProcessingFamily::Merrill) if settings.is_monochrome() => {
+            Ok(MERRILL_MONOCHROME_SHARPEN_BASE)
+        }
         _ => Ok(crate::noise::couplings(
             metadata,
             &settings.white_balance,

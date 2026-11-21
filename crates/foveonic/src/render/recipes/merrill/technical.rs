@@ -379,7 +379,7 @@ pub(super) fn build(
     };
     if settings.sharpen_selected() {
         let amount = profile.measure("prepare sharpening amount", || {
-            settings.effective_sharpen_amount(source.metadata())
+            super::applied_sharpen_amount(settings, source.metadata())
         })?;
         if amount != 0. || names.contains(&"sharpen.rgb") {
             let signal = signal.ok_or("missing sharpening signal")?;

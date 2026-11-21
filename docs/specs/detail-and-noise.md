@@ -29,7 +29,7 @@ Fine and Coarse amounts act on log-luminance residual bands over a range from ze
 
 Both detail amounts start at one. At those values, the bands recombine neutrally and the spatial pyramid is skipped, including for the neutral change map. One effective-control resolver treats disabled and neutral detail identically for recipe construction, inspection availability and GPU preparation. Saved enable choices and sizes remain unchanged. With Noise off and Detail neutral, the recipe bypasses the entire optional filtering foundation. When luminance cleanup is zero, photographic texture processing must not depend on luminance diffusion or pattern conditioning. Explicit inspection of those stages may still run them. Column-only cleanup must not require the filtered base. Lower amounts deliberately soften their bands. These frequency bands cannot distinguish hair from pores at the same scale.
 
-Restoration stays in calibrated sensor tiles before camera color conversion and ColorDQ. ColorDQ uses its camera-derived amount with the middle-preset cap unless manually set. [Final sharpening](./native-sharpening.md) remains a separate edit using the actual reconstructed RGB. Merrill color Auto sharpening is zero. Manual sharpening retains its meaning.
+Restoration stays in calibrated sensor tiles before camera color conversion and ColorDQ. ColorDQ uses its camera-derived amount with the middle-preset cap unless manually set. [Final sharpening](./native-sharpening.md) remains a separate edit using the actual reconstructed RGB. Merrill color Auto sharpening uses the camera noise-table base. Manual sharpening retains its meaning.
 
 ### Weak-reference chroma safeguard
 

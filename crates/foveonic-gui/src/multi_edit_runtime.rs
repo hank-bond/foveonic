@@ -1061,7 +1061,7 @@ mod tests {
     }
 
     #[test]
-    fn wb_dependent_colordq_does_not_block_constant_color_sharpening_or_exposure() {
+    fn wb_dependent_automatic_defaults_wait_for_a_render_while_exposure_edits_apply() {
         let mut runtime = runtime();
         for photo in runtime.photos.values_mut() {
             photo.metadata = Some(Arc::new(crate::capture::processing_metadata(
@@ -1073,7 +1073,9 @@ mod tests {
                 ..Default::default()
             });
         }
-        assert!(runtime.optional_readiness()[0].1);
+        // Merrill color Auto sharpening and ColorDQ both follow the noise
+        // tables, which depend on white balance.
+        assert!(!runtime.optional_readiness()[0].1);
         assert!(!runtime.optional_readiness()[1].1);
         assert!(!runtime.apply_edits(
             &[Edit::Optional {

@@ -376,13 +376,22 @@ fn classic_auto_sharpening_matches_recipe_default_without_merrill_descriptors() 
 }
 
 #[test]
-fn merrill_color_auto_sharpening_is_zero_and_monochrome_keeps_camera_coefficients() {
+fn merrill_color_auto_sharpening_uses_the_camera_base_and_monochrome_a_fixed_one() {
     let mut metadata = metadata();
     metadata
         .properties
         .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
     let mut settings = Settings::new("Sunlight", "Standard");
     assert_eq!(settings.sharpen_amount, None);
+    let camera_base = |settings: &Settings, metadata: &Metadata| {
+        crate::noise::couplings(
+            metadata,
+            &settings.white_balance,
+            settings.sensor_noise_controls(),
+        )
+        .unwrap()
+        .sharpen_base
+    };
     for choice in 0..=4 {
         settings.reconstruction = Some(crate::noise::Controls {
             chroma: choice,
@@ -394,28 +403,34 @@ fn merrill_color_auto_sharpening_is_zero_and_monochrome_keeps_camera_coefficient
             },
             ..Default::default()
         });
-        assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 0.);
+        let base = camera_base(&settings, &metadata);
+        assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), base);
         settings.output_size = Some([9, 17]);
         settings.tiff_color_space = Some(TiffColorSpace::ProPhotoRgb);
-        assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 0.);
+        assert_eq!(
+            settings.effective_sharpen_amount(&metadata).unwrap(),
+            base,
+            "export size does not change Auto"
+        );
     }
     settings.reconstruction = None;
-    assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 0.);
+    // ISO 200 lies one third between the source knots, giving the base 1.75.
+    assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 1.75);
     settings.sharpen_amount = Some(0.75);
     assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 0.75);
     settings.sharpen_amount = None;
-    settings.rendering = Rendering::Monochrome;
-    // ISO 200 lies one third between the source knots, giving the mono base 1.75.
-    assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 1.75);
-    assert_eq!(
-        crate::inspection::comparison_input(&settings, "sharpen.rgb", None),
-        Some("monochrome.rgb")
-    );
     let mut zero = metadata.clone();
     let table = zero.matrices.get_mut("ISONoiseSettings").unwrap();
     table.values[12] = -1.;
     table.values[25] = -2.;
     assert_eq!(settings.effective_sharpen_amount(&zero).unwrap(), 0.);
+    settings.rendering = Rendering::Monochrome;
+    assert_eq!(settings.effective_sharpen_amount(&metadata).unwrap(), 1.25);
+    assert_eq!(
+        crate::inspection::comparison_input(&settings, "sharpen.rgb", None),
+        Some("monochrome.rgb")
+    );
+    settings.rendering = Rendering::Color;
     metadata.matrices.remove("Histogram");
     assert!(settings.effective_sharpen_amount(&metadata).is_err());
 }

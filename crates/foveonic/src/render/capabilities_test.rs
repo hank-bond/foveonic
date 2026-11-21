@@ -139,7 +139,6 @@ fn merrill_texture_defaults_keep_manual_sharpening_independent() {
         matrices: Default::default(),
         lists: Default::default(),
     };
-    assert_eq!(s.effective_sharpen_amount(&metadata).unwrap(), 0.);
     s.sharpen_amount = Some(0.75);
     assert_eq!(s.effective_sharpen_amount(&metadata).unwrap(), 0.75);
 }

@@ -189,7 +189,7 @@ pub(super) fn build(
     let mut linear = node!(Stage::Expand, &[corrected]);
     if settings.sharpen_selected() {
         let amount = profile.measure("prepare sharpening amount", || {
-            settings.effective_sharpen_amount(metadata)
+            super::applied_sharpen_amount(settings, metadata)
         })?;
         linear = recipe
             .graph
