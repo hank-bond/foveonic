@@ -1,6 +1,5 @@
 //! Shows request-to-image time and discrete completed loading and rendering stages.
 
-use crate::rendering::{coordinator::Target, view_plan::ImageState};
 use eframe::egui;
 use foveonic::{render::RenderProgress, source::LoadStage};
 use std::{
@@ -44,156 +43,92 @@ impl Snapshot {
     }
 }
 
-/// One update's images, which the bar follows together in one pass. Each
-/// section belongs to one image target, so the sections stay fixed while a newer
-/// request for the same target takes its section over.
-struct Pass {
-    images: Vec<Image>,
-    started: Instant,
-    finished: Option<Instant>,
-    failed: bool,
+/// Where one image of the update stands, as the runtime publishes it from the
+/// plan and the coordinator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SectionState {
+    /// Already current when the update began.
+    Ready,
+    /// A whole image waiting for patches to finish.
+    Waiting,
+    Running,
+    Done,
+    Failed,
 }
-struct Image {
-    target: Target,
-    request_id: u64,
-    fraction: f32,
-    /// Received or failed.
-    done: bool,
-    /// Not wanted yet: a whole image waiting for patches to finish.
-    waiting: bool,
-}
-/// One image of an update for the progress pass to follow.
+#[derive(Clone, Copy, Debug)]
 pub struct Section {
-    pub target: Target,
+    /// The request whose work the section follows.
     pub request_id: u64,
-    /// A ready image's section starts complete; a waiting one keeps the pass open.
-    pub state: ImageState,
+    pub state: SectionState,
 }
-impl Pass {
-    fn snapshot(&self) -> Snapshot {
-        let total = self.images.len().max(1) as f32;
-        Snapshot {
-            request_id: self.images.first().map_or(0, |image| image.request_id),
-            fraction: self.images.iter().map(|image| image.fraction).sum::<f32>() / total,
-            checkpoints: self.images.len(),
-            started: self.started,
-            finished: self.finished,
-            failed: self.failed,
-        }
-    }
-    fn image(&mut self, request_id: u64) -> Option<&mut Image> {
-        if self.finished.is_some() {
-            return None;
-        }
-        self.images
-            .iter_mut()
-            .find(|image| image.request_id == request_id)
-    }
+
+/// The update the bar follows and how far each running request has come. The
+/// runtime publishes the sections and timing; the worker reports the fractions.
+/// The bar's snapshot is computed from both, so it keeps no lifecycle of its own.
+#[derive(Default)]
+struct Shared {
+    sections: Vec<Section>,
+    started: Option<Instant>,
+    finished: Option<Instant>,
+    fractions: std::collections::HashMap<u64, f32>,
 }
 
 #[derive(Clone, Default)]
-pub struct Tracker(Arc<Mutex<Option<Pass>>>);
+pub struct Tracker(Arc<Mutex<Shared>>);
 impl Tracker {
-    /// Follow an update's images. While a pass runs, an image for a target it
-    /// already follows takes that section over and other images join it, so one
-    /// pass covers the whole update; otherwise a new pass starts. A single
-    /// request is a pass of one.
-    pub fn begin(&self, sections: Vec<Section>, started: Instant) {
-        let image = |section: Section| {
-            let ready = section.state == ImageState::Ready;
-            Image {
-                target: section.target,
-                request_id: section.request_id,
-                fraction: if ready { 1. } else { 0. },
-                done: ready,
-                waiting: section.state == ImageState::Waiting,
-            }
-        };
-        let mut pass = self.0.lock().unwrap();
-        if let Some(pass) = pass.as_mut().filter(|pass| pass.finished.is_none()) {
-            for section in sections {
-                match pass
-                    .images
-                    .iter_mut()
-                    .find(|image| image.target == section.target)
-                {
-                    // A section whose image started or is now current keeps its progress.
-                    Some(current)
-                        if current.request_id == section.request_id
-                            || section.state == ImageState::Ready =>
-                    {
-                        current.waiting &= section.state == ImageState::Waiting;
-                    }
-                    Some(current) => *current = image(section),
-                    None => pass.images.push(image(section)),
-                }
-            }
-            return;
-        }
-        *pass = Some(Pass {
-            images: sections.into_iter().map(image).collect(),
-            started,
-            finished: None,
-            failed: false,
-        });
+    /// The runtime publishes the update's sections, started when its work began
+    /// and finished once every section is done.
+    pub fn publish(&self, sections: Vec<Section>, started: Instant, finished: Option<Instant>) {
+        let mut shared = self.0.lock().unwrap();
+        // Fractions only matter for requests still in the pass.
+        shared
+            .fractions
+            .retain(|id, _| sections.iter().any(|section| section.request_id == *id));
+        shared.sections = sections;
+        shared.started = Some(started);
+        shared.finished = finished;
     }
     pub fn snapshot(&self) -> Option<Snapshot> {
-        self.0.lock().unwrap().as_ref().map(Pass::snapshot)
+        let shared = self.0.lock().unwrap();
+        let started = shared.started?;
+        let reported = |section: &Section| {
+            shared
+                .fractions
+                .get(&section.request_id)
+                .copied()
+                .unwrap_or(0.)
+        };
+        let fraction = |section: &Section| match section.state {
+            SectionState::Ready | SectionState::Done => 1.,
+            SectionState::Waiting => 0.,
+            SectionState::Running | SectionState::Failed => reported(section),
+        };
+        let total = shared.sections.len().max(1) as f32;
+        Some(Snapshot {
+            request_id: shared
+                .sections
+                .first()
+                .map_or(0, |section| section.request_id),
+            fraction: shared.sections.iter().map(fraction).sum::<f32>() / total,
+            checkpoints: shared.sections.len(),
+            started,
+            finished: shared.finished,
+            failed: shared
+                .sections
+                .iter()
+                .any(|section| section.state == SectionState::Failed),
+        })
     }
     pub fn clear(&self) {
-        *self.0.lock().unwrap() = None;
+        *self.0.lock().unwrap() = Shared::default();
     }
-    fn advance(&self, request_id: u64, fraction: f32) -> bool {
-        let mut pass = self.0.lock().unwrap();
-        let Some(image) = pass.as_mut().and_then(|pass| pass.image(request_id)) else {
-            return false;
-        };
-        if fraction > image.fraction && fraction.is_finite() {
-            image.fraction = fraction.min(1.);
-            return true;
-        }
-        false
-    }
-    /// Finish an image on UI receipt, including worker queueing, GPU completion
-    /// and reply delivery. Other images keep rendering after one fails, so the
-    /// pass finishes once every image is done.
-    pub fn finish(&self, request_id: u64, failed: bool) {
-        let mut pass = self.0.lock().unwrap();
-        let Some(pass) = pass.as_mut() else {
+    fn advance(&self, request_id: u64, fraction: f32) {
+        if !fraction.is_finite() {
             return;
-        };
-        let Some(image) = pass.image(request_id) else {
-            return;
-        };
-        if !failed {
-            image.fraction = 1.;
         }
-        image.done = true;
-        pass.failed |= failed;
-        if pass.images.iter().all(|image| image.done) {
-            pass.finished = Some(Instant::now());
-        }
-    }
-    /// Keep image-stage reporting separate from settlement of the desired render
-    /// set. Idle work ends the pass unless an image still waits its turn.
-    pub fn settle(&self, pending: bool, failed_request_id: Option<u64>) {
-        let mut pass = self.0.lock().unwrap();
-        let Some(pass) = pass.as_mut().filter(|pass| pass.finished.is_none()) else {
-            return;
-        };
-        if failed_request_id
-            .is_some_and(|id| pass.images.iter().any(|image| image.request_id == id))
-        {
-            pass.failed = true;
-        }
-        if !pending && !pass.images.iter().any(|image| image.waiting) {
-            if !pass.failed {
-                for image in &mut pass.images {
-                    image.fraction = 1.;
-                }
-            }
-            pass.finished = Some(Instant::now());
-        }
+        let mut shared = self.0.lock().unwrap();
+        let current = shared.fractions.entry(request_id).or_insert(0.);
+        *current = current.max(fraction.min(1.));
     }
 }
 
@@ -298,104 +233,20 @@ pub fn show(ui: &mut egui::Ui, snapshot: Option<Snapshot>, show_time: bool) -> e
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rendering::request::RequestId;
 
-    /// A section following request `id` for the whole image of `photo`.
-    fn section(photo: &str, id: u64) -> Section {
-        Section {
-            target: Target {
-                path: photo.into(),
-                purpose: crate::rendering::request::Purpose::Current,
-                patch: false,
-            },
-            request_id: id,
-            state: ImageState::Render,
-        }
-    }
-
-    fn desire(
-        coordinator: &mut crate::rendering::coordinator::RenderCoordinator,
-        path: &str,
-        request_id: u64,
-    ) -> crate::rendering::coordinator::Stamp {
-        let request = Arc::new(crate::rendering::request::RenderRequest {
-            detail: false,
-            framing_preview: false,
-            calibration: None,
-            rendition: crate::editor::Rendition::Current,
-            id: RequestId(request_id),
-            path: path.into(),
-            settings: foveonic::render::Settings::new("Sunlight", "Standard"),
-            preview_scale: foveonic::render::Scale::new(8).unwrap(),
-            processing_quality: foveonic::render::ProcessingQuality::Speed,
-            output: "final".into(),
-            comparison: false,
-        });
-        let target = crate::rendering::coordinator::Target::of(&request);
-        coordinator.desire(request, None, Instant::now(), false);
-        coordinator.desired(&target).unwrap().stamp.clone()
+    fn section(request_id: u64, state: SectionState) -> Section {
+        Section { request_id, state }
     }
 
     #[test]
-    fn sibling_completion_order_cannot_leave_settled_progress_running() {
-        let mut coordinator = crate::rendering::coordinator::RenderCoordinator::default();
-        let a = desire(&mut coordinator, "a.x3f", 1);
-        let b = desire(&mut coordinator, "b.x3f", 2);
+    fn stages_are_discrete_and_the_bar_reads_each_running_requests_fraction() {
         let tracker = Tracker::default();
-        let began = Instant::now();
-        tracker.begin(vec![section("b.x3f", b.request_id.0)], began);
-        Reporter::new(tracker.clone(), b.request_id.0).rendered(RenderProgress::Stage {
-            completed: 1,
-            total: 1,
-        });
-
-        coordinator.finish(&b);
-        tracker.settle(coordinator.busy(), None);
-        assert!(tracker.snapshot().unwrap().running());
-        assert_eq!(tracker.snapshot().unwrap().fraction, 0.8);
-
-        coordinator.finish(&a);
-        tracker.settle(coordinator.busy(), None);
-        let done = tracker.snapshot().unwrap();
-        assert!(!done.running());
-        assert_eq!(done.fraction, 1.);
-        assert_eq!(done.request_id, b.request_id.0);
-        assert_eq!(done.started, began);
-    }
-
-    #[test]
-    fn retiring_last_desire_settles_without_another_image_reply() {
-        let mut coordinator = crate::rendering::coordinator::RenderCoordinator::default();
-        let a = desire(&mut coordinator, "a.x3f", 1);
-        let b = desire(&mut coordinator, "b.x3f", 2);
-        let tracker = Tracker::default();
-        tracker.begin(vec![section("b.x3f", b.request_id.0)], Instant::now());
-        coordinator.finish(&a);
-        tracker.settle(coordinator.busy(), None);
-        assert!(tracker.snapshot().unwrap().running());
-
-        coordinator.reconcile(
-            &crate::rendering::coordinator::Photos {
-                loading: vec!["a.x3f".into()],
-                history: vec![],
-                ..Default::default()
-            },
-            &[],
-        );
-        tracker.settle(coordinator.busy(), None);
-        assert!(!tracker.snapshot().unwrap().running());
-        assert_eq!(tracker.snapshot().unwrap().fraction, 1.);
-    }
-
-    #[test]
-    fn stages_are_discrete_and_older_jobs_cannot_advance_or_finish_a_new_request() {
-        let tracker = Tracker::default();
-        tracker.begin(vec![section("a.x3f", 1)], Instant::now());
+        let started = Instant::now();
+        tracker.publish(vec![section(1, SectionState::Running)], started, None);
         let reporter = Reporter::new(tracker.clone(), 1);
         reporter.loaded(LoadStage::FileRead);
         assert_eq!(tracker.snapshot().unwrap().fraction, 0.2);
         reporter.loaded(LoadStage::Decoded);
-        assert_eq!(tracker.snapshot().unwrap().fraction, 0.4);
         reporter.rendered(RenderProgress::Prepared);
         assert_eq!(tracker.snapshot().unwrap().fraction, 0.6);
         reporter.rendered(RenderProgress::Stage {
@@ -404,129 +255,48 @@ mod tests {
         });
         assert!((tracker.snapshot().unwrap().fraction - 0.7).abs() < 1e-6);
         reporter.loaded(LoadStage::FileRead);
-        assert!((tracker.snapshot().unwrap().fraction - 0.7).abs() < 1e-6);
-        // Request 2 replaces request 1 in the same section.
-        tracker.begin(vec![section("a.x3f", 2)], Instant::now());
-        reporter.rendered(RenderProgress::Stage {
-            completed: 4,
-            total: 4,
-        });
-        tracker.finish(1, false);
-        let latest = tracker.snapshot().unwrap();
-        assert_eq!(latest.fraction, 0.);
-        assert!(latest.running());
-        tracker.finish(2, false);
-        let done = tracker.snapshot().unwrap();
-        assert_eq!(done.fraction, 1.);
-        assert!(!done.running());
-        assert_eq!(
-            done.milliseconds(),
-            tracker.snapshot().unwrap().milliseconds()
+        assert!(
+            (tracker.snapshot().unwrap().fraction - 0.7).abs() < 1e-6,
+            "a stage never moves the bar back"
         );
-    }
-    #[test]
-    fn cached_render_and_failure_keep_truthful_completion_and_total_time() {
-        let tracker = Tracker::default();
-        tracker.begin(
-            vec![section("a.x3f", 1)],
-            Instant::now() - std::time::Duration::from_millis(250),
-        );
-        let reporter = Reporter::new(tracker.clone(), 1);
-        reporter.loaded(LoadStage::Decoded);
-        reporter.rendered(RenderProgress::Stage {
-            completed: 0,
-            total: 0,
-        });
-        assert!((tracker.snapshot().unwrap().fraction - 0.8).abs() < 1e-6);
-        tracker.finish(1, true);
-        let failed = tracker.snapshot().unwrap();
-        assert!(failed.failed);
-        assert!(!failed.running());
-        assert!(failed.fraction < 1.);
-        assert!(failed.milliseconds() >= 250.);
-        tracker.clear();
-        assert!(tracker.snapshot().is_none());
     }
 
     #[test]
-    fn a_multi_photo_update_is_one_pass_with_a_checkpoint_per_image() {
+    fn ready_and_done_sections_are_full_waiting_ones_empty_and_failures_mark_the_bar() {
         let tracker = Tracker::default();
-        tracker.begin(
+        tracker.publish(
             vec![
-                section("a.x3f", 1),
-                section("b.x3f", 2),
-                section("c.x3f", 3),
+                section(1, SectionState::Ready),
+                section(2, SectionState::Done),
+                section(3, SectionState::Waiting),
+                section(4, SectionState::Failed),
             ],
             Instant::now(),
+            None,
         );
         let snapshot = tracker.snapshot().unwrap();
-        assert_eq!(snapshot.checkpoints, 3);
-        assert_eq!(
-            snapshot.request_id, 1,
-            "the selected photo's image leads the pass"
-        );
-        tracker.finish(2, false);
-        assert!((tracker.snapshot().unwrap().fraction - 1. / 3.).abs() < 1e-6);
-        assert!(tracker.snapshot().unwrap().running());
-        Reporter::new(tracker.clone(), 1).loaded(LoadStage::Decoded);
-        tracker.finish(1, false);
-        tracker.finish(3, false);
-        let done = tracker.snapshot().unwrap();
-        assert!(!done.running());
-        assert_eq!(done.fraction, 1.);
-    }
-
-    #[test]
-    fn a_failed_image_marks_the_pass_but_the_others_keep_it_running() {
-        let tracker = Tracker::default();
-        tracker.begin(
-            vec![section("a.x3f", 1), section("b.x3f", 2)],
-            Instant::now(),
-        );
-        tracker.finish(1, true);
-        let snapshot = tracker.snapshot().unwrap();
-        assert!(snapshot.failed && snapshot.running());
-        tracker.begin(vec![section("c.x3f", 3)], Instant::now());
-        assert_eq!(
-            tracker.snapshot().unwrap().checkpoints,
-            3,
-            "work starting during the pass joins it"
-        );
-        tracker.finish(2, false);
-        tracker.finish(3, false);
-        assert!(!tracker.snapshot().unwrap().running());
-    }
-
-    #[test]
-    fn sections_stay_fixed_while_newer_requests_and_waiting_images_take_them_over() {
-        let tracker = Tracker::default();
-        let mut waiting = section("a.x3f", 2);
-        waiting.state = ImageState::Waiting;
-        let mut patch = section("a.x3f", 1);
-        patch.target.patch = true;
-        tracker.begin(vec![patch, waiting], Instant::now());
-        tracker.finish(1, false);
-        tracker.settle(false, None);
-        assert!(
-            tracker.snapshot().unwrap().running(),
-            "the whole image waiting for patches keeps the pass open"
-        );
-        tracker.begin(vec![section("a.x3f", 5)], Instant::now());
-        assert_eq!(tracker.snapshot().unwrap().checkpoints, 2);
-        tracker.finish(5, false);
-        assert!(!tracker.snapshot().unwrap().running());
-    }
-
-    #[test]
-    fn photos_already_current_count_as_complete_sections_of_the_pass() {
-        let tracker = Tracker::default();
-        let mut current = section("a.x3f", 1);
-        current.state = ImageState::Ready;
-        tracker.begin(vec![current, section("b.x3f", 2)], Instant::now());
-        let snapshot = tracker.snapshot().unwrap();
-        assert_eq!(snapshot.checkpoints, 2);
+        assert_eq!(snapshot.checkpoints, 4);
         assert_eq!(snapshot.fraction, 0.5);
-        tracker.finish(2, false);
-        assert!(!tracker.snapshot().unwrap().running());
+        assert!(snapshot.failed && snapshot.running());
+        assert_eq!(snapshot.request_id, 1, "the first section leads the pass");
+    }
+
+    #[test]
+    fn a_finished_pass_keeps_its_elapsed_time() {
+        let tracker = Tracker::default();
+        let started = Instant::now() - std::time::Duration::from_millis(250);
+        let finished = Instant::now();
+        tracker.publish(
+            vec![section(1, SectionState::Done)],
+            started,
+            Some(finished),
+        );
+        let snapshot = tracker.snapshot().unwrap();
+        assert!(!snapshot.running());
+        assert!(snapshot.milliseconds() >= 250.);
+        assert_eq!(
+            snapshot.milliseconds(),
+            tracker.snapshot().unwrap().milliseconds()
+        );
     }
 }

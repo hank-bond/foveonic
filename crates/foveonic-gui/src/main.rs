@@ -530,11 +530,8 @@ impl App {
     fn update_browser_preview(&mut self, frame: &worker::RenderResult) {
         update_browser_preview(&mut self.browser, &mut self.previews, frame);
     }
-    fn sync_render_progress(&mut self, failed_request_id: Option<u64>) {
+    fn sync_busy(&mut self) {
         self.busy = self.view_busy();
-        self.worker
-            .progress
-            .settle(self.busy || self.opening.is_some(), failed_request_id);
     }
 
     fn receive(&mut self, ctx: &egui::Context) {
@@ -612,15 +609,7 @@ impl App {
                 current: false,
                 accepted: false,
             });
-        // Each image of the progress pass reaches its checkpoint when it arrives.
-        if handling.current && !matches!(reply.result, worker::RenderOutcome::Cancelled) {
-            self.worker
-                .progress
-                .finish(reply.request.id.0, reply.result.failed());
-        }
-        self.sync_render_progress(
-            (handling.current && reply.result.failed()).then_some(reply.request.id.0),
-        );
+        self.sync_busy();
         if handling.current && reply.request.rendition == editor::Rendition::Current {
             self.multi_edit.complete(
                 &reply.request.path,
@@ -1829,7 +1818,7 @@ impl eframe::App for App {
         self.activity.show(ctx);
         self.update_scopes();
         self.smoke_check_scope_retention();
-        self.sync_render_progress(None);
+        self.sync_busy();
         let mapping = self.displayed_mapping();
         let active = self.active_key();
         let frame = active.as_ref().and_then(|(key, origin)| {

@@ -280,7 +280,6 @@ fn cached_current_sources_restore_after_newer_views_and_photo_switches() {
                 break reply.result.unwrap_rendered();
             }
         };
-        worker.progress.finish(revision, false);
         worker.whole_delivered(RequestId(revision));
         let deadline = Instant::now() + Duration::from_secs(5);
         while worker.busy() {

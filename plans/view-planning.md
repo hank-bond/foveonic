@@ -61,13 +61,15 @@ Then, agreed with the owner (vocabulary in the spec):
    - **Crop and rotation:** every viewport photo shows its crop plane and a drag edits the photo pointed at, without adding it to the editing selection. Crop presets move to a bar under each photo with its own dropdown, so they apply per photo.
    - **Color picks:** a click sets the clicked photo only; a Shift-click samples the clicked photo and sets the whole editing selection, consistent with zoom, pan and double-click.
    - **Single-photo panels:** scopes, navigator and information bar show when the editing selection is one photo. Mini maps and small scopes under each photo are a later exploration.
-   - **Progress:** one pass covers a whole multi-photo update, with checkpoint lines marking each photo's image completing within the pass.
+   - **Progress:** one pass covers a whole multi-photo update, with checkpoint lines marking each photo's image completing within the pass. The bar is a view, not a state machine: the runtime publishes the latest plan's tracked images with their lifecycle from the coordinator (current, waiting, running, done, failed), the worker reports each running request's stage fraction, and the snapshot combines them. Photos that leave the update drop out with the next plan.
    - **Inspection in a full grid:** a slower output switch is accepted; the owner will check it in the app.
    - **Action scope:** pointer actions act on the photo pointed at, Shift extends them to the editing selection, shared controls act on the editing selection and view switches on every viewport photo (spec, "Action scope"). With the Pointer tool, Shift-click keeps selecting a range. One scope function and one edit path implement it, which is also how 4d removes the active photo.
 
 5. **Planning split and GPU-free tests.** `viewport_photo_inputs()` reads each photo's inputs; a pure `plan_photos` returns the publication. Tests per case: loading, failed, Before while zoomed, loupe on an unedited photo, history photos.
 
 ## Follow-ups
+
+- **Before removing the active photo (4d), check:** (1) one photo through the multi-edit path waits for a numeric snapshot from a render before it is editable (`editable_ready`), which single-photo editing does not today; (2) whether multi-edit saves (`sidecars.apply`) handle writability, dirty state and recovery like the selected photo's sidecar session; (3) an inventory of every `selected` and `settings` use mapped to its new owner (opening and timing, white balance and dehaze pick state, information bar, Before, prefetch order, smoke scenarios).
 
 - **Metadata before the first render.** A photo outside the editing selection learns its camera, and so whether it offers the chosen inspection output, only from its first render reply. A newly drawn tile with a non-final output selected renders its final output first and then the inspection output. Source or prefetch metadata could avoid the second render.
 - **Memory with a full grid.** Every drawn tile now loads settings and renders a whole image, and inspection renders each at native Quality. Measure memory and latency with a full grid on a large display.

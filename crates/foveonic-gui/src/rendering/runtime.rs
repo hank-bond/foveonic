@@ -81,6 +81,8 @@ impl Handle {
                     status: published,
                     processed: 0,
                     loader,
+                    tracked: Vec::new(),
+                    pass: None,
                 };
                 runtime.run(input, results, output);
             })
@@ -250,6 +252,10 @@ struct Runtime {
     status: Arc<Mutex<Arc<Status>>>,
     processed: u64,
     loader: super::source_loader::Service,
+    /// The latest plan's tracked images, which the progress pass follows.
+    tracked: Vec<(super::coordinator::Target, RequestId, ImageState)>,
+    /// When the progress pass started and finished.
+    pass: Option<(Instant, Option<Instant>)>,
 }
 
 impl Runtime {
@@ -360,53 +366,40 @@ impl Runtime {
             Command::Clear(all) => {
                 self.coordinator.clear();
                 self.progress.clear();
+                self.tracked.clear();
+                self.pass = None;
                 let mut pending = self.slot.0.lock().unwrap();
                 pending.clear = true;
                 pending.clear_all |= all;
             }
             Command::Plan(photos, planned, queued_at) => {
-                // One progress pass follows the update's tracked images: current
-                // ones as complete, those rendering under their task's request id,
-                // and whole images waiting for patches.
-                let mut sections = Vec::new();
+                // The progress pass follows the plan's tracked images; a pass
+                // starts when new work begins after the last one finished.
+                let mut tracked = Vec::new();
                 let mut new_work = false;
                 for planned in &planned {
                     let target = super::coordinator::Target::of(&planned.request);
-                    let request_id = match planned.state {
-                        ImageState::Render => {
-                            let origin = self.cache.source_origin(&planned.request.path);
-                            new_work |= self.desire(
-                                planned.request.clone(),
-                                origin,
-                                queued_at,
-                                planned.speculative,
-                            );
-                            let Some(task) = self.coordinator.desired(&target) else {
-                                continue;
-                            };
-                            task.stamp.request_id
-                        }
-                        ImageState::Waiting => {
-                            new_work = true;
-                            planned.request.id
-                        }
-                        ImageState::Ready => planned.request.id,
-                    };
+                    if planned.state == ImageState::Render {
+                        let origin = self.cache.source_origin(&planned.request.path);
+                        new_work |= self.desire(
+                            planned.request.clone(),
+                            origin,
+                            queued_at,
+                            planned.speculative,
+                        );
+                    }
+                    new_work |= planned.state == ImageState::Waiting;
                     if let Some(place) = planned.tracked {
-                        sections.push((
-                            place,
-                            crate::progress::Section {
-                                target,
-                                request_id: request_id.0,
-                                state: planned.state,
-                            },
-                        ));
+                        tracked.push((place, target, planned.request.id, planned.state));
                     }
                 }
-                if new_work && !sections.is_empty() {
-                    sections.sort_by_key(|(place, _)| *place);
-                    let sections = sections.into_iter().map(|(_, section)| section).collect();
-                    self.progress.begin(sections, queued_at);
+                tracked.sort_by_key(|(place, ..)| *place);
+                self.tracked = tracked
+                    .into_iter()
+                    .map(|(_, target, id, state)| (target, id, state))
+                    .collect();
+                if new_work && self.pass.is_none_or(|(_, finished)| finished.is_some()) {
+                    self.pass = Some((queued_at, None));
                 }
                 let in_use: Vec<_> = planned.into_iter().map(|planned| planned.request).collect();
                 self.coordinator.reconcile(&photos, &in_use);
@@ -485,7 +478,48 @@ impl Runtime {
         self.coordinator.plan()
     }
 
+    /// Publish the progress pass from the tracked images and the coordinator:
+    /// it finishes once every section is current, done or failed.
+    fn publish_progress(&mut self) {
+        use crate::progress::{Section, SectionState};
+        // A finished pass stays as it ended until new work starts another.
+        let Some((started, finished @ None)) = self.pass.as_mut() else {
+            return;
+        };
+        let sections: Vec<_> = self
+            .tracked
+            .iter()
+            .map(|(target, planned_id, state)| {
+                let (request_id, state) = match state {
+                    ImageState::Ready => (*planned_id, SectionState::Ready),
+                    ImageState::Waiting => (*planned_id, SectionState::Waiting),
+                    ImageState::Render => match self.coordinator.target_progress(target) {
+                        Some((id, _, true)) => (id, SectionState::Failed),
+                        Some((id, true, false)) => (id, SectionState::Done),
+                        Some((id, false, false)) => (id, SectionState::Running),
+                        None => (*planned_id, SectionState::Done),
+                    },
+                };
+                Section {
+                    request_id: request_id.0,
+                    state,
+                }
+            })
+            .collect();
+        let settled = sections.iter().all(|section| {
+            matches!(
+                section.state,
+                SectionState::Ready | SectionState::Done | SectionState::Failed
+            )
+        });
+        if finished.is_none() && settled {
+            *finished = Some(Instant::now());
+        }
+        self.progress.publish(sections, *started, *finished);
+    }
+
     fn publish(&mut self) {
+        self.publish_progress();
         let plan = self.work_plan();
         let mut wanted = plan
             .tasks

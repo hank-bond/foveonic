@@ -117,6 +117,8 @@ pub struct ResultUpdate {
 struct Desired {
     task: Arc<Task>,
     settled: bool,
+    /// The current task's result was a failure.
+    failed: bool,
     admitted: RequestId,
     delivered: Option<Arc<crate::rendering::worker::presentation::Snapshot>>,
 }
@@ -271,11 +273,13 @@ impl RenderCoordinator {
             entry.task = task;
             if !same_delivery {
                 entry.settled = false;
+                entry.failed = false;
             }
         } else {
             self.desired.push(Desired {
                 task,
                 settled: false,
+                failed: false,
                 admitted: RequestId::default(),
                 delivered: None,
             });
@@ -329,6 +333,15 @@ impl RenderCoordinator {
     /// was removed is not in use.
     pub fn handle_result(&mut self, reply: &Reply) -> ResultUpdate {
         let completion = self.finish(&reply.stamp);
+        if completion == Completion::Current && reply.result.failed() {
+            if let Some(entry) = self
+                .desired
+                .iter_mut()
+                .find(|entry| entry.task.stamp == reply.stamp)
+            {
+                entry.failed = true;
+            }
+        }
         let image = reply.result.rendered();
         let accepted = completion != Completion::Removed
             && image.is_some_and(|frame| {
@@ -448,6 +461,13 @@ impl RenderCoordinator {
             .iter()
             .filter_map(|entry| entry.delivered.clone())
             .collect()
+    }
+    /// A target's current request and whether its work finished or failed.
+    pub fn target_progress(&self, target: &Target) -> Option<(RequestId, bool, bool)> {
+        self.desired
+            .iter()
+            .find(|entry| &entry.task.stamp.target == target)
+            .map(|entry| (entry.task.stamp.request_id, entry.settled, entry.failed))
     }
     pub fn desired(&self, target: &Target) -> Option<&Arc<Task>> {
         self.desired

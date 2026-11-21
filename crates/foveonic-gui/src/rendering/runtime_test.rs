@@ -211,9 +211,9 @@ fn coalescing_a_completed_request_preserves_its_finished_elapsed_time() {
     rig.requests(vec![request("a.x3f", 1, 0.)]);
     rig.results.send(result(&rig.tasks()[0])).unwrap();
     rig.receive();
-    rig.progress.settle(rig.handle.busy(), Some(1));
     let finished = rig.progress.snapshot().unwrap();
     assert!(!finished.running());
+    assert!(finished.failed, "the request's failure marks the pass");
     rig.requests(vec![request("a.x3f", 2, 0.)]);
     assert!(!rig.handle.busy());
     let coalesced = rig.progress.snapshot().unwrap();
@@ -344,4 +344,17 @@ fn a_photo_that_leaves_the_view_stops_its_work_unless_it_waits_to_be_drawn() {
     rig.handle.plan(Photos::default(), vec![], Instant::now());
     rig.applied();
     assert!(!has_patch(&rig));
+}
+
+#[test]
+fn the_progress_pass_follows_only_the_photos_the_latest_plan_tracks() {
+    let rig = Rig::new();
+    rig.requests(vec![request("a.x3f", 1, 0.), request("b.x3f", 2, 0.)]);
+    assert_eq!(rig.progress.snapshot().unwrap().checkpoints, 2);
+    // Moving on to C leaves A and B: their work stops and their sections go.
+    rig.requests(vec![request("c.x3f", 3, 0.)]);
+    let snapshot = rig.progress.snapshot().unwrap();
+    assert_eq!(snapshot.checkpoints, 1);
+    assert_eq!(snapshot.request_id, 3);
+    assert!(snapshot.running());
 }
