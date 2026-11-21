@@ -688,7 +688,7 @@ impl Source {
         progress: impl Fn(LoadStage),
     ) -> Result<(Self, Vec<u8>)> {
         crate::input_error::read(path, || {
-            crate::background::decode_priority();
+            crate::priority::decode_priority();
             let (source, original) =
                 crate::x3f::read_owned(path, || progress(LoadStage::FileRead))?;
             source.validate()?;

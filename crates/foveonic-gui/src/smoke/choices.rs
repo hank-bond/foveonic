@@ -114,11 +114,13 @@ impl ChoiceJourney {
             app.multi_edit.settings(path)
         }
     }
-    fn frame<'a>(app: &'a App, path: &PathBuf) -> Option<&'a crate::rendering::worker::Frame> {
-        app.frame
-            .as_ref()
-            .filter(|frame| frame.path == *path)
-            .or_else(|| app.multi_edit_frame(path))
+    fn frame<'a>(
+        app: &'a App,
+        path: &PathBuf,
+    ) -> Option<&'a crate::rendering::worker::RenderResult> {
+        app.active_image()
+            .filter(|frame| frame.request.path == *path)
+            .or_else(|| app.photo_layers(path)[0])
     }
     pub(super) fn advance(
         &mut self,
@@ -136,7 +138,7 @@ impl ChoiceJourney {
         let snapshot = automation::snapshot().ok_or("choice observation is not enabled")?;
         match self.phase {
             Phase::OpenWhiteBalance => {
-                if app.worker.busy() || !app.multi_edit.editable_ready() {
+                if app.view_busy() || !app.multi_edit.editable_ready() {
                     return Ok(false);
                 }
                 for (index, path) in paths.iter().enumerate() {
@@ -189,7 +191,7 @@ impl ChoiceJourney {
                 self.next(Phase::AwaitWhiteBalance);
             }
             Phase::AwaitWhiteBalance => {
-                if app.worker.busy() {
+                if app.view_busy() {
                     return Ok(false);
                 }
                 for path in paths {
@@ -201,8 +203,8 @@ impl ChoiceJourney {
                     let Some(frame) = Self::frame(app, path) else {
                         return Ok(false);
                     };
-                    if frame.rendition != crate::editor::Rendition::Current
-                        || frame.requested.white_balance != "Sunlight"
+                    if frame.request.rendition != crate::editor::Rendition::Current
+                        || frame.request.settings.white_balance != "Sunlight"
                         || frame.artifact.settings.white_balance != "Sunlight"
                     {
                         return Ok(false);
@@ -250,7 +252,7 @@ impl ChoiceJourney {
                 {
                     return self.wait("Tone checkbox did not paint unchecked");
                 }
-                if app.worker.busy() {
+                if app.view_busy() {
                     return Ok(false);
                 }
                 for path in paths {
@@ -264,9 +266,9 @@ impl ChoiceJourney {
                     let Some(frame) = Self::frame(app, path) else {
                         return Ok(false);
                     };
-                    if frame.rendition != crate::editor::Rendition::Current
-                        || frame.requested.tone_enabled
-                        || frame.requested.tone.contrast != 0.25
+                    if frame.request.rendition != crate::editor::Rendition::Current
+                        || frame.request.settings.tone_enabled
+                        || frame.request.settings.tone.contrast != 0.25
                         || frame.artifact.settings.tone_enabled
                         || frame.artifact.settings.white_balance != "Sunlight"
                     {

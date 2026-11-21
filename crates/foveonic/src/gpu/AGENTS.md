@@ -18,7 +18,7 @@ Keep raw buffers inside the GPU/storage layer. Reads borrow tracked ownership an
 - **[diagnostics.rs](./diagnostics.rs)** Resolves bounded capture-only GPU timestamps asynchronously on the device's normal polling path.
 - **[field.rs](./field.rs)** Compiles optional color-field kernels lazily and reflects their exact guarded resource access.
 - **[kernels.rs](./kernels.rs)** Registers compute kernels and builds pipelines from the owning node shaders.
-- **[scheduling.rs](./scheduling.rs)** Defers background submission waits to the executor's existing completed-stage boundary.
+- **[scheduling.rs](./scheduling.rs)** Groups submitted graph steps into ticks that share one GPU wait.
 - **[scratch.rs](./scratch.rs)** Recycles guarded storage only after the last shared reader releases it on the ordered GPU queue.
 - **[storage.rs](./storage.rs)** Prevents a later GPU write from changing an image that still has readers.
 

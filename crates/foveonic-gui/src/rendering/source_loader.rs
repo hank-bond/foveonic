@@ -1,8 +1,11 @@
 //! Acquires decoded sources off the renderer and hands bounded results through coordination.
 
-use super::{coordinator::TaskPriority, worker::Pending};
+use super::worker::Pending;
 use crate::progress::{Reporter, Tracker};
+#[cfg(test)]
+use crate::rendering::request::RequestId;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use foveonic::priority::Priority;
 #[cfg(test)]
 use foveonic::render::ProcessingQuality;
 use foveonic::{decode_cache::Cache, diagnostics as trace, source::Source};
@@ -21,9 +24,9 @@ type Slot = Arc<(Mutex<Pending>, Condvar)>;
 #[derive(Clone)]
 pub(super) struct Request {
     path: PathBuf,
-    revision: u64,
+    request_id: u64,
     context: Option<trace::Context>,
-    priority: TaskPriority,
+    priority: Priority,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -86,7 +89,7 @@ pub(super) struct Service {
     queue: VecDeque<Request>,
     active: Option<PathBuf>,
     wanted: Vec<PathBuf>,
-    priorities: Vec<(PathBuf, TaskPriority)>,
+    priorities: Vec<(PathBuf, Priority)>,
     active_request: Option<Request>,
     slot: Slot,
 }
@@ -106,15 +109,10 @@ pub(super) fn start(
             let mut hold = None;
             while let Ok(request) = work.recv() {
                 let _context = request.context.map(trace::enter);
-                let _activity = match request.priority {
-                    TaskPriority::Viewport => Some(cache.foreground()),
-                    TaskPriority::Auxiliary => Some(cache.auxiliary_demand()),
-                    TaskPriority::Thumbnail => Some(cache.thumbnail_demand()),
-                    TaskPriority::Idle => None,
-                };
+                let _demand = cache.priority().demand(request.priority);
                 let _scope = trace::scope(trace::Category::Cpu, "source.load");
-                let _span = crate::timing::Span::new(request.revision, "source_open");
-                let reporter = Reporter::new(progress.clone(), request.revision);
+                let _span = crate::timing::Span::new(request.request_id, "source_open");
+                let reporter = Reporter::new(progress.clone(), request.request_id);
                 if hold.is_none() {
                     hold = holds.try_recv().ok();
                 }
@@ -124,7 +122,7 @@ pub(super) fn start(
                     if request.cancelled.load(Ordering::Acquire) {
                         break Completion::Retry(request);
                     }
-                    let mut acquire = |cancel: &dyn Fn() -> bool| {
+                    let acquire = |cancel: &dyn Fn() -> bool| {
                         if hold.as_ref().is_some_and(|hold| hold.path == request.path) {
                             let hold = hold.take().unwrap();
                             let _pause =
@@ -142,11 +140,11 @@ pub(super) fn start(
                             foveonic::support::Level::Info,
                             "source.open",
                             "Opening photograph",
-                            serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.revision}),
+                            serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.request_id}),
                         );
                         let result = cache
                             .open(&request.path, |stage| {
-                                if request.priority == TaskPriority::Viewport {
+                                if request.priority == Priority::Viewport {
                                     reporter.loaded(stage);
                                 }
                             })
@@ -159,7 +157,7 @@ pub(super) fn start(
                                         component: Some("source loader".into()),
                                         phase: Some("open and decode".into()),
                                         source: Some(request.path.to_string_lossy().into_owned()),
-                                        revision: Some(request.revision.to_string()),
+                                        revision: Some(request.request_id.to_string()),
                                         ..Default::default()
                                     },
                                 )
@@ -169,17 +167,12 @@ pub(super) fn start(
                                 foveonic::support::Level::Info,
                                 "source.ready",
                                 "Photograph opened",
-                                serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.revision}),
+                                serde_json::json!({"operation_id":operation_id,"source":crate::support::path(&request.path),"revision":request.request_id}),
                             );
                         }
                         (!cancel() && !request.cancelled.load(Ordering::Acquire)).then_some(result)
                     };
-                    let attempt = match request.priority {
-                        TaskPriority::Viewport => Some(acquire(&|| false)),
-                        TaskPriority::Auxiliary => cache.auxiliary_execution(acquire),
-                        TaskPriority::Thumbnail => cache.thumbnail_execution(acquire),
-                        TaskPriority::Idle => cache.idle_execution(acquire),
-                    };
+                    let attempt = cache.priority().attempt(request.priority, acquire);
                     match attempt {
                         Some(Some(result)) => {
                             break Completion::Loaded(Loaded {
@@ -230,16 +223,16 @@ impl Handle {
     pub fn open(
         &mut self,
         path: &Path,
-        revision: u64,
+        request_id: u64,
     ) -> foveonic::source::Result<Option<Arc<Source>>> {
-        self.open_at(path, revision, TaskPriority::Viewport)
+        self.open_at(path, request_id, Priority::Viewport)
     }
 
     pub fn open_at(
         &mut self,
         path: &Path,
-        revision: u64,
-        priority: TaskPriority,
+        request_id: u64,
+        priority: Priority,
     ) -> foveonic::source::Result<Option<Arc<Source>>> {
         let (loaded, request) = {
             let mut pending = self.slot.0.lock().unwrap();
@@ -261,7 +254,7 @@ impl Handle {
         if request {
             let _ = self.signals.send(Signal::Needed(Request {
                 path: path.to_owned(),
-                revision,
+                request_id,
                 context: trace::current_context(),
                 priority,
                 cancelled: Arc::new(AtomicBool::new(false)),
@@ -342,7 +335,7 @@ impl Service {
         self.admit();
     }
 
-    fn priority(&self, path: &Path, fallback: TaskPriority) -> TaskPriority {
+    fn priority(&self, path: &Path, fallback: Priority) -> Priority {
         self.priorities
             .iter()
             .filter(|(candidate, _)| candidate == path)
@@ -352,7 +345,7 @@ impl Service {
     }
 
     /// Reprioritize shared acquisitions, preserving the strongest same-path demand.
-    pub fn prioritize(&mut self, priorities: &[(PathBuf, TaskPriority)]) {
+    pub fn prioritize(&mut self, priorities: &[(PathBuf, Priority)]) {
         self.priorities = priorities.to_vec();
         if let Some(active) = &self.active_request {
             if self.priority(&active.path, active.priority) != active.priority
@@ -365,7 +358,7 @@ impl Service {
         }
         let mut pending = self.slot.0.lock().unwrap();
         if pending.source.as_ref().is_some_and(|source| {
-            let held = self.priority(&source.path, TaskPriority::Idle);
+            let held = self.priority(&source.path, Priority::Speculative);
             priorities
                 .iter()
                 .any(|(path, priority)| *priority < held && pending.source_requests.contains(path))
@@ -453,12 +446,12 @@ mod tests {
     #[test]
     fn denied_lower_tier_resumes_after_gate_release_without_a_ui_event() {
         let cache = Arc::new(Cache::new());
-        let foreground = cache.foreground();
+        let foreground = cache.priority().demand(Priority::Viewport);
         let (mut handle, mut service, _control) = rig_with_cache(cache);
         let path = PathBuf::from("blocked-preview-missing.x3f");
         service.retain(vec![path.clone()]);
-        service.prioritize(&[(path.clone(), TaskPriority::Thumbnail)]);
-        handle.open_at(&path, 1, TaskPriority::Thumbnail).unwrap();
+        service.prioritize(&[(path.clone(), Priority::Thumbnail)]);
+        handle.open_at(&path, 1, Priority::Thumbnail).unwrap();
         signal_next(&mut service);
         assert!(service
             .results
@@ -467,7 +460,7 @@ mod tests {
         assert!(!handle.can_retry(&path, &service.slot.0.lock().unwrap()));
         drop(foreground);
         complete_next(&mut service);
-        assert!(handle.open_at(&path, 1, TaskPriority::Thumbnail).is_err());
+        assert!(handle.open_at(&path, 1, Priority::Thumbnail).is_err());
     }
 
     #[test]
@@ -477,17 +470,15 @@ mod tests {
         let preview = PathBuf::from("interrupted-preview-missing.x3f");
         let viewport = PathBuf::from("priority-viewport-missing.x3f");
         service.retain(vec![preview.clone(), viewport.clone()]);
-        service.prioritize(&[(preview.clone(), TaskPriority::Thumbnail)]);
+        service.prioritize(&[(preview.clone(), Priority::Thumbnail)]);
         let hold = control.hold(preview.clone());
-        handle
-            .open_at(&preview, 1, TaskPriority::Thumbnail)
-            .unwrap();
+        handle.open_at(&preview, 1, Priority::Thumbnail).unwrap();
         signal_next(&mut service);
         hold.reached.recv_timeout(Duration::from_secs(5)).unwrap();
-        let foreground = cache.foreground();
+        let foreground = cache.priority().demand(Priority::Viewport);
         service.prioritize(&[
-            (viewport.clone(), TaskPriority::Viewport),
-            (preview.clone(), TaskPriority::Thumbnail),
+            (viewport.clone(), Priority::Viewport),
+            (preview.clone(), Priority::Thumbnail),
         ]);
         handle.open(&viewport, 2).unwrap();
         signal_next(&mut service);
@@ -509,11 +500,9 @@ mod tests {
             "queued preview waits for viewport settlement"
         );
         drop(foreground);
-        service.prioritize(&[(preview.clone(), TaskPriority::Thumbnail)]);
+        service.prioritize(&[(preview.clone(), Priority::Thumbnail)]);
         complete_next(&mut service);
-        assert!(handle
-            .open_at(&preview, 1, TaskPriority::Thumbnail)
-            .is_err());
+        assert!(handle.open_at(&preview, 1, Priority::Thumbnail).is_err());
     }
 
     #[test]
@@ -521,14 +510,14 @@ mod tests {
         let (mut handle, mut service, control) = rig();
         let path = PathBuf::from("promoted-preview-missing.x3f");
         service.retain(vec![path.clone()]);
-        service.prioritize(&[(path.clone(), TaskPriority::Thumbnail)]);
+        service.prioritize(&[(path.clone(), Priority::Thumbnail)]);
         let hold = control.hold(path.clone());
-        handle.open_at(&path, 1, TaskPriority::Thumbnail).unwrap();
+        handle.open_at(&path, 1, Priority::Thumbnail).unwrap();
         signal_next(&mut service);
         hold.reached.recv_timeout(Duration::from_secs(5)).unwrap();
         service.prioritize(&[
-            (path.clone(), TaskPriority::Thumbnail),
-            (path.clone(), TaskPriority::Viewport),
+            (path.clone(), Priority::Thumbnail),
+            (path.clone(), Priority::Viewport),
         ]);
         assert!(handle.open(&path, 2).unwrap().is_none());
         assert!(
@@ -544,7 +533,7 @@ mod tests {
         service.completed(yielded);
         assert_eq!(
             service.active_request.as_ref().unwrap().priority,
-            TaskPriority::Viewport
+            Priority::Viewport
         );
         assert!(service.queue.is_empty());
         complete_next(&mut service);
@@ -563,28 +552,28 @@ mod tests {
         signal_next(&mut service);
         hold.reached.recv_timeout(Duration::from_secs(5)).unwrap();
         for (path, priority) in [
-            (&first, TaskPriority::Thumbnail),
-            (&second, TaskPriority::Auxiliary),
+            (&first, Priority::Thumbnail),
+            (&second, Priority::Auxiliary),
         ] {
             handle.open_at(path, 2, priority).unwrap();
             signal_next(&mut service);
         }
         service.prioritize(&[
-            (active.clone(), TaskPriority::Viewport),
-            (first.clone(), TaskPriority::Auxiliary),
-            (second.clone(), TaskPriority::Thumbnail),
+            (active.clone(), Priority::Viewport),
+            (first.clone(), Priority::Auxiliary),
+            (second.clone(), Priority::Thumbnail),
         ]);
         drop(hold);
         complete_next(&mut service);
         assert!(handle.open(&active, 1).is_err());
         service.prioritize(&[
-            (first.clone(), TaskPriority::Auxiliary),
-            (second, TaskPriority::Thumbnail),
+            (first.clone(), Priority::Auxiliary),
+            (second, Priority::Thumbnail),
         ]);
         assert_eq!(service.active.as_ref(), Some(&first));
         assert_eq!(
             service.active_request.as_ref().unwrap().priority,
-            TaskPriority::Auxiliary
+            Priority::Auxiliary
         );
         complete_next(&mut service);
     }
@@ -594,18 +583,64 @@ mod tests {
         use crate::{
             editor::Rendition,
             rendering::{
-                coordinator::{Cursor, RenderCoordinator},
-                request::Request as RenderRequest,
+                coordinator::{PickTask, RenderCoordinator, Stamp, Task, TaskId, WorkPlan},
+                request::RenderRequest,
             },
         };
-        use std::time::Instant;
+        use std::{collections::HashSet, time::Instant};
+
+        /// Jobs waiting for their source retry only once the loader allows it.
+        #[derive(Default)]
+        struct Waiting {
+            started: HashSet<Stamp>,
+            deferred: HashSet<Stamp>,
+            pick_started: Option<TaskId>,
+            pick_waiting: Option<TaskId>,
+        }
+        impl Waiting {
+            fn next_ready(
+                &mut self,
+                plan: &WorkPlan,
+                ready: impl Fn(&Task) -> bool,
+            ) -> Option<Arc<Task>> {
+                let task = plan
+                    .tasks
+                    .iter()
+                    .find(|task| {
+                        !self.started.contains(&task.stamp)
+                            && (!self.deferred.contains(&task.stamp) || ready(task))
+                    })?
+                    .clone();
+                self.deferred.remove(&task.stamp);
+                self.started.insert(task.stamp.clone());
+                Some(task)
+            }
+            fn defer(&mut self, stamp: &Stamp) {
+                self.started.remove(stamp);
+                self.deferred.insert(stamp.clone());
+            }
+            fn pick_ready(&mut self, plan: &WorkPlan, ready: bool) -> Option<Arc<PickTask>> {
+                let pick = plan.pick.as_ref()?;
+                if (self.pick_waiting == Some(pick.id) && !ready)
+                    || self.pick_started == Some(pick.id)
+                {
+                    return None;
+                }
+                self.pick_started = Some(pick.id);
+                self.pick_waiting = None;
+                Some(pick.clone())
+            }
+            fn retry_pick(&mut self) {
+                self.pick_waiting = self.pick_started.take();
+            }
+        }
 
         fn next(
             handle: &Handle,
             service: &Service,
-            cursor: &mut Cursor,
+            cursor: &mut Waiting,
             coordinator: &RenderCoordinator,
-        ) -> Option<Arc<super::super::coordinator::Task>> {
+        ) -> Option<Arc<Task>> {
             let pending = service.slot.0.lock().unwrap();
             cursor.next_ready(&coordinator.plan(), |task| {
                 handle.can_retry(&task.request.path, &pending)
@@ -615,15 +650,13 @@ mod tests {
         let (mut handle, mut service, control) = rig();
         let path = PathBuf::from("shared-missing.x3f");
         let mut coordinator = RenderCoordinator::default();
-        let mut cursor = Cursor::default();
+        let mut cursor = Waiting::default();
         for (revision, rendition) in [(1, Rendition::Current), (2, Rendition::Camera)] {
             coordinator.desire(
                 Arc::new(RenderRequest {
-                    auxiliary_preview: false,
-
                     detail: false,
                     path: path.clone(),
-                    revision,
+                    id: RequestId(revision),
                     rendition,
                     settings: foveonic::render::Settings::new("Sunlight", "Standard"),
                     framing_preview: false,
@@ -632,17 +665,20 @@ mod tests {
                     processing_quality: ProcessingQuality::Quality,
                     output: "final".into(),
                     comparison: false,
-                    export: None,
                 }),
                 None,
                 Instant::now(),
+                false,
             );
         }
         service.retain(vec![path.clone()]);
         let hold = control.hold(path.clone());
         for _ in 0..2 {
             let task = next(&handle, &service, &mut cursor, &coordinator).unwrap();
-            assert!(handle.open(&path, task.stamp.revision).unwrap().is_none());
+            assert!(handle
+                .open(&path, task.stamp.request_id.0)
+                .unwrap()
+                .is_none());
             cursor.defer(&task.stamp);
         }
         service.signal(
@@ -661,7 +697,7 @@ mod tests {
                 settings: Default::default(),
                 uv: [0.5, 0.5],
             },
-            2,
+            RequestId(2),
             None,
         );
         assert!(cursor.pick_ready(&coordinator.plan(), false).is_some());
@@ -680,7 +716,7 @@ mod tests {
                 .unwrap(),
         );
         let first = next(&handle, &service, &mut cursor, &coordinator).unwrap();
-        assert!(handle.open(&path, first.stamp.revision).is_err());
+        assert!(handle.open(&path, first.stamp.request_id.0).is_err());
         coordinator.finish(&first.stamp);
         let pick = cursor
             .pick_ready(
@@ -692,7 +728,7 @@ mod tests {
         let sibling = next(&handle, &service, &mut cursor, &coordinator)
             .expect("the other rendition must retry after its shared handoff was consumed");
         assert!(handle
-            .open(&path, sibling.stamp.revision)
+            .open(&path, sibling.stamp.request_id.0)
             .unwrap()
             .is_none());
         cursor.defer(&sibling.stamp);
@@ -710,7 +746,7 @@ mod tests {
                 .unwrap(),
         );
         let sibling = next(&handle, &service, &mut cursor, &coordinator).unwrap();
-        assert!(handle.open(&path, sibling.stamp.revision).is_err());
+        assert!(handle.open(&path, sibling.stamp.request_id.0).is_err());
         coordinator.finish(&sibling.stamp);
         assert!(!coordinator.busy());
     }
@@ -831,17 +867,17 @@ mod tests {
             a
         );
         service.prioritize(&[
-            (a.clone(), TaskPriority::Idle),
-            (a.clone(), TaskPriority::Viewport),
-            (b.clone(), TaskPriority::Viewport),
+            (a.clone(), Priority::Speculative),
+            (a.clone(), Priority::Viewport),
+            (b.clone(), Priority::Viewport),
         ]);
         assert!(
             service.slot.0.lock().unwrap().source.is_some(),
             "same-path foreground can consume the handoff"
         );
         service.prioritize(&[
-            (b.clone(), TaskPriority::Viewport),
-            (a.clone(), TaskPriority::Idle),
+            (b.clone(), Priority::Viewport),
+            (a.clone(), Priority::Speculative),
         ]);
         assert!(service.slot.0.lock().unwrap().source.is_none());
         assert_eq!(service.active.as_ref(), Some(&b));
@@ -885,9 +921,9 @@ mod tests {
             );
         }
         service.prioritize(&[
-            (c.clone(), TaskPriority::Viewport),
-            (a.clone(), TaskPriority::Viewport),
-            (b.clone(), TaskPriority::Idle),
+            (c.clone(), Priority::Viewport),
+            (a.clone(), Priority::Viewport),
+            (b.clone(), Priority::Speculative),
         ]);
         drop(hold);
         service.completed(
@@ -897,9 +933,9 @@ mod tests {
                 .unwrap(),
         );
         service.prioritize(&[
-            (c.clone(), TaskPriority::Viewport),
-            (a.clone(), TaskPriority::Idle),
-            (b.clone(), TaskPriority::Idle),
+            (c.clone(), Priority::Viewport),
+            (a.clone(), Priority::Speculative),
+            (b.clone(), Priority::Speculative),
         ]);
         assert_eq!(service.active.as_ref(), Some(&c));
         service.completed(
@@ -919,7 +955,10 @@ mod tests {
             service.active.is_none(),
             "queued speculative work waits for foreground settlement"
         );
-        service.prioritize(&[(a, TaskPriority::Idle), (b.clone(), TaskPriority::Idle)]);
+        service.prioritize(&[
+            (a, Priority::Speculative),
+            (b.clone(), Priority::Speculative),
+        ]);
         assert_eq!(service.active.as_ref(), Some(&b));
     }
 

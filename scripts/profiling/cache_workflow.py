@@ -1,4 +1,4 @@
-"""Check and report the two-photo native-detail cache workflow."""
+"""Check and report the multi-photo native-detail cache workflow."""
 
 import math
 import struct
@@ -11,24 +11,34 @@ def same_numeric(left, right):
 
 
 CACHE_WORKFLOW_DELTAS = (0.125, 0.125, -0.125, 0.25)
+# View planning settles a moving view after 120 ms; a patch then has the 400 ms loupe target.
+DRAG_SETTLE_MS = 120
+PATCH_TARGET_MS = 400
+WARM_EDITS = ('exposure-1', 'exposure-2', 'exposure-3')
+
+
+def zoom_action(native_photo_count):
+    """One and two zoomed photos keep their names so baselines stay comparable."""
+    return {1:'zoom-a-200', 2:'zoom-both-200'}.get(native_photo_count, f'zoom-{native_photo_count}-200')
 
 
 def check_cache_workflow(native_result, inputs, native_photo_count=1):
     """Check declared actions and authored results; keep observation and admission timings distinct."""
     workflow = native_result.get('cache_workflow')
-    if type(native_photo_count) is not int or native_photo_count not in (1, 2):
-        raise ValueError('cache workflow native photo count must be 1 or 2')
+    count = len(inputs)
+    if type(native_photo_count) is not int or not 1 <= native_photo_count <= count:
+        raise ValueError('cache workflow zooms between one and all of its photos')
     steps = native_result.get('steps', [])
     initial = [step for step in steps if step.get('action') == 'initial-selection']
     final = [step for step in steps if step.get('action') == 'cache-workflow']
-    if not native_result.get('passed') or not isinstance(workflow, dict) or len(inputs) != 2 or len(initial) != 1 or len(final) != 1:
-        raise ValueError('cache workflow lacks two-photo initial and final evidence')
+    if not native_result.get('passed') or not isinstance(workflow, dict) or count < 2 or len(initial) != 1 or len(final) != 1:
+        raise ValueError('cache workflow lacks multi-photo initial and final evidence')
     if type(workflow.get('native_photo_count')) is not int or workflow['native_photo_count'] != native_photo_count:
         raise ValueError('cache workflow native photo count differs from the declared count')
     declared = {item['staged_source']: item for item in inputs}
     starts = {photo['source']: photo['settings'] for photo in initial[0]['photos']}
     photos = {photo['source']: photo for photo in final[0]['photos']}
-    if len(declared) != 2 or set(starts) != set(declared) or set(photos) != set(declared):
+    if len(declared) != count or set(starts) != set(declared) or set(photos) != set(declared):
         raise ValueError('cache workflow photos do not match declared inputs')
     initial_exposures = []
     for item in inputs:
@@ -44,8 +54,8 @@ def check_cache_workflow(native_result, inputs, native_photo_count=1):
     if not isinstance(rows, list):
         raise ValueError('cache workflow lacks action evidence')
     actions = [row for row in rows if row.get('event') == 'action']
-    zoom = 'zoom-a-200' if native_photo_count == 1 else 'zoom-both-200'
-    names = ['fit-smart', zoom, *[f'exposure-{i}' for i in range(4)], 'return-fit']
+    zoom = zoom_action(native_photo_count)
+    names = ['fit-smart', zoom, *[f'exposure-{i}' for i in range(4)], 'drag', 'return-fit']
     if [row.get('action') for row in actions] != names:
         raise ValueError('cache workflow action sequence differs from the declared actions')
     # Each row belongs to the most recent action and uses the same monotonic clock.
@@ -65,9 +75,9 @@ def check_cache_workflow(native_result, inputs, native_photo_count=1):
                     or abs(elapsed - (timestamp - active['elapsed_ms'])) > 1.):
                 raise ValueError('cache workflow event is outside its action timeline')
     fit = [row for row in rows if row.get('event') == 'fit-overview']
-    if len(fit) != 2 or {row.get('photo') for row in fit} != {0, 1}:
-        raise ValueError('cache workflow lacks two Fit demand observations')
-    demanded = [None, None]
+    if len(fit) != count or {row.get('photo') for row in fit} != set(range(count)):
+        raise ValueError('cache workflow lacks a Fit demand observation per photo')
+    demanded = [None] * count
     for row in fit:
         index = row['photo']
         scale = row.get('demanded_scale')
@@ -99,7 +109,7 @@ def check_cache_workflow(native_result, inputs, native_photo_count=1):
                 continue
             photo = row.get('photo')
             target = initial_exposures if index == 0 else cumulative[index - 1]
-            if (type(photo) is not int or not 0 <= photo < 2
+            if (type(photo) is not int or not 0 <= photo < count
                     or row.get('source') != inputs[photo]['staged_source']
                     or row.get('rendition') != 'Current'
                     or (row.get('event') == 'first-current' and row.get('current') is not True)
@@ -118,22 +128,24 @@ def check_cache_workflow(native_result, inputs, native_photo_count=1):
                         or available[2] < visible[2] or available[3] < visible[3]):
                     raise ValueError('cache workflow native observation does not cover the viewport')
         current = [row for row in events if row.get('event') in ('first-current', 'first-current-observed', 'reuse-observed')]
-        if len(current) != 2 or {row.get('photo') for row in current} != {0, 1}:
+        if len(current) != count or {row.get('photo') for row in current} != set(range(count)):
             raise ValueError('cache workflow lacks a current observation for each photo')
-        whole = [row for row in events if row.get('event') == 'whole-settled']
-        if len(whole) != native_photo_count or {row.get('photo') for row in whole} != set(range(native_photo_count)):
-            raise ValueError('cache workflow lacks whole settlement for every native photo')
+        # Full size is speculative. Each zoomed photo needs a current whole image behind its patch.
+        behind = [row for row in events if row.get('event') == 'behind-current']
+        if len(behind) != native_photo_count or {row.get('photo') for row in behind} != set(range(native_photo_count)):
+            raise ValueError('cache workflow lacks a current image behind every native photo')
         target = initial_exposures if index == 0 else cumulative[index - 1]
-        for settled in whole:
+        for settled in behind:
             photo = settled['photo']
             if (settled.get('source') != inputs[photo]['staged_source']
                     or settled.get('rendition') != 'Current' or 'actual_region' not in settled or settled['actual_region'] is not None
-                    or settled.get('effective_scale') != 1 or not same_numeric(settled.get('exposure'), target[photo])
+                    or not same_numeric(settled.get('exposure'), target[photo])
                     or settled['action_elapsed_ms'] < max(row['action_elapsed_ms'] for row in current)):
-                raise ValueError('cache workflow Whole settlement is stale or incomplete')
+                raise ValueError('cache workflow image behind the patch is stale or incomplete')
+        whole = [row for row in events if row.get('event') == 'whole-settled']
         foreground = [row for row in events if row.get('event') in ('all-foreground-ready', 'all-foreground-observed')]
         if index and (len(foreground) != 1 or foreground[0]['action_elapsed_ms'] < max(row['action_elapsed_ms'] for row in current)
-                      or foreground[0]['action_elapsed_ms'] > min(row['action_elapsed_ms'] for row in whole)):
+                      or foreground[0]['action_elapsed_ms'] > min(row['action_elapsed_ms'] for row in behind)):
             raise ValueError('cache workflow lacks foreground completion')
         def values(event):
             return [row.get('action_elapsed_ms') for row in events if row.get('event') == event]
@@ -143,14 +155,30 @@ def check_cache_workflow(native_result, inputs, native_photo_count=1):
             'foreground_on_admission_ms': values('all-foreground-ready'),
             'foreground_by_observation_ms': values('all-foreground-observed'),
             'whole_current_admissions': [row for row in events if row.get('event') == 'whole-current-accepted'],
-            'whole_settled_observed_ms': max(row['action_elapsed_ms'] for row in whole),
+            'behind_current_observed_ms': max(row['action_elapsed_ms'] for row in behind),
+            'behind_current_by_photo': [{'photo':row['photo'], 'action_elapsed_ms':row['action_elapsed_ms']} for row in behind],
             'whole_settled_by_photo': [{'photo':row['photo'], 'action_elapsed_ms':row['action_elapsed_ms']} for row in whole],
             'regional_admitted_ms': values('regional-accepted'),
             'regional_observed_ms': values('regional-observed')})
+    drag = [row for row in rows if row.get('action') == 'drag']
+    current = [row for row in drag if row.get('event') == 'drag-patch-current']
+    if (len([row for row in drag if row.get('event') == 'drag-last-move']) != 1 or len(current) != 1
+            or type(current[0].get('since_last_move_ms')) not in (int, float)):
+        raise ValueError('cache workflow lacks drag settlement')
+    if any(row.get('event') == 'drag-patch-requested-while-moving' for row in drag):
+        raise ValueError('cache workflow requested a patch while the view was moving')
+    if any(row.get('stale') is True for row in drag if row.get('event') == 'drag-patch-accepted'):
+        raise ValueError('cache workflow drag finished a patch for a region the view had left')
+    # The scenario turns full-size completion off before the drag, so a patch must cover it.
+    if current[0].get('covered_by') != 'patch':
+        raise ValueError('cache workflow drag was not covered by a new patch')
+    if not DRAG_SETTLE_MS <= current[0]['since_last_move_ms'] <= DRAG_SETTLE_MS + PATCH_TARGET_MS:
+        raise ValueError('cache workflow drag patch missed the latency target')
     return {'native_photo_count':native_photo_count, 'expected_final_exposures': expected, 'actions': timings,
+            'drag_patch_since_last_move_ms': current[0]['since_last_move_ms'],
             'limits': ['Observations may describe retained frames; admissions are separate.',
                        'A group completion on admission can include an earlier retained-frame observation.',
-                       'Whole settlement is an application observation, not physical screen presentation.']}
+                       'Settlement is an application observation, not physical screen presentation.']}
 
 
 
@@ -207,13 +235,30 @@ def associate_trace(workflow, analysis):
                       'Frame resource sizes are logical references that may alias and are not additive.']}
 
 
+def retention_assertion(trace):
+    """Warm edits of visible photos must not load their files again or evict working photos."""
+    if not trace.get('available'):
+        return {'name':'cache_workflow_retention', 'outcome':'unverified', 'actual':trace.get('reason')}
+    actual = {}
+    for action in trace['actions']:
+        if action['action'] not in WARM_EDITS:
+            continue
+        loads = sum(count for decision, count in action['window_native_decisions'].items()
+                    if not decision.startswith('hit:'))
+        evictions = action['window_event_counts'].get('cache.processing.evicted', 0)
+        actual[action['action']] = {'native_loads':loads, 'evicted_photos':evictions}
+    failed = len(actual) != len(WARM_EDITS) or any(sum(row.values()) for row in actual.values())
+    return {'name':'cache_workflow_retention', 'outcome':'failed' if failed else 'passed',
+            'expected':'no native loads or evictions during warm edits', 'actual':actual}
+
+
 def latency_samples(workflow):
     """Extract finite per-photo and group milestones from an already checked report."""
     actions = workflow.get('actions') if isinstance(workflow, dict) else None
     count = workflow.get('native_photo_count', 1) if isinstance(workflow, dict) else None
-    if type(count) is not int or count not in (1, 2):
-        raise ValueError('cache workflow native photo count must be 1 or 2')
-    zoom = 'zoom-a-200' if count == 1 else 'zoom-both-200'
+    if type(count) is not int or count < 1:
+        raise ValueError('cache workflow native photo count must be positive')
+    zoom = zoom_action(count)
     expected = [zoom, *(f'exposure-{index}' for index in range(4))]
     if not isinstance(actions, list) or [row.get('action') for row in actions] != expected:
         raise ValueError('cache workflow requires all five latency actions')
@@ -231,10 +276,11 @@ def latency_samples(workflow):
         if not isinstance(admitted, list) or not isinstance(observed, list):
             raise ValueError('cache workflow lacks per-photo current milestones')
         rows = admitted + observed
-        if len(rows) != 2 or {row.get('photo') for row in rows} != {0, 1}:
+        photos = sorted({row.get('photo') for row in rows})
+        if len(rows) != len(photos) or photos != list(range(len(photos))) or len(photos) < 2:
             raise ValueError('cache workflow needs one current milestone per photo')
         photo_times = [elapsed(next(row.get('action_elapsed_ms') for row in rows if row['photo'] == photo))
-                       for photo in (0, 1)]
+                       for photo in photos]
         for photo, value in enumerate(photo_times):
             samples[f'{name}/photo-{photo}-current'] = value
         ready = action.get('foreground_on_admission_ms')
@@ -250,9 +296,9 @@ def latency_samples(workflow):
             raise ValueError('cache workflow needs one foreground milestone')
         if foreground < max(photo_times):
             raise ValueError('cache workflow foreground precedes its photo milestones')
-        whole = elapsed(action.get('whole_settled_observed_ms'))
-        if whole < foreground:
-            raise ValueError('cache workflow Whole settlement precedes foreground')
+        behind = elapsed(action.get('behind_current_observed_ms'))
+        if behind < foreground:
+            raise ValueError('cache workflow image behind the patch precedes foreground')
         samples[f'{name}/foreground'] = foreground
-        samples[f'{name}/whole-observed'] = whole
+        samples[f'{name}/behind-observed'] = behind
     return samples

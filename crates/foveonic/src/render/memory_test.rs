@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     inspection::Content,
     profile::Profile,
-    render::{RenderSession, SessionKind, SessionUse},
+    render::{NativePhoto, Purpose, Resolution},
     source::Source,
 };
 use std::sync::Arc;
@@ -64,7 +64,7 @@ fn decoded_source_reservations_deduplicate_by_allocation_not_origin() {
     assert_eq!(reservation.metadata.len(), 1);
     let mut retained = RetainedBytes::default();
     // Model a native owner without a GPU or a photographic fixture.
-    let session = RenderSession::new(first.clone());
+    let session = NativePhoto::new(first.clone());
     session.account_memory(&mut retained);
     for source in &reservation.sources {
         retained.owner(source.clone(), source.retained_source_bytes() as usize);
@@ -82,9 +82,9 @@ fn shared_reservations_and_processing_owners_are_counted_once() {
     let engine = Engine::test_executor();
     let mut settings = super::super::Settings::new("Sunlight", "Standard");
     settings.working_scale = super::super::Scale::new(8).unwrap();
-    let mut native = RenderSession::new(source.clone());
+    let mut native = NativePhoto::new(source.clone());
     let Content::Image(image) = engine
-        .render_session(
+        .render_native_photo(
             &mut native,
             &settings,
             &["linear.base"],
@@ -102,10 +102,10 @@ fn shared_reservations_and_processing_owners_are_counted_once() {
         .cache
         .buffers()
         .any(|buffer| buffer.shares_storage(&image.buffer)));
-    let mut reduced = ProcessingWorkingSet::new();
+    let mut reduced = WorkingSet::new();
     let empty = MemoryReservation::default();
     reduced
-        .insert_native(1, native, &engine, SessionUse::Foreground)
+        .insert_native(1, native, &engine, Purpose::Edit)
         .unwrap();
     let baseline = engine.memory_resources(&reduced, &empty);
     let mut reservation = MemoryReservation::default();
@@ -123,14 +123,14 @@ fn shared_reservations_and_processing_owners_are_counted_once() {
     assert_eq!(shared.total_bytes, baseline.total_bytes + 1234);
 
     let super::super::ReducedPreparation::Prepared(session) = engine
-        .prepare_reduced_session(source.clone(), &settings, || false, &mut Profile::default())
+        .prepare_reduced_photo(source.clone(), &settings, || false, &mut Profile::default())
         .unwrap()
     else {
         panic!("preparation")
     };
     let reduced_cpu = session.retained_cpu_bytes();
     reduced
-        .insert_reduced(1, session, &engine, SessionUse::Foreground)
+        .insert_reduced(1, session, &engine, Purpose::Edit)
         .unwrap();
     let combined = engine.memory_resources(&reduced, &reservation);
     assert!(
@@ -138,16 +138,24 @@ fn shared_reservations_and_processing_owners_are_counted_once() {
         "Native and reduced owners share the metadata allocation"
     );
     let bytes = engine.readback_image(&image).unwrap();
-    let trim = engine.trim_memory(&mut reduced, 0, &reservation);
-    assert_eq!(
-        trim.evicted_sessions,
-        vec![SessionKey {
+    // A guard keeps the reduced photo while the native one is evicted.
+    let in_use = reduced
+        .guard(PhotoKey {
             photo: 1,
-            kind: SessionKind::Native
+            resolution: Resolution::Reduced,
+        })
+        .unwrap();
+    let trim = engine.trim_memory(&mut reduced, 0, &reservation);
+    drop(in_use);
+    assert_eq!(
+        trim.evicted_photos,
+        vec![PhotoKey {
+            photo: 1,
+            resolution: Resolution::Native
         }]
     );
-    assert_eq!(trim.over_budget_bytes, trim.resources.total_bytes);
-    assert!(trim.over_budget_bytes >= source.retained_source_bytes() + 1234);
+    assert_eq!(trim.over_target_bytes, trim.resources.total_bytes);
+    assert!(trim.over_target_bytes >= source.retained_source_bytes() + 1234);
     assert_eq!(engine.readback_image(&image).unwrap(), bytes);
     assert!(
         matches!(
@@ -156,28 +164,28 @@ fn shared_reservations_and_processing_owners_are_counted_once() {
                     &engine,
                     1,
                     &settings,
-                    SessionUse::Foreground,
+                    Purpose::Edit,
                     || false,
                     &mut Profile::default()
                 )
                 .unwrap(),
-            Some(super::super::SessionRender::Rendered(_))
+            Some(super::super::PhotoRender::Rendered(_))
         ),
-        "active sensor inputs remain source-free"
+        "reduced sensor data needs no file"
     );
 }
 
 #[test]
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
-fn coordinated_budget_evicts_cold_history_before_actual_active_photos() {
+fn target_evicts_the_least_recent_photo_first() {
     let engine = Engine::test_executor();
     let path = std::env::var_os("SMALL_PREVIEW_X3F").unwrap();
     let mut settings = super::super::Settings::new("Sunlight", "Standard");
     settings.working_scale = super::super::Scale::new(8).unwrap();
-    let mut reduced = ProcessingWorkingSet::new();
+    let mut reduced = WorkingSet::new();
     for id in [1, 2] {
         let super::super::ReducedPreparation::Prepared(session) = engine
-            .prepare_reduced_session(
+            .prepare_reduced_photo(
                 Source::open(&path).unwrap(),
                 &settings,
                 || false,
@@ -188,26 +196,26 @@ fn coordinated_budget_evicts_cold_history_before_actual_active_photos() {
             panic!("preparation")
         };
         reduced
-            .insert_reduced(id, session, &engine, SessionUse::Foreground)
+            .insert_reduced(id, session, &engine, Purpose::Edit)
             .unwrap();
     }
     let reservation = MemoryReservation::default();
     let before = engine.memory_resources(&reduced, &reservation);
-    let limit = reduced.active_bytes() + 1024 * 1024;
-    assert!(before.total_bytes > limit);
-    let trim = engine.trim_memory(&mut reduced, limit, &reservation);
+    let target = reduced.most_recent_bytes() + 1024 * 1024;
+    assert!(before.total_bytes > target);
+    let trim = engine.trim_memory(&mut reduced, target, &reservation);
     assert_eq!(
-        trim.evicted_sessions,
-        vec![SessionKey {
+        trim.evicted_photos,
+        vec![PhotoKey {
             photo: 1,
-            kind: SessionKind::Reduced
+            resolution: Resolution::Reduced
         }]
     );
-    assert!(reduced.contains(SessionKey {
+    assert!(reduced.contains(PhotoKey {
         photo: 2,
-        kind: SessionKind::Reduced
+        resolution: Resolution::Reduced
     }));
-    assert_eq!(trim.over_budget_bytes, 0);
+    assert_eq!(trim.over_target_bytes, 0);
     assert!(trim.resources.total_bytes < before.total_bytes);
     assert!(matches!(
         reduced
@@ -215,12 +223,12 @@ fn coordinated_budget_evicts_cold_history_before_actual_active_photos() {
                 &engine,
                 2,
                 &settings,
-                SessionUse::Foreground,
+                Purpose::Edit,
                 || false,
                 &mut Profile::default()
             )
             .unwrap(),
-        Some(super::super::SessionRender::Rendered(_))
+        Some(super::super::PhotoRender::Rendered(_))
     ));
 }
 
@@ -231,31 +239,38 @@ fn native_fine_edits_keep_their_restart_frontier_under_memory_pressure() {
         .join("blue-parking-sign.x3f");
     let source = Arc::new(Source::open(path).unwrap());
     let engine = Engine::test_executor();
-    let mut reduced = ProcessingWorkingSet::new();
+    let mut reduced = WorkingSet::new();
     reduced
-        .insert_native(
-            1,
-            RenderSession::new(source.clone()),
-            &engine,
-            SessionUse::Foreground,
-        )
+        .insert_native(1, NativePhoto::new(source.clone()), &engine, Purpose::Edit)
         .unwrap();
+    let key = PhotoKey {
+        photo: 1,
+        resolution: Resolution::Native,
+    };
+    reduced.set_visible([key]);
     let mut settings = super::super::Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
     settings.sharpen_amount = Some(0.75);
     for (step, fine) in [1., 0.1, 0.15, 0.2].into_iter().enumerate() {
         settings.reconstruction.as_mut().unwrap().texture.fine = fine;
         let mut profile = Profile::new(crate::profile::Mode::Wall);
-        let Content::Image(image) = reduced
-            .with_native(1, |session| {
-                engine.render_session(session, &settings, &["final"], || false, &mut profile)
-            })
+        let Some(super::super::PhotoRender::Rendered(mut artifacts)) =
+            super::super::driver::render_working_photo(
+                &engine,
+                &mut reduced,
+                key,
+                &settings,
+                &["final"],
+                Purpose::Edit,
+                &|| false,
+                &mut profile,
+                None,
+            )
             .unwrap()
-            .flatten()
-            .unwrap()
-            .remove(0)
-            .content
         else {
+            panic!("render")
+        };
+        let Content::Image(image) = artifacts.remove(0).content else {
             panic!("image")
         };
         if step >= 2 {
@@ -271,10 +286,10 @@ fn native_fine_edits_keep_their_restart_frontier_under_memory_pressure() {
         }
         let mut reservation = MemoryReservation::default();
         reservation.add_image(&image);
-        // Even an undersized user budget must report essential overcommit
-        // rather than repeatedly discarding the active control's inputs.
+        // A target too small for the visible photo reports the overage rather
+        // than dropping the latest edit's inputs after every render.
         let trim = engine.trim_memory(&mut reduced, 0, &reservation);
-        assert!(trim.over_budget_bytes > 0);
+        assert!(trim.over_target_bytes > 0);
         if step == 3 {
             let fresh = engine
                 .render(&source, &settings, &mut Profile::default())

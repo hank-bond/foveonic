@@ -34,9 +34,6 @@ winit = { version = "0.30.13", default-features = false }
 pollster = "0.4"
 sha2 = "0.10"
 
-[features]
-default = ["wide-experiment"]
-wide-experiment = ["foveonic/wide-experiment"]
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -14,13 +14,7 @@ const VIEW_ICON_SIDE: f32 = 12.;
 const MIN_SEARCH_WIDTH: f32 = 148.;
 
 impl Browser {
-    pub fn header(
-        &mut self,
-        ui: &mut egui::Ui,
-        organizer: &mut Organizer,
-        enabled: bool,
-        focus: egui::Id,
-    ) {
+    pub fn header(&mut self, ui: &mut egui::Ui, organizer: &mut Organizer, focus: egui::Id) {
         self.apply_query();
         let visible = self.files.len() - self.excluded.len();
         let count = if visible == self.files.len() {
@@ -118,13 +112,9 @@ impl Browser {
                 ),
                 egui::Label::new(label).truncate(),
             );
-            ui.add_enabled_ui(enabled, |ui| {
-                self.ratings_button(ui);
-            });
+            self.ratings_button(ui);
             if self.import_mode {
-                ui.add_enabled_ui(enabled, |ui| {
-                    self.visibility_button(ui, focus);
-                });
+                self.visibility_button(ui, focus);
             }
             if inline {
                 self.search_controls(ui);

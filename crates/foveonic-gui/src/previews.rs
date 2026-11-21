@@ -1,6 +1,6 @@
 //! Retains edited GPU previews immediately and persists bounded photographic previews after foreground work yields.
 
-use crate::{preview_image::PreparedPreview, rendering::worker::Frame, viewport};
+use crate::{preview_image::PreparedPreview, rendering::worker::RenderResult, viewport};
 use eframe::{egui, egui_wgpu, wgpu};
 use foveonic::diagnostics as trace;
 use foveonic::{
@@ -289,12 +289,12 @@ impl Previews {
     /// Queue a bounded GPU thumbnail without waiting for readback or disk caching.
     pub fn snapshot(
         &mut self,
-        frame: &Frame,
+        frame: &RenderResult,
     ) -> Option<(crate::browser::Thumbnail, crate::browser::Thumbnail)> {
         if !frame.is_photographic() {
             return None;
         }
-        self.invalid_paths.remove(&frame.path);
+        self.invalid_paths.remove(&frame.request.path);
         let make = |side| {
             let target = scaled_texture(
                 &self.render_state,
@@ -311,7 +311,7 @@ impl Previews {
     }
     /// Keep one replaceable pending whole-image job. Diagnostics never become
     /// photographic thumbnails, even when they are displayed in the navigator.
-    pub fn update(&mut self, frame: Option<&Frame>, busy: bool, context: &egui::Context) {
+    pub fn update(&mut self, frame: Option<&RenderResult>, busy: bool, context: &egui::Context) {
         let Some(frame) = frame.filter(|f| {
             f.is_photographic()
                 && self
@@ -325,7 +325,7 @@ impl Previews {
             self.wanted = None;
             return;
         };
-        let key = (frame.path.clone(), frame.revision);
+        let key = (frame.request.path.clone(), frame.request.id.0);
         if self.sent.as_ref() == Some(&key) {
             return;
         }
@@ -339,9 +339,9 @@ impl Previews {
                 Job {
                     diagnostic_task: frame.diagnostic_task,
                     epoch: self.epoch,
-                    calibration_signature: frame.calibration_signature.clone(),
-                    path: frame.path.clone(),
-                    revision: frame.revision,
+                    calibration_signature: frame.calibration_signature().map(str::to_owned),
+                    path: frame.request.path.clone(),
+                    revision: frame.request.id.0,
                     source: frame.texture.clone(),
                     metadata: frame.artifact.metadata.clone(),
                     settings: frame.artifact.settings.clone(),

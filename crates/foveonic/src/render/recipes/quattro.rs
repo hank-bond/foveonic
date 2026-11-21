@@ -583,7 +583,7 @@ fn compose(
                     .with_working_scale(grid);
                 let output = graph.add_scoped(Operation::PoolSignal(prepared), &[input], scope)?;
                 graph.retain_for_session(output);
-                graph.retain_for_seal(output);
+                graph.retain_as_sensor_data(output);
                 Ok(output)
             };
         let rgb = pool(
@@ -625,7 +625,7 @@ fn compose(
             .into_iter()
             .chain(native_recovery_mask)
         {
-            graph.retain_for_seal(input);
+            graph.retain_as_sensor_data(input);
         }
         (
             restored,

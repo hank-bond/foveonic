@@ -6,7 +6,7 @@ use crate::{
     inspection::Content,
     profile::Mode,
     render::{
-        ColorFieldApproach, ControlCapabilities, Engine, HighlightMode, RenderSession, Rendering,
+        ColorFieldApproach, ControlCapabilities, Engine, HighlightMode, NativePhoto, Rendering,
         Settings,
     },
     source::Source,
@@ -128,9 +128,9 @@ fn photographic_shadow_limit_sweep() {
     settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
     settings.output_size = Some([864, 1296]);
     let engine = Engine::new().unwrap();
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let mut artifacts = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["linear.edits-input", "base-response.mask"],
@@ -194,7 +194,7 @@ fn photographic_shadow_limit_sweep() {
         eprintln!("shadow cap {hundredths}: fit {chosen:?}; mean linear RGB {mean}");
         if (87..=92).contains(&hundredths) {
             let mut images = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["final"],
@@ -352,9 +352,9 @@ fn adaptive_sessions_reuse_guide_and_invalidate_limits_without_touching_camera()
         .unwrap();
     let camera = engine.readback_image(&camera).unwrap();
     settings.photographic.base_response = BaseResponse::Natural;
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["final"],
@@ -366,7 +366,7 @@ fn adaptive_sessions_reuse_guide_and_invalidate_limits_without_touching_camera()
     settings.exposure = -0.2;
     let mut profile = Profile::new(Mode::Gpu);
     engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap();
     assert!(
@@ -383,7 +383,7 @@ fn adaptive_sessions_reuse_guide_and_invalidate_limits_without_touching_camera()
     settings.adaptive_tone_tuning.natural.shadows = 0.9;
     let mut profile = Profile::new(Mode::Gpu);
     let mut cached = engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap();
     assert!(profile

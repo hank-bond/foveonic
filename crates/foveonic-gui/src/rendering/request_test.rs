@@ -1,7 +1,7 @@
 //! Checks request purpose and working geometry without worker threads, source I/O or a GPU.
 
 use super::*;
-use crate::export::ExportFormat;
+use crate::rendering::request::RequestId;
 use foveonic::render::ProcessingQuality;
 
 fn metadata() -> Metadata {
@@ -30,22 +30,19 @@ fn metadata() -> Metadata {
     }
 }
 
-fn request() -> Request {
-    Request {
-        auxiliary_preview: false,
-
+fn request() -> RenderRequest {
+    RenderRequest {
         detail: false,
         framing_preview: false,
         calibration: None,
         rendition: Default::default(),
-        revision: 1,
+        id: RequestId(1),
         path: "camera.x3f".into(),
         settings: Settings::new("Sunlight", "Standard"),
         preview_scale: Scale::new(2).unwrap(),
         processing_quality: ProcessingQuality::Quality,
         output: "final".into(),
         comparison: false,
-        export: None,
     }
 }
 
@@ -59,12 +56,11 @@ fn preview_scale_and_processing_policy_resolve_independently() {
             let mut settings = request.settings.clone();
             request.apply_preview(&mut settings, &metadata()).unwrap();
             assert_eq!(settings.working_scale, request.preview_scale);
-            assert_eq!(settings.processing_quality, policy);
             assert!(super::super::matching::same_authored_edits(
                 &settings,
                 &request.settings
             ));
-            assert_eq!(request.uses_reduced_session(), divisor != 1);
+            assert_eq!(request.uses_reduced_photo(), divisor != 1);
         }
     }
 }
@@ -79,16 +75,14 @@ fn native_detail_and_whole_continuation_preserve_selected_policy() {
         let mut settings = first.settings.clone();
         first.apply_preview(&mut settings, &metadata()).unwrap();
         assert_eq!(settings.working_scale, Scale::NATIVE);
-        assert_eq!(settings.processing_quality, policy);
         assert_eq!(settings.output_size, None);
-        assert!(!first.uses_reduced_session());
+        assert!(!first.uses_reduced_photo());
         let mut whole = first.clone();
         whole.detail = false;
         whole.preview_scale = Scale::NATIVE;
         whole.settings.preview_region = None;
         whole.apply_preview(&mut settings, &metadata()).unwrap();
         assert_eq!(settings.working_scale, Scale::NATIVE);
-        assert_eq!(settings.processing_quality, policy);
     }
 }
 
@@ -104,9 +98,17 @@ fn inspection_and_comparison_use_native_quality() {
         let mut settings = request.settings.clone();
         request.apply_preview(&mut settings, &metadata()).unwrap();
         assert_eq!(settings.working_scale, Scale::NATIVE);
-        assert_eq!(settings.processing_quality, ProcessingQuality::Quality);
         assert_eq!(settings.preview_region, None);
-        assert!(!request.uses_reduced_session());
+        assert!(!request.uses_reduced_photo());
+        assert_eq!(
+            crate::rendering::quality::for_view(
+                ProcessingQuality::Speed,
+                request.rendition,
+                &request.output,
+                request.comparison,
+            ),
+            ProcessingQuality::Quality
+        );
     }
 }
 
@@ -155,7 +157,7 @@ fn before_renditions_preserve_policy_and_resolved_scale() {
         request.processing_quality = ProcessingQuality::Speed;
         request.preview_scale = Scale::new(4).unwrap();
         assert_eq!(request.nominal_working_scale(), Scale::new(4).unwrap());
-        assert!(request.uses_reduced_session());
+        assert!(request.uses_reduced_photo());
     }
 }
 
@@ -165,7 +167,11 @@ fn consumer_purpose_preserves_export_before_inspection_and_detail_precedence() {
     assert_eq!(r.purpose(), Purpose::Current);
     r.detail = true;
     r.settings.preview_region = Some([100, 100, 400, 300]);
-    assert_eq!(r.purpose(), Purpose::Detail);
+    assert_eq!(
+        r.purpose(),
+        Purpose::Current,
+        "a patch differs by target, not purpose"
+    );
     r.comparison = true;
     assert_eq!(r.purpose(), Purpose::Inspection("final".into(), true));
     r.output = "sensor.rgb".into();
@@ -175,17 +181,6 @@ fn consumer_purpose_preserves_export_before_inspection_and_detail_precedence() {
     assert_eq!(r.purpose(), Purpose::Camera);
     r.rendition = Rendition::Defaults;
     assert_eq!(r.purpose(), Purpose::Defaults);
-    r.export = Some(Export {
-        path: "export.output".into(),
-        format: ExportFormat::Tiff,
-        tiff_color_space: None,
-        encoding: Default::default(),
-        sections: Default::default(),
-        conflict: foveonic::importing::ConflictPolicy::Rename,
-    });
-    assert_eq!(r.purpose(), Purpose::Export);
-    assert!(!r.uses_reduced_session());
-    assert_eq!(r.nominal_working_scale(), Scale::NATIVE);
 }
 
 #[test]
@@ -198,7 +193,7 @@ fn output_resize_and_photographic_options_preserve_resolved_preview_grid() {
     request.settings.photographic.base_response = foveonic::render::BaseResponse::Strong;
     for divisor in [2, 4, 8] {
         request.preview_scale = Scale::new(divisor).unwrap();
-        assert!(request.uses_reduced_session());
+        assert!(request.uses_reduced_photo());
         assert_eq!(request.nominal_working_scale(), request.preview_scale);
     }
     request.detail = true;
@@ -206,75 +201,4 @@ fn output_resize_and_photographic_options_preserve_resolved_preview_grid() {
     request.apply_preview(&mut settings, &metadata()).unwrap();
     assert_eq!(settings.output_size, None);
     assert_eq!(settings.working_scale, Scale::NATIVE);
-}
-
-#[test]
-fn auxiliary_preview_bounds_processing_without_changing_authored_output_size() {
-    let mut request = request();
-    request.auxiliary_preview = true;
-    request.preview_scale = Scale::new(8).unwrap();
-    request.processing_quality = ProcessingQuality::Speed;
-    request.settings.output_size = Some([6000, 4000]);
-    request.settings.preview_region = Some([100, 100, 400, 300]);
-    let mut effective = request.settings.clone();
-    request.apply_preview(&mut effective, &metadata()).unwrap();
-    assert_eq!(request.purpose(), Purpose::Preview);
-    assert!(request.uses_reduced_session());
-    assert_eq!(effective.working_scale, Scale::new(8).unwrap());
-    assert_eq!(effective.processing_quality, ProcessingQuality::Speed);
-    assert_eq!(effective.output_size, None);
-    assert_eq!(effective.preview_region, None);
-    assert_eq!(request.settings.output_size, Some([6000, 4000]));
-}
-
-#[test]
-fn native_coverage_reuses_overscan_until_visible_pixels_leave_the_patch() {
-    let mut first = request();
-    first.detail = true;
-    first.preview_scale = Scale::NATIVE;
-    first.settings.preview_region = Some([36, 36, 464, 364]);
-    let existing = Refinement {
-        first,
-        visible_region: Some([100, 100, 400, 300]),
-        preview: None,
-        whole: None,
-    };
-    let mut pan = existing.clone();
-    pan.first.revision += 1;
-    pan.first.settings.preview_region = Some([100, 100, 528, 428]);
-    pan.visible_region = Some([164, 164, 464, 364]);
-    assert!(existing.same_sequence(&pan));
-    assert!(
-        existing.covers(&pan),
-        "changed overscan is not uncovered visible demand"
-    );
-    pan.visible_region = Some([165, 164, 465, 364]);
-    assert!(
-        !existing.covers(&pan),
-        "one uncovered visible column needs native detail"
-    );
-    pan.visible_region = Some([0, 0, 300, 200]);
-    assert!(!existing.covers(&pan), "coverage must hold on every edge");
-    pan.first.settings.exposure += 0.5;
-    assert!(!existing.same_sequence(&pan));
-    let mut whole = existing;
-    whole.first.settings.preview_region = None;
-    assert!(whole.covers(&pan));
-}
-
-#[test]
-fn whole_before_refinement_tracks_increased_sampling_demand() {
-    let mut first = request();
-    first.rendition = crate::editor::Rendition::Camera;
-    first.preview_scale = Scale::new(8).unwrap();
-    let reduced = Refinement {
-        first,
-        visible_region: None,
-        preview: None,
-        whole: None,
-    };
-    let mut finer = reduced.clone();
-    finer.first.preview_scale = Scale::new(4).unwrap();
-    assert!(!reduced.same_sequence(&finer));
-    assert!(reduced.same_sequence(&reduced.clone()));
 }

@@ -82,7 +82,7 @@ fn raw_catalogue_does_not_require_calibration_fields() {
 fn planes_keep_their_extents_and_retained_siblings() {
     let engine = Engine::test_executor();
     let settings = Settings::new("", "");
-    let mut session = RenderSession::new(supported_source());
+    let mut session = NativePhoto::new(supported_source());
     let mut retained = Vec::new();
     // Begin with a side output. Later requests must preserve earlier snapshots.
     for name in [
@@ -93,7 +93,7 @@ fn planes_keep_their_extents_and_retained_siblings() {
         "sensor.blue",
     ] {
         let artifacts = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &[name],
@@ -155,7 +155,7 @@ fn planes_keep_their_extents_and_retained_siblings() {
         }
     }
     let mixed = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["sensor.blue", "extraction.rgb"],
@@ -244,10 +244,10 @@ fn original_quattro_planes_have_independent_geometry() {
 fn original_gain_stage_matches_independent_native_output() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     let engine = Engine::new().unwrap();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let settings = Settings::new("", "");
     let result = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["phase-gain.blue"],
@@ -267,7 +267,7 @@ fn original_gain_stage_matches_independent_native_output() {
     );
     let stored = engine.readback_image(image).unwrap();
     let again = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["extraction.blue", "phase-gain.blue"],
@@ -295,7 +295,7 @@ fn composed_calibration_matches_stopped_native_boundaries() {
         .unwrap()
         .with_calibration_resources(std::env::var_os("QUATTRO_RESOURCE_DIRECTORY").unwrap())
         .unwrap();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let names = [
         "blue-refresh.rgb",
         "hlp.rgb",
@@ -305,7 +305,7 @@ fn composed_calibration_matches_stopped_native_boundaries() {
         "hlp-repair.blue",
     ];
     let results = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &Settings::new("", ""),
             &names,
@@ -397,7 +397,7 @@ fn composed_preprocess_and_noise_match_native_active_image() {
         .unwrap()
         .with_calibration_resources(std::env::var_os("QUATTRO_RESOURCE_DIRECTORY").unwrap())
         .unwrap();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let names = [
         "highlight-restoration.rgb",
         "blue-mismatch.blue",
@@ -405,7 +405,7 @@ fn composed_preprocess_and_noise_match_native_active_image() {
         "noise.source-after",
     ];
     let results = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &diagnostic_settings(),
             &names,
@@ -473,10 +473,10 @@ fn composed_preprocess_and_noise_match_native_active_image() {
 fn complete_color_photograph_and_tiff() {
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     let engine = Engine::new().unwrap();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let mut profile = Profile::new(crate::profile::Mode::Gpu);
     let results = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &Settings::new("Sunlight", "Standard"),
             &["final", "sharpen.rgb"],
@@ -602,9 +602,9 @@ fn compare_complete_native_photograph(recorded_range_cutoff_witness: bool) {
             .reconstruction
             .is_some_and(|controls| controls.luminance == 2 && controls.detail == 1.);
     let engine = Engine::new().unwrap();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let results = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["final"],
@@ -645,7 +645,6 @@ fn compare_complete_native_photograph(recorded_range_cutoff_witness: bool) {
             &[encoded],
             &mut Profile::default(),
             &mut crate::interactive::Execution::default(),
-            crate::render::execute::Completion::Queued,
         )
         .unwrap();
     let actual = engine.gpu.readback(&values[0].buffer).unwrap();
@@ -841,14 +840,14 @@ fn composed_preprocess_matches_native_camera() {
         "luma-clusters.blue"
     };
     let engine = Engine::new().unwrap();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let noise_reference = std::env::var_os("QUATTRO_STAGE1_BOUNDARY").map(std::path::PathBuf::from);
     let mut names = vec!["highlight-restoration.rgb", blue];
     if noise_reference.is_some() {
         names.extend(["noise.rgb", "noise.source-after"]);
     }
     let results = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &names,
@@ -916,12 +915,12 @@ fn photographic_edits_preserve_reconstruction_and_cached_defaults() {
     use std::hash::{Hash, Hasher};
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([678, 452]);
     let mut render = |settings: &Settings| {
         let results = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 settings,
                 &["final", "reconstruction.rgb"],
@@ -982,9 +981,9 @@ fn selected_recorded_balance_keeps_identity_shading_inspectable() {
     let balance = source.metadata.recorded_white_balance().unwrap();
     let settings = Settings::new(balance, "Standard");
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let results = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &[
@@ -1023,12 +1022,12 @@ fn every_camera_white_balance_renders_and_restores_defaults() {
         .collect();
     assert!(!balances.is_empty());
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([339, 226]);
     let mut render = |settings: &Settings| {
         let results = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 settings,
                 &["final"],
@@ -1079,13 +1078,13 @@ fn noise_and_detail_keep_factory_corrections_and_exposure_independent() {
     use std::hash::{Hash, Hasher};
     let source = Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([678, 452]);
     settings.reconstruction = Some(super::recipes::quattro::default_noise_controls());
     let mut render = |settings: &Settings| {
         let results = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 settings,
                 &["final", "highlight-restoration.rgb", "noise.rgb"],
@@ -1216,10 +1215,10 @@ fn preparation_can_stop_before_later_calibration() {
         checks.set(checks.get() + 1);
         checks.get() >= 2
     };
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let before = engine.gpu_activity();
     let result = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &Settings::new("", ""),
             &["extraction.rgb"],
@@ -1245,8 +1244,7 @@ fn original_fast_previews_match_fresh_renders_through_quality_and_edit_changes()
         "sd-quattro",
         "dp3-quattro-iso800",
     ] {
-        let mut session =
-            RenderSession::new(Source::open(root.join(format!("{name}.x3f"))).unwrap());
+        let mut session = NativePhoto::new(Source::open(root.join(format!("{name}.x3f"))).unwrap());
         let mut full = Settings::new("Sunlight", "Standard");
         // Full must still match the committed complete image on every source.
         let reference = engine
@@ -1283,7 +1281,7 @@ fn original_fast_previews_match_fresh_renders_through_quality_and_edit_changes()
                 None
             };
             let cached = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &full,
                     &["final"],
@@ -1366,10 +1364,10 @@ fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_pannin
             .unwrap();
         let [width, height] = full.view().extent;
         let bytes = engine.readback_image(&full).unwrap();
-        let mut session = RenderSession::new(source);
+        let mut session = NativePhoto::new(source);
         settings.working_scale = Scale::new(2).unwrap();
         engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -1385,7 +1383,7 @@ fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_pannin
             settings.preview_region = Some([x, y, x + 480, y + 320]);
             let before = engine.gpu_activity();
             let mut result = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["final"],
@@ -1431,7 +1429,7 @@ fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_pannin
         }
         settings.preview_region = None;
         let mut completed = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -1467,7 +1465,7 @@ fn progress_observers_report_real_load_and_render_boundaries_without_changing_pi
             crate::source::LoadStage::Decoded
         ]
     );
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     for (quality, exposure) in [
@@ -1479,7 +1477,7 @@ fn progress_observers_report_real_load_and_render_boundaries_without_changing_pi
         settings.exposure = exposure;
         let stages = RefCell::new(Vec::new());
         let mut artifacts = engine
-            .render_session_with_progress(
+            .render_native_photo_with_progress(
                 &mut session,
                 &settings,
                 &["final"],

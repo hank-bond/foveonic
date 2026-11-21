@@ -17,10 +17,9 @@ Requested source acquisition now uses a separate I/O thread, the existing disk c
 
 - **Requested state:** which existing state becomes authoritative for per-photo edits, and what immutable input does the render runtime need? Avoid rebuilding the whole editor state to move scheduling off the UI.
 - **Communication fit:** Crossbeam selection services incoming commands while bounded image delivery is full. The UI command queue uses nonblocking publication with coordinator-side replacement before plan publication. Measure backlog under sustained editing before considering another transport. Independent broadcast/watch consumers would require a library with explicit state/event and lag semantics.
-- **Execution control:** what small shared policy separates cancellation, yielding, priority and GPU completion? Decide the bound on already-submitted speculative work from measurements. A lower-priority host thread cannot guarantee GPU preemption.
-- **Resource ownership:** which owner reports availability, decides admission and releases each representation? Clarify the existing serial lifecycle without building concurrent session admission or a second cache manager.
+- **Execution control and resource ownership:** decided. The [Scheduler](../specs/render-scheduling.md) owns the queue, priority, working set, admission and ticks. Its implementation follows the [scheduler plan](../../plans/render-scheduler.md).
 - **Workflow evidence:** what representative collection and interactions define time to cull and edit 100 photos? Existing scenarios cover up to eight at once. A collection journey should advance through editing groups, not enlarge the editing limit.
 
 Loupe, focus/eye analysis and other culling UX remain future consumers of the runtime. Their concrete algorithms and interactions are outside this migration.
 
-Wide execution and its session-admission/graph-advancement questions belong to the [separate deferred investigation](../../plans/archived/wide-rendering.md). Clear ownership should make that experiment easier, but it is not a required implementation step or success criterion here.
+Running several photographs together is part of the [Scheduler](../specs/render-scheduling.md) and no longer a separate investigation.

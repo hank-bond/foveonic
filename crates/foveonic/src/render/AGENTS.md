@@ -16,22 +16,24 @@ The [public renderer](../render.rs) owns the engine and display/export entry poi
 
 ### Source files
 
-- **[allocation.rs](./allocation.rs)** Bounds GPU allocations for audited resolved operations before additional work is admitted.
+- **[allocation.rs](./allocation.rs)** Estimates GPU allocations for resolved operations, audited where a contract exists and generic otherwise.
 - **[artifacts.rs](./artifacts.rs)** Collects requested graph outputs as owned images or diagnostic tables.
 - **[banding_controls.rs](./banding_controls.rs)** Stores independent native-pixel widths and strengths for Merrill directional band cleanup.
 - **[capabilities.rs](./capabilities.rs)** Resolves supported photographic adjustments and compatible defaults at family boundaries.
-- **[driver.rs](./driver.rs)** Drives shared graph execution and claimed session renders through preparation and settlement.
+- **[driver.rs](./driver.rs)** Drives every render through one resumable recipe execution that steps its graph traversal with a tick wait after each step.
 - **[edits.rs](./edits.rs)** Shares scoped recipes, user defaults and camera-derived numeric editing values.
 - **[execute.rs](./execute.rs)** Executes typed graph operations with selective outputs and guarded GPU storage.
-- **[experimental.rs](./experimental.rs)** Groups shared session executions behind opt-in submission windows.
-- **[memory.rs](./memory.rs)** Inventories shared processing owners and trims optional history under one caller-set budget.
+- **[image_cache.rs](./image_cache.rs)** Holds images the application may show again, so the scheduler can drop them before working photos.
+- **[memory.rs](./memory.rs)** Inventories shared processing owners and trims retained memory back to one caller-set target.
 - **[preparation.rs](./preparation.rs)** Reuses bounded immutable metadata preparation independently of decoded sensor ownership.
 - **[quality.rs](./quality.rs)** Separates photographic processing quality from the image's working resolution.
-- **[reduced.rs](./reduced.rs)** Prepares source-free camera dependency cuts and renders reduced sessions.
+- **[queue.rs](./queue.rs)** Orders submitted jobs by priority tier, then by when each target was first submitted.
+- **[reduced.rs](./reduced.rs)** Prepares sensor data downsampled to the working scale and renders reduced working photos.
 - **[scale.rs](./scale.rs)** Describes power-of-two sensor sampling and the covered, padded working grid.
+- **[scheduler.rs](./scheduler.rs)** Owns the job queue, the working set and admission, and advances admitted jobs together one step per tick.
 - **[settings.rs](./settings.rs)** Defines shared photographic settings and validates their values.
 - **[source_preparation.rs](./source_preparation.rs)** Retains the two source-derived calibration statistics without owning sensor samples.
 - **[speckle_controls.rs](./speckle_controls.rs)** Defines Merrill speckle detection thresholds and compact-neighborhood support.
-- **[working_set.rs](./working_set.rs)** Retains native and reduced sessions with separate foreground recency and execution protection.
+- **[working_set.rs](./working_set.rs)** Retains native and reduced working photos in recency order and protects each one while a render holds its guard.
 
 <!-- INDEX:END -->

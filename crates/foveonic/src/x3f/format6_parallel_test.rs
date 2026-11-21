@@ -28,10 +28,10 @@ fn parallel_rows_preserve_first_damaged_row_and_all_sample_values() {
     for workers in [1, 2, 4] {
         let pool = Arc::new(crate::decode_pool::Pool::new(workers).unwrap());
         let order = Arc::new(crate::decode_pool::Order::default());
-        let gate = Arc::new(crate::background::Gate::default());
+        let gate = Arc::new(crate::priority::Gate::default());
         let mut parallel = vec![0.; serial.len()];
-        crate::background::interruptible(gate, || {
-            crate::background::decoder(
+        crate::priority::interruptible(gate, || {
+            crate::priority::decoder(
                 crate::decode_pool::Task {
                     pool,
                     turn: order.issue(),
@@ -98,11 +98,11 @@ fn profile_bounded_classic_rows() {
                 let pool = (workers > 0)
                     .then(|| Arc::new(crate::decode_pool::Pool::new(workers).unwrap()));
                 let order = Arc::new(crate::decode_pool::Order::default());
-                let gate = Arc::new(crate::background::Gate::default());
+                let gate = Arc::new(crate::priority::Gate::default());
                 let began = Instant::now();
                 let source = if let Some(pool) = pool.as_ref() {
-                    crate::background::interruptible(gate, || {
-                        crate::background::decoder(
+                    crate::priority::interruptible(gate, || {
+                        crate::priority::decoder(
                             crate::decode_pool::Task {
                                 pool: pool.clone(),
                                 turn: order.issue(),

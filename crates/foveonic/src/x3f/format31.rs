@@ -94,7 +94,7 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
         Vec::with_capacity(product(cells, if equal { 3 } else { 6 })?)
     };
     for y in 0..low_height {
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         for x in 0..low_width {
             let index = y * low_width + x;
             output.push(f32::from(planes[0][index]));

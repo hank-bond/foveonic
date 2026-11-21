@@ -64,10 +64,10 @@ fn node_observations_distinguish_executed_cached_and_pruned_outputs() {
     let source = Source::open(directory.join("blue-parking-sign.x3f")).unwrap();
     let engine = Engine::new().unwrap();
     let settings = Settings::new("Sunlight", "Standard");
-    let mut session = crate::interactive::RenderSession::new(source);
+    let mut session = crate::interactive::NativePhoto::new(source);
     let mut off = Profile::default();
     engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut off)
+        .render_native_photo(&mut session, &settings, &["final"], || false, &mut off)
         .unwrap()
         .unwrap();
     assert!(off.nodes.is_empty());
@@ -103,7 +103,7 @@ fn node_observations_distinguish_executed_cached_and_pruned_outputs() {
     );
     let mut wall = Profile::new(Mode::Wall);
     engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut wall)
+        .render_native_photo(&mut session, &settings, &["final"], || false, &mut wall)
         .unwrap()
         .unwrap();
     assert!(wall
@@ -205,11 +205,11 @@ fn session_node_phases_preserve_work_and_exact_pixels() {
     let mut activities = Vec::new();
     for mode in [Mode::Off, Mode::Wall] {
         let engine = engine.executor();
-        let mut session = crate::interactive::RenderSession::new(source.clone());
+        let mut session = crate::interactive::NativePhoto::new(source.clone());
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.working_scale = crate::render::Scale::new(8).unwrap();
         engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -222,7 +222,7 @@ fn session_node_phases_preserve_work_and_exact_pixels() {
         let before = engine.gpu_activity();
         let mut profile = Profile::new(mode);
         let mut artifacts = engine
-            .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+            .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
             .unwrap()
             .unwrap();
         let activity = engine.gpu_activity().since(before);
@@ -256,7 +256,7 @@ fn session_node_phases_preserve_work_and_exact_pixels() {
                 profile
                     .host
                     .iter()
-                    .filter(|t| t.stage == "complete interactive graph stage")
+                    .filter(|t| t.stage == crate::render::execute::TICK_WAIT_STAGE)
                     .count()
             );
             assert!(profile
@@ -273,7 +273,7 @@ fn session_node_phases_preserve_work_and_exact_pixels() {
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR, run serialized"]
 fn native_checkpoint_capture_preserves_warm_edit_work_and_pixels() {
-    use crate::{diagnostics, inspection::Content, render::RenderSession};
+    use crate::{diagnostics, inspection::Content, render::NativePhoto};
     use std::sync::Arc;
     let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
@@ -291,10 +291,10 @@ fn native_checkpoint_capture_preserves_warm_edit_work_and_pixels() {
     let mut detail = exposure.clone();
     detail.reconstruction.as_mut().unwrap().texture.fine = 1.3;
     let warm = || {
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         for settings in [&base, &exposure] {
             engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     settings,
                     &["final"],
@@ -313,7 +313,7 @@ fn native_checkpoint_capture_preserves_warm_edit_work_and_pixels() {
     let mut baseline = warm();
     let before = engine.gpu_activity();
     let mut artifacts = engine
-        .render_session(
+        .render_native_photo(
             &mut baseline,
             &detail,
             &["final"],
@@ -356,7 +356,7 @@ fn native_checkpoint_capture_preserves_warm_edit_work_and_pixels() {
     let before = engine.gpu_activity();
     let mut profile = Profile::default();
     let mut artifacts = engine
-        .render_session(&mut session, &detail, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &detail, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap();
     engine

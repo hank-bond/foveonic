@@ -693,7 +693,7 @@ mod preview_tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        changed = processing_quality(ui, true, &mut quality);
+                        changed = processing_quality(ui, &mut quality);
                     });
                 },
             );

@@ -1,7 +1,7 @@
 //! Exercises held native-detail gestures, cancellation and transient photo ownership in the real app.
 
+use crate::rendering::request::RequestId;
 use crate::{
-    editor::Rendition,
     loupe_tool::{self, Options, Size, Zoom},
     photo_tools,
     rendering::{matching, worker},
@@ -227,7 +227,7 @@ impl Driver {
         self.expected_editing = app.edit_selection.paths().to_vec();
         self.main = paths
             .iter()
-            .map(|path| (path.clone(), app.current_photo_frame(path).map(image_id)))
+            .map(|path| (path.clone(), app.current_image(path).map(image_id)))
             .collect();
     }
     fn check_main(&self, app: &App) -> Result<(), String> {
@@ -240,7 +240,7 @@ impl Driver {
             );
         }
         for (path, expected) in &self.main {
-            if app.current_photo_frame(path).map(image_id) != *expected {
+            if app.current_image(path).map(image_id) != *expected {
                 return Err(format!(
                     "loupe replaced the main photograph: {}",
                     path.display()
@@ -266,36 +266,35 @@ impl Driver {
             .multi_edit
             .settings(self.target())
             .ok_or("loupe settings not resolved")?;
-        let effective = app.preferences.render_settings(settings);
+        let effective = app.preferences.with_workspace_settings(settings);
         let Some(geometry) = app
-            .current_photo_frame(self.target())
-            .filter(|frame| matching::same_image_geometry(&frame.requested, &effective))
+            .current_image(self.target())
+            .filter(|frame| matching::same_image_geometry(&frame.request.settings, &effective))
             .or_else(|| {
-                app.multi_edit
-                    .detail(self.target())
-                    .filter(|frame| matching::same_image_geometry(&frame.requested, &effective))
+                app.photo_patch(self.target()).filter(|frame| {
+                    matching::same_image_geometry(&frame.request.settings, &effective)
+                })
             })
         else {
             return Ok(None);
         };
         let (focus, required) = footprint(geometry, &gesture, ctx.pixels_per_point());
-        // Native Whole pixels can already belong to the main photograph. The
-        // loupe then reuses them without creating a separate detail resource.
+        // A current full-size image covers the lens without a separate patch.
         let frame = if whole {
-            app.loupe_image(self.target(), &effective, required)
+            app.loupe_image(self.target(), required)
                 .filter(|frame| frame.artifact.settings.working_scale == Scale::NATIVE)
         } else {
-            app.multi_edit.detail(self.target())
+            app.photo_patch(self.target())
         };
         let Some(frame) = frame else {
             return Ok(None);
         };
-        if !matching::same_authored_edits(&frame.requested, &effective) {
+        if !matching::same_authored_edits(&frame.request.settings, &effective) {
             return Ok(None);
         }
-        if frame.path != self.target()
+        if frame.request.path != self.target()
             || !(frame.is_current_detail() || (whole && frame.is_photographic()))
-            || frame.processing_quality != app.preferences.processing_quality
+            || frame.processing_quality() != app.preferences.processing_quality
             || frame.comparison.is_some()
             || frame.artifact.settings.output_size.is_some()
             || frame.artifact.settings.working_scale != Scale::NATIVE
@@ -308,8 +307,7 @@ impl Driver {
         let calibration = app
             .noise_calibration
             .selected(app.preferences.noise_profile);
-        if frame.calibration_signature.as_deref()
-            != calibration.as_ref().map(|profile| profile.signature())
+        if frame.calibration_signature() != calibration.as_ref().map(|profile| profile.signature())
             || app
                 .worker
                 .cache
@@ -318,20 +316,16 @@ impl Driver {
         {
             return Err("loupe borrowed pixels from another source or calibration".into());
         }
-        if whole && frame.is_photographic() && app.worker.busy() {
+        if whole && frame.is_photographic() && app.view_busy() {
             return Err("loupe requested new work despite complete native Whole coverage".into());
         }
         let region = frame.detail_region();
         if !contains(region, required) {
-            if let Some(base) = app.current_photo_frame(self.target()).filter(|base| {
-                matching::same_authored_edits(&base.requested, &effective)
+            if let Some(base) = app.current_image(self.target()).filter(|base| {
+                matching::same_authored_edits(&base.request.settings, &effective)
                     && contains(base.detail_region(), required)
             }) {
-                if app
-                    .loupe_image(self.target(), &effective, required)
-                    .map(image_id)
-                    != Some(image_id(base))
-                {
+                if app.loupe_image(self.target(), required).map(image_id) != Some(image_id(base)) {
                     return Err(
                         "loupe preferred uncovered detail over the current whole base".into(),
                     );
@@ -339,11 +333,7 @@ impl Driver {
             }
             return Ok(None);
         }
-        if app
-            .loupe_image(self.target(), &effective, required)
-            .map(image_id)
-            != Some(image_id(frame))
-        {
+        if app.loupe_image(self.target(), required).map(image_id) != Some(image_id(frame)) {
             return Err(
                 "loupe drawing did not select the covered native image with current edits".into(),
             );
@@ -359,7 +349,7 @@ impl Driver {
         self.held_reply_epoch = app.memory_reply_epoch;
         self.hold = Some(
             app.worker
-                .hold_delivery(self.target().to_owned(), app.revision + 1),
+                .hold_delivery(self.target().to_owned(), app.last_request_id.next().0),
         );
     }
     fn held(&self) -> Result<bool, String> {
@@ -383,13 +373,12 @@ impl Driver {
         }
         // Retiring desired work can settle busy before the held executor reply
         // reaches the UI. Observe that reply before starting another gesture.
-        if app.worker.busy() || app.memory_reply_epoch == self.held_reply_epoch {
+        if app.view_busy() || app.memory_reply_epoch == self.held_reply_epoch {
             return Ok(false);
         }
         if app
-            .multi_edit
-            .detail(self.target())
-            .is_some_and(|frame| frame.content_revision() > self.accepted)
+            .photo_patch(self.target())
+            .is_some_and(|frame| frame.request.id > RequestId(self.accepted))
         {
             return Err("a cancelled loupe detail was delivered after cancellation".into());
         }
@@ -441,7 +430,7 @@ impl Driver {
                     .iter()
                     .find(|path| {
                         **path != active
-                            && app.current_photo_frame(path).is_some_and(|frame| {
+                            && app.current_image(path).is_some_and(|frame| {
                                 app.multi_edit.settings(path).is_some_and(|settings| {
                                     settings.regional_preview_available(&frame.artifact.metadata)
                                 })
@@ -474,7 +463,7 @@ impl Driver {
                 self.phase = Phase::Ready;
             }
             Phase::Ready => {
-                if app.worker.busy() || paths.iter().any(|path| !thumb_ready(app, path)) {
+                if app.view_busy() || paths.iter().any(|path| !thumb_ready(app, path)) {
                     return Ok(false);
                 }
                 self.snapshot_main(app, paths);
@@ -490,7 +479,7 @@ impl Driver {
                 }
                 self.events.push(json!({"observed":"native regional detail","photo":self.target(),"task":first.image,"region":first.region}));
                 self.first = Some(first);
-                let frame = app.multi_edit.detail(self.target()).unwrap();
+                let frame = app.photo_patch(self.target()).unwrap();
                 let radius = 40. * ctx.pixels_per_point();
                 let uv = focus_uv(
                     frame,
@@ -508,10 +497,7 @@ impl Driver {
             }
             Phase::PartialCapture => {
                 self.check_main(app)?;
-                let settings = app
-                    .preferences
-                    .render_settings(app.multi_edit.settings(self.target()).unwrap());
-                let [Some(base), Some(detail)] = app.loupe_images(self.target(), &settings) else {
+                let [Some(base), Some(detail)] = app.loupe_images(self.target()) else {
                     return Err("partial loupe lost its overview or native overlay".into());
                 };
                 let first = self.first.unwrap();
@@ -642,12 +628,12 @@ impl Driver {
                 self.phase = Phase::TransientComposed;
             }
             Phase::TransientComposed => {
-                if app.worker.busy() {
+                if app.view_busy() {
                     return Ok(false);
                 }
-                let Some(frame) = app.current_photo_frame(self.target()).filter(|frame| {
+                let Some(frame) = app.current_image(self.target()).filter(|frame| {
                     matching::same_authored_edits(
-                        &frame.requested,
+                        &frame.request.settings,
                         self.transient_settings.as_ref().unwrap(),
                     )
                 }) else {
@@ -664,8 +650,7 @@ impl Driver {
                 self.phase = Phase::TransientReady;
             }
             Phase::TransientReady => {
-                if app.worker.busy()
-                    || !app.displayed_paths.iter().any(|path| path == self.target())
+                if app.view_busy() || !app.displayed_paths.iter().any(|path| path == self.target())
                 {
                     return Ok(false);
                 }
@@ -685,14 +670,15 @@ impl Driver {
                 self.phase = Phase::TransientDetail;
             }
             Phase::TransientDetail => {
-                let Some(detail) = self.detail(app, ctx, true)? else {
+                let Some(detail) = self.detail(app, ctx, false)? else {
                     return Ok(false);
                 };
                 let expected = self.transient_settings.as_ref().unwrap();
-                let frame = app.multi_edit.detail(self.target()).unwrap();
+                let frame = app.photo_patch(self.target()).unwrap();
                 if Some(frame.camera_extent()) != self.transient_extent
                     || frame
-                        .requested
+                        .request
+                        .settings
                         .preview_region
                         .is_some_and(|region| !contains(region, detail.required))
                 {
@@ -713,7 +699,7 @@ impl Driver {
                 self.phase = Phase::TransientReleased;
             }
             Phase::TransientReleased => {
-                if loupe_tool::gesture(ctx).is_some() || app.worker.busy() {
+                if loupe_tool::gesture(ctx).is_some() || app.view_busy() {
                     return Ok(false);
                 }
                 if app
@@ -739,7 +725,7 @@ impl Driver {
                 self.phase = Phase::OwnersRestored;
             }
             Phase::OwnersRestored => {
-                if app.worker.busy() || !app.multi_edit.editable_ready() {
+                if app.view_busy() || !app.multi_edit.editable_ready() {
                     return Ok(false);
                 }
                 let target = paths.iter().find(|path| {
@@ -766,7 +752,7 @@ impl Driver {
                 }
             }
             Phase::AdaptiveReady => {
-                if app.worker.busy() || !thumb_ready(app, self.target()) {
+                if app.view_busy() || !thumb_ready(app, self.target()) {
                     return Ok(false);
                 }
                 self.snapshot_main(app, paths);
@@ -787,7 +773,7 @@ impl Driver {
                 let Some(detail) = self.detail(app, ctx, false)? else {
                     return Ok(false);
                 };
-                if app.worker.busy() {
+                if app.view_busy() {
                     return Ok(false);
                 }
                 if detail.image == self.first.unwrap().image {
@@ -800,14 +786,14 @@ impl Driver {
                 self.phase = Phase::AdaptiveReleased;
             }
             Phase::AdaptiveReleased => {
-                if loupe_tool::gesture(ctx).is_some() || app.worker.busy() {
+                if loupe_tool::gesture(ctx).is_some() || app.view_busy() {
                     return Ok(false);
                 }
                 self.check_main(app)?;
                 self.begin_single(app);
             }
             Phase::SingleReady => {
-                if app.multi_photo_overview() || app.worker.busy() || !app.sidecars.ready() {
+                if app.multi_photo_overview() || app.view_busy() || !app.sidecars.ready() {
                     return Ok(false);
                 }
                 let path = app
@@ -817,12 +803,12 @@ impl Driver {
                 if !thumb_ready(app, &path) {
                     return Ok(false);
                 }
-                let frame = app.current_photo_frame(&path).unwrap();
-                let effective = app.preferences.render_settings(&app.settings);
+                let frame = app.current_image(&path).unwrap();
+                let effective = app.preferences.with_workspace_settings(&app.settings);
                 self.single_whole = (frame.artifact.settings.working_scale == Scale::NATIVE
                     && frame.artifact.settings.output_size.is_none()
                     && frame.comparison.is_none()
-                    && matching::same_authored_edits(&frame.requested, &effective))
+                    && matching::same_authored_edits(&frame.request.settings, &effective))
                     || !effective.regional_preview_available(&frame.artifact.metadata);
                 self.target = Some(path);
                 self.snapshot_main(app, paths);
@@ -838,7 +824,7 @@ impl Driver {
                     return Ok(false);
                 }
                 let reused_main = app
-                    .current_photo_frame(self.target())
+                    .current_image(self.target())
                     .is_some_and(|frame| image_id(frame) == detail.image);
                 self.events.push(json!({"observed":"active single-photo native loupe preserved the main photograph",
                     "photo":self.target(),"task":detail.image,"processing_quality":app.preferences.processing_quality,
@@ -885,7 +871,7 @@ impl Driver {
                 self.phase = Phase::SingleMotionSweepSettled;
             }
             Phase::SingleMotionSweepSettled => {
-                if app.worker.busy() {
+                if app.view_busy() {
                     return Ok(false);
                 }
                 let Some(detail) = self.detail(app, ctx, self.single_whole)? else {
@@ -896,7 +882,7 @@ impl Driver {
                     self.release_pointer(smoke);
                     self.phase = Phase::SingleReleased;
                 } else {
-                    let frame = app.multi_edit.detail(self.target()).unwrap();
+                    let frame = app.photo_patch(self.target()).unwrap();
                     let radius = 40. * ctx.pixels_per_point();
                     let uv = focus_uv(
                         frame,
@@ -911,7 +897,7 @@ impl Driver {
                 if !self.held()? {
                     return Ok(false);
                 }
-                let frame = app.multi_edit.detail(self.target()).unwrap();
+                let frame = app.photo_patch(self.target()).unwrap();
                 let uv = focus_uv(frame, self.first.unwrap().focus);
                 self.queue_pointer(app, smoke, uv, None)?;
                 self.phase = Phase::ReturnCovered;
@@ -923,7 +909,7 @@ impl Driver {
                 if detail.image != self.first.unwrap().image {
                     return Err("return to covered loupe lost the retained native image".into());
                 }
-                if app.worker.busy() {
+                if app.view_busy() {
                     return Ok(false);
                 }
                 self.events.push(json!({"observed":"covered loupe withdrew held replacement", "detail":detail.image,"region":detail.region,"required":detail.required}));
@@ -932,7 +918,7 @@ impl Driver {
                 self.phase = Phase::ReturnReleased;
             }
             Phase::ReturnReleased => {
-                if app.worker.busy() || app.memory_reply_epoch == self.held_reply_epoch {
+                if app.view_busy() || app.memory_reply_epoch == self.held_reply_epoch {
                     return Ok(false);
                 }
                 let Some(detail) = self.detail(app, ctx, false)? else {
@@ -943,7 +929,7 @@ impl Driver {
                         "withdrawn replacement was admitted over retained loupe coverage".into(),
                     );
                 }
-                let frame = app.multi_edit.detail(self.target()).unwrap();
+                let frame = app.photo_patch(self.target()).unwrap();
                 let radius = 40. * ctx.pixels_per_point();
                 let uv = focus_uv(
                     frame,
@@ -968,7 +954,7 @@ impl Driver {
                 self.phase = Phase::SingleReleased;
             }
             Phase::SingleReleased => {
-                if loupe_tool::gesture(ctx).is_some() || app.worker.busy() {
+                if loupe_tool::gesture(ctx).is_some() || app.view_busy() {
                     return Ok(false);
                 }
                 self.check_main(app)?;
@@ -999,15 +985,10 @@ impl Driver {
             }
             Phase::ZoomCapture => {
                 let base = app
-                    .current_photo_frame(self.target())
+                    .current_image(self.target())
                     .ok_or("zoom lost overview")?;
                 let detail = app
-                    .photo_detail(
-                        self.target(),
-                        Some(base),
-                        &app.view_settings(),
-                        Rendition::Current,
-                    )
+                    .photo_patch(self.target())
                     .ok_or("zoom lost compatible native overlay")?;
                 let visible = app
                     .viewports
@@ -1015,12 +996,7 @@ impl Driver {
                     .visible_pixels()
                     .ok_or("zoom has no visible bounds")?;
                 let window = base.display_window(false);
-                let required = [
-                    visible.top_left[0] + window[0],
-                    visible.top_left[1] + window[1],
-                    visible.bottom_right[0] + 1 + window[0],
-                    visible.bottom_right[1] + 1 + window[1],
-                ];
+                let required = visible.native_bounds(window);
                 let first = self.first.unwrap();
                 if app.selected.as_deref() != Some(self.target())
                     || image_id(detail) != first.image
@@ -1041,20 +1017,20 @@ impl Driver {
                 self.phase = Phase::ZoomReleased;
             }
             Phase::ZoomReleased => {
-                if app.worker.busy() {
+                if app.view_busy() {
                     return Ok(false);
                 }
                 self.restore_browser(app);
             }
             Phase::RestoreBrowser => {
-                if app.viewport_paths.len() != paths.len() || app.worker.busy() {
+                if app.viewport_paths.len() != paths.len() || app.view_busy() {
                     return Ok(false);
                 }
                 self.restore(app, ctx);
             }
             Phase::Restoring => {
                 let saved = self.saved.as_ref().unwrap();
-                if app.worker.busy()
+                if app.view_busy()
                     || !app.multi_edit.editable_ready()
                     || app.selected.as_ref() != Some(&saved.active)
                     || app.edit_selection.paths() != saved.editing
@@ -1125,8 +1101,8 @@ impl Driver {
     }
 }
 
-fn focus_uv(frame: &worker::Frame, focus: [f32; 2]) -> [f32; 2] {
-    let window = frame.requested.crop.pixels(frame.uncropped_extent());
+fn focus_uv(frame: &worker::RenderResult, focus: [f32; 2]) -> [f32; 2] {
+    let window = frame.request.settings.crop.pixels(frame.uncropped_extent());
     [
         (focus[0] - window[0] as f32) / (window[2] - window[0]) as f32,
         (focus[1] - window[1] as f32) / (window[3] - window[1]) as f32,
@@ -1134,21 +1110,21 @@ fn focus_uv(frame: &worker::Frame, focus: [f32; 2]) -> [f32; 2] {
 }
 
 fn thumb_ready(app: &App, path: &Path) -> bool {
-    app.current_photo_frame(path).is_some_and(|frame| {
+    app.current_image(path).is_some_and(|frame| {
         app.multi_edit.settings(path).is_some_and(|settings| {
             matching::same_authored_edits(
-                &frame.requested,
-                &app.preferences.render_settings(settings),
+                &frame.request.settings,
+                &app.preferences.with_workspace_settings(settings),
             )
-        }) && frame.processing_quality == app.preferences.processing_quality
+        }) && frame.processing_quality() == app.preferences.processing_quality
             && frame.artifact.settings.working_scale.divisor()
                 <= app
                     .preview_scale_for(path, app.preferences.processing_quality)
                     .divisor()
     })
 }
-fn image_id(frame: &worker::Frame) -> ImageId {
-    (frame.diagnostic_task.id, frame.content_revision())
+fn image_id(frame: &worker::RenderResult) -> ImageId {
+    (frame.diagnostic_task.id, frame.request.id.0)
 }
 fn covers(region: [u32; 4], point: [f32; 2]) -> bool {
     point[0] >= region[0] as f32
@@ -1159,11 +1135,11 @@ fn covers(region: [u32; 4], point: [f32; 2]) -> bool {
 // The maintained gesture fixes a 160-point lens at 200%. Its native footprint
 // is independent of the production placement and overscan helpers.
 fn footprint(
-    frame: &worker::Frame,
+    frame: &worker::RenderResult,
     gesture: &loupe_tool::Gesture,
     pixels_per_point: f32,
 ) -> ([f32; 2], [u32; 4]) {
-    let window = frame.requested.crop.pixels(frame.uncropped_extent());
+    let window = frame.request.settings.crop.pixels(frame.uncropped_extent());
     let focus = [
         window[0] as f32 + gesture.focus_uv[0] * (window[2] - window[0]) as f32,
         window[1] as f32 + gesture.focus_uv[1] * (window[3] - window[1]) as f32,

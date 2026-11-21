@@ -72,9 +72,9 @@ pub(super) struct Cache {
     repairs: Vec<RepairEntry>,
 }
 impl Cache {
-    fn trim_cold(&mut self, protected: &[&Arc<Metadata>]) -> bool {
+    fn trim_cold(&mut self, retained: &[&Arc<Metadata>]) -> bool {
         let cold = |metadata: &Weak<Metadata>| {
-            !protected
+            !retained
                 .iter()
                 .any(|current| same_metadata(metadata, current))
         };
@@ -207,14 +207,14 @@ impl Cache {
 impl Engine {
     pub(super) fn trim_cold_preparation(
         &self,
-        protected: &[&Arc<Metadata>],
+        retained: &[&Arc<Metadata>],
         origins: &[&crate::source::SourceOrigin],
     ) -> bool {
         if self
             .preparation
             .lock()
             .expect("metadata preparation cache")
-            .trim_cold(protected)
+            .trim_cold(retained)
         {
             return true;
         }
@@ -268,7 +268,7 @@ impl Engine {
             .expect("calibration statistics cache") = Vec::new();
     }
 
-    /// A sealed reduced checkpoint does not need the full sensor's clipping map.
+    /// Reduced sensor data does not need the full sensor's clipping map.
     /// The caller must also release upstream graph keys to release their readers.
     pub fn release_native_preparation(&self, metadata: &Arc<Metadata>) {
         let mut cache = self.preparation.lock().expect("metadata preparation cache");

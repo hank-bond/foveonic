@@ -215,7 +215,6 @@ fn responsive_header_stays_inside_the_pane_with_long_queries_and_import_counts()
                                 browser.header(
                                     ui,
                                     &mut mode,
-                                    true,
                                     ui.id().with("organizer focus"),
                                 );
                                 assert!(
@@ -303,7 +302,6 @@ impl Fixture {
             &self.ctx,
             &mut input,
             crate::shortcuts::Availability {
-                enabled: true,
                 browser: !self.browser.files.is_empty(),
                 import: self.browser.import_mode,
                 settings: false,

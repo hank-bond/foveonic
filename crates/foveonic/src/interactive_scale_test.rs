@@ -27,7 +27,7 @@ fn session_scale_switch_diagnostic() {
             settings.photographic.tone_method = PhotographicMethod::Universal;
             settings.photographic.base_response = BaseResponse::Natural;
         }
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         for (step, (quality, exposure)) in [
             (Scale::new(2).unwrap(), 0.),
             (Scale::new(2).unwrap(), 0.25),
@@ -52,7 +52,7 @@ fn session_scale_switch_diagnostic() {
             let before = engine.gpu_activity();
             let started = std::time::Instant::now();
             let artifact = engine
-                .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+                .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
                 .unwrap()
                 .unwrap()
                 .pop()
@@ -70,7 +70,7 @@ fn session_scale_switch_diagnostic() {
             let completed_ms = started.elapsed().as_secs_f64() * 1000.;
             let activity = engine.gpu_activity().since(before);
             if step > 0 && ![3, 6].contains(&step) {
-                assert!(profile.nodes.iter().all(|node| !node.executed || !matches!(node.operation, "Source" | "SourcePhaseCells" | "PoolSignal")), "warm edits and recovered scale histories must reuse their exact sensor cuts: look={look} step={step}");
+                assert!(profile.nodes.iter().all(|node| !node.executed || !matches!(node.operation, "Source" | "SourcePhaseCells" | "PoolSignal")), "warm edits and recovered scale histories must reuse their exact sensor data: look={look} step={step}");
             }
             let executed: Vec<_> = profile.nodes.iter().filter(|node| node.executed).map(|node| serde_json::json!({"operation":node.operation,"outputs":node.outputs.iter().map(|o|o.name.as_str()).collect::<Vec<_>>(),"activity":node.activity,"host_ms":node.host_milliseconds})).collect();
             println!(

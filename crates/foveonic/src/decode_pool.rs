@@ -1,6 +1,6 @@
 //! Runs independent processing CPU work on one host-sized pool with decode-specific FIFO admission.
 
-use crate::{background, source::Result};
+use crate::{priority, source::Result};
 use std::{
     collections::BTreeSet,
     sync::{Arc, Condvar, LazyLock, Mutex},
@@ -56,15 +56,15 @@ pub(crate) fn shared() -> Result<Arc<Pool>> {
 pub(crate) fn cpu<T: Send>(work: impl FnOnce() -> Result<T> + Send) -> Result<T> {
     let diagnostic = crate::diagnostics::current_context();
     let _admission = crate::diagnostics::scope(crate::diagnostics::Category::Cpu, "cpu.install");
-    let scheduling = background::context();
-    let pool = background::decoder_context()
+    let scheduling = priority::context();
+    let pool = priority::decoder_context()
         .map(|task| task.pool)
         .map_or_else(shared, Ok)?;
     pool.0.install(|| {
         let _context = diagnostic.map(crate::diagnostics::enter);
         let _work = crate::diagnostics::scope(crate::diagnostics::Category::Cpu, "cpu.execute");
-        background::with_context(scheduling, || {
-            background::checkpoint_or_cancel()?;
+        priority::with_context(scheduling, || {
+            priority::checkpoint_or_cancel()?;
             work()
         })
     })
@@ -107,7 +107,7 @@ impl Turn {
         loop {
             // Thumbnail demand can pause admission. Leave the order lock free
             // so already-admitted photos can release their turns while paused.
-            background::checkpoint_or_cancel()?;
+            priority::checkpoint_or_cancel()?;
             let state = self.order.state.lock().unwrap();
             if self.ticket == state.next {
                 return Ok(());
@@ -159,7 +159,7 @@ impl Pool {
         let mut results: [_; SENSOR_PLANES] = std::array::from_fn(|_| None);
         self.0.in_place_scope_fifo(|scope| {
             for (channel, result) in results.iter_mut().enumerate() {
-                let scheduling = background::context();
+                let scheduling = priority::context();
                 let diagnostic = crate::diagnostics::current_context();
                 let decode = &decode;
                 scope.spawn_fifo(move |_| {
@@ -171,8 +171,8 @@ impl Pool {
                             fields.u64("plane", channel as u64);
                         },
                     );
-                    *result = Some(background::decoding(scheduling, || {
-                        background::checkpoint_or_cancel()?;
+                    *result = Some(priority::decoding(scheduling, || {
+                        priority::checkpoint_or_cancel()?;
                         decode(channel)
                     }));
                 });
@@ -205,7 +205,7 @@ impl Pool {
             for (chunk, (output, result)) in
                 output.chunks_mut(chunk_size).zip(&mut results).enumerate()
             {
-                let scheduling = background::context();
+                let scheduling = priority::context();
                 let diagnostic = crate::diagnostics::current_context();
                 scope.spawn_fifo(move |_| {
                     let _context = diagnostic.map(crate::diagnostics::enter);
@@ -217,8 +217,8 @@ impl Pool {
                             fields.u64("rows", (output.len() / row_size) as u64);
                         },
                     );
-                    *result = Some(background::decoding(scheduling, || {
-                        background::checkpoint_or_cancel()?;
+                    *result = Some(priority::decoding(scheduling, || {
+                        priority::checkpoint_or_cancel()?;
                         decode(chunk * chunk_rows, output)
                     }));
                 });
@@ -238,7 +238,7 @@ impl Pool {
 /// Decode independent planes using the common processing CPU budget. Speculative
 /// photo admission adds its FIFO turn; foreground decoding has no such turn.
 pub(crate) fn planes<T: Send>(decode: impl Fn(usize) -> Result<T> + Sync) -> Result<Vec<T>> {
-    if let Some(task) = background::decoder_context() {
+    if let Some(task) = priority::decoder_context() {
         task.pool.planes(Some(&task.turn), decode)
     } else {
         shared()?.planes(None, decode)
@@ -256,7 +256,7 @@ pub(crate) fn rows<T: Send>(
         return Ok(());
     }
     assert!(row_size != 0 && output.len().is_multiple_of(row_size));
-    if let Some(task) = background::decoder_context() {
+    if let Some(task) = priority::decoder_context() {
         task.pool.rows(Some(&task.turn), output, row_size, &decode)
     } else {
         shared()?.rows(None, output, row_size, &decode)

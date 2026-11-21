@@ -1,4 +1,4 @@
-//! Counts shared photographic samples and distinct frontend display pools for the worker budget.
+//! Counts shared photographic samples and distinct frontend display pools for the worker memory target.
 
 use crate::rendering::worker;
 use eframe::egui;
@@ -45,7 +45,7 @@ impl Inventory {
     pub fn image(&mut self, image: &foveonic::image::RenderedImage) {
         self.reservation.add_image(image);
     }
-    pub fn frame(&mut self, frame: &worker::Frame) {
+    pub fn frame(&mut self, frame: &worker::RenderResult) {
         self.metadata(&frame.artifact.metadata);
         if let Content::Image(image) = &frame.artifact.content {
             self.reservation.add_image(image);
@@ -76,7 +76,7 @@ pub struct PendingImage {
     comparison: Option<Weak<ImageTexture>>,
 }
 impl PendingImage {
-    pub fn new(frame: &worker::Frame) -> Self {
+    pub fn new(frame: &worker::RenderResult) -> Self {
         let mut shared = MemoryReservation::default();
         shared.add_metadata(&frame.artifact.metadata);
         if let Content::Image(image) = &frame.artifact.content {
@@ -128,9 +128,9 @@ pub fn texture_bytes(texture: &eframe::wgpu::Texture) -> u64 {
         .sum()
 }
 
-pub fn frame_key(frame: &worker::Frame, key: &mut Vec<u64>) {
+pub fn frame_key(frame: &worker::RenderResult, key: &mut Vec<u64>) {
     key.extend([
-        frame.revision,
+        frame.request.id.0,
         Arc::as_ptr(&frame.texture) as usize as u64,
         Arc::as_ptr(&frame.artifact.metadata) as usize as u64,
         frame.comparison.as_ref().map_or(0, |comparison| {
@@ -148,15 +148,12 @@ impl crate::App {
             self.navigator.resource_revision(),
             self.previews.resource_revision(),
         ];
-        key.push(u64::from(self.frame.is_some()));
-        if let Some(frame) = &self.frame {
+        for frame in self.images.images() {
             frame_key(frame, &mut key);
         }
         if let Some(metadata) = &self.metadata {
             key.push(Arc::as_ptr(metadata) as usize as u64);
         }
-        self.before.memory_key(&mut key);
-        self.multi_edit.memory_key(&mut key);
         if let Some(images) = &self.scope_images {
             images.memory_key(&mut key);
         }
@@ -170,14 +167,12 @@ impl crate::App {
         }
         self.memory_key = key;
         let mut inventory = Inventory::default();
-        for frame in self.frame.iter() {
+        for frame in self.images.images() {
             inventory.frame(frame);
         }
         if let Some(metadata) = &self.metadata {
             inventory.metadata(metadata);
         }
-        self.before.memory_resources(&mut inventory);
-        self.multi_edit.memory_resources(&mut inventory);
         self.browser.memory_resources(&mut inventory);
         self.navigator.memory_resources(&mut inventory);
         self.previews.memory_resources(&mut inventory);
@@ -188,7 +183,7 @@ impl crate::App {
             inventory.cpu((snapshot.data.counts.capacity() * size_of::<u32>()) as u64);
         }
         self.worker
-            .set_memory_budget(self.preferences.memory_cache_bytes, inventory);
+            .set_memory_target(self.preferences.memory_cache_bytes, inventory);
     }
 }
 

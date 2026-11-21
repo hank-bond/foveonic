@@ -4,7 +4,7 @@ use crate::gpu::Gpu;
 use crate::graph::{Graph, Operation};
 use crate::image::{Description, ImageTexture, Layout, RenderedImage, Space};
 use crate::inspection::Artifact;
-pub use crate::interactive::RenderSession;
+pub use crate::interactive::NativePhoto;
 use crate::interactive::{Execution, Superseded};
 use crate::profile::Profile;
 use crate::source::{Metadata, Result, Source};
@@ -19,30 +19,31 @@ mod capabilities;
 #[path = "dng/gpu.rs"]
 mod dng_gpu;
 mod driver;
-#[cfg(feature = "wide-experiment")]
-pub use driver::{
-    experimental::{RenderExecutionStart, SubmissionWindow},
-    RenderExecution,
-};
+pub use driver::{RenderExecution, RenderExecutionStart, Tick};
 mod edits;
-mod execute;
+pub(crate) mod execute;
+mod image_cache;
 mod memory;
 mod preparation;
 mod quality;
+mod queue;
 mod recipes;
 mod reduced;
 mod scale;
+mod scheduler;
 mod settings;
 mod source_preparation;
 mod working_set;
-pub use memory::{ExecutionBudget, MemoryReservation, MemoryResources, MemoryTrim};
+pub use image_cache::{CachedImage, ImageCache};
+pub use memory::{MemoryReservation, MemoryResources, MemoryTrim};
 pub use quality::ProcessingQuality;
 pub use reduced::{
-    NeedsOriginal, ParameterResources, ReducedPreparation, ReducedSession, SessionResources,
+    NeedsOriginal, ParameterResources, PhotoResources, ReducedPhoto, ReducedPreparation,
 };
 pub use scale::Scale;
 pub(crate) use scale::WorkingGrid;
-pub use working_set::{ProcessingWorkingSet, SessionInUse, SessionKey, SessionKind, SessionUse};
+pub use scheduler::{Host, Interruption, Job, Outcome, Render, Scheduler, Start};
+pub use working_set::{PhotoInUse, PhotoKey, Purpose, Resolution, WorkingSet};
 /// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.
 pub fn native_extent(metadata: &crate::source::Metadata) -> crate::source::Result<[u32; 2]> {
     recipes::native_extent(metadata)
@@ -68,8 +69,8 @@ pub use crate::nodes::finish::advanced_color::{
     MAX_NAME_CHARS as MAX_COLOR_RANGE_NAME_CHARS, MAX_RANGES as MAX_COLOR_RANGES,
 };
 pub use crate::nodes::finish::color_editor::Sample as ColorRangeSample;
+use execute::Input;
 pub(crate) use execute::Value;
-use execute::{Completion, Input};
 use recipes::Recipe;
 pub use settings::{
     AutoExposureCompensation, ColorEditorControls, ColorFieldApproach, ColorFieldControls,
@@ -78,8 +79,8 @@ pub use settings::{
     Settings, TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening, WhiteBalanceBias,
 };
 
-/// A completed session render or a request to recover missing reduced-session inputs.
-pub enum SessionRender {
+/// A completed working-photo render or a request to recover missing reduced-photo inputs.
+pub enum PhotoRender {
     Rendered(Vec<Artifact>),
     NeedsOriginal(NeedsOriginal),
     Superseded,
@@ -115,7 +116,7 @@ impl Engine {
         &self.gpu
     }
 
-    // Selected serial artifact tests share device/kernel resources, with fresh
+    // Selected artifact tests share device/kernel resources, with fresh
     // preparation and ownership. Initialization, diagnostics and lifetime tests stay fresh.
     pub(crate) fn test_executor() -> Self {
         static SEED: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
@@ -427,74 +428,78 @@ impl Engine {
             Recipe::Photographic(names),
             profile,
             &mut Execution::default(),
-            Completion::Queued,
         )
     }
 
     /// Render one or more outputs of a retained native photograph through the shared lifecycle.
-    /// Missing input returns None. Supersession is reported in SessionRender.
+    /// Missing input returns None. Supersession is reported in PhotoRender.
     #[allow(clippy::too_many_arguments)]
     pub fn render_native(
         &self,
-        working: &mut ProcessingWorkingSet,
+        working: &mut WorkingSet,
         photo: u64,
         settings: &Settings,
         names: &[&str],
-        usage: SessionUse,
+        purpose: Purpose,
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
         progress: impl Fn(RenderProgress),
-        budget: Option<ExecutionBudget<'_>>,
-    ) -> Result<Option<SessionRender>> {
-        driver::render_session(
+    ) -> Result<Option<PhotoRender>> {
+        driver::render_working_photo(
             self,
             working,
-            SessionKey {
+            PhotoKey {
                 photo,
-                kind: SessionKind::Native,
+                resolution: Resolution::Native,
             },
             settings,
             names,
-            usage,
+            purpose,
             &cancel,
             profile,
             Some(&progress),
-            budget,
         )
     }
 
     /// Render edits with reusable session checkpoints. None means a newer request
     /// took over safely, not that rendering failed.
     /// Checkpoints remain bound to this session's immutable source and this engine's device.
-    pub fn render_session(
+    pub fn render_native_photo(
         &self,
-        session: &mut RenderSession,
+        session: &mut NativePhoto,
         settings: &Settings,
         names: &[&str],
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
     ) -> Result<Option<Vec<crate::inspection::Artifact>>> {
-        self.render_session_observed(session, settings, names, cancel, profile, None)
+        self.render_native_photo_observed(session, settings, names, cancel, profile, None)
     }
 
     /// Report graph stages after per-operation GPU completion.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_session_with_progress(
+    pub fn render_native_photo_with_progress(
         &self,
-        session: &mut RenderSession,
+        session: &mut NativePhoto,
         settings: &Settings,
         names: &[&str],
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
         progress: impl Fn(RenderProgress),
     ) -> Result<Option<Vec<crate::inspection::Artifact>>> {
-        self.render_session_observed(session, settings, names, cancel, profile, Some(&progress))
+        self.render_native_photo_observed(
+            session,
+            settings,
+            names,
+            cancel,
+            profile,
+            Some(&progress),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render_session_observed(
+    fn render_native_photo_observed(
         &self,
-        session: &mut RenderSession,
+        session: &mut NativePhoto,
         settings: &Settings,
         names: &[&str],
         cancel: impl Fn() -> bool,
@@ -520,11 +525,10 @@ impl Engine {
             Recipe::Photographic(names),
             profile,
             &mut execution,
-            Completion::Operation,
         );
         profile.measure("finish session cache", || {
             if result.is_ok() {
-                session.cache.commit();
+                session.cache.commit(None);
             }
             session.cache.finish()
         });
@@ -548,7 +552,6 @@ impl Engine {
                 Recipe::DngBase,
                 profile,
                 &mut Execution::default(),
-                Completion::Queued,
             )?
             .pop()
             .ok_or("missing DNG processing base")?;
@@ -636,7 +639,6 @@ impl Engine {
             &[file],
             profile,
             &mut Execution::default(),
-            Completion::Queued,
         )?;
         Ok(image.view().extent)
     }

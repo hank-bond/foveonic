@@ -107,7 +107,7 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
     // Reuse the open reader. During pre-cache this seeks only within the original
     // memory buffer, including metadata stored in version-4 JPEG MakerNotes.
     let encoding = color::Encoding::camera(&crate::x3f::capture::read(file).unwrap_or_default());
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     let length = file.seek(SeekFrom::End(0))?;
     file.seek(SeekFrom::Start(0))?;
     if length < BASE_HEADER_BYTES as u64 + DIRECTORY_POINTER_BYTES {
@@ -165,7 +165,7 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
         .filter(|e| e.iter().all(|v| *v > 0) && u64::from(e[0]) * u64::from(e[1]) <= MAX_PIXELS);
     let mut native_extent = header_extent.unwrap_or([0_u32; 2]);
     for entry in entries.as_chunks::<DIRECTORY_ENTRY_BYTES>().0 {
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         if &entry[ENTRY_TAG_OFFSET..] != b"IMAG" && &entry[ENTRY_TAG_OFFSET..] != b"IMA2" {
             continue;
         }
@@ -215,7 +215,7 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
             {
                 let mut prefix = vec![0; (size - IMAGE_HEADER_BYTES).min(EXIF_PREFIX_BYTES)];
                 file.read_exact(&mut prefix)?;
-                crate::background::checkpoint_or_cancel()?;
+                crate::priority::checkpoint_or_cancel()?;
                 if let Some(preview) = crate::x3f::jpeg_thumbnail(&prefix).and_then(|jpeg| {
                     decode_exif_thumbnail(jpeg, extent, &encoding.jpeg(&prefix)).ok()
                 }) {
@@ -265,13 +265,13 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
     }
     file.seek(SeekFrom::Start(selected.offset))?;
     let mut encoded = vec![0; selected.size];
-    for chunk in encoded.chunks_mut(crate::background::IO_CHUNK_BYTES) {
-        crate::background::checkpoint_or_cancel()?;
+    for chunk in encoded.chunks_mut(crate::priority::IO_CHUNK_BYTES) {
+        crate::priority::checkpoint_or_cancel()?;
         file.read_exact(chunk)?;
     }
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     let (rgb, color_space) = selected.decode(&encoded, &encoding)?;
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
 
     Ok(Preview {
         rgb,
@@ -372,7 +372,7 @@ impl Embedded {
             }
             let mut rgb = Vec::with_capacity(self.pixels() as usize * 3);
             for row in encoded[..required].chunks_exact(self.stride) {
-                crate::background::checkpoint_or_cancel()?;
+                crate::priority::checkpoint_or_cancel()?;
                 rgb.extend_from_slice(&row[..row_bytes]);
             }
             encoding.decode(&rgb)

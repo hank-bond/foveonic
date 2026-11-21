@@ -8,10 +8,10 @@ type Latch = (Mutex<bool>, Condvar);
 #[test]
 fn borrowed_cpu_preparation_and_nested_planes_share_capacity_and_cancellation() {
     let pool = Arc::new(Pool::new(2).unwrap());
-    let gate = Arc::new(background::Gate::default());
+    let gate = Arc::new(priority::Gate::default());
     let values = [3, 5, 7];
-    background::interruptible(gate.clone(), || {
-        background::decoder(
+    priority::interruptible(gate.clone(), || {
+        priority::decoder(
             Task {
                 pool: pool.clone(),
                 turn: Arc::new(Order::default()).issue(),
@@ -20,7 +20,7 @@ fn borrowed_cpu_preparation_and_nested_planes_share_capacity_and_cancellation() 
                 assert_eq!(
                     cpu(|| {
                         assert!(pool.0.current_thread_index().is_some());
-                        assert!(background::context().is_some());
+                        assert!(priority::context().is_some());
                         planes(|channel| {
                             assert!(pool.0.current_thread_index().is_some());
                             Ok(values[channel])
@@ -28,14 +28,14 @@ fn borrowed_cpu_preparation_and_nested_planes_share_capacity_and_cancellation() 
                     })?,
                     values
                 );
-                let _foreground = gate.foreground();
+                let _foreground = gate.demand(crate::priority::Priority::Viewport);
                 let ran = std::sync::atomic::AtomicBool::new(false);
                 assert!(cpu(|| {
                     ran.store(true, std::sync::atomic::Ordering::Relaxed);
                     Ok(())
                 })
                 .unwrap_err()
-                .is::<background::Interrupted>());
+                .is::<priority::Interrupted>());
                 assert!(!ran.load(std::sync::atomic::Ordering::Relaxed));
                 Ok(())
             },
@@ -47,7 +47,7 @@ fn borrowed_cpu_preparation_and_nested_planes_share_capacity_and_cancellation() 
 #[test]
 fn paused_cpu_batch_yields_one_worker_to_foreground_and_resumes() {
     let pool = Arc::new(Pool::new(1).unwrap());
-    let gate = Arc::new(background::Gate::default());
+    let gate = Arc::new(priority::Gate::default());
     let (started, start) = mpsc::channel();
     let (proceed, resume) = mpsc::channel();
     let (foreground_done, done) = mpsc::channel();
@@ -57,8 +57,8 @@ fn paused_cpu_batch_yields_one_worker_to_foreground_and_resumes() {
             let pool = pool.clone();
             let gate = gate.clone();
             scope.spawn(move || {
-                background::processing(gate, || {
-                    background::decoder(
+                gate.run(priority::Priority::Export, || {
+                    priority::decoder(
                         Task {
                             pool,
                             turn: Arc::new(Order::default()).issue(),
@@ -67,7 +67,7 @@ fn paused_cpu_batch_yields_one_worker_to_foreground_and_resumes() {
                             cpu(move || {
                                 started.send(()).unwrap();
                                 resume.recv().unwrap();
-                                background::checkpoint_or_cancel()?;
+                                priority::checkpoint_or_cancel()?;
                                 batch_resumed.send(()).unwrap();
                                 Ok(19)
                             })
@@ -77,9 +77,9 @@ fn paused_cpu_batch_yields_one_worker_to_foreground_and_resumes() {
             })
         };
         start.recv_timeout(Duration::from_secs(5)).unwrap();
-        let foreground = gate.foreground();
+        let foreground = gate.demand(crate::priority::Priority::Viewport);
         pool.0.spawn(move || {
-            background::with_context(None, || foreground_done.send(()).unwrap());
+            priority::with_context(None, || foreground_done.send(()).unwrap());
         });
         proceed.send(()).unwrap();
         let completed = done.recv_timeout(Duration::from_secs(5));
@@ -114,7 +114,7 @@ fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
         planes(|channel| {
             assert!(pool.0.current_thread_index().is_some());
             assert_ne!(std::thread::current().id(), caller);
-            assert!(background::context().is_none());
+            assert!(priority::context().is_none());
             Ok(channel + 1)
         })
         .unwrap(),
@@ -124,7 +124,7 @@ fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
     rows(&mut output, 1, |first, chunk| {
         assert!(pool.0.current_thread_index().is_some());
         assert_ne!(std::thread::current().id(), caller);
-        assert!(background::context().is_none());
+        assert!(priority::context().is_none());
         for (offset, value) in chunk.iter_mut().enumerate() {
             *value = first + offset;
         }
@@ -132,8 +132,8 @@ fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
     })
     .unwrap();
     assert_eq!(output, (0..output.len()).collect::<Vec<_>>());
-    background::interruptible(Arc::new(background::Gate::default()), || {
-        background::decoder(
+    priority::interruptible(Arc::new(priority::Gate::default()), || {
+        priority::decoder(
             Task {
                 pool: pool.clone(),
                 turn: Arc::new(Order::default()).issue(),
@@ -143,7 +143,7 @@ fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
                     assert!(pool.0.current_thread_index().is_some());
                     assert!(Arc::ptr_eq(
                         &pool,
-                        &background::decoder_context().unwrap().pool
+                        &priority::decoder_context().unwrap().pool
                     ));
                     Ok(channel)
                 })?;
@@ -151,7 +151,7 @@ fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
                     assert!(pool.0.current_thread_index().is_some());
                     assert!(Arc::ptr_eq(
                         &pool,
-                        &background::decoder_context().unwrap().pool
+                        &priority::decoder_context().unwrap().pool
                     ));
                     chunk.fill(7);
                     Ok(())
@@ -184,9 +184,9 @@ fn five_workers_start_rgb_rg_then_take_the_next_b_before_the_first_photo_finishe
                 let gates = gates.clone();
                 let started = started.clone();
                 scope.spawn(move || {
-                    background::interruptible(Arc::new(background::Gate::default()), || {
-                        background::decoder(Task { pool, turn }, || {
-                            let task = background::decoder_context().unwrap();
+                    priority::interruptible(Arc::new(priority::Gate::default()), || {
+                        priority::decoder(Task { pool, turn }, || {
+                            let task = priority::decoder_context().unwrap();
                             task.pool.planes(Some(&task.turn), |layer| {
                                 started
                                     .send((photo, layer, std::thread::current().id()))
@@ -236,10 +236,10 @@ fn cancellation_reaches_queued_layers_and_unblocks_later_photo_admission() {
     let order = Arc::new(Order::default());
     let first = order.issue();
     let second = order.issue();
-    let gate = Arc::new(background::Gate::default());
-    background::interruptible(gate.clone(), || {
-        let _foreground = gate.foreground();
-        let error = background::decoder(
+    let gate = Arc::new(priority::Gate::default());
+    priority::interruptible(gate.clone(), || {
+        let _foreground = gate.demand(crate::priority::Priority::Viewport);
+        let error = priority::decoder(
             Task {
                 pool: pool.clone(),
                 turn: first,
@@ -247,17 +247,17 @@ fn cancellation_reaches_queued_layers_and_unblocks_later_photo_admission() {
             || Ok(()),
         )
         .unwrap_err();
-        assert!(error.is::<background::Interrupted>());
+        assert!(error.is::<priority::Interrupted>());
     });
-    background::interruptible(gate.clone(), || {
-        background::decoder(Task { pool, turn: second }, || {
-            let task = background::decoder_context().unwrap();
-            let _foreground = gate.foreground();
+    priority::interruptible(gate.clone(), || {
+        priority::decoder(Task { pool, turn: second }, || {
+            let task = priority::decoder_context().unwrap();
+            let _foreground = gate.demand(crate::priority::Priority::Viewport);
             assert!(task
                 .pool
                 .planes(Some(&task.turn), |_| Ok(()))
                 .unwrap_err()
-                .is::<background::Interrupted>());
+                .is::<priority::Interrupted>());
             Ok(())
         })
         .unwrap();
@@ -270,7 +270,7 @@ fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
     let order = Arc::new(Order::default());
     let first = order.issue();
     let second = order.issue();
-    let gate = Arc::new(background::Gate::default());
+    let gate = Arc::new(priority::Gate::default());
     let latches: Arc<Vec<Latch>> = Arc::new(
         (0..3)
             .map(|_| (Mutex::new(false), Condvar::new()))
@@ -282,21 +282,21 @@ fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
         let old_pool = pool.clone();
         let old_gate = gate.clone();
         let job = scope.spawn(move || {
-            background::interruptible(old_gate, || {
-                background::decoder(
+            priority::interruptible(old_gate, || {
+                priority::decoder(
                     Task {
                         pool: old_pool,
                         turn: first,
                     },
                     || {
-                        let task = background::decoder_context().unwrap();
+                        let task = priority::decoder_context().unwrap();
                         task.pool.planes(Some(&task.turn), |layer| {
                             started.send(layer).unwrap();
                             let mut released = latches[layer].0.lock().unwrap();
                             while !*released {
                                 released = latches[layer].1.wait(released).unwrap();
                             }
-                            background::checkpoint_or_cancel()?;
+                            priority::checkpoint_or_cancel()?;
                             Ok(layer)
                         })
                     },
@@ -305,21 +305,21 @@ fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
         });
         receive.recv_timeout(Duration::from_secs(10)).unwrap();
         // A selection/window change invalidates the epoch without acquiring foreground work.
-        gate.interrupt_prefetch();
+        gate.interrupt_speculative();
         drop(release);
         assert!(job
             .join()
             .unwrap()
             .unwrap_err()
-            .is::<background::Interrupted>());
+            .is::<priority::Interrupted>());
         assert!(
             receive.try_recv().is_err(),
             "obsolete queued layers started decoding"
         );
     });
-    let next = background::interruptible(gate, || {
-        background::decoder(Task { pool, turn: second }, || {
-            let task = background::decoder_context().unwrap();
+    let next = priority::interruptible(gate, || {
+        priority::decoder(Task { pool, turn: second }, || {
+            let task = priority::decoder_context().unwrap();
             task.pool.planes(Some(&task.turn), Ok)
         })
     })
@@ -355,8 +355,8 @@ fn row_photos_share_only_configured_workers_and_release_admission_after_queueing
                     let maximum = &maximum;
                     scope.spawn(move || {
                         let mut output = vec![0; worker_count * 4];
-                        background::interruptible(Arc::new(background::Gate::default()), || {
-                            background::decoder(Task { pool, turn }, || {
+                        priority::interruptible(Arc::new(priority::Gate::default()), || {
+                            priority::decoder(Task { pool, turn }, || {
                                 rows(&mut output, 1, |first, output| {
                                     let running = active.fetch_add(1, Ordering::SeqCst) + 1;
                                     maximum.fetch_max(running, Ordering::SeqCst);
@@ -419,7 +419,7 @@ fn row_cancellation_reaches_active_and_queued_chunks_and_releases_next_turn() {
     let order = Arc::new(Order::default());
     let first = order.issue();
     let second = order.issue();
-    let gate = Arc::new(background::Gate::default());
+    let gate = Arc::new(priority::Gate::default());
     let (started, receive) = mpsc::channel();
     let latches: Arc<Vec<Latch>> = Arc::new(
         (0..2)
@@ -441,8 +441,8 @@ fn row_cancellation_reaches_active_and_queued_chunks_and_releases_next_turn() {
         let pool = pool.clone();
         let inherited = gate.clone();
         let job = scope.spawn(move || {
-            background::interruptible(inherited, || {
-                background::decoder(Task { pool, turn: first }, || {
+            priority::interruptible(inherited, || {
+                priority::decoder(Task { pool, turn: first }, || {
                     let mut output = [0; 8];
                     rows(&mut output, 1, |_, _| {
                         started.send(()).unwrap();
@@ -450,26 +450,26 @@ fn row_cancellation_reaches_active_and_queued_chunks_and_releases_next_turn() {
                         while !*released {
                             released = latches[0].1.wait(released).unwrap();
                         }
-                        background::checkpoint_or_cancel()
+                        priority::checkpoint_or_cancel()
                     })
                 })
             })
         });
         receive.recv_timeout(Duration::from_secs(10)).unwrap();
-        gate.interrupt_prefetch();
+        gate.interrupt_speculative();
         drop(release);
         assert!(job
             .join()
             .unwrap()
             .unwrap_err()
-            .is::<background::Interrupted>());
+            .is::<priority::Interrupted>());
         assert!(
             receive.try_recv().is_err(),
             "cancelled queued row chunk entered the decoder"
         );
     });
-    background::interruptible(gate, || {
-        background::decoder(Task { pool, turn: second }, || {
+    priority::interruptible(gate, || {
+        priority::decoder(Task { pool, turn: second }, || {
             let mut output = [0; 8];
             rows(&mut output, 1, |_, output| {
                 output.fill(7);
@@ -502,8 +502,8 @@ fn row_failures_join_every_chunk_and_choose_row_order_for_foreground_and_pool() 
         let error = if pooled {
             let pool = Arc::new(Pool::new(4).unwrap());
             let order = Arc::new(Order::default());
-            background::interruptible(Arc::new(background::Gate::default()), || {
-                background::decoder(
+            priority::interruptible(Arc::new(priority::Gate::default()), || {
+                priority::decoder(
                     Task {
                         pool,
                         turn: order.issue(),
@@ -527,12 +527,12 @@ fn row_failures_join_every_chunk_and_choose_row_order_for_foreground_and_pool() 
             16_usize.div_ceil(rows_per_chunk)
         );
     }
-    let gate = Arc::new(background::Gate::default());
-    background::interruptible(gate.clone(), || {
-        gate.interrupt_prefetch();
+    let gate = Arc::new(priority::Gate::default());
+    priority::interruptible(gate.clone(), || {
+        gate.interrupt_speculative();
         let mut output = [0; 16];
-        let error = rows(&mut output, 1, |_, _| background::checkpoint_or_cancel()).unwrap_err();
-        assert!(error.is::<background::Interrupted>());
+        let error = rows(&mut output, 1, |_, _| priority::checkpoint_or_cancel()).unwrap_err();
+        assert!(error.is::<priority::Interrupted>());
     });
 }
 

@@ -467,7 +467,6 @@ fn zero_auto_strength_keeps_signed_rgb_and_headroom_unchanged() {
             &[color, mono],
             &mut Profile::default(),
             &mut crate::interactive::Execution::default(),
-            crate::render::execute::Completion::Queued,
         )
         .unwrap();
     for output in outputs {
@@ -484,10 +483,10 @@ fn auto_sharpen_matches_manual_for_color_mono_cached_and_dng_recipes() {
     let directory = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let engine = Engine::test_executor();
     let mut session =
-        RenderSession::new(Source::open(directory.join("blue-parking-sign.x3f")).unwrap());
-    let render = |session: &mut RenderSession, settings: &Settings| {
+        NativePhoto::new(Source::open(directory.join("blue-parking-sign.x3f")).unwrap());
+    let render = |session: &mut NativePhoto, settings: &Settings| {
         let artifact = engine
-            .render_session(
+            .render_native_photo(
                 session,
                 settings,
                 &["final"],

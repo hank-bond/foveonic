@@ -4,7 +4,6 @@ use super::*;
 
 fn available() -> Availability {
     Availability {
-        enabled: true,
         browser: true,
         import: true,
         settings: true,

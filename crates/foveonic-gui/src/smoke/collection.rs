@@ -88,7 +88,7 @@ impl CollectionJourney {
                 if app.folder_loader.loading()
                     || app.browser.root.as_ref() != Some(&self.directory)
                     || !app.browser.import_mode
-                    || app.worker.busy()
+                    || app.view_busy()
                     || !app.sidecars.ready()
                 {
                     return Ok(false);
@@ -103,7 +103,7 @@ impl CollectionJourney {
             Phase::Selected => {
                 if app.browser.processing_selection(app.selected.as_deref()) != self.aliases
                     || app.edit_selection.paths() != &self.aliases[..LIMIT]
-                    || app.worker.busy()
+                    || app.view_busy()
                     || !app.multi_edit.editable_ready()
                 {
                     return Ok(false);
@@ -113,7 +113,7 @@ impl CollectionJourney {
                 }
                 if self.aliases[LIMIT..]
                     .iter()
-                    .any(|path| app.multi_edit_frame(path).is_some())
+                    .any(|path| app.photo_layers(path)[0].is_some())
                 {
                     return Err("unexpected editable frame outside bounded targets".into());
                 }
@@ -127,7 +127,7 @@ impl CollectionJourney {
                 self.phase = Phase::Edited;
             }
             Phase::Edited => {
-                if app.worker.busy() || !app.multi_edit.editable_ready() {
+                if app.view_busy() || !app.multi_edit.editable_ready() {
                     return Ok(false);
                 }
                 let edited: Vec<_> = self.exposures.iter().map(|v| v + 0.125).collect();
@@ -140,14 +140,14 @@ impl CollectionJourney {
                 self.phase = Phase::SwitchedAway;
             }
             Phase::SwitchedAway => {
-                if app.worker.busy() || app.selected.as_ref() != Some(&self.aliases[1]) {
+                if app.view_busy() || app.selected.as_ref() != Some(&self.aliases[1]) {
                     return Ok(false);
                 }
                 app.select(self.aliases[0].clone(), true);
                 self.phase = Phase::SwitchedBack;
             }
             Phase::SwitchedBack => {
-                if app.worker.busy() || app.selected.as_ref() != Some(&self.aliases[0]) {
+                if app.view_busy() || app.selected.as_ref() != Some(&self.aliases[0]) {
                     return Ok(false);
                 }
                 let edited: Vec<_> = self.exposures.iter().map(|v| v + 0.125).collect();
@@ -167,7 +167,7 @@ impl CollectionJourney {
             Phase::OriginalFolder => {
                 if app.folder_loader.loading()
                     || app.browser.files != self.original
-                    || app.worker.busy()
+                    || app.view_busy()
                     || !app.sidecars.ready()
                 {
                     return Ok(false);
@@ -178,7 +178,7 @@ impl CollectionJourney {
             }
             Phase::OriginalSelected => {
                 if app.edit_selection.paths() != self.original
-                    || app.worker.busy()
+                    || app.view_busy()
                     || !app.multi_edit.editable_ready()
                 {
                     return Ok(false);
@@ -225,18 +225,17 @@ fn stage(original: &[PathBuf], directory: &PathBuf) -> Result<Vec<PathBuf>, Stri
 fn frames_ready(app: &App, paths: &[PathBuf], exposures: &[f32]) -> bool {
     paths.iter().zip(exposures).all(|(path, expected)| {
         let frame = app
-            .frame
-            .as_ref()
-            .filter(|frame| frame.path == *path)
-            .or_else(|| app.multi_edit_frame(path));
+            .active_image()
+            .filter(|frame| frame.request.path == *path)
+            .or_else(|| app.photo_layers(path)[0]);
         let settings = app
             .multi_edit
             .settings(path)
             .or_else(|| (app.selected.as_ref() == Some(path)).then_some(&app.settings));
         frame.is_some_and(|frame| {
-            frame.rendition == crate::editor::Rendition::Current
+            frame.request.rendition == crate::editor::Rendition::Current
                 && app.worker.is_settled_and_admitted(frame)
-                && frame.requested.exposure == *expected
+                && frame.request.settings.exposure == *expected
                 && !frame.artifact.settings.exposure_auto
                 && frame.artifact.settings.exposure == *expected
         }) && settings

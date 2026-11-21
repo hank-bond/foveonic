@@ -52,9 +52,8 @@ pub fn show(
             ui.horizontal(|ui| {
                 ui.label("Cache memory");
                 let mut mb = preferences.memory_cache_bytes / preferences::MIB;
-                let range = preferences::MEMORY_BYTES_RANGE;
                 if ui.add(widgets::count_drag_value(&mut mb)
-                    .range(*range.start() / preferences::MIB..=*range.end() / preferences::MIB)
+                    .range(preferences::MIN_MEMORY_CACHE_BYTES / preferences::MIB..=u64::MAX / preferences::MIB)
                     .speed(64.).suffix(" MB")).changed() {
                     preferences.memory_cache_bytes = mb * preferences::MIB;
                 }
@@ -62,8 +61,8 @@ pub fn show(
 
             ui.label(format!("Retained data: {:.0} MB", memory.resources.total_bytes as f64 / preferences::MIB as f64))
                 .on_hover_text("Known photo samples, display images and caches. Temporary processing and graphics-driver allocations are additional.");
-            if memory.over_budget_bytes > 0 {
-                ui.weak(format!("{:.0} MB above the cache target", memory.over_budget_bytes as f64 / preferences::MIB as f64));
+            if memory.over_target_bytes > 0 {
+                ui.weak(format!("{:.0} MB above the cache target", memory.over_target_bytes as f64 / preferences::MIB as f64));
             }
             ui.horizontal(|ui| {
                 ui.label("Maximum editing targets");

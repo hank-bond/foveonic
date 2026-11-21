@@ -342,13 +342,13 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
         image::RenderedImage,
         inspection::Content,
         profile::Profile,
-        render::{BaseResponse, PhotographicMethod, RenderSession, Scale, Settings},
+        render::{BaseResponse, NativePhoto, PhotographicMethod, Scale, Settings},
         source::Source,
     };
 
-    fn cached(engine: &Engine, session: &mut RenderSession, settings: &Settings) -> RenderedImage {
+    fn cached(engine: &Engine, session: &mut NativePhoto, settings: &Settings) -> RenderedImage {
         let mut artifacts = engine
-            .render_session(
+            .render_native_photo(
                 session,
                 settings,
                 &["final"],
@@ -364,7 +364,7 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
     }
     fn compare(
         engine: &Engine,
-        session: &mut RenderSession,
+        session: &mut NativePhoto,
         settings: &Settings,
         label: &str,
     ) -> RenderedImage {
@@ -386,7 +386,7 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
     let first = Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
     let second = Arc::new(Source::open(root.join("merrill-hazy-coast.x3f")).unwrap());
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(first.clone());
+    let mut session = NativePhoto::new(first.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.working_scale = Scale::new(8).unwrap();
     settings.reconstruction = Some(Default::default());
@@ -452,7 +452,7 @@ fn gpu_preparation_invalidation_and_native_release_match_fresh_pixels() {
     let previous_curve = engine
         .prepare_tone(&first.metadata, &selected, settings.tone, false)
         .unwrap();
-    let mut other = RenderSession::new(second);
+    let mut other = NativePhoto::new(second);
     compare(
         &engine,
         &mut other,

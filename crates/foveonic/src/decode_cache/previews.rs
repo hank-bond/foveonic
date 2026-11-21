@@ -148,7 +148,7 @@ impl Cache {
     pub fn preview(&self, path: &Path) -> Option<Preview> {
         // The caller owns cooperative scheduling. Keep larger-image decoding
         // at background QoS on this dedicated thread.
-        crate::background::lower_priority();
+        crate::priority::lower_priority();
         let settings = self.control.lock().unwrap().settings.clone();
         if !settings.enabled || settings.max_bytes == 0 {
             return None;
@@ -366,7 +366,7 @@ fn embedded(
     if read(&key.location(root), &key, settings).is_ok() {
         return Ok(());
     }
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     let preview = crate::preview::read_full(path)?;
     // DP0's large JPEG omits Raw borders. Keep its correctly framed small
     // thumbnail until a photographic render can supply those missing pixels.
@@ -377,7 +377,7 @@ fn embedded(
     {
         return Ok(());
     }
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     let preview = preview.resized(MAX_SIDE)?;
     let write = PendingPreview {
         path: path.to_owned(),
@@ -445,7 +445,7 @@ fn write_checked(
     if !current() || !settings.permits(write.header.family) {
         return Ok(());
     }
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     if !Key::read(&write.path)?.same_file_recipe(&write.header.key) {
         return Ok(());
     }
@@ -469,7 +469,7 @@ pub(super) struct PreparedPreview {
 }
 
 fn prepare(mut write: PendingPreview) -> Result<PreparedPreview> {
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     if write
         .preview
         .extent
@@ -499,7 +499,7 @@ fn prepare(mut write: PendingPreview) -> Result<PreparedPreview> {
         )?;
     }
     let encoded = encoded.into_inner();
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     write.header.checksum = crc32fast::hash(&encoded);
     let json = serde_json::to_vec(&write.header)?;
     Ok(PreparedPreview {
@@ -528,7 +528,7 @@ pub(super) fn publish(
     if !current() || !settings.permits(header.family) {
         return Ok(());
     }
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     if !Key::read(&path)?.same_file_recipe(&header.key) {
         return Ok(());
     }
@@ -544,7 +544,7 @@ pub(super) fn publish(
         return Ok(());
     }
     fs::create_dir_all(root)?;
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     if !current() || !lru::reserve(root, &destination, bytes, settings.max_bytes, nearby)? {
         return Ok(());
     }
@@ -564,7 +564,7 @@ pub(super) fn publish(
         file.write_all(&json)?;
         file.write_all(&encoded)?;
         drop(file);
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         if current() && Key::read(&path)?.same_file_recipe(&header.key) {
             fs::rename(&temporary, destination)?;
         }

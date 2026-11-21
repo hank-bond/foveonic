@@ -50,7 +50,7 @@ These examples use daylight white balance and the Standard colour mode. The comm
 
 ## Build the Mac app
 
-You'll need macOS 26+, Rust 1.88+ with Cargo, and Xcode 26+ with its command-line tools selected. From the repository root:
+You'll need macOS 26+, Rust 1.88+ with Cargo, CMake, and Xcode 26+ with its command-line tools selected. See [building from scratch](docs/building.md) for setup on each platform. From the repository root:
 
 ```sh
 cargo xtask bundle

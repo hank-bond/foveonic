@@ -25,11 +25,11 @@ fn original_tiger_modes_masks_and_retained_results() {
     assert_eq!(modes.len(), 10);
     let source_hash = fingerprint(bytemuck::cast_slice(source.samples().as_ref()));
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([600, 400]);
     let results = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["final", "highlight-restoration.recovery-mask"],
@@ -61,7 +61,7 @@ fn original_tiger_modes_masks_and_retained_results() {
     for mode in &modes {
         settings.color_mode = mode.to_string();
         let image = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -93,12 +93,12 @@ fn original_tiger_modes_masks_and_retained_results() {
 
 fn session_image(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     profile: &mut Profile,
 ) -> RenderedImage {
     let artifact = engine
-        .render_session(session, settings, &["final"], || false, profile)
+        .render_native_photo(session, settings, &["final"], || false, profile)
         .unwrap()
         .unwrap()
         .pop()
@@ -117,7 +117,7 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
         let mut source = Source::open(std::env::var_os("TIGER_X3F").unwrap()).unwrap();
         Arc::make_mut(&mut source.metadata).rotation = rotation;
         let source_hash = fingerprint(bytemuck::cast_slice(source.samples().as_ref()));
-        let mut session = RenderSession::new(source);
+        let mut session = NativePhoto::new(source);
         let mut settings = Settings::new(
             "Sunlight",
             if rotation == 0 {
@@ -185,7 +185,6 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
         );
         drop(restored);
 
-        assert!(session.cached_bytes() <= crate::interactive::Cache::LIMIT);
         let checkpoints = session.checkpoints();
         for role in ["highlight-restoration.rgb", "noise.rgb", "sector-color.rgb"] {
             assert!(

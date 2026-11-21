@@ -1,4 +1,4 @@
-//! Checks grouped session retirement, completed progress and independent native and reduced results.
+//! Checks executions sharing ticks: retirement, completed progress and independent native and reduced results.
 
 use super::*;
 use crate::render::driver::tests::{fixture, image, session, settings};
@@ -12,18 +12,13 @@ struct Running {
     outcome: Option<Result<()>>,
 }
 
-fn start(
-    engine: &Engine,
-    working: &mut ProcessingWorkingSet,
-    photo: u64,
-    settings: &Settings,
-) -> Running {
+fn start(engine: &Engine, working: &mut WorkingSet, photo: u64, settings: &Settings) -> Running {
     start_key(
         engine,
         working,
-        SessionKey {
+        PhotoKey {
             photo,
-            kind: SessionKind::Reduced,
+            resolution: Resolution::Reduced,
         },
         settings,
     )
@@ -31,8 +26,8 @@ fn start(
 
 fn start_key(
     engine: &Engine,
-    working: &mut ProcessingWorkingSet,
-    key: SessionKey,
+    working: &mut WorkingSet,
+    key: PhotoKey,
     settings: &Settings,
 ) -> Running {
     let mut profile = Profile::default();
@@ -42,10 +37,10 @@ fn start_key(
             working,
             key,
             settings,
-            SessionUse::Foreground,
+            &["final"],
             &|| false,
             &mut profile,
-            &|event| progress.borrow_mut().push(event),
+            Some(&|event| progress.borrow_mut().push(event)),
         )
         .unwrap()
     else {
@@ -66,7 +61,7 @@ fn four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_comple
     let engine = Engine::new().unwrap();
     let source = fixture();
     let base = settings();
-    let mut working = ProcessingWorkingSet::new();
+    let mut working = WorkingSet::new();
     let mut requested = Vec::new();
     let mut expected = Vec::new();
     for photo in 1..=4 {
@@ -76,7 +71,7 @@ fn four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_comple
         let mut ordinary = session(&engine, &source, &base);
         image(
             engine
-                .render_reduced_session(
+                .render_reduced_photo(
                     &mut ordinary,
                     &base,
                     &["final"],
@@ -87,7 +82,7 @@ fn four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_comple
         );
         let output = image(
             engine
-                .render_reduced_session(
+                .render_reduced_photo(
                     &mut ordinary,
                     &next,
                     &["final"],
@@ -104,7 +99,7 @@ fn four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_comple
         let mut warm = session(&engine, &source, &base);
         image(
             engine
-                .render_reduced_session(
+                .render_reduced_photo(
                     &mut warm,
                     &base,
                     &["final"],
@@ -114,7 +109,7 @@ fn four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_comple
                 .unwrap(),
         );
         working
-            .insert_reduced(photo, warm, &engine, SessionUse::Preparation)
+            .insert_reduced(photo, warm, &engine, Purpose::Speculative)
             .unwrap();
         requested.push(next);
     }
@@ -128,13 +123,13 @@ fn four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_comple
     while jobs.iter().any(|job| job.execution.is_some()) {
         rounds += 1;
         assert!(rounds < 128);
-        let window = engine.submission_window();
+        let tick = engine.tick();
         for job in &mut jobs {
             let Some(execution) = &mut job.execution else {
                 continue;
             };
             let previous = job.progress.borrow().len();
-            let result = execution.advance(&engine, &mut working, &|| false);
+            let result = execution.step(&engine, &mut working, &|| false);
             assert_eq!(
                 job.progress.borrow().len(),
                 previous,
@@ -146,14 +141,14 @@ fn four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_comple
                 Err(error) => job.outcome = Some(Err(error)),
             }
         }
-        window.complete().unwrap();
+        let waited = tick.complete().unwrap();
         for job in &mut jobs {
             let Some(execution) = &mut job.execution else {
                 continue;
             };
-            execution
-                .complete_window(&engine, &|event| job.progress.borrow_mut().push(event))
-                .unwrap();
+            execution.complete_tick(&engine, waited, &|event| {
+                job.progress.borrow_mut().push(event)
+            });
             if let Some(outcome) = job.outcome.take() {
                 let output = image(
                     job.execution
@@ -207,12 +202,12 @@ fn cancelled_peer_retries_without_source_while_unchanged_peer_commits() {
     let base = settings();
     let mut requested = base.clone();
     requested.reconstruction.as_mut().unwrap().chroma = 1;
-    let mut working = ProcessingWorkingSet::new();
+    let mut working = WorkingSet::new();
     for photo in 1..=2 {
         let mut warm = session(&engine, &source, &base);
         image(
             engine
-                .render_reduced_session(
+                .render_reduced_photo(
                     &mut warm,
                     &base,
                     &["final"],
@@ -222,7 +217,7 @@ fn cancelled_peer_retries_without_source_while_unchanged_peer_commits() {
                 .unwrap(),
         );
         working
-            .insert_reduced(photo, warm, &engine, SessionUse::Preparation)
+            .insert_reduced(photo, warm, &engine, Purpose::Speculative)
             .unwrap();
     }
     let mut jobs = [
@@ -234,25 +229,25 @@ fn cancelled_peer_retries_without_source_while_unchanged_peer_commits() {
     while jobs.iter().any(|job| job.execution.is_some()) {
         round += 1;
         assert!(round < 128);
-        let window = engine.submission_window();
+        let tick = engine.tick();
         for job in &mut jobs {
             let Some(execution) = &mut job.execution else {
                 continue;
             };
-            match execution.advance(&engine, &mut working, &|| job.photo == 1 && round > 1) {
+            match execution.step(&engine, &mut working, &|| job.photo == 1 && round > 1) {
                 Ok(true) => {}
                 Ok(false) => job.outcome = Some(Ok(())),
                 Err(error) => job.outcome = Some(Err(error)),
             }
         }
-        window.complete().unwrap();
+        let waited = tick.complete().unwrap();
         for job in &mut jobs {
             let Some(execution) = &mut job.execution else {
                 continue;
             };
-            execution
-                .complete_window(&engine, &|event| job.progress.borrow_mut().push(event))
-                .unwrap();
+            execution.complete_tick(&engine, waited, &|event| {
+                job.progress.borrow_mut().push(event)
+            });
             if let Some(outcome) = job.outcome.take() {
                 let result = job
                     .execution
@@ -261,7 +256,7 @@ fn cancelled_peer_retries_without_source_while_unchanged_peer_commits() {
                     .finish(&engine, &mut working, outcome, &mut job.profile)
                     .unwrap();
                 if job.photo == 1 {
-                    assert!(matches!(result, SessionRender::Superseded));
+                    assert!(matches!(result, PhotoRender::Superseded));
                 } else {
                     completed_peer = Some(image(result));
                 }
@@ -274,7 +269,7 @@ fn cancelled_peer_retries_without_source_while_unchanged_peer_commits() {
                 &engine,
                 1,
                 &requested,
-                SessionUse::Foreground,
+                Purpose::Edit,
                 || false,
                 &mut Profile::default(),
             )
@@ -284,7 +279,7 @@ fn cancelled_peer_retries_without_source_while_unchanged_peer_commits() {
     let mut ordinary = session(&engine, &source, &base);
     let expected = image(
         engine
-            .render_reduced_session(
+            .render_reduced_photo(
                 &mut ordinary,
                 &requested,
                 &["final"],
@@ -302,10 +297,10 @@ fn cancelled_peer_retries_without_source_while_unchanged_peer_commits() {
     working.clear().unwrap();
 }
 
-fn native_key(photo: u64) -> SessionKey {
-    SessionKey {
+fn native_key(photo: u64) -> PhotoKey {
+    PhotoKey {
         photo,
-        kind: SessionKind::Native,
+        resolution: Resolution::Native,
     }
 }
 
@@ -318,12 +313,12 @@ fn native_base() -> Settings {
 
 fn native_image(
     engine: &Engine,
-    session: &mut crate::render::RenderSession,
+    session: &mut crate::render::NativePhoto,
     settings: &Settings,
 ) -> crate::image::RenderedImage {
-    image(SessionRender::Rendered(
+    image(PhotoRender::Rendered(
         engine
-            .render_session(
+            .render_native_photo(
                 session,
                 settings,
                 &["final"],
@@ -339,15 +334,15 @@ fn warm_native(
     engine: &Engine,
     source: &Arc<crate::source::Source>,
     base: &Settings,
-) -> crate::render::RenderSession {
-    let mut session = crate::render::RenderSession::new(source.clone());
+) -> crate::render::NativePhoto {
+    let mut session = crate::render::NativePhoto::new(source.clone());
     drop(native_image(engine, &mut session, base));
     session
 }
 
 fn finish_jobs(
     engine: &Engine,
-    working: &mut ProcessingWorkingSet,
+    working: &mut WorkingSet,
     jobs: &mut [Running],
 ) -> Vec<(u64, crate::image::RenderedImage)> {
     let mut images = Vec::new();
@@ -355,22 +350,22 @@ fn finish_jobs(
         if jobs.iter().all(|job| job.execution.is_none()) {
             return images;
         }
-        let window = engine.submission_window();
+        let tick = engine.tick();
         for job in jobs.iter_mut() {
             if let Some(execution) = &mut job.execution {
                 let progress_before = job.progress.borrow().len();
-                if !execution.advance(engine, working, &|| false).unwrap() {
+                if !execution.step(engine, working, &|| false).unwrap() {
                     job.outcome = Some(Ok(()));
                 }
                 assert_eq!(job.progress.borrow().len(), progress_before);
             }
         }
-        window.complete().unwrap();
+        let waited = tick.complete().unwrap();
         for job in jobs.iter_mut() {
             if let Some(execution) = &mut job.execution {
-                execution
-                    .complete_window(engine, &|stage| job.progress.borrow_mut().push(stage))
-                    .unwrap();
+                execution.complete_tick(engine, waited, &|stage| {
+                    job.progress.borrow_mut().push(stage)
+                });
             }
             if let Some(outcome) = job.outcome.take() {
                 let rendered = job
@@ -417,14 +412,14 @@ fn native_regions_width_one_and_two_match_ordinary_pixels_and_geometry() {
             })
             .collect();
         for width in [1, 2] {
-            let mut working = ProcessingWorkingSet::new();
+            let mut working = WorkingSet::new();
             for photo in 1..=2 {
                 working
                     .insert_native(
                         photo,
                         warm_native(&engine, &source, &base),
                         &engine,
-                        SessionUse::Preparation,
+                        Purpose::Speculative,
                     )
                     .unwrap();
             }
@@ -486,14 +481,14 @@ fn native_cancelled_submission_retires_claim_and_preserves_peer_and_retry() {
             output.view,
         )
     };
-    let mut working = ProcessingWorkingSet::new();
+    let mut working = WorkingSet::new();
     for photo in 1..=2 {
         working
             .insert_native(
                 photo,
                 warm_native(&engine, &source, &base),
                 &engine,
-                SessionUse::Preparation,
+                Purpose::Speculative,
             )
             .unwrap();
     }
@@ -508,13 +503,13 @@ fn native_cancelled_submission_retires_claim_and_preserves_peer_and_retry() {
         if jobs.iter().all(|job| job.execution.is_none()) {
             break;
         }
-        let window = engine.submission_window();
+        let tick = engine.tick();
         for job in &mut jobs {
             let Some(execution) = &mut job.execution else {
                 continue;
             };
             let before = engine.gpu_activity().submissions;
-            match execution.advance(&engine, &mut working, &|| job.photo == 1 && submitted) {
+            match execution.step(&engine, &mut working, &|| job.photo == 1 && submitted) {
                 Ok(true) => {}
                 Ok(false) => job.outcome = Some(Ok(())),
                 Err(error) => job.outcome = Some(Err(error)),
@@ -527,12 +522,12 @@ fn native_cancelled_submission_retires_claim_and_preserves_peer_and_retry() {
                 );
             }
         }
-        window.complete().unwrap();
+        let waited = tick.complete().unwrap();
         for job in &mut jobs {
             if let Some(execution) = &mut job.execution {
-                execution
-                    .complete_window(&engine, &|event| job.progress.borrow_mut().push(event))
-                    .unwrap();
+                execution.complete_tick(&engine, waited, &|event| {
+                    job.progress.borrow_mut().push(event)
+                });
             }
             if let Some(outcome) = job.outcome.take() {
                 let result = job
@@ -542,7 +537,7 @@ fn native_cancelled_submission_retires_claim_and_preserves_peer_and_retry() {
                     .finish(&engine, &mut working, outcome, &mut job.profile)
                     .unwrap();
                 if job.photo == 1 {
-                    assert!(matches!(result, SessionRender::Superseded));
+                    assert!(matches!(result, PhotoRender::Superseded));
                     cancelled = true;
                     assert!(
                         working
@@ -580,13 +575,13 @@ fn native_cancelled_submission_retires_claim_and_preserves_peer_and_retry() {
 fn native_prepare_failure_and_early_cancel_release_claim_without_submission() {
     let engine = Engine::new().unwrap();
     let source = fixture();
-    let mut working = ProcessingWorkingSet::new();
+    let mut working = WorkingSet::new();
     working
         .insert_native(
             1,
-            crate::render::RenderSession::new(source),
+            crate::render::NativePhoto::new(source),
             &engine,
-            SessionUse::Foreground,
+            Purpose::Edit,
         )
         .unwrap();
     for invalid in [true, false] {
@@ -602,10 +597,10 @@ fn native_prepare_failure_and_early_cancel_release_claim_without_submission() {
             &mut working,
             native_key(1),
             &requested,
-            SessionUse::Foreground,
+            &["final"],
             &|| !invalid,
             &mut profile,
-            &|_| {},
+            None,
         );
         if invalid {
             assert!(result.is_err());
@@ -646,7 +641,7 @@ fn execution_inventory_deduplicates_two_live_graphs_caches_and_frontend_owners()
     let engine = Engine::new().unwrap();
     let source = fixture();
     let base = settings();
-    let mut working = ProcessingWorkingSet::new();
+    let mut working = WorkingSet::new();
     let mut frontend = MemoryReservation::default();
     frontend.exclusive_bytes = 257;
     frontend.add_source(&source);
@@ -655,7 +650,7 @@ fn execution_inventory_deduplicates_two_live_graphs_caches_and_frontend_owners()
         let mut warm = session(&engine, &source, &base);
         let output = image(
             engine
-                .render_reduced_session(
+                .render_reduced_photo(
                     &mut warm,
                     &base,
                     &["final"],
@@ -667,7 +662,7 @@ fn execution_inventory_deduplicates_two_live_graphs_caches_and_frontend_owners()
         frontend.add_image(&output);
         displayed.push(output);
         working
-            .insert_reduced(photo, warm, &engine, SessionUse::Preparation)
+            .insert_reduced(photo, warm, &engine, Purpose::Speculative)
             .unwrap();
     }
     assert_eq!(
@@ -694,15 +689,7 @@ fn execution_inventory_deduplicates_two_live_graphs_caches_and_frontend_owners()
             .map(|buffer| (buffer.identity().0, buffer.size()))
             .collect::<std::collections::HashMap<_, _>>();
         for (index, execution) in executions.iter().enumerate() {
-            for buffer in execution
-                .job
-                .as_ref()
-                .unwrap()
-                .graph
-                .as_ref()
-                .unwrap()
-                .buffers()
-            {
+            for buffer in execution.recipe.traversal.buffers() {
                 let retained = working
                     .memory_buffers()
                     .any(|cached| cached.shares_storage(buffer));
@@ -747,7 +734,7 @@ fn execution_inventory_deduplicates_two_live_graphs_caches_and_frontend_owners()
             break;
         }
         assert!(round < 127, "both inventory jobs must complete");
-        let window = engine.submission_window();
+        let tick = engine.tick();
         for job in &mut jobs {
             if job.outcome.is_some() {
                 continue;
@@ -756,20 +743,21 @@ fn execution_inventory_deduplicates_two_live_graphs_caches_and_frontend_owners()
                 .execution
                 .as_mut()
                 .unwrap()
-                .advance(&engine, &mut working, &|| false)
+                .step(&engine, &mut working, &|| false)
             {
                 Ok(true) => {}
                 Ok(false) => job.outcome = Some(Ok(())),
                 Err(error) => job.outcome = Some(Err(error)),
             }
         }
-        window.complete().unwrap();
+        let waited = tick.complete().unwrap();
         for job in &mut jobs {
             job.execution
                 .as_mut()
                 .unwrap()
-                .complete_window(&engine, &|stage| job.progress.borrow_mut().push(stage))
-                .unwrap();
+                .complete_tick(&engine, waited, &|stage| {
+                    job.progress.borrow_mut().push(stage)
+                });
         }
     }
     assert!(

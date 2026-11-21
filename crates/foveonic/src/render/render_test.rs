@@ -66,7 +66,6 @@ fn color_conversion_preserves_signed_calibrated_layers_and_headroom() {
                 &[root, color],
                 &mut Profile::default(),
                 &mut crate::interactive::Execution::default(),
-                crate::render::execute::Completion::Queued,
             )
             .unwrap();
         assert_eq!(
@@ -250,7 +249,6 @@ fn scalar_fields_preserve_geometry_and_values_without_rgb_storage() {
             &[input],
             &mut Profile::default(),
             &mut crate::interactive::Execution::default(),
-            crate::render::execute::Completion::Queued,
         )
         .unwrap();
     assert_eq!(imported[0].description, Some(scalar.description));
@@ -677,7 +675,6 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
             &[a, c],
             &mut profile,
             &mut crate::interactive::Execution::default(),
-            crate::render::execute::Completion::Queued,
         )
         .unwrap();
     let _other = outputs.pop().unwrap();
@@ -696,7 +693,6 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
             &[c],
             &mut profile,
             &mut crate::interactive::Execution::default(),
-            crate::render::execute::Completion::Queued,
         )
         .unwrap()
         .pop()

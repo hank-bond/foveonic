@@ -4,7 +4,7 @@ use crate::render::Engine;
 use crate::{
     inspection::Content,
     profile::Profile,
-    render::{ControlCapabilities, PhotographicMethod, RenderSession, Rendering, Scale},
+    render::{ControlCapabilities, NativePhoto, PhotographicMethod, Rendering, Scale},
     source::{ProcessingFamily, Source},
 };
 use std::sync::Arc;
@@ -73,12 +73,12 @@ fn gpu_tone_method_ignores_inactive_edits_in_the_rendered_result() {
 
 fn session_image(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     profile: &mut Profile,
 ) -> crate::image::RenderedImage {
     let mut artifacts = engine
-        .render_session(session, settings, &["final"], || false, profile)
+        .render_native_photo(session, settings, &["final"], || false, profile)
         .unwrap()
         .unwrap();
     let Content::Image(image) = artifacts.remove(0).content else {
@@ -104,7 +104,7 @@ fn gpu_adaptive_regions_use_whole_analysis_and_match_whole_pixels() {
     for response in [BaseResponse::Natural, BaseResponse::Strong] {
         settings.photographic.base_response = response;
         assert!(settings.regional_preview_available(&source.metadata));
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         for edit in 0..2 {
             settings.exposure = edit as f32 * 0.35;
             settings.photographic.local_contrast = edit as f32 * 0.2;
@@ -217,7 +217,7 @@ fn gpu_shared_finishing_original_color_mono_cache_and_dng() {
                 ]);
         }
         settings.validate_for_camera(&source.metadata).unwrap();
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         let image = session_image(&engine, &mut session, &settings, &mut Profile::default());
         let first = engine.readback_image(&image).unwrap();
         drop(image);
@@ -360,7 +360,7 @@ fn gpu_adaptive_hdr_cold_regions_pan_and_continue_to_whole() {
 
                 // This session has no Whole checkpoint. A broader cached result must not
                 // conceal missing support on the first regional request.
-                let mut session = RenderSession::new(source.clone());
+                let mut session = NativePhoto::new(source.clone());
                 let first_rect = [
                     width / 2 + 3,
                     height / 2 + 5,
@@ -439,7 +439,7 @@ fn gpu_shared_spatial_finishing_matches_full_and_regional_views() {
         .unwrap();
     let full_bytes = engine.readback_image(&full).unwrap();
     let [w, h] = full.view().extent;
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     settings.working_scale = Scale::new(2).unwrap();
     let overview = session_image(&engine, &mut session, &settings, &mut Profile::default());
     engine
@@ -601,7 +601,7 @@ fn gpu_merrill_color_sensitivity_matches_baked_dng_and_keeps_guide_independent()
                 );
             }
         }
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         let _ = session_image(&engine, &mut session, &settings, &mut Profile::default());
         settings.photographic.color_editor.bands[0].lightness = 0.5;
         let mut profile = Profile::new(crate::profile::Mode::Wall);
@@ -682,7 +682,7 @@ fn gpu_rotated_regions_match_sampled_whole_view() {
         settings.color_mode = capabilities.default_color_mode(&source.metadata).unwrap();
     }
     settings.crop.bounds = [0.12, 0.17, 0.89, 0.92];
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let read = |image: &crate::image::RenderedImage| {
         let extent = image.view().extent;
         let texture = engine

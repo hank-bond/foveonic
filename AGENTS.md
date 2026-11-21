@@ -19,6 +19,10 @@ read_when: "Read first when entering the repository."
 ## Implementation approach
 
 - Choose the simplest architecture that meets current needs. Add complexity when actual work demonstrates its value.
+- Write the simplest code that does the job in the most obvious, least surprising way. Lines are a maintenance burden, but overly dense code is hard to read. Do as little as is needed and keep it readable.
+- Comment only to explain a non-obvious choice: the why, not the what.
+- Name things precisely for what the code actually does.
+- Name configuration values and magic numbers as visible constants or settings instead of inlining them.
 - Build the smallest useful end-to-end slice first, then add processing stages incrementally.
 - Keep scope grounded in Merrill X3F requirements.
 - Defer advanced logging and production hardening to a dedicated later phase.

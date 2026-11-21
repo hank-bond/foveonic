@@ -49,7 +49,7 @@ impl SourceLoading {
                 crate::automation::reveal(Some("Exposure"));
             }
             1 => {
-                if app.worker.busy() {
+                if app.view_busy() {
                     return Ok(false);
                 }
                 if app.selected.as_ref() != Some(&paths[1])
@@ -101,10 +101,9 @@ impl SourceLoading {
                     );
                 }
                 self.previous_revision = app
-                    .frame
-                    .as_ref()
-                    .filter(|frame| frame.path == paths[1])
-                    .or_else(|| app.multi_edit_frame(&paths[1]))
+                    .active_image()
+                    .filter(|frame| frame.request.path == paths[1])
+                    .or_else(|| app.photo_layers(&paths[1])[0])
                     .ok_or("missing ready photo before edit")?
                     .diagnostic_task
                     .revision;
@@ -114,23 +113,22 @@ impl SourceLoading {
             }
             3 => {
                 let frame = app
-                    .frame
-                    .as_ref()
-                    .filter(|frame| frame.path == paths[1])
-                    .or_else(|| app.multi_edit_frame(&paths[1]));
+                    .active_image()
+                    .filter(|frame| frame.request.path == paths[1])
+                    .or_else(|| app.photo_layers(&paths[1])[0]);
                 let Some(frame) = frame else {
                     return Ok(false);
                 };
                 if frame.diagnostic_task.revision <= self.previous_revision
-                    || frame.requested.exposure != self.model.exposures()[1]
+                    || frame.request.settings.exposure != self.model.exposures()[1]
                     || !app.worker.is_settled_and_admitted(frame)
                 {
                     return Ok(false);
                 }
-                if !app.worker.busy() {
+                if !app.view_busy() {
                     return Err("source A stopped being requested before B completed".into());
                 }
-                self.events.push(serde_json::json!({"observation":"rendered_while_source_held","photo":1,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"exposure":frame.requested.exposure}));
+                self.events.push(serde_json::json!({"observation":"rendered_while_source_held","photo":1,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"exposure":frame.request.settings.exposure}));
                 self.release();
                 crate::automation::reveal(None);
                 self.stage += 1;

@@ -153,7 +153,7 @@ fn learned_repairs_follow_serial_switches_bypasses_and_cached_rendering() {
         inspection::Content,
         nodes::sensor::calibration,
         profile::Profile,
-        render::{Engine, RenderSession, Settings},
+        render::{Engine, NativePhoto, Settings},
     };
     use std::sync::Arc;
     let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
@@ -192,12 +192,12 @@ fn learned_repairs_follow_serial_switches_bypasses_and_cached_rendering() {
     let trained = Arc::new(trained);
     let source = Arc::new(source);
     let mut engine = Engine::test_executor();
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.repair = None;
-    let render = |engine: &Engine, session: &mut RenderSession, settings: &Settings| {
+    let render = |engine: &Engine, session: &mut NativePhoto, settings: &Settings| {
         let mut artifacts = engine
-            .render_session(
+            .render_native_photo(
                 session,
                 settings,
                 &["calibration.layers"],

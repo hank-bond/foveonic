@@ -1,6 +1,6 @@
 //! Runs replayable transitions through the existing native scenario.
 
-use crate::{rendering::worker::Frame, App};
+use crate::{rendering::worker::RenderResult, App};
 use eframe::egui;
 use foveonic::render::ProcessingQuality;
 use std::path::{Path, PathBuf};
@@ -326,15 +326,19 @@ impl TransitionJourney {
         result
     }
     /// Current regional feedback is complete without optional Whole continuation.
-    pub(super) fn smart_feedback<'a>(app: &'a App, path: &Path, native: bool) -> Option<&'a Frame> {
+    pub(super) fn smart_feedback<'a>(
+        app: &'a App,
+        path: &Path,
+        native: bool,
+    ) -> Option<&'a RenderResult> {
         let settings = if app.selected.as_deref() == Some(path) {
             &app.settings
         } else {
             app.multi_edit.settings(path)?
         };
-        let base = app.current_photo_frame(path)?;
-        let current = |frame: &Frame| {
-            crate::rendering::matching::same_authored_edits(&frame.requested, settings)
+        let base = app.current_image(path)?;
+        let current = |frame: &RenderResult| {
+            crate::rendering::matching::same_authored_edits(&frame.request.settings, settings)
                 && app.worker.is_settled_and_admitted(frame)
                 && app
                     .worker
@@ -342,33 +346,23 @@ impl TransitionJourney {
                     .source_origin(path)
                     .is_none_or(|origin| origin == frame.origin)
         };
-        app.photo_detail(
-            path,
-            Some(base),
-            settings,
-            crate::editor::Rendition::Current,
-        )
-        .filter(|detail| {
-            let Some(visible) = app.viewports.view(Some(path)).visible_pixels() else {
-                return false;
-            };
-            let window = base.display_window(false);
-            let visible = [
-                visible.top_left[0] + window[0],
-                visible.top_left[1] + window[1],
-                visible.bottom_right[0] + 1 + window[0],
-                visible.bottom_right[1] + 1 + window[1],
-            ];
-            current(detail)
-                && detail.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
-                && crate::rendering::smart::contains(detail.detail_region(), visible)
-        })
-        .or_else(|| {
-            (current(base)
-                && (!native
-                    || base.artifact.settings.working_scale == foveonic::render::Scale::NATIVE))
-                .then_some(base)
-        })
+        app.photo_patch(path)
+            .filter(|detail| {
+                let Some(visible) = app.viewports.view(Some(path)).visible_pixels() else {
+                    return false;
+                };
+                let window = base.display_window(false);
+                let visible = visible.native_bounds(window);
+                current(detail)
+                    && detail.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
+                    && crate::rendering::smart::contains(detail.detail_region(), visible)
+            })
+            .or_else(|| {
+                (current(base)
+                    && (!native
+                        || base.artifact.settings.working_scale == foveonic::render::Scale::NATIVE))
+                    .then_some(base)
+            })
     }
 
     fn observe_smart_edit(&mut self, app: &App, _paths: &[PathBuf]) -> Result<(), String> {
@@ -417,9 +411,9 @@ impl TransitionJourney {
         path: &std::path::Path,
     ) -> Result<ViewSnapshot, String> {
         let frame = if app.selected.as_deref() == Some(path) {
-            app.frame.as_ref()
+            app.active_image()
         } else {
-            app.multi_edit.frame(path)
+            app.photo_layers(path)[0]
         }
         .ok_or("missing photograph")?;
         let view = app.viewports.view(Some(path));
@@ -433,27 +427,20 @@ impl TransitionJourney {
                 app.preferences.processing_quality,
                 ctx.pixels_per_point(),
             )?,
-            settings: frame.requested.clone(),
+            settings: frame.request.settings.clone(),
             policy: app.preferences.processing_quality,
             origin: frame.origin.clone(),
             native_extent: frame.native_display_extent(),
-            detail: app
-                .photo_detail(
-                    path,
-                    Some(frame),
-                    &frame.requested,
-                    crate::editor::Rendition::Current,
+            detail: app.photo_patch(path).map(|detail| {
+                (
+                    (detail.diagnostic_task.id, detail.diagnostic_task.revision),
+                    detail
+                        .artifact
+                        .settings
+                        .preview_region
+                        .unwrap_or_else(|| detail.display_window(false)),
                 )
-                .map(|detail| {
-                    (
-                        (detail.diagnostic_task.id, detail.diagnostic_task.revision),
-                        detail
-                            .artifact
-                            .settings
-                            .preview_region
-                            .unwrap_or_else(|| detail.display_window(false)),
-                    )
-                }),
+            }),
         })
     }
 
@@ -465,20 +452,20 @@ impl TransitionJourney {
     ) -> Result<(bool, bool), String> {
         let view = app.viewports.view(Some(path));
         let frame = if app.selected.as_deref() == Some(path) {
-            app.frame.as_ref()
+            app.active_image()
         } else {
-            app.multi_edit.frame(path)
+            app.photo_layers(path)[0]
         }
         .ok_or("missing photograph")?;
-        if frame.path != *path
-            || frame.rendition != crate::editor::Rendition::Current
+        if frame.request.path != *path
+            || frame.request.rendition != crate::editor::Rendition::Current
             || !frame.is_photographic()
-            || frame.processing_quality != expected.policy
+            || frame.processing_quality() != expected.policy
             || app.preferences.processing_quality != expected.policy
             || frame.origin != expected.origin
             || frame.native_display_extent() != expected.native_extent
             || !crate::rendering::matching::same_authored_edits(
-                &frame.requested,
+                &frame.request.settings,
                 &expected.settings,
             )
         {
@@ -491,23 +478,13 @@ impl TransitionJourney {
         let demanded = demanded_scale.divisor();
         let visible = view.visible_pixels().ok_or("missing visible pixels")?;
         let window = frame.display_window(false);
-        let visible = [
-            visible.top_left[0] + window[0],
-            visible.top_left[1] + window[1],
-            visible.bottom_right[0] + 1 + window[0],
-            visible.bottom_right[1] + 1 + window[1],
-        ];
-        let detail = app.photo_detail(
-            path,
-            Some(frame),
-            &expected.settings,
-            crate::editor::Rendition::Current,
-        );
+        let visible = visible.native_bounds(window);
+        let detail = app.photo_patch(path);
         if let Some(detail) = detail {
-            if detail.processing_quality != expected.policy
+            if detail.processing_quality() != expected.policy
                 || detail.origin != expected.origin
                 || !crate::rendering::matching::same_authored_edits(
-                    &detail.requested,
+                    &detail.request.settings,
                     &expected.settings,
                 )
                 || detail.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
@@ -651,7 +628,7 @@ impl TransitionJourney {
                 ));
             }
             let current = app
-                .current_photo_frame(&photo.path)
+                .current_image(&photo.path)
                 .ok_or("group Before lost Current pixels")?;
             let same_pixels = photo
                 .current
@@ -718,11 +695,12 @@ impl TransitionJourney {
                 return Err("a white peer inherited the blue targets' Before rendition".into());
             }
             let frame = if app.selected.as_ref() == Some(&photo.path) {
-                app.frame.as_ref()
+                app.active_image()
             } else {
-                app.rendition_frame(&photo.path, expected_rendition)
+                app.photo_layers(&photo.path)[0]
             };
-            let Some(frame) = frame.filter(|frame| frame.rendition == expected_rendition) else {
+            let Some(frame) = frame.filter(|frame| frame.request.rendition == expected_rendition)
+            else {
                 return Ok(false);
             };
             let expected = match expected_rendition {
@@ -730,11 +708,14 @@ impl TransitionJourney {
                 Rendition::Defaults => &photo.defaults,
                 Rendition::Current => &photo.authored,
             };
-            if frame.path != photo.path
-                || frame.rendition != expected_rendition
-                || frame.processing_quality != app.preferences.processing_quality
+            if frame.request.path != photo.path
+                || frame.request.rendition != expected_rendition
+                || frame.processing_quality() != app.preferences.processing_quality
                 || frame.origin != photo.origin
-                || !crate::rendering::matching::same_authored_edits(&frame.requested, expected)
+                || !crate::rendering::matching::same_authored_edits(
+                    &frame.request.settings,
+                    expected,
+                )
             {
                 return Err(format!(
                     "group rendition did not use its own settings/source/geometry for {}",
@@ -756,22 +737,16 @@ impl TransitionJourney {
                     return Ok(false);
                 };
                 let window = frame.display_window(false);
-                let visible = [
-                    visible.top_left[0] + window[0],
-                    visible.top_left[1] + window[1],
-                    visible.bottom_right[0] + 1 + window[0],
-                    visible.bottom_right[1] + 1 + window[1],
-                ];
-                let detail =
-                    app.photo_detail(&photo.path, Some(frame), expected, expected_rendition);
+                let visible = visible.native_bounds(window);
+                let detail = app.photo_patch(&photo.path);
                 if let Some(detail) = detail {
-                    if detail.path != photo.path
-                        || detail.rendition != expected_rendition
+                    if detail.request.path != photo.path
+                        || detail.request.rendition != expected_rendition
                         || detail.origin != photo.origin
-                        || detail.processing_quality != app.preferences.processing_quality
+                        || detail.processing_quality() != app.preferences.processing_quality
                         || detail.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
                         || !crate::rendering::matching::same_authored_edits(
-                            &detail.requested,
+                            &detail.request.settings,
                             expected,
                         )
                     {
@@ -790,7 +765,7 @@ impl TransitionJourney {
                     return Err("group Before image did not pan".into());
                 }
             }
-            observations.push(serde_json::json!({"source":photo.path,"rendition":format!("{expected_rendition:?}"),"task":frame.diagnostic_task.id,"crop":frame.requested.crop,"rotation":frame.requested.rotation,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"detail_coverage":coverage}));
+            observations.push(serde_json::json!({"source":photo.path,"rendition":format!("{expected_rendition:?}"),"task":frame.diagnostic_task.id,"crop":frame.request.settings.crop,"rotation":frame.request.settings.rotation,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"detail_coverage":coverage}));
         }
         let event = serde_json::json!({"group_before":step,"photos":observations,"scopes_suppressed":true,"multiple_editing_targets":true,"authored_settings_preserved":true});
         crate::timing::emit("scenario.group_before", || event.clone());
@@ -808,7 +783,7 @@ impl TransitionJourney {
             .zoom_percent(pixels_per_point)
             .ok_or("missing group view geometry")?;
         let frame = app
-            .current_photo_frame(path)
+            .current_image(path)
             .ok_or("missing group Current frame")?;
         let extent = frame.display_extent(false);
         let display =
@@ -863,15 +838,15 @@ impl TransitionJourney {
                 app.multi_edit.settings(&photo.path)
             };
             let frame = app
-                .current_photo_frame(&photo.path)
+                .current_image(&photo.path)
                 .ok_or("missing group viewing Current")?;
             if authored != Some(&photo.authored)
-                || frame.path != photo.path
+                || frame.request.path != photo.path
                 || frame.origin != photo.origin
-                || frame.rendition != crate::editor::Rendition::Current
-                || frame.processing_quality != app.preferences.processing_quality
+                || frame.request.rendition != crate::editor::Rendition::Current
+                || frame.processing_quality() != app.preferences.processing_quality
                 || !crate::rendering::matching::same_authored_edits(
-                    &frame.requested,
+                    &frame.request.settings,
                     &photo.authored,
                 )
             {
@@ -936,27 +911,17 @@ impl TransitionJourney {
                         return Ok(false);
                     };
                     let window = frame.display_window(false);
-                    let visible = [
-                        visible.top_left[0] + window[0],
-                        visible.top_left[1] + window[1],
-                        visible.bottom_right[0] + 1 + window[0],
-                        visible.bottom_right[1] + 1 + window[1],
-                    ];
-                    let detail = app.photo_detail(
-                        &photo.path,
-                        Some(frame),
-                        &photo.authored,
-                        crate::editor::Rendition::Current,
-                    );
+                    let visible = visible.native_bounds(window);
+                    let detail = app.photo_patch(&photo.path);
                     if let Some(detail) = detail {
-                        if detail.path != photo.path
+                        if detail.request.path != photo.path
                             || detail.origin != photo.origin
-                            || detail.rendition != crate::editor::Rendition::Current
-                            || detail.processing_quality != app.preferences.processing_quality
+                            || detail.request.rendition != crate::editor::Rendition::Current
+                            || detail.processing_quality() != app.preferences.processing_quality
                             || detail.artifact.settings.working_scale
                                 != foveonic::render::Scale::NATIVE
                             || !crate::rendering::matching::same_authored_edits(
-                                &detail.requested,
+                                &detail.request.settings,
                                 &photo.authored,
                             )
                         {
@@ -984,18 +949,18 @@ impl TransitionJourney {
 
     fn cold_group_state(&self, app: &App, paths: &[PathBuf]) -> serde_json::Value {
         serde_json::json!({"group_before_cold":self.steps[self.index],
-            "opening":app.opening.is_some(),"worker_busy":app.worker.busy(),
+            "opening":app.opening.is_some(),"worker_busy":app.view_busy(),
             "selected":app.selected,"editing_targets":app.edit_selection.paths(),
             "cold_photos":paths[2..4].iter().map(|path| {
                 let frame = if app.selected.as_ref() == Some(path) {
-                    app.frame.as_ref().filter(|frame| frame.path == *path)
+                    app.active_image().filter(|frame| frame.request.path == *path)
                 } else {
-                    app.rendition_frame(path, crate::editor::Rendition::Camera)
+                    app.photo_layers(path)[0]
                 };
                 serde_json::json!({"source":path,"settings_known":app.multi_edit.settings(path).is_some(),
                     "metadata_known":app.multi_edit.metadata(path).is_some(),
-                    "current_pixels":app.current_photo_frame(path).is_some(),
-                    "camera_pixels":frame.is_some_and(|frame| frame.rendition == crate::editor::Rendition::Camera)})
+                    "current_pixels":app.current_image(path).is_some(),
+                    "camera_pixels":frame.is_some_and(|frame| frame.request.rendition == crate::editor::Rendition::Camera)})
             }).collect::<Vec<_>>()})
     }
 
@@ -1021,22 +986,19 @@ impl TransitionJourney {
             for path in &paths[2..4] {
                 if app.multi_edit.metadata(path).is_some()
                     || app.multi_edit.settings(path).is_some()
-                    || app.current_photo_frame(path).is_some()
-                    || app
-                        .multi_edit
-                        .before_frame(path, Rendition::Camera)
-                        .is_some()
+                    || app.current_image(path).is_some()
+                    || app.images.images().any(|frame| frame.request.path == *path)
                     || app.multi_edit.rendering(path)
                 {
                     return Err("retention did not evict the cold target's application metadata/pixels/demand".into());
                 }
             }
-            // sync_render_demand publishes retain_overviews with only retained owners.
-            // The common readiness gate has waited for that command to be processed.
+            // The published plan lists only retained photos as history.
+            // The common readiness gate has waited for that plan to be processed.
             let event = serde_json::json!({"group_before_cold":step,
                 "evicted":&paths[2..4],"retained":app.multi_edit.retained_paths(),
-                "render_paths":app.multi_edit.render_paths(),"worker_busy":app.worker.busy(),
-                "current_demand_retirement":"processed retain_overviews excludes C/D"});
+                "render_paths":app.multi_edit.render_paths(),"worker_busy":app.view_busy(),
+                "current_demand_retirement":"processed plan history excludes C/D"});
             crate::timing::emit("scenario.group_before_cold", || event.clone());
             self.events.push(event);
             return Ok(true);
@@ -1052,29 +1014,31 @@ impl TransitionJourney {
                     return Ok(false);
                 }
                 let frame = if index == 2 {
-                    app.frame.as_ref()
+                    app.active_image()
                 } else {
-                    app.rendition_frame(path, Rendition::Camera)
+                    app.photo_layers(path)[0]
                 };
-                let Some(frame) = frame.filter(|frame| frame.rendition == Rendition::Camera) else {
+                let Some(frame) =
+                    frame.filter(|frame| frame.request.rendition == Rendition::Camera)
+                else {
                     return Ok(false);
                 };
-                if frame.path != *path
+                if frame.request.path != *path
                     || frame.origin != photo.origin
-                    || frame.processing_quality != app.preferences.processing_quality
+                    || frame.processing_quality() != app.preferences.processing_quality
                     || !crate::rendering::matching::same_authored_edits(
-                        &frame.requested,
+                        &frame.request.settings,
                         &photo.camera,
                     )
                     || app.multi_edit.settings(path) != Some(&photo.authored)
                 {
                     return Err(format!(
                         "cold target {index} mismatch: path={}, source={}, policy={}, baseline={}, authored={}, actual_request={:?}, expected_baseline={:?}, authored_settings={:?}, expected_authored={:?}",
-                        frame.path == *path, frame.origin == photo.origin,
-                        frame.processing_quality == app.preferences.processing_quality,
-                        crate::rendering::matching::same_authored_edits(&frame.requested, &photo.camera),
+                        frame.request.path == *path, frame.origin == photo.origin,
+                        frame.processing_quality() == app.preferences.processing_quality,
+                        crate::rendering::matching::same_authored_edits(&frame.request.settings, &photo.camera),
                         app.multi_edit.settings(path) == Some(&photo.authored),
-                        frame.requested, photo.camera, app.multi_edit.settings(path), photo.authored,
+                        frame.request.settings, photo.camera, app.multi_edit.settings(path), photo.authored,
                     ));
                 }
             }
@@ -1092,11 +1056,11 @@ impl TransitionJourney {
                 );
             }
             for photo in &mut group.photos[2..] {
-                let Some(current) = app.current_photo_frame(&photo.path) else {
+                let Some(current) = app.current_image(&photo.path) else {
                     return Ok(false);
                 };
                 if !crate::rendering::matching::same_authored_edits(
-                    &current.requested,
+                    &current.request.settings,
                     &photo.authored,
                 ) {
                     return Ok(false);
@@ -1104,8 +1068,9 @@ impl TransitionJourney {
                 // These white owners were deliberately evicted and legitimately rendered again.
                 photo.current = std::sync::Arc::downgrade(&current.texture);
                 photo.browser_revision_ceiling = current
-                    .revision
-                    .max(current.content_revision())
+                    .request
+                    .id
+                    .0
                     .max(app.browser.rendered_revision(&photo.path).unwrap_or(0));
             }
         }
@@ -1197,7 +1162,7 @@ impl TransitionJourney {
         if self.pending && self.steps[self.index] == Step::SmartGroupEdit {
             self.observe_smart_edit(app, paths)?;
         }
-        if !smoke.direct_events.is_empty() || !app.sidecars.ready() || app.worker.busy() {
+        if !smoke.direct_events.is_empty() || !app.sidecars.ready() || app.view_busy() {
             return Ok(false);
         }
         if self.pending {
@@ -1213,8 +1178,11 @@ impl TransitionJourney {
                         .multi_edit
                         .settings(path)
                         .ok_or("missing group settings")?;
-                    if app.current_photo_frame(path).is_none_or(|frame| {
-                        !crate::rendering::matching::same_authored_edits(&frame.requested, settings)
+                    if app.current_image(path).is_none_or(|frame| {
+                        !crate::rendering::matching::same_authored_edits(
+                            &frame.request.settings,
+                            settings,
+                        )
                     }) {
                         return Ok(false);
                     }
@@ -1246,8 +1214,11 @@ impl TransitionJourney {
                     .ok_or("missing group restore")?
                     .original_b;
                 if app.multi_edit.settings(&paths[1]) != Some(original)
-                    || app.current_photo_frame(&paths[1]).is_none_or(|frame| {
-                        !crate::rendering::matching::same_authored_edits(&frame.requested, original)
+                    || app.current_image(&paths[1]).is_none_or(|frame| {
+                        !crate::rendering::matching::same_authored_edits(
+                            &frame.request.settings,
+                            original,
+                        )
                     })
                 {
                     return Ok(false);
@@ -1272,10 +1243,9 @@ impl TransitionJourney {
                         .iter()
                         .map(|path| {
                             let frame = app
-                                .frame
-                                .as_ref()
-                                .filter(|frame| frame.path == *path)
-                                .or_else(|| app.multi_edit.frame(path))
+                                .active_image()
+                                .filter(|frame| frame.request.path == *path)
+                                .or_else(|| app.photo_layers(path)[0])
                                 .ok_or("missing settled Fit photograph")?;
                             Ok((path.clone(), frame.artifact.settings.working_scale))
                         })
@@ -1352,21 +1322,23 @@ impl TransitionJourney {
                 self.model.select((0..paths.len()).collect());
             }
             if let Step::Quality(which) = step {
-                let frame = match &app.frame {
-                    Some(frame) if frame.rendition == crate::editor::Rendition::Current => frame,
+                let frame = match app.active_image() {
+                    Some(frame) if frame.request.rendition == crate::editor::Rendition::Current => {
+                        frame
+                    }
                     _ => return Ok(false),
                 };
                 let _ = which;
                 let divisor = crate::rendering::request::camera_preview_scale(
-                    app.preview_scale_for(&frame.path, app.preferences.processing_quality),
+                    app.preview_scale_for(&frame.request.path, app.preferences.processing_quality),
                     &frame.artifact.metadata,
                 )
                 .map_err(|e| e.to_string())?
                 .divisor();
-                if frame.processing_quality != app.preferences.processing_quality
+                if frame.processing_quality() != app.preferences.processing_quality
                     || frame.artifact.settings.working_scale.divisor() > divisor
                     || !crate::rendering::matching::same_authored_edits(
-                        &frame.requested,
+                        &frame.request.settings,
                         &app.settings,
                     )
                 {
@@ -1377,7 +1349,7 @@ impl TransitionJourney {
                         if app.selected.as_ref() == Some(path) {
                             continue;
                         }
-                        let Some(frame) = app.multi_edit_frame(path) else {
+                        let Some(frame) = app.photo_layers(path)[0] else {
                             return Ok(false);
                         };
                         let expected = crate::rendering::request::camera_preview_scale(
@@ -1387,11 +1359,11 @@ impl TransitionJourney {
                         .map_err(|e| e.to_string())?
                         .divisor();
                         let actual = frame.artifact.settings.working_scale.divisor();
-                        if frame.processing_quality != app.preferences.processing_quality
+                        if frame.processing_quality() != app.preferences.processing_quality
                             || actual > expected
                             || !app.multi_edit.settings(path).is_some_and(|settings| {
                                 crate::rendering::matching::same_authored_edits(
-                                    &frame.requested,
+                                    &frame.request.settings,
                                     settings,
                                 )
                             })
@@ -1444,7 +1416,7 @@ impl TransitionJourney {
             }
             if matches!(step, Step::ViewportScopes | Step::WholeScopes) {
                 let path = app.selected.as_deref().ok_or("missing scope photo")?;
-                let base = app.frame.as_ref().ok_or("missing scope overview")?;
+                let base = app.active_image().ok_or("missing scope overview")?;
                 if app.multi_edit.multiple()
                     || app.before.active != crate::editor::Rendition::Current
                 {
@@ -1455,18 +1427,18 @@ impl TransitionJourney {
                     .selected(app.preferences.noise_profile);
                 let signature = calibration.as_ref().map(|profile| profile.signature());
                 let origin = app.worker.cache.source_origin(path);
-                let compatible = |frame: &crate::rendering::worker::Frame| {
-                    frame.path.as_path() == path
-                        && frame.rendition == crate::editor::Rendition::Current
-                        && frame.output == "final"
-                        && !frame.framing_preview
+                let compatible = |frame: &crate::rendering::worker::RenderResult| {
+                    frame.request.path.as_path() == path
+                        && frame.request.rendition == crate::editor::Rendition::Current
+                        && frame.request.output == "final"
+                        && !frame.request.framing_preview
                         && frame.comparison.is_none()
-                        && frame.processing_quality == app.preferences.processing_quality
-                        && frame.requested.processing_quality == app.preferences.processing_quality
-                        && frame.calibration_signature.as_deref() == signature
+                        && frame.processing_quality() == app.preferences.processing_quality
+                        && frame.processing_quality() == app.preferences.processing_quality
+                        && frame.calibration_signature() == signature
                         && origin.as_ref().is_none_or(|origin| &frame.origin == origin)
                         && crate::rendering::matching::same_authored_edits(
-                            &frame.requested,
+                            &frame.request.settings,
                             &app.settings,
                         )
                 };
@@ -1477,16 +1449,11 @@ impl TransitionJourney {
                     .viewport()
                     .visible_pixels_for([window[2] - window[0], window[3] - window[1]])
                     .ok_or("missing native scope bounds")?;
-                let visible = [
-                    pixels.top_left[0] + window[0],
-                    pixels.top_left[1] + window[1],
-                    pixels.bottom_right[0] + 1 + window[0],
-                    pixels.bottom_right[1] + 1 + window[1],
-                ];
-                let detail = app.multi_edit.detail(path).filter(|frame| {
+                let visible = pixels.native_bounds(window);
+                let detail = app.photo_patch(path).filter(|frame| {
                     step == Step::ViewportScopes
                         && compatible(frame)
-                        && frame.detail
+                        && frame.request.detail
                         && frame.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
                         && frame
                             .artifact
@@ -1498,7 +1465,7 @@ impl TransitionJourney {
                 });
                 // A complete finer image wins over a reduced whole-photo preview.
                 // Neither a stale whole nor a regional patch can supply whole-photo scopes.
-                let whole = [Some(base), app.multi_edit.preview(path)]
+                let whole = [Some(base), app.photo_layers(path)[0]]
                     .into_iter()
                     .flatten()
                     .filter(|frame| compatible(frame) && frame.is_photographic())
@@ -1520,12 +1487,7 @@ impl TransitionJourney {
                         .viewport()
                         .visible_pixels_for(source.texture.description().extent)
                         .ok_or("missing scope sampling bounds")?;
-                    Some([
-                        pixels.top_left[0],
-                        pixels.top_left[1],
-                        pixels.bottom_right[0] + 1,
-                        pixels.bottom_right[1] + 1,
-                    ])
+                    Some(pixels.bounds())
                 };
                 let foveonic::inspection::Content::Image(image) = &source.artifact.content else {
                     return Err("scope source is not photographic samples".into());
@@ -1539,7 +1501,7 @@ impl TransitionJourney {
                     }
                 }
                 let key = crate::rendering::worker::ScopeKey {
-                    revision: source.revision,
+                    request_id: source.request.id,
                     region,
                 };
                 if app.scope_key != Some(key)
@@ -1551,20 +1513,22 @@ impl TransitionJourney {
                     return Ok(false);
                 }
                 self.events.push(
-                    serde_json::json!({"scope_revision":key.revision,"scope_region":key.region,
-                    "scope_source":source.path,"scope_source_task":source.diagnostic_task.id,
+                    serde_json::json!({"scope_revision":key.request_id,"scope_region":key.region,
+                    "scope_source":source.request.path,"scope_source_task":source.diagnostic_task.id,
                     "scope_source_scale":source.artifact.settings.working_scale.divisor(),
                     "scope_source_patch":source.artifact.settings.preview_region}),
                 );
             }
             if step == Step::HeldSupersession {
-                let frame = match &app.frame {
-                    Some(frame) if frame.rendition == crate::editor::Rendition::Current => frame,
+                let frame = match app.active_image() {
+                    Some(frame) if frame.request.rendition == crate::editor::Rendition::Current => {
+                        frame
+                    }
                     _ => return Ok(false),
                 };
-                if frame.processing_quality != app.preferences.processing_quality
+                if frame.processing_quality() != app.preferences.processing_quality
                     || !crate::rendering::matching::same_authored_edits(
-                        &frame.requested,
+                        &frame.request.settings,
                         &app.settings,
                     )
                 {
@@ -1572,9 +1536,9 @@ impl TransitionJourney {
                 }
             }
             if step == Step::Compose
-                && app.frame.as_ref().is_none_or(|frame| {
+                && app.active_image().is_none_or(|frame| {
                     !crate::rendering::matching::same_authored_edits(
-                        &frame.requested,
+                        &frame.request.settings,
                         &app.settings,
                     )
                 })
@@ -1582,17 +1546,17 @@ impl TransitionJourney {
                 return Ok(false);
             }
             if step == Step::Before
-                && app.frame.as_ref().is_none_or(|frame| {
-                    frame.rendition != crate::editor::Rendition::Camera
-                        || frame.processing_quality != app.preferences.processing_quality
+                && app.active_image().is_none_or(|frame| {
+                    frame.request.rendition != crate::editor::Rendition::Camera
+                        || frame.processing_quality() != app.preferences.processing_quality
                 })
             {
                 return Ok(false);
             }
             if step == Step::BeforeZoom {
-                let frame = app.frame.as_ref().ok_or("missing Before zoom image")?;
+                let frame = app.active_image().ok_or("missing Before zoom image")?;
                 if app.before.active != crate::editor::Rendition::Camera
-                    || frame.rendition != crate::editor::Rendition::Camera
+                    || frame.request.rendition != crate::editor::Rendition::Camera
                 {
                     return Err("Smart display demand left the Before rendition".into());
                 }
@@ -1602,10 +1566,9 @@ impl TransitionJourney {
             }
             if step == Step::RefreshOverviews {
                 if app.before.active != crate::editor::Rendition::Camera
-                    || app
-                        .frame
-                        .as_ref()
-                        .is_none_or(|frame| frame.rendition != crate::editor::Rendition::Camera)
+                    || app.active_image().is_none_or(|frame| {
+                        frame.request.rendition != crate::editor::Rendition::Camera
+                    })
                 {
                     return Err("overview refresh replaced the active Before view".into());
                 }
@@ -1615,23 +1578,23 @@ impl TransitionJourney {
                 self.events.push(serde_json::json!({"background_overviews":app.multi_edit.render_paths(),"editing_targets":app.edit_selection.paths(),"active_rendition":"Camera"}));
             }
             if matches!(step, Step::Inspection | Step::RefreshInspection) {
-                let Some(frame) = &app.frame else {
+                let Some(frame) = app.active_image() else {
                     return Ok(false);
                 };
-                if Some(frame.output.as_str()) != self.inspection_output.as_deref() {
+                if Some(frame.request.output.as_str()) != self.inspection_output.as_deref() {
                     return Ok(false);
                 }
-                if frame.processing_quality != ProcessingQuality::Quality
+                if frame.processing_quality() != ProcessingQuality::Quality
                     || frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
                 {
                     return Err("pipeline inspection did not use native Quality".into());
                 }
                 if step == Step::RefreshInspection {
                     for path in app.multi_edit.render_paths() {
-                        let Some(overview) = app.current_photo_frame(path) else {
+                        let Some(overview) = app.current_image(path) else {
                             return Ok(false);
                         };
-                        if overview.processing_quality != ProcessingQuality::Speed {
+                        if overview.processing_quality() != ProcessingQuality::Speed {
                             return Err(
                                 "inspector refresh changed a background overview's Speed policy"
                                     .into(),
@@ -1646,14 +1609,13 @@ impl TransitionJourney {
             }
             if step == Step::Photograph
                 && app
-                    .frame
-                    .as_ref()
-                    .is_none_or(|frame| frame.output != "final")
+                    .active_image()
+                    .is_none_or(|frame| frame.request.output != "final")
             {
                 return Ok(false);
             }
             if step == Step::Photograph {
-                let frame = app.frame.as_ref().unwrap();
+                let frame = app.active_image().unwrap();
                 if Some((frame.diagnostic_task.id, frame.diagnostic_task.revision))
                     != self.photograph_task
                 {
@@ -1664,19 +1626,18 @@ impl TransitionJourney {
                 }
             }
             if step == Step::After
-                && app
-                    .frame
-                    .as_ref()
-                    .is_none_or(|frame| frame.rendition != crate::editor::Rendition::Current)
+                && app.active_image().is_none_or(|frame| {
+                    frame.request.rendition != crate::editor::Rendition::Current
+                })
             {
                 return Ok(false);
             }
             if step == Step::After && app.output != "final" {
-                let frame = app.frame.as_ref().ok_or("missing restored inspector")?;
+                let frame = app.active_image().ok_or("missing restored inspector")?;
                 if app.preferences.processing_quality != ProcessingQuality::Speed
-                    || frame.processing_quality != ProcessingQuality::Quality
+                    || frame.processing_quality() != ProcessingQuality::Quality
                     || frame.artifact.settings.working_scale != foveonic::render::Scale::NATIVE
-                    || Some(frame.output.as_str()) != self.inspection_output.as_deref()
+                    || Some(frame.request.output.as_str()) != self.inspection_output.as_deref()
                     || Some((frame.diagnostic_task.id, frame.diagnostic_task.revision))
                         != self.inspection_task
                 {
@@ -1773,7 +1734,7 @@ impl TransitionJourney {
                     );
                 }
                 app.sync_multi_edit();
-                app.submit(None);
+                app.submit_photos();
             }
             Step::GroupBeforeSetup => {
                 let original_b = app
@@ -1817,8 +1778,7 @@ impl TransitionJourney {
                     zoom_pan: egui::Vec2::ZERO,
                 });
                 app.preferences.background_full_image_completion = false;
-                app.worker.set_background_completion(false);
-                app.submit(None);
+                app.submit_photos();
             }
             Step::GroupCamera => {
                 // A prior Current preview may still be queued after its viewport settles.
@@ -1826,7 +1786,7 @@ impl TransitionJourney {
                 let mut photos = Vec::new();
                 for path in paths {
                     let frame = app
-                        .current_photo_frame(path)
+                        .current_image(path)
                         .ok_or("missing saved Current photograph")?;
                     let current = if app.selected.as_ref() == Some(path) {
                         &app.settings
@@ -1855,12 +1815,13 @@ impl TransitionJourney {
                         authored: current.clone(),
                         current: std::sync::Arc::downgrade(&frame.texture),
                         browser_revision_ceiling: frame
-                            .revision
-                            .max(frame.content_revision())
+                            .request
+                            .id
+                            .0
                             .max(app.browser.rendered_revision(path).unwrap_or(0)),
                         origin: frame.origin.clone(),
-                        camera: app.preferences.render_settings(&camera),
-                        defaults: app.preferences.render_settings(&defaults),
+                        camera: app.preferences.with_workspace_settings(&camera),
+                        defaults: app.preferences.with_workspace_settings(&defaults),
                     });
                 }
                 if photos[0].authored.crop == photos[1].authored.crop
@@ -1892,8 +1853,7 @@ impl TransitionJourney {
                 app.sync_multi_edit();
                 // Sidecars resolve asynchronously through ordinary target admission.
                 for path in &paths[2..4] {
-                    if app.multi_edit.metadata(path).is_some()
-                        || app.current_photo_frame(path).is_some()
+                    if app.multi_edit.metadata(path).is_some() || app.current_image(path).is_some()
                     {
                         return Err(
                             "cold-add precondition already has metadata or Current pixels".into(),
@@ -2060,7 +2020,6 @@ impl TransitionJourney {
                     app.settings = group.original_b.clone();
                 }
                 app.preferences.background_full_image_completion = group.idle_completion;
-                app.worker.set_background_completion(group.idle_completion);
                 for path in paths {
                     app.viewports.view_mut(Some(path)).reset();
                 }
@@ -2085,7 +2044,7 @@ impl TransitionJourney {
                     false,
                 );
                 app.sync_multi_edit();
-                app.submit(None);
+                app.submit_photos();
             }
             Step::SmartGroupZoom | Step::SmartGroupZoomOther => {
                 let active = self.smart_active.ok_or("no active Smart photo")?;
@@ -2106,7 +2065,7 @@ impl TransitionJourney {
             Step::SmartGroupEdit => {
                 self.smart_observed.clear();
                 self.smart_began = Some(std::time::Instant::now());
-                let event = serde_json::json!({"phase":"begin","zoomed":self.smart_zoomed,"editing_count":app.edit_selection.paths().len(),"minimum_revision":app.revision+1});
+                let event = serde_json::json!({"phase":"begin","zoomed":self.smart_zoomed,"editing_count":app.edit_selection.paths().len(),"minimum_revision":app.last_request_id.next().0});
                 crate::timing::emit("scenario.smart_edit", || event.clone());
                 self.events.push(event);
                 self.model.adjust_exposure(0.125);
@@ -2121,7 +2080,7 @@ impl TransitionJourney {
                 self.smart_active = Some((active + 1) % paths.len());
                 self.hold = Some(
                     app.worker
-                        .hold_delivery(paths[active].clone(), app.revision + 1),
+                        .hold_delivery(paths[active].clone(), app.last_request_id.next().0),
                 );
                 self.model.adjust_exposure(0.125);
                 super::scenarios::apply_exposure(app, 0.125);
@@ -2276,7 +2235,7 @@ impl TransitionJourney {
                 app.viewport_mut().reset();
                 app.preferences.processing_quality =
                     [ProcessingQuality::Quality, ProcessingQuality::Speed][which as usize];
-                app.submit(None);
+                app.submit_photos();
             }
             Step::Zoom => {
                 let (_, image) = app
@@ -2297,7 +2256,7 @@ impl TransitionJourney {
             Step::WholeScopes => app.preferences.scope_viewport = false,
             Step::HeldSupersession => {
                 let index = self.single.ok_or("no single photo for delivery hold")?;
-                let revision = app.revision + 1;
+                let revision = app.last_request_id.next().0;
                 self.hold = Some(app.worker.hold_delivery(paths[index].clone(), revision));
                 self.held_delta = if self.model.exposures()[index] > 3.5 {
                     -0.125
@@ -2325,12 +2284,11 @@ impl TransitionJourney {
                 app.sidecars.edited(&app.settings);
                 app.multi_edit
                     .observe_active(&paths[index], &app.settings, app.metadata.as_ref());
-                app.submit(None);
+                app.submit_photos();
             }
             Step::Before => {
                 self.inspection_task = if app.output != "final" {
-                    app.frame
-                        .as_ref()
+                    app.active_image()
                         .map(|frame| (frame.diagnostic_task.id, frame.diagnostic_task.revision))
                 } else {
                     None
@@ -2349,16 +2307,14 @@ impl TransitionJourney {
             Step::BeforeZoom => {
                 app.preferences.processing_quality = ProcessingQuality::Speed;
                 app.viewport_mut().zoom_by(20.);
-                app.submit(None);
+                app.submit_photos();
             }
             Step::RefreshOverviews => {
-                app.multi_edit.invalidate();
                 app.submit_photos();
             }
             Step::Inspection => {
                 let frame = app
-                    .frame
-                    .as_ref()
+                    .active_image()
                     .ok_or("missing photograph before inspection")?;
                 self.photograph_task =
                     Some((frame.diagnostic_task.id, frame.diagnostic_task.revision));
@@ -2373,15 +2329,14 @@ impl TransitionJourney {
                 self.inspection_output = Some(output.name.into());
                 app.output = output.name.into();
                 app.channel = -1;
-                app.submit(None);
+                app.submit_photos();
             }
             Step::RefreshInspection => {
-                app.multi_edit.invalidate();
                 app.submit_photos();
             }
             Step::Photograph => {
                 app.output = "final".into();
-                app.submit(None);
+                app.submit_photos();
             }
             Step::Restore => {
                 app.preferences.processing_quality = ProcessingQuality::Speed;

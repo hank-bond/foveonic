@@ -26,8 +26,8 @@ fn unsupported_formats_io_errors_and_cancellation_are_not_reported_as_damage() {
     ] {
         assert!(!context(path, error).to_string().contains("damaged"));
     }
-    let error = context(path, Box::new(crate::background::Interrupted));
-    assert!(error.is::<crate::background::Interrupted>());
+    let error = context(path, Box::new(crate::priority::Interrupted));
+    assert!(error.is::<crate::priority::Interrupted>());
     let error = context(
         path,
         std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into(),

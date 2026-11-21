@@ -1,6 +1,6 @@
 //! Describes photo render requests and resolves their purpose and preview geometry independently of execution.
 
-use crate::{editor::Rendition, export::Export};
+use crate::editor::Rendition;
 use foveonic::render::ProcessingQuality;
 use foveonic::{
     render::{ControlCapabilities, Scale, Settings},
@@ -8,16 +8,29 @@ use foveonic::{
 };
 use std::{path::PathBuf, sync::Arc};
 
+/// Issued by the app to each request in order, so a larger id is a later
+/// request. Several requests can share one coordinator task (`TaskId`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+pub struct RequestId(pub u64);
+impl RequestId {
+    pub fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+}
+impl std::fmt::Display for RequestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[derive(Clone)]
-pub struct Request {
-    /// A reduced whole-photo result shared by navigator and browser consumers.
-    pub auxiliary_preview: bool,
+pub struct RenderRequest {
     /// Native inspection pixels are independent of the main preview, including Whole fallback.
     pub detail: bool,
     pub framing_preview: bool,
     pub calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
     pub rendition: Rendition,
-    pub revision: u64,
+    pub id: RequestId,
     pub path: PathBuf,
     pub settings: Settings,
     pub preview_scale: Scale,
@@ -25,47 +38,6 @@ pub struct Request {
     pub processing_quality: ProcessingQuality,
     pub output: String,
     pub comparison: bool,
-    pub export: Option<Export>,
-}
-
-/// Frozen regional, reduced-preview and optional native completion requests.
-/// The coordinator owns their independent admission and settlement.
-#[derive(Clone)]
-pub struct Refinement {
-    pub first: Request,
-    /// Visible native image bounds, before overscan, with exclusive right/bottom edges.
-    /// When absent, the requested processing region is also the required coverage.
-    pub visible_region: Option<[u32; 4]>,
-    pub preview: Option<Request>,
-    pub whole: Option<Request>,
-}
-impl Refinement {
-    /// Edit identity is independent of the viewport's required native coverage.
-    pub fn same_sequence(&self, other: &Self) -> bool {
-        super::matching::same_request_context(&self.first, &other.first)
-            && super::matching::same_authored_edits(&self.first.settings, &other.first.settings)
-            && self.first.processing_quality == other.first.processing_quality
-            && self.first.nominal_working_scale() == other.first.nominal_working_scale()
-            && match (&self.preview, &other.preview) {
-                (Some(a), Some(b)) => super::matching::same_delivery_request(a, b),
-                (None, None) => true,
-                _ => false,
-            }
-            && self.whole.is_some() == other.whole.is_some()
-    }
-
-    /// Reuse the overscan margin until newly visible pixels leave this patch.
-    /// A whole-image request covers every visible region.
-    pub fn covers(&self, other: &Self) -> bool {
-        match (
-            self.first.settings.preview_region,
-            other.visible_region.or(other.first.settings.preview_region),
-        ) {
-            (None, _) => true,
-            (Some(outer), Some(inner)) => super::smart::contains(outer, inner),
-            (Some(_), None) => false,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -73,33 +45,23 @@ pub enum Purpose {
     Current,
     Camera,
     Defaults,
-    Detail,
-    Preview,
     Inspection(String, bool),
-    Export,
 }
-impl Request {
+impl RenderRequest {
     /// Consumer identity, independent of the processing grid used to produce it.
     pub fn purpose(&self) -> Purpose {
-        if self.export.is_some() {
-            Purpose::Export
-        } else if self.auxiliary_preview {
-            Purpose::Preview
-        } else {
-            match self.rendition {
-                Rendition::Camera => Purpose::Camera,
-                Rendition::Defaults => Purpose::Defaults,
-                Rendition::Current if self.output != "final" || self.comparison => {
-                    Purpose::Inspection(self.output.clone(), self.comparison)
-                }
-                Rendition::Current if self.detail => Purpose::Detail,
-                Rendition::Current => Purpose::Current,
+        match self.rendition {
+            Rendition::Camera => Purpose::Camera,
+            Rendition::Defaults => Purpose::Defaults,
+            Rendition::Current if self.output != "final" || self.comparison => {
+                Purpose::Inspection(self.output.clone(), self.comparison)
             }
+            Rendition::Current => Purpose::Current,
         }
     }
 
     fn photographic_preview(&self) -> bool {
-        self.export.is_none() && self.output == "final" && !self.comparison
+        self.output == "final" && !self.comparison
     }
 
     /// Requested processing scale before camera-specific smallest-grid sizing or reuse
@@ -115,23 +77,14 @@ impl Request {
 
     /// Reduced final views share the reduced working set, including both policies,
     /// Camera and Defaults. Native detail recovers its source through the loader.
-    pub fn uses_reduced_session(&self) -> bool {
+    pub fn uses_reduced_photo(&self) -> bool {
         self.preview_scale.is_reduced() && self.photographic_preview() && !self.detail
     }
 
     /// Apply processing geometry to camera-resolved settings without changing
     /// authored controls or the workspace preview policy.
     pub fn apply_preview(&self, settings: &mut Settings, metadata: &Metadata) -> Result<()> {
-        settings.processing_quality = if self.photographic_preview() {
-            self.processing_quality
-        } else {
-            ProcessingQuality::Quality
-        };
         settings.working_scale = self.nominal_working_scale();
-        if self.auxiliary_preview {
-            settings.output_size = None;
-            settings.preview_region = None;
-        }
         if settings.working_scale.is_reduced() {
             settings.working_scale = camera_preview_scale(self.preview_scale, metadata)?;
         }

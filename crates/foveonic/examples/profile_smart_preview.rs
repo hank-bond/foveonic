@@ -8,7 +8,7 @@ use foveonic::{
     image::{ImageTexture, RenderedImage},
     inspection::Content,
     profile::{GpuActivity, Mode, Profile},
-    render::{Engine, RenderSession, Scale, Settings},
+    render::{Engine, NativePhoto, Scale, Settings},
     source::{Result, Source},
 };
 use serde::Serialize;
@@ -42,7 +42,7 @@ fn camera_settings(source: &Source) -> Result<Settings> {
 }
 fn completed(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     mode: Mode,
 ) -> Result<(Completed, ImageTexture)> {
@@ -58,13 +58,13 @@ fn route(
     mode: Mode,
 ) -> Result<serde_json::Value> {
     let mut settings = initial_settings.clone();
-    let mut overview_session = RenderSession::new(source.clone());
+    let mut overview_session = NativePhoto::new(source.clone());
     settings.working_scale = Scale::new(2).unwrap();
     let (overview, _overview_texture, _overview_image) =
         completed_image(engine, &mut overview_session, &settings, Mode::Off)?;
     // Keep the reduced owner alive while native detail uses an independent cache,
     // matching the app's split owners without reopening or decoding the source.
-    let mut native_session = separate_overview_session.then(|| RenderSession::new(source));
+    let mut native_session = separate_overview_session.then(|| NativePhoto::new(source));
     let session = native_session.as_mut().unwrap_or(&mut overview_session);
     let [width, height] = overview.extent.map(|v| v * 2);
     // Match the central 200% viewport in the native landscape smoke, including overscan.
@@ -306,7 +306,7 @@ fn main() -> Result<()> {
             std::fs::write(destination, serde_json::to_vec_pretty(&report)?)?;
             return Ok(());
         }
-        let mut session = RenderSession::new(source);
+        let mut session = NativePhoto::new(source);
         let mut edited_settings = settings.clone();
         edited_settings.working_scale = Scale::NATIVE;
         edited_settings.preview_region = None;
@@ -393,7 +393,7 @@ fn warm_edit_benchmark(
 ) -> Result<()> {
     let initial = settings.clone();
     let native_extent = foveonic::render::native_extent(&source.metadata)?;
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     settings.working_scale = Scale::new(2).unwrap();
     let overview = region_completed(engine, &mut session, &settings, Mode::Off)?;
     let window = initial.crop.pixels(initial.rotation.extent(native_extent));
@@ -484,7 +484,7 @@ fn full_edit_sequence(
     repeats: usize,
     mode: Mode,
 ) -> Result<Vec<serde_json::Value>> {
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let mut current = settings.clone();
     current.working_scale = Scale::NATIVE;
     current.preview_region = None;
@@ -507,7 +507,7 @@ fn full_edit_sequence(
 // The image and texture stay alive through continuation, matching foreground ownership.
 fn region_completed(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     mode: Mode,
 ) -> Result<(Completed, ImageTexture, RenderedImage)> {
@@ -516,7 +516,7 @@ fn region_completed(
 
 fn completed_image(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     mode: Mode,
 ) -> Result<(Completed, ImageTexture, RenderedImage)> {
@@ -524,7 +524,7 @@ fn completed_image(
     let before = engine.gpu_activity();
     let mut profile = Profile::new(mode);
     let mut artifacts = engine
-        .render_session(session, settings, &["final"], || false, &mut profile)?
+        .render_native_photo(session, settings, &["final"], || false, &mut profile)?
         .ok_or("render superseded")?;
     let Content::Image(image) = artifacts.pop().ok_or("missing image")?.content else {
         return Err("image expected".into());
@@ -575,7 +575,7 @@ fn region_route(
         origin[0] + size[0],
         origin[1] + size[1],
     ];
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let _previous = if scenario == "fresh" {
         None
     } else {
@@ -692,7 +692,7 @@ fn region_benchmark(
     let mut settings = initial_settings.clone();
     apply_edit(&mut settings, scenario);
     settings.working_scale = Scale::NATIVE;
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let (_, _, whole) = region_completed(engine, &mut session, &settings, Mode::Off)?;
     let extent = whole.uncropped_view().extent;
     let full_baseline = if diagnostic_only {

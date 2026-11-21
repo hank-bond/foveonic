@@ -28,7 +28,7 @@ fn inspect_shadow_protection() -> Result<()> {
     });
     settings.neutralize_shadows.strength = 1.;
     let points = [[539, 76], [583, 85], [595, 98], [509, 245], [597, 234]];
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let mut runs = Vec::new();
     for (id, tolerance, width) in [
         ("default-selectivity", 0.25, 35.),
@@ -39,7 +39,7 @@ fn inspect_shadow_protection() -> Result<()> {
         settings.neutralize_shadows.color_tolerance = tolerance;
         settings.neutralize_shadows.hue_width = width;
         let artifacts = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["shadow-neutralize.input", "shadow-neutralize.rgb"],

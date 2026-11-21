@@ -3,7 +3,7 @@
 use foveonic::{
     inspection::Content,
     profile::{report, Mode, Profile},
-    render::{Engine, RenderSession, Settings},
+    render::{Engine, NativePhoto, Settings},
     source::Source,
 };
 use std::{
@@ -85,9 +85,9 @@ fn main() -> Result<(), Error> {
             )
         } else {
             // A fresh session measures all work, unlike an unchanged edit.
-            let mut session = RenderSession::new(source.clone());
+            let mut session = NativePhoto::new(source.clone());
             let artifacts = engine
-                .render_session(&mut session, settings, &[output], || false, &mut profile)?
+                .render_native_photo(&mut session, settings, &[output], || false, &mut profile)?
                 .ok_or("cancelled")?;
             (artifacts, Some(session))
         };
@@ -99,7 +99,7 @@ fn main() -> Result<(), Error> {
             .poll(wgpu::PollType::Wait)
             .expect("GPU polling failed");
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.;
-        let cached_bytes = session.as_ref().map_or(0, RenderSession::cached_bytes);
+        let cached_bytes = session.as_ref().map_or(0, NativePhoto::cached_bytes);
         record(
             &mut log,
             "completed",

@@ -628,6 +628,27 @@ pub struct PixelRegion {
     pub bottom_right: [u32; 2],
     pub extent: [u32; 2],
 }
+impl PixelRegion {
+    /// `[left, top, right, bottom]` with an exclusive end.
+    pub fn bounds(&self) -> [u32; 4] {
+        [
+            self.top_left[0],
+            self.top_left[1],
+            self.bottom_right[0] + 1,
+            self.bottom_right[1] + 1,
+        ]
+    }
+    /// The bounds in native image coordinates, given the native window this grid shows.
+    pub fn native_bounds(&self, window: [u32; 4]) -> [u32; 4] {
+        let [left, top, right, bottom] = self.bounds();
+        [
+            left + window[0],
+            top + window[1],
+            right + window[0],
+            bottom + window[1],
+        ]
+    }
+}
 
 pub struct Viewport {
     id: egui::Id,
@@ -986,8 +1007,11 @@ impl Viewport {
     pub fn explicit_zoom_pending(&self) -> bool {
         self.explicit_zoom_pending
     }
-    pub fn take_explicit_zoom(&mut self) -> bool {
-        std::mem::take(&mut self.explicit_zoom_pending)
+
+    /// Display pixels per image pixel if this view were fitted.
+    pub fn fit_density(&self, pixels_per_point: f32) -> Option<f32> {
+        let (size, extent) = self.last_canvas?;
+        Some(Self::fit_scale(size, extent) * pixels_per_point)
     }
 
     pub fn explicit_zoom(&self) -> bool {
@@ -2716,8 +2740,6 @@ mod composition_zoom_tests {
         viewport.zoom_by(1.25);
         assert!(viewport.explicit_zoom());
         assert!(viewport.explicit_zoom_pending());
-        assert!(viewport.take_explicit_zoom());
-        assert!(!viewport.explicit_zoom_pending());
         viewport.zoom_by(1.25);
         viewport.reset();
         assert!(!viewport.explicit_zoom_pending());

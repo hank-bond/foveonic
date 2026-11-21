@@ -199,7 +199,7 @@ pub struct GraphOutput {
     pub dependencies: Vec<usize>,
     pub data_type: String,
     pub session_hint: bool,
-    pub sealed_cut: bool,
+    pub sensor_data: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -232,8 +232,7 @@ pub struct CheckpointEntry {
     pub selected: bool,
     pub primary: bool,
     pub restart: bool,
-    pub pinned: bool,
-    pub required_cut: bool,
+    pub sensor_data: bool,
     pub priority: Option<(u8, usize)>,
     pub used_frame: u64,
 }
@@ -361,6 +360,15 @@ impl Profile {
         crate::diagnostics::interval_since(crate::diagnostics::Category::Cpu, stage, start, |_| {});
         if self.mode.enabled() {
             self.host.push(Timing::elapsed(stage, start));
+        }
+    }
+
+    pub(crate) fn record_duration(&mut self, stage: &'static str, duration: std::time::Duration) {
+        if self.mode.enabled() {
+            self.host.push(Timing {
+                stage,
+                milliseconds: duration.as_secs_f64() * 1000.,
+            });
         }
     }
 

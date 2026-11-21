@@ -41,10 +41,10 @@ def cache_inventory(snapshot):
                             'aliases':[{'version':entry['version'], 'generation':entry['generation'], 'role':entry['role'],
                                         'names':entry['names'],
                                         **{field:entry[field] for field in
-                                           ('selected','primary','restart','pinned','required_cut','priority','used_frame')}}
+                                           ('selected','primary','restart','sensor_data','priority','used_frame')}}
                                        for entry in aliases]})
     flagged = {flag:unique_allocations([entry for entry in entries if entry[flag]])['unique_bytes']
-               for flag in ('selected','primary','restart','pinned','required_cut')}
+               for flag in ('selected','primary','restart','sensor_data')}
     flagged['unselected_versions'] = unique_allocations([entry for entry in entries if not entry['selected']])['unique_bytes']
     return {'gpu':unique_allocations(entries), 'allocations':allocations,
             'versions':snapshot.get('versions', []),
@@ -163,7 +163,7 @@ def analyze_profile(profile, snapshot):
             producer = nodes.get(output['producer'])
             candidate = {'output_id':output['id'], 'name':output['name'], 'producer':output['producer'],
                          'dependencies':output['dependencies'], 'data_type':output['data_type'],
-                         'session_hint':output['session_hint'], 'sealed_cut':output['sealed_cut'],
+                         'session_hint':output['session_hint'], 'sensor_data':output['sensor_data'],
                          'resource':resource, 'observation':observation, 'checkpoint_aliases':aliases.get(allocation_key(resource), []) if resource else [],
                          'producer_operation':producer.get('operation') if producer else None,
                          'producer_host_ms':producer.get('host_milliseconds') if producer else None,

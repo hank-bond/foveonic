@@ -2,8 +2,9 @@
 
 use super::PreparedPreview;
 use eframe::egui;
-use foveonic::decode_cache::{Activity, Cache};
 use foveonic::diagnostics as trace;
+use foveonic::priority::Priority;
+use foveonic::{decode_cache::Cache, priority::Demand};
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -37,7 +38,7 @@ struct Queue {
     visible: Vec<PathBuf>,
     active: Option<Request>,
     stop: bool,
-    demand: Option<Activity>,
+    demand: Option<Demand>,
 }
 impl Queue {
     fn current(&self, request: &Request) -> bool {
@@ -66,7 +67,7 @@ impl Queue {
     }
     fn reserve(&mut self, kind: Kind, cache: Option<&Cache>) {
         if kind == Kind::Thumbnail && self.demand.is_none() && !self.requests.is_empty() {
-            self.demand = cache.map(Cache::thumbnail_demand);
+            self.demand = cache.map(|cache| cache.priority().demand(Priority::Thumbnail));
         }
         if self.requests.is_empty() && self.active.is_none() {
             self.demand = None;
@@ -167,7 +168,7 @@ impl Worker {
                     })
                 };
                 let image = match source.as_ref() {
-                    Some(cache) if kind == Kind::Thumbnail => cache.thumbnail(load),
+                    Some(cache) if kind == Kind::Thumbnail => cache.priority().run(Priority::Thumbnail, load),
                     Some(cache) => cache.background(load),
                     None => load(),
                 };

@@ -4,7 +4,7 @@ summary: "The render worker consumes ready sources, coordinates grouped executio
 
 # Render execution
 
-`mod.rs` owns service order, request execution and reply publication. Presentation reuses immutable whole-image results. Processing owns verified photo identities, native/reduced session lookup and acquisition through the source loader. Its engine working set shares foreground-use recency, required-session protection and budget trimming across both session kinds. Reduced preparation can borrow a matching retained native source without promoting the native session. Verified source replacement invalidates both kinds. Ordinary view clearing parks retained processing; explicit processing clearing releases both kinds. Jobs needing source data defer without settling, while other ready jobs can execute. Idle preparation uses the same owners under foreground priority and spare-capacity admission. Keep operations separate from the decisions that select and interrupt them.
+`mod.rs` owns service order, request execution and reply publication. Presentation reuses immutable whole-image results. Processing owns verified photo identities, native/reduced session lookup and acquisition through the source loader. Its engine working set shares use recency, protection of visible working photos and trimming to the memory target across both resolutions. Reduced preparation can borrow a matching retained native source without promoting the native session. Verified source replacement invalidates both kinds. Explicit processing clearing releases both kinds. Jobs needing source data defer without settling, while other ready jobs can execute. Idle preparation uses the same owners under foreground priority and spare-capacity admission. Keep operations separate from the decisions that select and interrupt them.
 
 Presentation snapshots are shared with the coordinator and inventoried by borrowing their existing resource handles. Keep snapshot reuse separate from numerical dependency validity.
 
@@ -14,12 +14,11 @@ Presentation snapshots are shared with the coordinator and inventoried by borrow
 
 ### Source files
 
-- **[admission.rs](./admission.rs)** Estimates coarse workspace headroom for admitting additional warm Merrill photographs.
 - **[diagnostics.rs](./diagnostics.rs)** Captures immutable app images and controls delivery timing for opt-in native checks.
+- **[host.rs](./host.rs)** Turns the coordinator's work plan into scheduler jobs and gives each job its application meaning.
 - **[mod.rs](./mod.rs)** Keeps rendering off the UI thread and replaces outdated requests instead of queuing edits.
 - **[preparation.rs](./preparation.rs)** Prepares ready decoded neighbors during idle time using the render worker's existing owners.
 - **[presentation.rs](./presentation.rs)** Reframes one immutable whole-image result without reopening sources or running photographic nodes.
-- **[processing.rs](./processing.rs)** Owns verified per-photo native and reduced sessions under the shared processing budget.
-- **[wide.rs](./wide.rs)** Interleaves warm photo executions while ordinary worker code owns delivery.
+- **[processing.rs](./processing.rs)** Tracks which retained working photo belongs to which verified original, and prepares working photos for rendering.
 
 <!-- INDEX:END -->

@@ -98,7 +98,7 @@ impl DamagedRecovery {
                 if app.folder_loader.loading()
                     || app.selected.as_deref() != Some(broken.as_path())
                     || !app.sidecars.ready()
-                    || app.worker.busy()
+                    || app.view_busy()
                     || !app.import.smoke_ready(false)
                     || !app.activity.unread_errors()
                 {
@@ -112,9 +112,8 @@ impl DamagedRecovery {
                     return Ok(false);
                 }
                 let has_image = app
-                    .frame
-                    .as_ref()
-                    .is_some_and(|frame| frame.path == *broken);
+                    .active_image()
+                    .is_some_and(|frame| frame.request.path == *broken);
                 self.checks.push(json!({"check":"truncated-raw-reports-error","passed":!has_image,"selected":broken,"unread_errors":true,"image_accepted":has_image}));
                 if has_image {
                     return Err("truncated RAW unexpectedly produced an image".into());
@@ -146,14 +145,13 @@ impl DamagedRecovery {
                 if app.folder_loader.loading()
                     || app.selected.as_deref() != Some(source)
                     || !app.sidecars.ready()
-                    || app.worker.busy()
+                    || app.view_busy()
                 {
                     return Ok(false);
                 }
                 let Some(frame) = app
-                    .frame
-                    .as_ref()
-                    .filter(|frame| frame.path.as_path() == source)
+                    .active_image()
+                    .filter(|frame| frame.request.path.as_path() == source)
                 else {
                     return Ok(false);
                 };
@@ -161,8 +159,10 @@ impl DamagedRecovery {
                     return Ok(false);
                 }
                 let matches =
-                    crate::rendering::matching::same_authored_edits(&frame.requested, expected)
-                        && crate::rendering::matching::same_authored_edits(&app.settings, expected)
+                    crate::rendering::matching::same_authored_edits(
+                        &frame.request.settings,
+                        expected,
+                    ) && crate::rendering::matching::same_authored_edits(&app.settings, expected)
                         && !app.activity.unread_errors();
                 self.checks.push(json!({"check":"valid-raw-recovers-latest-frame","passed":matches,"source":source,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"unread_errors":app.activity.unread_errors()}));
                 if !matches {

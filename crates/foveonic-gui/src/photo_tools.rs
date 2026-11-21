@@ -184,7 +184,6 @@ pub fn escape(ctx: &egui::Context) {
 
 pub fn show(
     ui: &mut egui::Ui,
-    enabled: bool,
     crop: &mut Crop,
     rotation: &mut foveonic::rotation::Rotation,
     extent: Option<[u32; 2]>,
@@ -193,32 +192,29 @@ pub fn show(
 ) -> bool {
     let before = (*crop, *rotation);
     toolbar::tool_group(ui, &Tool::TOOLBAR.map(Tool::width), |ui| {
-        ui.add_enabled_ui(enabled, |ui| {
-            for tool in Tool::TOOLBAR {
-                match tool {
-                    Tool::Pointer => {
-                        let selected = selects_photos(ui.ctx());
-                        let button =
-                            widgets::icon_button(ui, "Pointer", selected, ControlSize::Large);
-                        pointer_icon(ui, &button, selected);
-                        if button
-                            .on_hover_text("Pointer (V) · Click to select photographs, drag to pan")
-                            .clicked()
-                        {
-                            pointer(ui.ctx());
-                        }
+        for tool in Tool::TOOLBAR {
+            match tool {
+                Tool::Pointer => {
+                    let selected = selects_photos(ui.ctx());
+                    let button = widgets::icon_button(ui, "Pointer", selected, ControlSize::Large);
+                    pointer_icon(ui, &button, selected);
+                    if button
+                        .on_hover_text("Pointer (V) · Click to select photographs, drag to pan")
+                        .clicked()
+                    {
+                        pointer(ui.ctx());
                     }
-                    Tool::Loupe => loupe_tool::button(ui, loupe),
-                    Tool::Crop => crop_tool::button(ui, crop, extent, custom),
-                    Tool::Rotate => {
-                        ui.add_enabled_ui(extent.is_some(), |ui| {
-                            rotate_tool::button(ui, rotation, crop)
-                        });
-                    }
-                    _ => unreachable!("only photograph toolbar buttons are listed"),
                 }
+                Tool::Loupe => loupe_tool::button(ui, loupe),
+                Tool::Crop => crop_tool::button(ui, crop, extent, custom),
+                Tool::Rotate => {
+                    ui.add_enabled_ui(extent.is_some(), |ui| {
+                        rotate_tool::button(ui, rotation, crop)
+                    });
+                }
+                _ => unreachable!("only photograph toolbar buttons are listed"),
             }
-        });
+        }
     });
     crop_tool::dialog(ui.ctx(), crop, extent, custom);
     before != (*crop, *rotation)

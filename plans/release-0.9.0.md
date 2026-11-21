@@ -1,8 +1,15 @@
 ---
-summary: "Integrate wide rendering and relative group viewing, then prepare and validate the 0.9.0 minor release with the maintained release lanes."
+summary: "0.9.0 is held until the render scheduler replaces the serial and Merrill-only wide paths. Its viewing features and release lanes remain in scope."
 ---
 
 # Release 0.9.0
+
+## Held
+
+On 2026-11-17 the owner held 0.9.0. The candidate's wide rendering runs only warm Merrill work beside a separate serial path, and the GUI decides memory admission with Merrill-specific constants. 0.9.0 will ship its current features, including group Before/After and linked Shift gestures, on the architecture in the [render scheduler plan](./render-scheduler.md). The candidate evidence below describes the held build and must be repeated for the new candidate.
+
+- [ ] Complete the [render scheduler plan](./render-scheduler.md).
+- [ ] Freeze a new candidate and repeat every release check below, including the comparison with published 0.8.4.
 
 The owner authorizes merging the completed wide-rendering work into main, preparing the next minor release and running the new release test process. The subsequent Shift viewing reports belong to this candidate: each photograph must preserve its own point at the same relative position within its displayed region, independently of aspect ratio or pan. Shift-drag must move every edited photograph by the same on-screen displacement. Publication remains a separate owner review.
 
@@ -10,7 +17,7 @@ Requirements: [release specification](../docs/specs/releases.md), [release guide
 
 ## Scope
 
-Ship memory-aware wide rendering through the shared execution lifecycle, priority for viewport and auxiliary work over browser previews and idle continuation, compatible preview reuse, optional idle full-image completion, group Before/After and linked Shift gestures. The release build enables the previously explicit wide feature. Preserve subsequent main changes through 0.8.4, including capture metadata, encoder compatibility, Windows startup and the new test process.
+Ship memory-aware multi-photo rendering through the [render scheduler](./render-scheduler.md), compatible preview reuse, optional idle full-image completion, group Before/After and linked Shift gestures. Preserve subsequent main changes through 0.8.4, including capture metadata, encoder compatibility, Windows startup and the new test process.
 
 The Shift-zoom fix passes all 639 ordinary GUI checks after reproducing both the visible mixed-aspect bug and a known-hidden Fit regression. The Shift-pan case independently reproduces unequal on-screen displacement before its fix. The final combined GUI suite passes all 642 ordinary tests, including mixed aspect ratios, both source orders, different zooms, display densities, Space/tool isolation and hidden/carry behavior. Independent reviews have no outstanding findings. These intermediate checks do not replace the final candidate run.
 

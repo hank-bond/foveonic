@@ -184,7 +184,7 @@ Sources: [worker request/resolution](../crates/foveonic-gui/src/rendering/worker
 
 ## C. Work selection, execution and interruption
 
-Sources: [worker loop](../crates/foveonic-gui/src/rendering/worker/mod.rs), [service cursor](../crates/foveonic-gui/src/rendering/coordinator.rs), [priority gate](../crates/foveonic/src/background.rs), [CPU admission](../crates/foveonic/src/decode_pool.rs), [graph executor](../crates/foveonic/src/render/execute.rs), [GPU completion scope](../crates/foveonic/src/gpu/scheduling.rs).
+Sources: [worker loop](../crates/foveonic-gui/src/rendering/worker/mod.rs), [service cursor](../crates/foveonic-gui/src/rendering/coordinator.rs), [priority gate](../crates/foveonic/src/priority.rs), [CPU admission](../crates/foveonic/src/decode_pool.rs), [graph executor](../crates/foveonic/src/render/execute.rs), [GPU completion scope](../crates/foveonic/src/gpu/scheduling.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -197,7 +197,7 @@ Sources: [worker loop](../crates/foveonic-gui/src/rendering/worker/mod.rs), [ser
 
 ## D. Completion, delivery and progress
 
-Sources: [reply handling](../crates/foveonic-gui/src/main.rs), [delivery classifier](../crates/foveonic-gui/src/rendering/delivery.rs), [coordinator settlement/admission](../crates/foveonic-gui/src/rendering/coordinator.rs), [runtime completion](../crates/foveonic-gui/src/multi_edit_runtime.rs), [progress](../crates/foveonic-gui/src/progress.rs).
+Sources: [reply handling](../crates/foveonic-gui/src/main.rs), [view planning](../crates/foveonic-gui/src/rendering/views.rs), [coordinator settlement/admission](../crates/foveonic-gui/src/rendering/coordinator.rs), [runtime completion](../crates/foveonic-gui/src/multi_edit_runtime.rs), [progress](../crates/foveonic-gui/src/progress.rs).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |
@@ -258,7 +258,7 @@ Sources: [idle preparation](../crates/foveonic-gui/src/rendering/worker/preparat
 
 ## H. Evidence, naming and source organization
 
-Sources: [GUI timing adapter](../crates/foveonic-gui/src/timing.rs), [aggregate profiles](../crates/foveonic/src/profile.rs), [native scenarios](../crates/foveonic-gui/src/smoke/scenarios.rs), [trace analysis](../scripts/profiling/trace_analysis.py), [coordinator tests](../crates/foveonic-gui/src/rendering/coordinator_test.rs), [delivery tests](../crates/foveonic-gui/src/rendering/delivery_test.rs), [architecture map](../docs/interactive-rendering-architecture.md).
+Sources: [GUI timing adapter](../crates/foveonic-gui/src/timing.rs), [aggregate profiles](../crates/foveonic/src/profile.rs), [native scenarios](../crates/foveonic-gui/src/smoke/scenarios.rs), [trace analysis](../scripts/profiling/trace_analysis.py), [coordinator tests](../crates/foveonic-gui/src/rendering/coordinator_test.rs), [architecture map](../docs/interactive-rendering-architecture.md).
 
 | ID | Observed concern | Contract to establish before changing it |
 | --- | --- | --- |

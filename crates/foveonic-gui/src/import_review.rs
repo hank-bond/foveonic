@@ -126,17 +126,15 @@ impl Review {
     pub fn update(&mut self, browser: &mut Browser) {
         let mut replay_from = self.received_imports;
         let mut filter_changed = false;
-        if let Some(scanned) = self.worker.receive_scan() {
-            if scanned.generation == self.generation {
-                self.scanning = false;
-                self.sources.extend(scanned.sources);
+        if let Some(recorded) = self.worker.receive_history() {
+            if recorded.generation == self.generation {
                 // A completion already received by the UI may postdate this scan.
                 // Replay its recorded status without undoing later checkbox changes.
-                replay_from = scanned.completed_imports;
-                self.errors = scanned.errors;
+                replay_from = recorded.completed_imports;
+                self.errors.extend(recorded.errors);
                 if browser.import_mode {
                     filter_changed = true;
-                    browser.recorded_marks = scanned
+                    browser.recorded_marks = recorded
                         .dispositions
                         .into_iter()
                         .map(|(path, disposition)| {
@@ -151,6 +149,13 @@ impl Review {
                         })
                         .collect();
                 }
+            }
+        }
+        if let Some(scanned) = self.worker.receive_scan() {
+            if scanned.generation == self.generation {
+                self.scanning = false;
+                self.sources.extend(scanned.sources);
+                self.errors.extend(scanned.errors);
             }
         }
         let progress = self.worker.progress();

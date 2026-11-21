@@ -212,11 +212,11 @@ fn views(
     }
     Ok(names)
 }
-pub(super) fn seed(session: &mut RenderSession, buffer: ReadGuard) -> Result<()> {
+pub(super) fn seed(session: &mut NativePhoto, buffer: ReadGuard) -> Result<()> {
     let name = "texture.layers-tiles";
     let version = session
         .cache
-        .working
+        .planned
         .versions
         .get(name)
         .ok_or("texture checkpoint")?
@@ -244,7 +244,6 @@ pub(super) fn seed(session: &mut RenderSession, buffer: ReadGuard) -> Result<()>
         true
     });
     session.cache.entries.push(super::super::Entry {
-        pinned: session.cache.working.cuts.contains(&version.generation),
         version,
         used: session.cache.frame,
         value: crate::render::Value {
@@ -350,10 +349,10 @@ fn compare_local_color() -> Result<()> {
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?
             .unwrap_or_default();
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         let initial = image(
             engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["final"],
@@ -634,7 +633,7 @@ fn compare_local_color() -> Result<()> {
             }
             // Update recipe versions normally, then replace only the texture result for this comparison.
             engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["final"],
@@ -645,7 +644,7 @@ fn compare_local_color() -> Result<()> {
             seed(&mut session, corrected)?;
             let rendered = image(
                 engine
-                    .render_session(
+                    .render_native_photo(
                         &mut session,
                         &settings,
                         &["final"],
@@ -658,7 +657,7 @@ fn compare_local_color() -> Result<()> {
                 seed(&mut session, original.clone())?;
                 let replay = image(
                     engine
-                        .render_session(
+                        .render_native_photo(
                             &mut session,
                             &settings,
                             &["final"],

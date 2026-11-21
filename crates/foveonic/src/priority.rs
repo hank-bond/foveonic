@@ -1,4 +1,4 @@
-//! Prioritizes viewport, navigator/scopes and thumbnails over batches and interruptible idle work.
+//! Orders all work in one set of tiers and lets lower tiers yield to higher-tier demand across threads.
 
 #[cfg(target_os = "linux")]
 use std::cell::Cell;
@@ -13,86 +13,158 @@ use std::{
 
 pub(crate) const IO_CHUNK_BYTES: usize = 1024 * 1024;
 
-// Only queued/running user work holds a demand counter. CPU work already
-// decoding an in-memory speculative source may finish below interactive work.
-#[derive(Clone, Copy)]
-enum Priority {
-    Foreground = 0,
-    Auxiliary = 1,
-    Thumbnail = 2,
-    Processing = 3,
-    Background = 4,
-    Decode,
+/// Every tier yields to all tiers above it. This is the only priority order in the app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Priority {
+    /// Images shown in the editor's photo viewports.
+    Viewport,
+    /// Navigator images and scopes.
+    Auxiliary,
+    /// Browser thumbnails needed to use the app.
+    Thumbnail,
+    /// User-requested file output.
+    Export,
+    /// Run-ahead work nobody has asked for yet.
+    Speculative,
 }
+const TIERS: usize = Priority::Speculative as usize + 1;
+
 impl Priority {
-    fn higher_levels(self) -> usize {
-        match self {
-            Self::Decode => Self::Thumbnail as usize,
-            _ => self as usize,
-        }
+    fn index(self) -> usize {
+        self as usize
     }
 }
 
+/// Shares demand for each tier across every thread that does prioritized work.
 #[derive(Default)]
-pub(crate) struct Gate {
-    demand: [AtomicUsize; Priority::Background as usize],
-    epoch: AtomicU64,
-    execution_epochs: [AtomicU64; Priority::Background as usize + 1],
+pub struct Gate {
+    demand: [AtomicUsize; TIERS],
+    speculative_epoch: AtomicU64,
+    attempt_epochs: [AtomicU64; TIERS],
     lock: Mutex<()>,
     wake: Condvar,
 }
-/// Holds priority through queued and active work, including supersession.
-pub struct Activity {
+
+/// Holds demand for one tier through queued and active work, including supersession.
+pub struct Demand {
     gate: Arc<Gate>,
     priority: Priority,
 }
+
 impl Gate {
-    fn activity(self: &Arc<Self>, priority: Priority) -> Activity {
+    /// Lower tiers pause at their next checkpoint and current lower-tier attempts are invalidated.
+    pub fn demand(self: &Arc<Self>, priority: Priority) -> Demand {
         let _guard = self.lock.lock().unwrap();
-        self.demand[priority as usize].fetch_add(1, Ordering::AcqRel);
-        for epoch in &self.execution_epochs[priority as usize + 1..] {
+        self.demand[priority.index()].fetch_add(1, Ordering::AcqRel);
+        for epoch in &self.attempt_epochs[priority.index() + 1..] {
             epoch.fetch_add(1, Ordering::AcqRel);
         }
-        if matches!(priority, Priority::Foreground) {
-            self.epoch.fetch_add(1, Ordering::AcqRel);
+        if priority == Priority::Viewport {
+            self.speculative_epoch.fetch_add(1, Ordering::AcqRel);
         }
         self.wake.notify_all();
-        Activity {
+        Demand {
             gate: self.clone(),
             priority,
         }
     }
-    pub fn foreground(self: &Arc<Self>) -> Activity {
-        self.activity(Priority::Foreground)
-    }
-    pub fn auxiliary(self: &Arc<Self>) -> Activity {
-        self.activity(Priority::Auxiliary)
-    }
-    pub fn thumbnails(self: &Arc<Self>) -> Activity {
-        self.activity(Priority::Thumbnail)
-    }
-    fn available(&self, priority: Priority) -> bool {
-        self.demand[..priority.higher_levels()]
+    /// No higher tier has demand.
+    pub fn ready(&self, priority: Priority) -> bool {
+        self.demand[..priority.index()]
             .iter()
             .all(|count| count.load(Ordering::Acquire) == 0)
     }
-    pub fn idle(&self) -> bool {
-        self.available(Priority::Background)
-    }
-    pub fn auxiliary_ready(&self) -> bool {
-        self.available(Priority::Auxiliary)
-    }
-    pub fn thumbnail_ready(&self) -> bool {
-        self.available(Priority::Thumbnail)
-    }
-    pub fn interrupt_prefetch(&self) {
+    pub fn interrupt_speculative(&self) {
         let _guard = self.lock.lock().unwrap();
-        self.epoch.fetch_add(1, Ordering::AcqRel);
-        self.execution_epochs[Priority::Background as usize].fetch_add(1, Ordering::AcqRel);
+        self.speculative_epoch.fetch_add(1, Ordering::AcqRel);
+        self.attempt_epochs[Priority::Speculative.index()].fetch_add(1, Ordering::AcqRel);
         self.wake.notify_all();
     }
+    /// Viewport work runs without a context: it never pauses, and the GPU and
+    /// scheduler treat contextless work as interactive.
+    pub(crate) fn context(self: &Arc<Self>, priority: Priority) -> Option<Context> {
+        (priority != Priority::Viewport).then(|| Context {
+            gate: self.clone(),
+            interrupt_epoch: None,
+            attempt_epoch: None,
+            decoder: None,
+            decoding: false,
+            priority,
+        })
+    }
+    /// Run `work` now if no higher tier has demand. Its cancel probe turns true when
+    /// higher-tier demand arrives, even demand that has already finished.
+    pub fn attempt<T>(
+        self: &Arc<Self>,
+        priority: Priority,
+        work: impl FnOnce(&dyn Fn() -> bool) -> T,
+    ) -> Option<T> {
+        if priority == Priority::Viewport {
+            return Some(work(&|| false));
+        }
+        let epoch = self.attempt_epochs[priority.index()].load(Ordering::Acquire);
+        if !self.ready(priority) {
+            return None;
+        }
+        let mut attempt = self.context(priority);
+        if let Some(context) = &mut attempt {
+            context.attempt_epoch = Some((priority, epoch));
+        }
+        with_context(attempt, || {
+            let scheduling = context().expect("priority attempt context");
+            let cancel = || scheduling.interrupted();
+            (!cancel()).then(|| work(&cancel))
+        })
+    }
+    /// Wait until no higher tier has demand, then run `work`. The caller holds its own demand.
+    pub fn when_ready<T>(
+        self: &Arc<Self>,
+        priority: Priority,
+        cancel: &dyn Fn() -> bool,
+        work: impl FnOnce() -> T,
+    ) -> Option<T> {
+        const RECHECK: std::time::Duration = std::time::Duration::from_millis(10);
+        loop {
+            if cancel() {
+                return None;
+            }
+            let guard = self.lock.lock().unwrap();
+            if self.ready(priority) {
+                drop(guard);
+                break;
+            }
+            drop(self.wake.wait_timeout(guard, RECHECK).unwrap());
+        }
+        if cancel() {
+            return None;
+        }
+        Some(self.run(priority, work))
+    }
+    /// Run pausable work at a tier. It waits at entry and at checkpoints while a
+    /// higher tier has demand. The caller holds its own demand when lower tiers
+    /// should wait for it.
+    pub fn run<T>(self: &Arc<Self>, priority: Priority, work: impl FnOnce() -> T) -> T {
+        with_context(self.context(priority), || {
+            checkpoint();
+            work()
+        })
+    }
+    /// Run speculative work that viewport or auxiliary demand cancels at its next
+    /// checkpoint, even if that demand has already finished. Thumbnail and export
+    /// demand only pause it. Decoder children inherit the cancellation. Unlike
+    /// `attempt(Speculative)`, demand from thumbnails or exports does not cancel it.
+    pub fn speculate<T>(self: &Arc<Self>, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
+        if !self.ready(Priority::Speculative) {
+            return None;
+        }
+        interruptible(self.clone(), || {
+            let scheduling = context().expect("speculative context");
+            let cancel = || scheduling.interrupted();
+            (!cancel()).then(|| work(&cancel))
+        })
+    }
     fn wait(&self, context: &Context) {
-        if self.available(context.priority) || context.interrupted() {
+        if self.ready(context.priority) || context.interrupted() {
             return;
         }
         let _scope = crate::diagnostics::scope_with(
@@ -104,33 +176,30 @@ impl Gate {
         );
         if rayon::current_thread_index().is_some() {
             // A paused CPU task must not occupy the last worker needed by the
-            // foreground task that will release its gate. Help without holding
+            // higher-tier task that will release its gate. Help without holding
             // the gate lock, and sleep briefly only when no pool work is ready.
-            while !self.available(context.priority) && !context.interrupted() {
+            const IDLE_SLEEP: std::time::Duration = std::time::Duration::from_millis(1);
+            while !self.ready(context.priority) && !context.interrupted() {
                 if rayon::yield_now() == Some(rayon::Yield::Executed) {
                     continue;
                 }
                 let guard = self.lock.lock().unwrap();
-                if !self.available(context.priority) && !context.interrupted() {
-                    drop(
-                        self.wake
-                            .wait_timeout(guard, std::time::Duration::from_millis(1))
-                            .unwrap(),
-                    );
+                if !self.ready(context.priority) && !context.interrupted() {
+                    drop(self.wake.wait_timeout(guard, IDLE_SLEEP).unwrap());
                 }
             }
             return;
         }
         let mut guard = self.lock.lock().unwrap();
-        while !self.available(context.priority) && !context.interrupted() {
+        while !self.ready(context.priority) && !context.interrupted() {
             guard = self.wake.wait(guard).unwrap();
         }
     }
 }
-impl Drop for Activity {
+impl Drop for Demand {
     fn drop(&mut self) {
         let _guard = self.gate.lock.lock().unwrap();
-        self.gate.demand[self.priority as usize].fetch_sub(1, Ordering::AcqRel);
+        self.gate.demand[self.priority.index()].fetch_sub(1, Ordering::AcqRel);
         self.gate.wake.notify_all();
     }
 }
@@ -138,18 +207,20 @@ impl Drop for Activity {
 pub(crate) struct Context {
     gate: Arc<Gate>,
     interrupt_epoch: Option<u64>,
-    execution_epoch: Option<(Priority, u64)>,
+    attempt_epoch: Option<(Priority, u64)>,
     decoder: Option<crate::decode_pool::Task>,
+    /// Decoding children of export and speculative work run at utility QoS.
+    decoding: bool,
     priority: Priority,
 }
 impl Context {
     pub(crate) fn interrupted(&self) -> bool {
         self.interrupt_epoch.is_some_and(|epoch| {
-            !self.gate.available(Priority::Thumbnail)
-                || self.gate.epoch.load(Ordering::Acquire) != epoch
-        }) || self.execution_epoch.is_some_and(|(priority, epoch)| {
-            !self.gate.available(priority)
-                || self.gate.execution_epochs[priority as usize].load(Ordering::Acquire) != epoch
+            !self.gate.ready(Priority::Thumbnail)
+                || self.gate.speculative_epoch.load(Ordering::Acquire) != epoch
+        }) || self.attempt_epoch.is_some_and(|(priority, epoch)| {
+            !self.gate.ready(priority)
+                || self.gate.attempt_epochs[priority.index()].load(Ordering::Acquire) != epoch
         })
     }
 }
@@ -158,7 +229,7 @@ impl Context {
 pub(crate) struct Interrupted;
 impl std::fmt::Display for Interrupted {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("background prefetch interrupted")
+        f.write_str("lower-priority work interrupted")
     }
 }
 impl std::error::Error for Interrupted {}
@@ -171,136 +242,23 @@ thread_local! {
 pub(crate) fn context() -> Option<Context> {
     CONTEXT.with(|c| c.borrow().clone())
 }
-pub(crate) fn run<T>(gate: Option<Arc<Gate>>, work: impl FnOnce() -> T) -> T {
-    with_context(
-        gate.map(|gate| Context {
-            gate,
-            interrupt_epoch: None,
-            execution_epoch: None,
-            decoder: None,
-            priority: Priority::Background,
-        }),
-        work,
-    )
-}
 
-/// User-requested processing yields to interaction without maintenance-level throttling.
-pub(crate) fn processing<T>(gate: Arc<Gate>, work: impl FnOnce() -> T) -> T {
-    let _activity = gate.activity(Priority::Processing);
-    with_context(
-        Some(Context {
-            gate,
-            interrupt_epoch: None,
-            execution_epoch: None,
-            decoder: None,
-            priority: Priority::Processing,
-        }),
-        || {
-            checkpoint();
-            work()
-        },
-    )
-}
-
-/// A foreground request invalidates this whole speculative attempt, even if it
-/// finishes before the next checkpoint. Decoder children inherit the same epoch.
+/// Viewport demand invalidates the whole speculative attempt, even if it finishes
+/// before the next checkpoint. Decoder children inherit the same epoch.
 pub(crate) fn interruptible<T>(gate: Arc<Gate>, work: impl FnOnce() -> T) -> T {
-    let epoch = gate.epoch.load(Ordering::Acquire);
+    let epoch = gate.speculative_epoch.load(Ordering::Acquire);
     with_context(
         Some(Context {
             gate,
             interrupt_epoch: Some(epoch),
-            execution_epoch: None,
+            attempt_epoch: None,
             decoder: None,
-            priority: Priority::Background,
+            decoding: false,
+            priority: Priority::Speculative,
         }),
         work,
     )
 }
-/// Idle work cancels on every higher-tier arrival, even if that work has finished.
-pub(crate) fn idle_execution<T>(
-    gate: Arc<Gate>,
-    work: impl FnOnce(&dyn Fn() -> bool) -> T,
-) -> Option<T> {
-    execution(gate, Priority::Background, work)
-}
-
-pub(crate) fn auxiliary_execution<T>(
-    gate: Arc<Gate>,
-    work: impl FnOnce(&dyn Fn() -> bool) -> T,
-) -> Option<T> {
-    execution(gate, Priority::Auxiliary, work)
-}
-
-pub(crate) fn thumbnail_execution<T>(
-    gate: Arc<Gate>,
-    work: impl FnOnce(&dyn Fn() -> bool) -> T,
-) -> Option<T> {
-    execution(gate, Priority::Thumbnail, work)
-}
-
-fn execution<T>(
-    gate: Arc<Gate>,
-    priority: Priority,
-    work: impl FnOnce(&dyn Fn() -> bool) -> T,
-) -> Option<T> {
-    let epoch = gate.execution_epochs[priority as usize].load(Ordering::Acquire);
-    if !gate.available(priority) {
-        return None;
-    }
-    with_context(
-        Some(Context {
-            gate,
-            interrupt_epoch: None,
-            execution_epoch: Some((priority, epoch)),
-            decoder: None,
-            priority,
-        }),
-        || {
-            let scheduling = context().expect("priority execution context");
-            let cancel = || scheduling.interrupted();
-            (!cancel()).then(|| work(&cancel))
-        },
-    )
-}
-
-/// The caller retains auxiliary demand. Only viewport demand delays this tier.
-/// Cancellation is checked without the gate lock, including during shutdown.
-pub(crate) fn auxiliary<T>(
-    gate: Arc<Gate>,
-    cancel: &dyn Fn() -> bool,
-    work: impl FnOnce() -> T,
-) -> Option<T> {
-    loop {
-        if cancel() {
-            return None;
-        }
-        let guard = gate.lock.lock().unwrap();
-        if gate.available(Priority::Auxiliary) {
-            drop(guard);
-            break;
-        }
-        let (guard, _) = gate
-            .wake
-            .wait_timeout(guard, std::time::Duration::from_millis(10))
-            .unwrap();
-        drop(guard);
-    }
-    if cancel() {
-        return None;
-    }
-    with_context(
-        Some(Context {
-            gate,
-            interrupt_epoch: None,
-            execution_epoch: None,
-            decoder: None,
-            priority: Priority::Auxiliary,
-        }),
-        || Some(work()),
-    )
-}
-
 pub(crate) fn with_context<T>(context: Option<Context>, work: impl FnOnce() -> T) -> T {
     struct Restore(Option<Context>);
     impl Drop for Restore {
@@ -319,7 +277,7 @@ pub(crate) fn checkpoint() {
     }
 }
 
-/// Pausable jobs retain progress. A foreground request still cancels speculative
+/// Pausable jobs retain progress. Viewport or auxiliary demand still cancels speculative
 /// work immediately, including workers waiting behind thumbnail demand.
 pub(crate) fn checkpoint_or_cancel() -> crate::source::Result<()> {
     if let Some(context) = context() {
@@ -331,34 +289,11 @@ pub(crate) fn checkpoint_or_cancel() -> crate::source::Result<()> {
     Ok(())
 }
 
-/// Small browser reads yield to the selected photo and precede optional work.
-pub(crate) fn thumbnail<T>(gate: Arc<Gate>, work: impl FnOnce() -> T) -> T {
-    with_context(
-        Some(Context {
-            gate,
-            interrupt_epoch: None,
-            execution_epoch: None,
-            decoder: None,
-            priority: Priority::Thumbnail,
-        }),
-        || {
-            checkpoint();
-            work()
-        },
-    )
-}
-
-/// Background decodes may finish under thumbnail demand. Explicit UI work keeps
-/// its own tier, so a preview never waits behind the demand that requested it.
+/// Decoder children keep the tier of the work that requested them.
 pub(crate) fn decoding<T>(inherited: Option<Context>, work: impl FnOnce() -> T) -> T {
-    let context = inherited.map(|mut context| {
-        if !matches!(
-            context.priority,
-            Priority::Foreground | Priority::Auxiliary | Priority::Thumbnail
-        ) {
-            context.priority = Priority::Decode;
-        }
-        context
+    let context = inherited.map(|context| Context {
+        decoding: true,
+        ..context
     });
     with_context(context, work)
 }
@@ -384,7 +319,8 @@ pub(crate) fn decode_priority() {
     set_qos(match context() {
         Some(context)
             if context.decoder.is_some()
-                || matches!(context.priority, Priority::Processing | Priority::Decode) =>
+                || context.priority == Priority::Export
+                || (context.decoding && context.priority == Priority::Speculative) =>
         {
             QOS_UTILITY
         }
@@ -441,23 +377,23 @@ mod tests {
     #[test]
     fn execution_tiers_cancel_on_transient_higher_demand_but_not_their_own() {
         let gate = Arc::new(Gate::default());
-        let _auxiliary = gate.auxiliary();
-        auxiliary_execution(gate.clone(), |cancel| {
-            let same_tier = gate.auxiliary();
-            let lower_tier = gate.thumbnails();
+        let _auxiliary = gate.demand(Priority::Auxiliary);
+        gate.attempt(Priority::Auxiliary, |cancel| {
+            let same_tier = gate.demand(Priority::Auxiliary);
+            let lower_tier = gate.demand(Priority::Thumbnail);
             assert!(!cancel());
             drop((same_tier, lower_tier));
-            let foreground = gate.foreground();
-            drop(foreground);
+            let viewport = gate.demand(Priority::Viewport);
+            drop(viewport);
             assert!(cancel());
             assert!(checkpoint_or_cancel().is_err());
         })
         .unwrap();
         drop(_auxiliary);
-        let _thumbnails = gate.thumbnails();
-        thumbnail_execution(gate.clone(), |cancel| {
+        let _thumbnails = gate.demand(Priority::Thumbnail);
+        gate.attempt(Priority::Thumbnail, |cancel| {
             assert!(!cancel());
-            let auxiliary = gate.auxiliary();
+            let auxiliary = gate.demand(Priority::Auxiliary);
             drop(auxiliary);
             assert!(cancel());
             decoding(context(), || {
@@ -471,58 +407,80 @@ mod tests {
     }
 
     #[test]
+    fn viewport_attempt_runs_as_interactive_work_without_a_context() {
+        let gate = Arc::new(Gate::default());
+        let _auxiliary = gate.demand(Priority::Auxiliary);
+        assert_eq!(
+            gate.attempt(Priority::Viewport, |cancel| !cancel()
+                && context().is_none()),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn denied_execution_never_runs_or_waits_for_its_own_demand() {
         let gate = Arc::new(Gate::default());
-        let foreground = gate.foreground();
-        assert!(auxiliary_execution(gate.clone(), |_| panic!("blocked auxiliary ran")).is_none());
-        assert!(thumbnail_execution(gate.clone(), |_| panic!("blocked thumbnail ran")).is_none());
-        drop(foreground);
-        let auxiliary = gate.auxiliary();
-        assert!(auxiliary_execution(gate.clone(), |cancel| assert!(!cancel())).is_some());
-        assert!(!gate.thumbnail_ready());
-        assert!(
-            thumbnail_execution(gate.clone(), |_| panic!("thumbnail overtook auxiliary")).is_none()
-        );
+        let viewport = gate.demand(Priority::Viewport);
+        assert!(gate
+            .attempt(Priority::Auxiliary, |_| panic!("blocked auxiliary ran"))
+            .is_none());
+        assert!(gate
+            .attempt(Priority::Thumbnail, |_| panic!("blocked thumbnail ran"))
+            .is_none());
+        drop(viewport);
+        let auxiliary = gate.demand(Priority::Auxiliary);
+        assert!(gate
+            .attempt(Priority::Auxiliary, |cancel| assert!(!cancel()))
+            .is_some());
+        assert!(!gate.ready(Priority::Thumbnail));
+        assert!(gate
+            .attempt(Priority::Thumbnail, |_| panic!(
+                "thumbnail overtook auxiliary"
+            ))
+            .is_none());
         drop(auxiliary);
-        let _thumbnail = gate.thumbnails();
-        assert!(gate.thumbnail_ready());
-        assert!(thumbnail_execution(gate, |cancel| assert!(!cancel())).is_some());
+        let _thumbnail = gate.demand(Priority::Thumbnail);
+        assert!(gate.ready(Priority::Thumbnail));
+        assert!(gate
+            .attempt(Priority::Thumbnail, |cancel| assert!(!cancel()))
+            .is_some());
     }
 
     #[test]
     fn auxiliary_runs_below_viewport_above_thumbnails_without_waiting_on_itself() {
         let gate = Arc::new(Gate::default());
-        let foreground = gate.foreground();
-        let demand = gate.auxiliary();
-        assert!(!gate.auxiliary_ready());
+        let viewport = gate.demand(Priority::Viewport);
+        let demand = gate.demand(Priority::Auxiliary);
+        assert!(!gate.ready(Priority::Auxiliary));
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let worker_gate = gate.clone();
         let worker = std::thread::spawn(move || {
-            auxiliary(worker_gate, &|| false, || {
-                started_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-            })
-            .unwrap();
+            worker_gate
+                .when_ready(Priority::Auxiliary, &|| false, || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                })
+                .unwrap();
             drop(demand);
         });
         assert!(started_rx.recv_timeout(Duration::from_millis(20)).is_err());
-        drop(foreground);
-        assert!(gate.auxiliary_ready());
+        drop(viewport);
+        assert!(gate.ready(Priority::Auxiliary));
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(!gate.available(Priority::Thumbnail));
-        assert!(!gate.idle());
+        assert!(!gate.ready(Priority::Thumbnail));
+        assert!(!gate.ready(Priority::Speculative));
         release_tx.send(()).unwrap();
         worker.join().unwrap();
-        assert!(gate.available(Priority::Thumbnail));
-        assert!(gate.idle());
+        assert!(gate.ready(Priority::Thumbnail));
+        assert!(gate.ready(Priority::Speculative));
     }
 
     #[test]
-    fn cancelled_auxiliary_wait_retires_while_foreground_is_still_active() {
+    fn cancelled_auxiliary_wait_retires_while_viewport_is_still_active() {
         let gate = Arc::new(Gate::default());
-        let foreground = gate.foreground();
-        let demand = gate.auxiliary();
+        let viewport = gate.demand(Priority::Viewport);
+        let demand = gate.demand(Priority::Auxiliary);
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_cancelled = cancelled.clone();
         let worker_gate = gate.clone();
@@ -530,18 +488,19 @@ mod tests {
         let (checked_tx, checked_rx) = mpsc::channel();
         let worker = std::thread::spawn(move || {
             let checked = std::cell::Cell::new(false);
-            assert!(auxiliary(
-                worker_gate,
-                &|| {
-                    let cancelled = worker_cancelled.load(Ordering::Acquire);
-                    if !checked.replace(true) {
-                        checked_tx.send(()).unwrap();
-                    }
-                    cancelled
-                },
-                || panic!("cancelled job ran")
-            )
-            .is_none());
+            assert!(worker_gate
+                .when_ready(
+                    Priority::Auxiliary,
+                    &|| {
+                        let cancelled = worker_cancelled.load(Ordering::Acquire);
+                        if !checked.replace(true) {
+                            checked_tx.send(()).unwrap();
+                        }
+                        cancelled
+                    },
+                    || panic!("cancelled job ran")
+                )
+                .is_none());
             drop(demand);
             done_tx.send(()).unwrap();
         });
@@ -549,28 +508,30 @@ mod tests {
         cancelled.store(true, Ordering::Release);
         done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         worker.join().unwrap();
-        drop(foreground);
-        assert!(gate.idle());
+        drop(viewport);
+        assert!(gate.ready(Priority::Speculative));
     }
 
     #[test]
-    fn idle_execution_rejects_and_remembers_every_higher_tier() {
+    fn speculative_attempt_rejects_and_remembers_every_higher_tier() {
         let gate = Arc::new(Gate::default());
         for priority in [
-            Priority::Foreground,
+            Priority::Viewport,
             Priority::Auxiliary,
             Priority::Thumbnail,
-            Priority::Processing,
+            Priority::Export,
         ] {
-            let demand = gate.activity(priority);
-            assert!(
-                idle_execution(gate.clone(), |_| panic!("busy gate admitted idle work")).is_none()
-            );
+            let demand = gate.demand(priority);
+            assert!(gate
+                .attempt(Priority::Speculative, |_| panic!(
+                    "busy gate admitted speculative work"
+                ))
+                .is_none());
             drop(demand);
             assert_eq!(
-                idle_execution(gate.clone(), |cancel| {
+                gate.attempt(Priority::Speculative, |cancel| {
                     assert!(!cancel());
-                    drop(gate.activity(priority));
+                    drop(gate.demand(priority));
                     assert!(
                         cancel(),
                         "completed higher-priority work must invalidate the attempt"
@@ -581,19 +542,22 @@ mod tests {
             );
             assert!(context().is_none());
         }
-        assert_eq!(idle_execution(gate, |cancel| !cancel()), Some(true));
+        assert_eq!(
+            gate.attempt(Priority::Speculative, |cancel| !cancel()),
+            Some(true)
+        );
     }
 
     #[test]
-    fn auxiliary_cancels_prefetch_decoding_while_thumbnails_allow_it_to_finish() {
+    fn thumbnails_pause_and_auxiliary_cancels_speculative_decoding() {
         let gate = Arc::new(Gate::default());
         interruptible(gate.clone(), || {
-            let thumbnails = gate.thumbnails();
-            decoding(context(), checkpoint_or_cancel).unwrap();
+            let thumbnails = gate.demand(Priority::Thumbnail);
+            assert!(!gate.ready(Priority::Speculative));
+            assert!(!context().unwrap().interrupted());
             drop(thumbnails);
-            let auxiliary = gate.auxiliary();
+            let auxiliary = gate.demand(Priority::Auxiliary);
             assert!(decoding(context(), checkpoint_or_cancel).is_err());
-            assert!(context().unwrap().interrupted());
             drop(auxiliary);
             checkpoint_or_cancel().unwrap();
         });
@@ -603,25 +567,26 @@ mod tests {
     fn ui_decoders_pass_their_own_demand_and_cancel_for_higher_tiers() {
         for priority in [Priority::Auxiliary, Priority::Thumbnail] {
             let gate = Arc::new(Gate::default());
-            let own = gate.activity(priority);
+            let own = gate.demand(priority);
             let (started_tx, started_rx) = mpsc::channel();
             let (resume_tx, resume_rx) = mpsc::channel();
             let worker_gate = gate.clone();
             let worker = std::thread::spawn(move || {
-                execution(worker_gate, priority, |_| {
-                    decoding(context(), || {
-                        checkpoint_or_cancel().unwrap();
-                        started_tx.send(()).unwrap();
-                        resume_rx.recv().unwrap();
-                        assert!(checkpoint_or_cancel().is_err());
-                    });
-                })
-                .unwrap();
+                worker_gate
+                    .attempt(priority, |_| {
+                        decoding(context(), || {
+                            checkpoint_or_cancel().unwrap();
+                            started_tx.send(()).unwrap();
+                            resume_rx.recv().unwrap();
+                            assert!(checkpoint_or_cancel().is_err());
+                        });
+                    })
+                    .unwrap();
             });
             let admitted = started_rx.recv_timeout(Duration::from_secs(2));
             let higher = match priority {
-                Priority::Auxiliary => gate.foreground(),
-                Priority::Thumbnail => gate.auxiliary(),
+                Priority::Auxiliary => gate.demand(Priority::Viewport),
+                Priority::Thumbnail => gate.demand(Priority::Auxiliary),
                 _ => unreachable!(),
             };
             // Cancellation remembers even a higher-tier task that already ended.
@@ -635,7 +600,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn active_decode_and_inherited_background_context_set_native_qos() {
+    fn contextless_decode_and_inherited_contexts_set_native_qos() {
         unsafe extern "C" {
             fn pthread_self() -> *mut std::ffi::c_void;
             fn pthread_get_qos_class_np(
@@ -669,7 +634,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-            run(Some(Arc::new(Gate::default())), || {
+            Arc::new(Gate::default()).run(Priority::Speculative, || {
                 assert_eq!(qos(), QOS_BACKGROUND);
                 let inherited = context();
                 std::thread::spawn(move || {
@@ -679,11 +644,11 @@ mod tests {
                 .unwrap();
             });
             assert_eq!(qos(), QOS_USER_INITIATED);
-            thumbnail(Arc::new(Gate::default()), || {
+            Arc::new(Gate::default()).run(Priority::Thumbnail, || {
                 assert_eq!(qos(), QOS_UTILITY);
             });
             assert_eq!(qos(), QOS_USER_INITIATED);
-            processing(Arc::new(Gate::default()), || {
+            Arc::new(Gate::default()).run(Priority::Export, || {
                 assert_eq!(qos(), QOS_UTILITY);
                 crate::decode_pool::planes(|_| {
                     assert_eq!(qos(), QOS_UTILITY);
@@ -695,13 +660,12 @@ mod tests {
                     Ok(())
                 })
                 .unwrap();
-                run(Some(Arc::new(Gate::default())), || {
-                    assert_eq!(qos(), QOS_BACKGROUND)
-                });
+                Arc::new(Gate::default())
+                    .run(Priority::Speculative, || assert_eq!(qos(), QOS_BACKGROUND));
                 assert_eq!(
                     qos(),
                     QOS_UTILITY,
-                    "nested maintenance must restore batch priority"
+                    "nested speculative work must restore export priority"
                 );
                 let inherited = context();
                 std::thread::spawn(move || {
@@ -739,33 +703,35 @@ mod tests {
     }
 
     #[test]
-    fn selected_photo_precedes_thumbnails_then_batches_then_maintenance() {
+    fn viewport_precedes_thumbnails_then_exports_then_speculative_work() {
         let gate = Arc::new(Gate::default());
-        let foreground = gate.foreground();
-        let thumbnails = gate.thumbnails();
-        let queued_batch = gate.activity(Priority::Processing);
+        let viewport = gate.demand(Priority::Viewport);
+        let thumbnails = gate.demand(Priority::Thumbnail);
+        let queued_batch = gate.demand(Priority::Export);
         let (thumb_tx, thumb_rx) = mpsc::channel();
         let (batch_tx, batch_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let (background_tx, background_rx) = mpsc::channel();
         let small_gate = gate.clone();
-        let small =
-            std::thread::spawn(move || thumbnail(small_gate, || thumb_tx.send(()).unwrap()));
+        let small = std::thread::spawn(move || {
+            small_gate.run(Priority::Thumbnail, || thumb_tx.send(()).unwrap())
+        });
         let batch_gate = gate.clone();
         let batch = std::thread::spawn(move || {
-            processing(batch_gate, || {
+            let _demand = batch_gate.demand(Priority::Export);
+            batch_gate.run(Priority::Export, || {
                 batch_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
             })
         });
         let background = std::thread::spawn(move || {
-            run(Some(gate), || {
+            gate.run(Priority::Speculative, || {
                 checkpoint();
                 background_tx.send(()).unwrap();
             })
         });
         assert!(thumb_rx.recv_timeout(Duration::from_millis(20)).is_err());
-        drop(foreground);
+        drop(viewport);
         thumb_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(batch_rx.recv_timeout(Duration::from_millis(20)).is_err());
         assert!(background_rx.try_recv().is_err());
@@ -783,14 +749,14 @@ mod tests {
     }
 
     #[test]
-    fn an_active_thumbnail_yields_when_a_selected_photo_arrives() {
+    fn an_active_thumbnail_yields_when_viewport_demand_arrives() {
         let gate = Arc::new(Gate::default());
         let (ready_tx, ready_rx) = mpsc::channel();
         let (advance_tx, advance_rx) = mpsc::channel();
         let (done_tx, done_rx) = mpsc::channel();
         let thumbnail_gate = gate.clone();
         let worker = std::thread::spawn(move || {
-            thumbnail(thumbnail_gate, || {
+            thumbnail_gate.run(Priority::Thumbnail, || {
                 ready_tx.send(()).unwrap();
                 advance_rx.recv().unwrap();
                 checkpoint_or_cancel().unwrap();
@@ -798,46 +764,16 @@ mod tests {
             })
         });
         ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        let foreground = gate.foreground();
+        let viewport = gate.demand(Priority::Viewport);
         advance_tx.send(()).unwrap();
         assert!(done_rx.recv_timeout(Duration::from_millis(20)).is_err());
-        drop(foreground);
+        drop(viewport);
         done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         worker.join().unwrap();
     }
 
     #[test]
-    fn speculative_cpu_work_finishes_during_thumbnail_demand_but_foreground_still_cancels() {
-        let gate = Arc::new(Gate::default());
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let (advance_tx, advance_rx) = mpsc::channel();
-        let (cpu_tx, cpu_rx) = mpsc::channel();
-        let (done_tx, done_rx) = mpsc::channel();
-        let background_gate = gate.clone();
-        let worker = std::thread::spawn(move || {
-            interruptible(background_gate, || {
-                ready_tx.send(()).unwrap();
-                advance_rx.recv().unwrap();
-                decoding(context(), checkpoint_or_cancel).unwrap();
-                cpu_tx.send(()).unwrap();
-                let error = checkpoint_or_cancel().unwrap_err();
-                done_tx.send(error.is::<Interrupted>()).unwrap();
-            })
-        });
-        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        let thumbnails = gate.thumbnails();
-        advance_tx.send(()).unwrap();
-        cpu_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(done_rx.recv_timeout(Duration::from_millis(20)).is_err());
-        let foreground = gate.foreground();
-        assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
-        worker.join().unwrap();
-        drop(foreground);
-        drop(thumbnails);
-    }
-
-    #[test]
-    fn interrupted_prefetch_unwinds_inherited_workers_before_foreground_finishes() {
+    fn interrupted_speculative_work_unwinds_inherited_workers_before_viewport_finishes() {
         let gate = Arc::new(Gate::default());
         let (ready_tx, ready_rx) = mpsc::channel();
         let (advance_tx, advance_rx) = mpsc::channel();
@@ -861,26 +797,26 @@ mod tests {
             assert!(context().is_none());
         });
         ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        let foreground = gate.foreground();
+        let viewport = gate.demand(Priority::Viewport);
         advance_tx.send(()).unwrap();
         assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
         thread.join().unwrap();
-        // Cancellation completes while this guard still owns foreground priority.
-        assert!(!gate.idle());
-        drop(foreground);
+        // Cancellation completes while this guard still holds viewport demand.
+        assert!(!gate.ready(Priority::Speculative));
+        drop(viewport);
         interruptible(gate.clone(), checkpoint_or_cancel).unwrap();
         interruptible(gate.clone(), || {
-            drop(gate.foreground());
+            drop(gate.demand(Priority::Viewport));
             assert!(checkpoint_or_cancel().unwrap_err().is::<Interrupted>());
         });
     }
 
     #[test]
-    fn background_waits_for_all_queued_and_running_foreground_work() {
+    fn speculative_work_waits_for_all_queued_and_running_viewport_work() {
         for requested in [false, true] {
             let gate = Arc::new(Gate::default());
-            let queued = gate.foreground();
-            let running = gate.foreground();
+            let queued = gate.demand(Priority::Viewport);
+            let running = gate.demand(Priority::Viewport);
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
                 let work = || {
@@ -888,9 +824,9 @@ mod tests {
                     tx.send(()).unwrap();
                 };
                 if requested {
-                    processing(gate, work)
+                    gate.run(Priority::Export, work)
                 } else {
-                    run(Some(gate), work)
+                    gate.run(Priority::Speculative, work)
                 }
             });
             assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
@@ -898,7 +834,7 @@ mod tests {
             assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
             drop(running);
             rx.recv_timeout(Duration::from_secs(2)).unwrap();
-            checkpoint(); // Ordinary decode callers never acquire the background gate.
+            checkpoint(); // Contextless decode callers never wait on the gate.
         }
     }
 }

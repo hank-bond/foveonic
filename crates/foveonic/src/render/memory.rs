@@ -1,6 +1,6 @@
-//! Inventories shared processing owners and trims optional history under one caller-set budget.
+//! Inventories shared processing owners and trims retained memory back to one caller-set target.
 
-use super::{Engine, ProcessingWorkingSet, SessionKey};
+use super::{working_set::Trimmed, Engine, PhotoKey, WorkingSet};
 use crate::recipe::RetainedBytes;
 use std::sync::Arc;
 
@@ -37,6 +37,12 @@ impl MemoryReservation {
             self.add_source(source);
         }
     }
+    /// Add a separate owner's memory: shared storage counts once and its
+    /// exclusive bytes add.
+    pub fn merge(&mut self, other: &Self) {
+        self.extend_shared(other);
+        self.exclusive_bytes = self.exclusive_bytes.saturating_add(other.exclusive_bytes);
+    }
     pub fn add_image(&mut self, image: &crate::image::RenderedImage) {
         self.add_buffer(&image.buffer);
         self.add_metadata(&image.metadata);
@@ -59,14 +65,6 @@ impl MemoryReservation {
     }
 }
 
-/// The caller's current logical target and retained frontend owners.
-/// Unestimated mandatory work keeps the existing exclusive width-one fallback.
-#[derive(Clone, Copy)]
-pub struct ExecutionBudget<'a> {
-    pub limit_bytes: u64,
-    pub retained: &'a MemoryReservation,
-}
-
 /// Logical retained processing allocations plus the caller's other retained pools.
 /// Driver, allocator and temporary rendering overhead need separate headroom.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -81,15 +79,15 @@ pub struct MemoryResources {
 #[derive(Debug, serde::Serialize)]
 pub struct MemoryTrim {
     pub resources: MemoryResources,
-    /// Current sensor/edit inputs, decoded source and reserved pools may exceed the budget.
-    pub over_budget_bytes: u64,
-    pub evicted_sessions: Vec<SessionKey>,
+    /// Visible photos, sensor data and reserved pools may exceed the target.
+    pub over_target_bytes: u64,
+    pub evicted_photos: Vec<PhotoKey>,
 }
 
 impl Engine {
     pub fn memory_resources(
         &self,
-        working: &ProcessingWorkingSet,
+        working: &WorkingSet,
         reservation: &MemoryReservation,
     ) -> MemoryResources {
         self.memory_resources_with(working, reservation, |_| {})
@@ -97,7 +95,7 @@ impl Engine {
 
     pub(super) fn memory_resources_with(
         &self,
-        working: &ProcessingWorkingSet,
+        working: &WorkingSet,
         reservation: &MemoryReservation,
         account: impl FnOnce(&mut RetainedBytes),
     ) -> MemoryResources {
@@ -141,58 +139,64 @@ impl Engine {
         }
     }
 
-    /// Trim stale alternatives before current optional frontiers, cold preparation,
-    /// and inactive photos. Active sensor and successful edit dependencies stay protected.
+    /// Trim obsolete, then optional checkpoints and preparation no retained photo
+    /// owns. Then drop whatever was used longest ago: one edit's restart inputs or a
+    /// whole working photo. Visible and guarded photos are never evicted. When they
+    /// alone exceed the target, the overage is reported instead of rebuilding them
+    /// after every render.
     pub fn trim_memory(
         &self,
-        working: &mut ProcessingWorkingSet,
-        limit_bytes: u64,
+        working: &mut WorkingSet,
+        target_bytes: u64,
         reservation: &MemoryReservation,
     ) -> MemoryTrim {
-        self.trim_memory_with(working, limit_bytes, reservation, |_| {})
+        self.trim_memory_with(working, target_bytes, reservation, |_| {})
     }
 
     pub(super) fn trim_memory_with(
         &self,
-        working: &mut ProcessingWorkingSet,
-        limit_bytes: u64,
+        working: &mut WorkingSet,
+        target_bytes: u64,
         reservation: &MemoryReservation,
         account: impl Fn(&mut RetainedBytes),
     ) -> MemoryTrim {
         let _scope = crate::diagnostics::scope(crate::diagnostics::Category::Memory, "memory.trim");
         let mut resources = self.memory_resources_with(working, reservation, &account);
         for obsolete_only in [true, false] {
-            while resources.total_bytes > limit_bytes {
+            while resources.total_bytes > target_bytes {
                 if !working.trim_optional(obsolete_only) {
                     break;
                 }
                 resources = self.memory_resources_with(working, reservation, &account);
             }
         }
-        let mut evicted_sessions = Vec::new();
-        while resources.total_bytes > limit_bytes {
-            let (protected, origins): (Vec<_>, Vec<_>) = working.protected_inputs().unzip();
-            if !self.trim_cold_preparation(&protected, &origins) {
-                let Some(key) = working.evict_oldest() else {
-                    break;
-                };
-                crate::diagnostics::event(
-                    crate::diagnostics::Category::Cache,
-                    "cache.processing.evicted",
-                    |fields| {
-                        fields.u64("session", key.photo);
-                        fields.str(
-                            "kind",
-                            match key.kind {
-                                super::SessionKind::Native => "native",
-                                super::SessionKind::Reduced => "reduced",
+        let mut evicted_photos = Vec::new();
+        while resources.total_bytes > target_bytes {
+            let (retained, origins): (Vec<_>, Vec<_>) = working.retained_inputs().unzip();
+            if !self.trim_cold_preparation(&retained, &origins) {
+                match working.trim_least_recent() {
+                    None => break,
+                    Some(Trimmed::RestartInput) => {}
+                    Some(Trimmed::Photo(key)) => {
+                        crate::diagnostics::event(
+                            crate::diagnostics::Category::Cache,
+                            "cache.processing.evicted",
+                            |fields| {
+                                fields.u64("session", key.photo);
+                                fields.str(
+                                    "kind",
+                                    match key.resolution {
+                                        super::Resolution::Native => "native",
+                                        super::Resolution::Reduced => "reduced",
+                                    },
+                                );
+                                fields.str("reason", "memory_target");
+                                fields.u64("target_bytes", target_bytes);
                             },
                         );
-                        fields.str("reason", "shared_memory_budget");
-                        fields.u64("budget_bytes", limit_bytes);
-                    },
-                );
-                evicted_sessions.push(key);
+                        evicted_photos.push(key);
+                    }
+                }
             }
             resources = self.memory_resources_with(working, reservation, &account);
         }
@@ -218,18 +222,18 @@ impl Engine {
         );
         crate::diagnostics::counter(
             crate::diagnostics::Category::Memory,
-            "memory.budget_bytes",
-            limit_bytes as f64,
+            "memory.target_bytes",
+            target_bytes as f64,
         );
         crate::diagnostics::counter(
             crate::diagnostics::Category::Memory,
-            "memory.over_budget_bytes",
-            resources.total_bytes.saturating_sub(limit_bytes) as f64,
+            "memory.over_target_bytes",
+            resources.total_bytes.saturating_sub(target_bytes) as f64,
         );
         MemoryTrim {
             resources,
-            over_budget_bytes: resources.total_bytes.saturating_sub(limit_bytes),
-            evicted_sessions,
+            over_target_bytes: resources.total_bytes.saturating_sub(target_bytes),
+            evicted_photos,
         }
     }
 }

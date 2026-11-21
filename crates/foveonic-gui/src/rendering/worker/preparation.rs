@@ -10,7 +10,7 @@ use foveonic::{
     diagnostics::{self as trace, Category},
     noise_calibration::Calibration,
     profile::Profile,
-    render::{Engine, MemoryReservation, ProcessingQuality},
+    render::{Engine, MemoryReservation, ProcessingQuality, WorkingSet},
     source::SourceOrigin,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -48,6 +48,7 @@ impl Preparation {
         config: &Arc<Config>,
         cache: &Cache,
         engine: &mut Engine,
+        working: &mut WorkingSet,
         photos: &mut Photos,
         reservation: &MemoryReservation,
         limit: u64,
@@ -71,12 +72,12 @@ impl Preparation {
             .filter_map(|path| cache.source_origin(&path).map(|origin| (path, origin)))
             .find(|(path, origin)| {
                 !self.attempted.contains(&(path.clone(), origin.clone()))
-                    && !photos.contains_reduced(path, origin)
+                    && !photos.contains_reduced(working, path, origin)
             })
         else {
             return false;
         };
-        let ran = cache.speculate(|interrupted| {
+        let ran = cache.priority().speculate(|interrupted| {
             let _context = trace::enabled().then(|| {
                 trace::enter(crate::timing::context_for(
                     0,
@@ -96,7 +97,7 @@ impl Preparation {
                 if cancel() {
                     return Ok(false);
                 }
-                if !photos.has_prefetch_capacity(engine, reservation, limit) {
+                if engine.memory_resources(working, reservation).total_bytes >= limit {
                     trace::event(
                         Category::Cache,
                         "cache.processing.prefetch_skipped",
@@ -117,7 +118,7 @@ impl Preparation {
                 );
                 settings.processing_quality = config.processing_quality;
                 let Some(source) = photos
-                    .shared_source(&path, &origin)
+                    .shared_source(working, &path, &origin)
                     .or_else(|| cache.open_cached(&path, |_| {}))
                 else {
                     return Ok(false);
@@ -137,6 +138,7 @@ impl Preparation {
                 settings.dehaze_estimate = settings.dehaze_auto();
                 engine.set_noise_calibration(config.calibration.clone());
                 photos.prefetch(
+                    working,
                     engine,
                     source,
                     &path,

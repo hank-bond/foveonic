@@ -159,13 +159,13 @@ fn prepare_assets_cpu(
     recipe: Option<render::Settings>,
 ) -> Result<PreparedSelection> {
     let mut checksum = crc32fast::Hasher::new();
-    for chunk in original.chunks(crate::background::IO_CHUNK_BYTES) {
-        crate::background::checkpoint_or_cancel()?;
+    for chunk in original.chunks(crate::priority::IO_CHUNK_BYTES) {
+        crate::priority::checkpoint_or_cancel()?;
         checksum.update(chunk);
     }
     let original_checksum = checksum.finalize();
     let small = crate::preview::from_original(original, false).ok();
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     let large = crate::preview::from_original(original, true)
         .ok()
         .filter(|p| {
@@ -190,7 +190,7 @@ fn prepare_assets_cpu(
     } else {
         None
     };
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     let selection = Selection {
         properties: metadata.properties.clone(),
         settings: recipe.clone(),
@@ -317,7 +317,7 @@ fn publish_record(
         file.write_all(&checksum.to_le_bytes())?;
         file.write_all(&json)?;
         drop(file);
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         if !current() {
             return Err("cached selection was superseded during publication".into());
         }

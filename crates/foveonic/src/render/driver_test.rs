@@ -4,13 +4,13 @@ use super::*;
 use crate::{
     inspection::Content,
     profile::{Mode, Timing},
-    render::{ReducedPreparation, ReducedSession, Scale},
+    render::{ReducedPhoto, ReducedPreparation, Scale},
     source::Source,
 };
 use sha2::{Digest, Sha256};
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
-pub(super) fn fixture() -> Arc<Source> {
+pub(crate) fn fixture() -> Arc<Source> {
     let manifest: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../scripts/profiling/wide_inputs.json"
     ))
@@ -35,7 +35,7 @@ pub(super) fn fixture() -> Arc<Source> {
     Arc::new(Source::open(path).unwrap())
 }
 
-pub(super) fn settings() -> Settings {
+pub(crate) fn settings() -> Settings {
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.working_scale = Scale::new(8).unwrap();
     settings.exposure_auto = false;
@@ -50,9 +50,9 @@ pub(super) fn session(
     engine: &Engine,
     source: &Arc<Source>,
     settings: &Settings,
-) -> Box<ReducedSession> {
+) -> Box<ReducedPhoto> {
     let ReducedPreparation::Prepared(session) = engine
-        .prepare_reduced_session(source.clone(), settings, || false, &mut Profile::default())
+        .prepare_reduced_photo(source.clone(), settings, || false, &mut Profile::default())
         .unwrap()
     else {
         panic!("prepared reduced inputs")
@@ -60,15 +60,10 @@ pub(super) fn session(
     session
 }
 
-fn working(engine: &Engine, source: &Arc<Source>, settings: &Settings) -> ProcessingWorkingSet {
-    let mut working = ProcessingWorkingSet::new();
+fn working(engine: &Engine, source: &Arc<Source>, settings: &Settings) -> WorkingSet {
+    let mut working = WorkingSet::new();
     working
-        .insert_reduced(
-            1,
-            session(engine, source, settings),
-            engine,
-            SessionUse::Foreground,
-        )
+        .insert_reduced(1, session(engine, source, settings), engine, Purpose::Edit)
         .unwrap();
     working
 }
@@ -82,8 +77,8 @@ fn profile() -> Profile {
     profile
 }
 
-pub(super) fn image(result: SessionRender) -> crate::image::RenderedImage {
-    let SessionRender::Rendered(mut artifacts) = result else {
+pub(super) fn image(result: PhotoRender) -> crate::image::RenderedImage {
+    let PhotoRender::Rendered(mut artifacts) = result else {
         panic!("completed reduced render")
     };
     assert_eq!(artifacts.len(), 1);
@@ -114,7 +109,7 @@ fn progress(event: RenderProgress) -> (usize, usize) {
     }
 }
 
-fn buffers(working: &ProcessingWorkingSet, photo: u64) -> Vec<((u64, u64), u64)> {
+fn buffers(working: &WorkingSet, photo: u64) -> Vec<((u64, u64), u64)> {
     working
         .reduced(photo)
         .unwrap()
@@ -125,29 +120,42 @@ fn buffers(working: &ProcessingWorkingSet, photo: u64) -> Vec<((u64, u64), u64)>
 
 fn begin(
     engine: &Engine,
-    working: &mut ProcessingWorkingSet,
+    working: &mut WorkingSet,
     settings: &Settings,
     profile: &mut Profile,
 ) -> RenderExecution {
-    match RenderExecution::begin(
-        engine,
-        working,
-        SessionKey {
-            photo: 1,
-            kind: SessionKind::Reduced,
-        },
-        settings,
-        &["final"],
-        SessionUse::Foreground,
-        profile,
-        &|| false,
-        None,
-    )
-    .unwrap()
+    match engine
+        .begin_render_execution(
+            working,
+            PhotoKey {
+                photo: 1,
+                resolution: Resolution::Reduced,
+            },
+            settings,
+            &["final"],
+            &|| false,
+            profile,
+            None,
+        )
+        .unwrap()
     {
-        Begin::Ready(execution) => execution,
+        RenderExecutionStart::Ready(execution) => execution,
         _ => panic!("retained reduced session"),
     }
+}
+
+/// One step alone in its own tick.
+fn step(
+    engine: &Engine,
+    working: &mut WorkingSet,
+    execution: &mut RenderExecution,
+    cancel: &dyn Fn() -> bool,
+) -> crate::source::Result<bool> {
+    let tick = engine.tick();
+    let more = execution.step(engine, working, cancel);
+    let waited = tick.complete()?;
+    execution.complete_tick(engine, waited, &|_| {});
+    more
 }
 
 #[test]
@@ -160,47 +168,42 @@ fn same_photo_is_rejected_before_validation_profile_or_session_mutation() {
     let mut first_profile = profile();
     let execution = begin(&engine, &mut working, &settings, &mut first_profile);
     let retained_buffers = buffers(&working, 1);
-    let active = working.active_key();
     let activity = engine.gpu_activity();
     let mut invalid = settings.clone();
     invalid.exposure = f32::NAN;
     let mut peer_profile = profile();
-    let error = RenderExecution::begin(
-        &engine,
-        &mut working,
-        SessionKey {
-            photo: 1,
-            kind: SessionKind::Reduced,
-        },
-        &invalid,
-        &["final"],
-        SessionUse::Foreground,
-        &mut peer_profile,
-        &|| panic!("denied peer must not enter execution"),
-        None,
-    )
-    .err()
-    .expect("same photo already executes");
-    assert!(error.is::<crate::render::SessionInUse>());
-    assert_eq!(working.active_key(), active);
+    let error = engine
+        .begin_render_execution(
+            &mut working,
+            PhotoKey {
+                photo: 1,
+                resolution: Resolution::Reduced,
+            },
+            &invalid,
+            &["final"],
+            &|| panic!("denied peer must not enter execution"),
+            &mut peer_profile,
+            None,
+        )
+        .err()
+        .expect("same photo already executes");
+    assert!(error.is::<crate::render::PhotoInUse>());
     assert_eq!(buffers(&working, 1), retained_buffers);
     assert!(working.reduced(1).unwrap().last_settings.is_none());
     assert_eq!(peer_profile.mode, Mode::Wall);
     assert_eq!(peer_profile.host.len(), 1);
     assert_eq!(engine.gpu_activity().submissions, activity.submissions);
     assert!(working.remove_photo(1).is_err());
-    let scope = execution.graph_scope(&working);
     assert!(matches!(
         execution
-            .finish_with_scope(
+            .finish(
                 &engine,
                 &mut working,
                 Err(Box::new(Superseded)),
-                &mut first_profile,
-                scope,
+                &mut first_profile
             )
             .unwrap(),
-        SessionRender::Superseded
+        PhotoRender::Superseded
     ));
     assert!(working.remove_photo(1).unwrap());
 }
@@ -222,7 +225,7 @@ fn session_execution_matches_ordinary_pixels_geometry_and_completed_progress_und
         let expected_progress = RefCell::new(Vec::new());
         let expected = image(
             engine
-                .render_reduced_session_with_progress(
+                .render_reduced_photo_with_progress(
                     &mut ordinary,
                     &requested,
                     &["final"],
@@ -240,14 +243,10 @@ fn session_execution_matches_ordinary_pixels_geometry_and_completed_progress_und
                     &engine,
                     1,
                     &requested,
-                    SessionUse::Foreground,
+                    Purpose::Edit,
                     || false,
                     &mut profile,
                     |event| observed_progress.borrow_mut().push(progress(event)),
-                    Some(ExecutionBudget {
-                        limit_bytes: 1,
-                        retained: &retained,
-                    }),
                 )
                 .unwrap()
                 .unwrap(),
@@ -266,8 +265,12 @@ fn session_execution_matches_ordinary_pixels_geometry_and_completed_progress_und
         assert!(!profile.graphs.is_empty());
         assert!(engine.memory_resources(&working, &retained).total_bytes > 1);
     }
+    working.set_visible([PhotoKey {
+        photo: 1,
+        resolution: Resolution::Reduced,
+    }]);
     let trim = engine.trim_memory(&mut working, 1, &retained);
-    assert!(trim.over_budget_bytes > 0);
+    assert!(trim.over_target_bytes > 0);
     assert!(working.reduced(1).is_some());
     working.clear().unwrap();
 }
@@ -281,19 +284,10 @@ fn live_graph_and_scratch_share_one_inventory_with_sessions_and_frontend() {
     let mut working = working(&engine, &source, &settings);
     let mut profile = profile();
     let mut execution = begin(&engine, &mut working, &settings, &mut profile);
-    let scope = execution.graph_scope(&working);
     let mut cursor_only_seen = false;
     loop {
-        let more = execution
-            .advance_graph(
-                &engine,
-                &mut working,
-                &|| false,
-                None,
-                Completion::Operation,
-            )
-            .unwrap();
-        let graph = execution.job.as_ref().unwrap().graph.as_ref().unwrap();
+        let more = step(&engine, &mut working, &mut execution, &|| false).unwrap();
+        let graph = &execution.recipe.traversal;
         let retained: HashMap<_, _> = working
             .memory_buffers()
             .map(|buffer| (buffer.identity().0, buffer.size()))
@@ -310,11 +304,7 @@ fn live_graph_and_scratch_share_one_inventory_with_sessions_and_frontend() {
         for buffer in working.memory_buffers() {
             frontend.add_buffer(buffer);
         }
-        let budget = Some(ExecutionBudget {
-            limit_bytes: 1,
-            retained: &frontend,
-        });
-        let before = execution.memory(&engine, &working, budget);
+        let before = engine.execution_memory_resources(&working, &frontend, &[&execution]);
         assert_eq!(before.gpu_bytes, union.values().sum::<u64>());
         assert_eq!(before.reserved_bytes, 257);
         let session_cpu = engine
@@ -326,14 +316,14 @@ fn live_graph_and_scratch_share_one_inventory_with_sessions_and_frontend() {
         );
         assert_eq!(
             before.cpu_bytes,
-            execution.memory(&engine, &working, None).cpu_bytes
+            engine
+                .execution_memory_resources(&working, &Default::default(), &[&execution])
+                .cpu_bytes
         );
         assert_eq!(
             before.total_bytes,
             before.cpu_bytes + before.gpu_bytes + 257
         );
-        execution.reconcile(&engine, &mut working, budget);
-        assert_eq!(execution.memory(&engine, &working, budget), before);
         if !more {
             break;
         }
@@ -344,9 +334,7 @@ fn live_graph_and_scratch_share_one_inventory_with_sessions_and_frontend() {
     );
     assert!(
         execution
-            .job
-            .as_ref()
-            .unwrap()
+            .recipe
             .profile
             .nodes
             .iter()
@@ -355,7 +343,7 @@ fn live_graph_and_scratch_share_one_inventory_with_sessions_and_frontend() {
     );
     image(
         execution
-            .finish_with_scope(&engine, &mut working, Ok(()), &mut profile, scope)
+            .finish(&engine, &mut working, Ok(()), &mut profile)
             .unwrap(),
     );
     working.clear().unwrap();
@@ -376,35 +364,23 @@ fn cancellation_failure_and_unfinished_retirement_restore_profile_and_allow_retr
             Mode::Off,
             "execution temporarily owns the caller profile"
         );
-        let scope = execution.graph_scope(&working);
         let before = engine.gpu_activity().submissions;
         if reason != "unfinished" {
             while engine.gpu_activity().submissions == before {
                 assert!(
-                    execution
-                        .advance_graph(
-                            &engine,
-                            &mut working,
-                            &|| false,
-                            None,
-                            Completion::Operation,
-                        )
-                        .unwrap(),
+                    step(&engine, &mut working, &mut execution, &|| false).unwrap(),
                     "interruption must leave a partially advanced graph"
                 );
             }
         }
         let outcome = match reason {
-            "cancel" => execution
-                .advance_graph(&engine, &mut working, &|| true, None, Completion::Operation)
-                .map(|_| ()),
+            "cancel" => step(&engine, &mut working, &mut execution, &|| true).map(|_| ()),
             "failure" => Err("injected job failure".into()),
             _ => Ok(()),
         };
-        let result =
-            execution.finish_with_scope(&engine, &mut working, outcome, &mut profile, scope);
+        let result = execution.finish(&engine, &mut working, outcome, &mut profile);
         if reason == "cancel" {
-            assert!(matches!(result.unwrap(), SessionRender::Superseded));
+            assert!(matches!(result.unwrap(), PhotoRender::Superseded));
         } else {
             assert!(result.is_err());
         }
@@ -416,21 +392,14 @@ fn cancellation_failure_and_unfinished_retirement_restore_profile_and_allow_retr
         );
         let retry = image(
             working
-                .render_reduced(
-                    &engine,
-                    1,
-                    &settings,
-                    SessionUse::Foreground,
-                    || false,
-                    &mut profile,
-                )
+                .render_reduced(&engine, 1, &settings, Purpose::Edit, || false, &mut profile)
                 .unwrap()
                 .unwrap(),
         );
         let mut ordinary = session(&engine, &source, &settings);
         let expected = image(
             engine
-                .render_reduced_session(
+                .render_reduced_photo(
                     &mut ordinary,
                     &settings,
                     &["final"],
@@ -456,7 +425,7 @@ fn rejected_preparation_preserves_profile_and_releases_claim_for_retry() {
     let mut ordinary = session(&engine, &source, &settings);
     let expected = image(
         engine
-            .render_reduced_session(
+            .render_reduced_photo(
                 &mut ordinary,
                 &settings,
                 &["final"],
@@ -476,23 +445,23 @@ fn rejected_preparation_preserves_profile_and_releases_claim_for_retry() {
         }
         let mut profile = profile();
         let before = engine.gpu_activity().submissions;
-        let error = RenderExecution::begin(
-            &engine,
+        let start = engine.begin_render_execution(
             &mut working,
-            SessionKey {
+            PhotoKey {
                 photo: 1,
-                kind: SessionKind::Reduced,
+                resolution: Resolution::Reduced,
             },
             &requested,
             &["final"],
-            SessionUse::Foreground,
-            &mut profile,
             &|| reason == "cancel",
+            &mut profile,
             None,
-        )
-        .err()
-        .expect("preparation must reject this request");
-        assert_eq!(error.is::<Superseded>(), reason == "cancel");
+        );
+        if reason == "cancel" {
+            assert!(matches!(start, Ok(RenderExecutionStart::Superseded)));
+        } else {
+            assert!(start.is_err(), "preparation must reject this request");
+        }
         assert_eq!(
             engine.gpu_activity().submissions,
             before,
@@ -503,14 +472,7 @@ fn rejected_preparation_preserves_profile_and_releases_claim_for_retry() {
         assert!(working.reduced(1).unwrap().last_settings.is_none());
         let retry = image(
             working
-                .render_reduced(
-                    &engine,
-                    1,
-                    &settings,
-                    SessionUse::Foreground,
-                    || false,
-                    &mut profile,
-                )
+                .render_reduced(&engine, 1, &settings, Purpose::Edit, || false, &mut profile)
                 .unwrap()
                 .unwrap(),
         );
@@ -519,158 +481,37 @@ fn rejected_preparation_preserves_profile_and_releases_claim_for_retry() {
     }
 }
 
+fn cost(output_bytes: u64, temporary_bytes: u64, released_bytes: u64) -> NodeCost {
+    NodeCost {
+        allocation: crate::render::allocation::GpuAllocation::new(output_bytes, temporary_bytes)
+            .unwrap(),
+        released_bytes,
+    }
+}
+
 #[test]
-fn submitted_temporaries_stay_reserved_until_completion() {
-    let mut reservation = Reservation {
-        operations: vec![
-            GpuAllocation::new(120, 16).unwrap(),
-            GpuAllocation::new(240, 32).unwrap(),
-        ],
-        submitted_temporary_bytes: 0,
+fn reservation_covers_the_remaining_peak_and_delivery() {
+    let reservation = Reservation {
+        // The third node's output reuses the scratch the second node released.
+        costs: vec![cost(120, 16, 0), cost(240, 32, 120), cost(60, 0, 240)],
         delivery_bytes: 512,
     };
-    assert_eq!(reservation.bytes(), Some(920));
-    reservation.submitted(0).unwrap();
-    // The output's 120 bytes now belong in actual ownership, while the uniform
-    // still belongs to submitted work even after its host guard disappears.
-    assert_eq!(reservation.bytes(), Some(800));
-    reservation.submitted(1).unwrap();
-    assert_eq!(reservation.bytes(), Some(560));
-    reservation.completed();
-    assert_eq!(reservation.bytes(), Some(512));
+    // Peaks carry 10% headroom for tile padding.
+    assert_eq!(
+        reservation.remaining_bytes(0),
+        Some((120 + 240 + 32) * 11 / 10 + 512)
+    );
+    assert_eq!(reservation.remaining_bytes(2), Some(60 * 11 / 10 + 512));
+    assert_eq!(reservation.remaining_bytes(3), Some(512));
 }
 
 #[test]
 fn overflowing_reservation_is_unknown() {
     let reservation = Reservation {
-        operations: vec![GpuAllocation::new(u64::MAX, 0).unwrap()],
-        submitted_temporary_bytes: 0,
-        delivery_bytes: 1,
+        costs: vec![cost(u64::MAX, 0, 0), cost(1, 0, 0)],
+        delivery_bytes: 0,
     };
-    assert_eq!(reservation.bytes(), None);
-}
-
-#[test]
-#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
-fn resolved_warm_chroma_forecast_covers_actual_gpu_allocations_and_transfers_outputs() {
-    let engine = Engine::new().unwrap();
-    let source = fixture();
-    let base = settings();
-    let mut working = working(&engine, &source, &base);
-    image(
-        working
-            .render_reduced(
-                &engine,
-                1,
-                &base,
-                SessionUse::Foreground,
-                || false,
-                &mut Profile::default(),
-            )
-            .unwrap()
-            .unwrap(),
-    );
-    let mut requested = base.clone();
-    requested.reconstruction.as_mut().unwrap().chroma = 1;
-    let mut profile = Profile::default();
-    let mut execution = begin(&engine, &mut working, &requested, &mut profile);
-    let scope = execution.graph_scope(&working);
-    execution
-        .initialize(&engine, &mut working, &|| false, None)
-        .unwrap();
-    let job = execution.job.as_ref().unwrap();
-    let reservation = job
-        .reservation
-        .as_ref()
-        .expect("audited resolved continuation");
-    let operations: Vec<_> = reservation
-        .operations
-        .iter()
-        .enumerate()
-        .filter(|(_, allocation)| allocation.total_bytes().unwrap() > 0)
-        .map(|(index, _)| job.prepared.built.graph.nodes[index].operation.kind())
-        .collect();
-    assert_eq!(
-        operations,
-        [
-            "Texture",
-            "TiledColor",
-            "TiledColorDq",
-            "ProjectColorTiles",
-            "ResampleRgb",
-            "Tone"
-        ]
-    );
-    let graph_forecast: u64 = reservation
-        .operations
-        .iter()
-        .map(|allocation| allocation.total_bytes().unwrap())
-        .sum();
-    let delivery = reservation.delivery_bytes;
-    let before = engine.gpu_activity();
-    let mut previous = execution.future_bytes().unwrap();
-    while execution
-        .advance_graph(
-            &engine,
-            &mut working,
-            &|| false,
-            None,
-            Completion::Operation,
-        )
-        .unwrap()
-    {
-        let future = execution.future_bytes().unwrap();
-        assert!(future <= previous);
-        assert_eq!(
-            execution
-                .job
-                .as_ref()
-                .unwrap()
-                .reservation
-                .as_ref()
-                .unwrap()
-                .submitted_temporary_bytes,
-            0
-        );
-        previous = future;
-    }
-    assert_eq!(execution.future_bytes(), Some(delivery));
-    let activity = engine.gpu_activity().since(before);
-    assert!(activity.dispatches > 0);
-    let allocated = activity.storage_bytes + activity.upload_bytes + activity.uniform_bytes;
-    assert!(
-        allocated <= graph_forecast,
-        "actual {allocated} exceeds forecast {graph_forecast}"
-    );
-    let mut retained = crate::recipe::RetainedBytes::default();
-    assert!(
-        execution.account(&mut retained),
-        "audit every owned graph node, including cached nodes"
-    );
-    let observed = image(
-        execution
-            .finish_with_scope(&engine, &mut working, Ok(()), &mut profile, scope)
-            .unwrap(),
-    );
-    let mut ordinary = session(&engine, &source, &base);
-    let expected = image(
-        engine
-            .render_reduced_session(
-                &mut ordinary,
-                &requested,
-                &["final"],
-                || false,
-                &mut Profile::default(),
-            )
-            .unwrap(),
-    );
-    assert_eq!(
-        engine.readback_image(&observed).unwrap(),
-        engine.readback_image(&expected).unwrap()
-    );
-    assert_eq!(observed.description, expected.description);
-    assert_eq!(observed.view, expected.view);
-    working.clear().unwrap();
+    assert_eq!(reservation.remaining_bytes(0), None);
 }
 
 #[test]
@@ -691,23 +532,22 @@ fn native_final_matches_ordinary_pixels_geometry_progress_and_reuses_retained_in
         edited.reconstruction.as_mut().unwrap().chroma = 1;
         let mut panned = edited.clone();
         panned.preview_region = Some([900, 700, 1100, 900]);
-        let mut ordinary = super::super::RenderSession::new(source.clone());
-        let mut working = ProcessingWorkingSet::new();
+        let mut ordinary = super::super::NativePhoto::new(source.clone());
+        let mut working = WorkingSet::new();
         working
             .insert_native(
                 1,
-                super::super::RenderSession::new(source.clone()),
+                super::super::NativePhoto::new(source.clone()),
                 &engine,
-                SessionUse::Foreground,
+                Purpose::Edit,
             )
             .unwrap();
-        let retained = MemoryReservation::default();
         for requested in [base, edited, panned] {
             let expected_progress = RefCell::new(Vec::new());
             let mut expected_profile = profile();
-            let expected = image(SessionRender::Rendered(
+            let expected = image(PhotoRender::Rendered(
                 engine
-                    .render_session_with_progress(
+                    .render_native_photo_with_progress(
                         &mut ordinary,
                         &requested,
                         &["final"],
@@ -727,14 +567,10 @@ fn native_final_matches_ordinary_pixels_geometry_progress_and_reuses_retained_in
                         1,
                         &requested,
                         &["final"],
-                        SessionUse::Foreground,
+                        Purpose::Edit,
                         || false,
                         &mut profile,
                         |event| observed_progress.borrow_mut().push(progress(event)),
-                        Some(ExecutionBudget {
-                            limit_bytes: 1,
-                            retained: &retained,
-                        }),
                     )
                     .unwrap()
                     .unwrap(),
@@ -774,7 +610,7 @@ fn native_final_missing_failure_and_submitted_cancel_preserve_attempted_settings
     let mut settings = settings();
     settings.working_scale = Scale::NATIVE;
     settings.preview_region = Some([600, 600, 800, 800]);
-    let mut working = ProcessingWorkingSet::new();
+    let mut working = WorkingSet::new();
     let mut profile = profile();
     let before = engine.gpu_activity();
     assert!(engine
@@ -783,11 +619,10 @@ fn native_final_missing_failure_and_submitted_cancel_preserve_attempted_settings
             1,
             &settings,
             &["final"],
-            SessionUse::Foreground,
+            Purpose::Edit,
             || panic!("missing input must not execute"),
             &mut profile,
             |_| panic!("missing input must not report progress"),
-            None,
         )
         .unwrap()
         .is_none());
@@ -797,9 +632,9 @@ fn native_final_missing_failure_and_submitted_cancel_preserve_attempted_settings
     working
         .insert_native(
             1,
-            super::super::RenderSession::new(source.clone()),
+            super::super::NativePhoto::new(source.clone()),
             &engine,
-            SessionUse::Foreground,
+            Purpose::Edit,
         )
         .unwrap();
     for reason in ["invalid", "cancel", "submitted-cancel"] {
@@ -817,14 +652,13 @@ fn native_final_missing_failure_and_submitted_cancel_preserve_attempted_settings
             1,
             &requested,
             &["final"],
-            SessionUse::Foreground,
+            Purpose::Edit,
             || {
                 reason == "cancel"
                     || (reason == "submitted-cancel" && engine.gpu_activity().submissions > before)
             },
             &mut profile,
             |_| {},
-            None,
         );
         if reason == "invalid" {
             assert!(result.is_err());
@@ -837,7 +671,7 @@ fn native_final_missing_failure_and_submitted_cancel_preserve_attempted_settings
                 .exposure
                 .is_nan());
         } else {
-            assert!(matches!(result.unwrap(), Some(SessionRender::Superseded)));
+            assert!(matches!(result.unwrap(), Some(PhotoRender::Superseded)));
             assert!(working
                 .native(1)
                 .unwrap()
@@ -866,19 +700,18 @@ fn native_final_missing_failure_and_submitted_cancel_preserve_attempted_settings
                         1,
                         &requested,
                         &["final"],
-                        SessionUse::Foreground,
+                        Purpose::Edit,
                         || false,
                         &mut profile,
                         |_| {},
-                        None,
                     )
                     .unwrap()
                     .unwrap(),
             );
-            let mut ordinary = super::super::RenderSession::new(source.clone());
-            let expected = image(SessionRender::Rendered(
+            let mut ordinary = super::super::NativePhoto::new(source.clone());
+            let expected = image(PhotoRender::Rendered(
                 engine
-                    .render_session(
+                    .render_native_photo(
                         &mut ordinary,
                         &requested,
                         &["final"],
@@ -902,4 +735,175 @@ fn native_final_missing_failure_and_submitted_cancel_preserve_attempted_settings
         }
     }
     working.clear().unwrap();
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn resolved_warm_chroma_forecast_covers_actual_gpu_allocations_and_transfers_outputs() {
+    let engine = Engine::new().unwrap();
+    let source = fixture();
+    let base = settings();
+    let mut working = working(&engine, &source, &base);
+    image(
+        working
+            .render_reduced(
+                &engine,
+                1,
+                &base,
+                Purpose::Edit,
+                || false,
+                &mut Profile::default(),
+            )
+            .unwrap()
+            .unwrap(),
+    );
+    let mut requested = base.clone();
+    requested.reconstruction.as_mut().unwrap().chroma = 1;
+    let mut profile = Profile::default();
+    let mut execution = begin(&engine, &mut working, &requested, &mut profile);
+    let recipe = &execution.recipe;
+    let reservation = recipe.reservation.as_ref().expect("resolved continuation");
+    let bytes = |cost: &NodeCost| cost.allocation.output_bytes + cost.allocation.temporary_bytes;
+    let operations: Vec<_> = reservation
+        .costs
+        .iter()
+        .enumerate()
+        .filter(|(_, cost)| bytes(cost) > 0)
+        .map(|(index, _)| recipe.prepared.built.graph.nodes[index].operation.kind())
+        .collect();
+    for audited in [
+        "Texture",
+        "TiledColor",
+        "TiledColorDq",
+        "ProjectColorTiles",
+        "ResampleRgb",
+        "Tone",
+    ] {
+        assert!(operations.contains(&audited), "{audited} in {operations:?}");
+    }
+    let graph_forecast: u64 = reservation.costs.iter().map(bytes).sum();
+    let delivery = reservation.delivery_bytes;
+    let before = engine.gpu_activity();
+    while step(&engine, &mut working, &mut execution, &|| false).unwrap() {
+        assert!(execution.future_bytes().is_some());
+    }
+    assert_eq!(execution.future_bytes(), Some(delivery));
+    let activity = engine.gpu_activity().since(before);
+    assert!(activity.dispatches > 0);
+    let allocated = activity.storage_bytes + activity.upload_bytes + activity.uniform_bytes;
+    assert!(
+        allocated <= graph_forecast,
+        "actual {allocated} exceeds forecast {graph_forecast}"
+    );
+    let mut retained = crate::recipe::RetainedBytes::default();
+    assert!(
+        execution.recipe.account(&mut retained),
+        "audit every owned graph node, including cached nodes"
+    );
+    let observed = image(
+        execution
+            .finish(&engine, &mut working, Ok(()), &mut profile)
+            .unwrap(),
+    );
+    let mut ordinary = session(&engine, &source, &base);
+    let expected = image(
+        engine
+            .render_reduced_photo(
+                &mut ordinary,
+                &requested,
+                &["final"],
+                || false,
+                &mut Profile::default(),
+            )
+            .unwrap(),
+    );
+    assert_eq!(
+        engine.readback_image(&observed).unwrap(),
+        engine.readback_image(&expected).unwrap()
+    );
+    assert_eq!(observed.description, expected.description);
+    assert_eq!(observed.view, expected.view);
+    working.clear().unwrap();
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Classic, Merrill, Quattro and Quattro H originals"]
+fn estimates_exist_for_every_family_and_view_and_cover_measured_peaks() {
+    let root = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let engine = Engine::new().unwrap();
+    let key = PhotoKey {
+        photo: 1,
+        resolution: Resolution::Native,
+    };
+    for name in ["sd14", "blue-parking-sign", "dp0-quattro", "sd-quattro-h"] {
+        let source = Arc::new(Source::open(root.join(format!("{name}.x3f"))).unwrap());
+        let mut views = vec![(Scale::new(4).unwrap(), None)];
+        let mut regional = Settings::new("Sunlight", "Standard");
+        regional.preview_region = Some([256, 256, 768, 768]);
+        if regional.regional_preview_available(&source.metadata) {
+            views.push((Scale::NATIVE, regional.preview_region));
+        }
+        for (scale, region) in views {
+            let mut settings = Settings::new("Sunlight", "Standard");
+            settings.working_scale = scale;
+            settings.preview_region = region;
+            let mut estimates = Vec::new();
+            for mode in [Mode::Off, Mode::Wall] {
+                let mut working = WorkingSet::new();
+                working
+                    .insert_native(
+                        1,
+                        crate::interactive::NativePhoto::new(source.clone()),
+                        &engine,
+                        Purpose::Edit,
+                    )
+                    .unwrap();
+                let mut profile = Profile::new(mode);
+                let RenderExecutionStart::Ready(mut execution) = engine
+                    .begin_render_execution(
+                        &mut working,
+                        key,
+                        &settings,
+                        &["final"],
+                        &|| false,
+                        &mut profile,
+                        None,
+                    )
+                    .unwrap()
+                else {
+                    panic!("{name}: retained native session")
+                };
+                let estimate = execution
+                    .recipe
+                    .future_bytes()
+                    .unwrap_or_else(|| panic!("{name} {scale:?} {region:?}: no estimate"));
+                while step(&engine, &mut working, &mut execution, &|| false).unwrap() {}
+                // Wall profiling records live buffer bytes at node boundaries.
+                let nodes = &execution.recipe.profile.nodes;
+                if let Some(first) = nodes.first() {
+                    let start = first.memory_before.union_bytes;
+                    let grown = nodes
+                        .iter()
+                        .map(|node| node.memory_after_publication.union_bytes)
+                        .max()
+                        .unwrap()
+                        .saturating_sub(start);
+                    assert!(
+                        estimate >= grown,
+                        "{name} {scale:?} {region:?}: estimate {estimate} below measured {grown}"
+                    );
+                }
+                image(
+                    execution
+                        .finish(&engine, &mut working, Ok(()), &mut profile)
+                        .unwrap(),
+                );
+                estimates.push(estimate);
+            }
+            assert_eq!(
+                estimates[0], estimates[1],
+                "{name}: profiling changed the estimate"
+            );
+        }
+    }
 }

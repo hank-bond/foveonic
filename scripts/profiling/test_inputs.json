@@ -8,7 +8,9 @@
     "sunlit-red-flower.x3f": "98eeaef4e5d17f1330e5cdeda19f97c1337eacf4d392bceaa743d843f386a06e"
   },
   "aliases": {
-    "sd-quattro-h-second.x3f": "sd-quattro-h.x3f"
+    "sd-quattro-h-second.x3f": "sd-quattro-h.x3f",
+    "blue-parking-sign-second.x3f": "blue-parking-sign.x3f",
+    "merrill-hazy-coast-second.x3f": "merrill-hazy-coast.x3f"
   },
   "render_cases": [
     {
@@ -1559,6 +1561,50 @@
           }
         }
       ]
+    }
+  ],
+  "native_zoom_cases": [
+    {
+      "source": "blue-parking-sign.x3f",
+      "settings": {
+        "exposure": -0.15,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "merrill-hazy-coast.x3f",
+      "settings": {
+        "exposure": 0.15,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "low-light-speaker-and-desk.x3f",
+      "settings": {
+        "exposure": 0.3,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "sunlit-red-flower.x3f",
+      "settings": {
+        "exposure": -0.3,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "blue-parking-sign-second.x3f",
+      "settings": {
+        "exposure": 0.0,
+        "exposure_auto": false
+      }
+    },
+    {
+      "source": "merrill-hazy-coast-second.x3f",
+      "settings": {
+        "exposure": 0.45,
+        "exposure_auto": false
+      }
     }
   ]
 }

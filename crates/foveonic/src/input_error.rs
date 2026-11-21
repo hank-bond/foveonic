@@ -80,7 +80,7 @@ fn is_damaged(mut error: &(dyn Error + 'static)) -> bool {
     }
 }
 fn context(path: &Path, error: Cause) -> Cause {
-    if error.is::<crate::background::Interrupted>() {
+    if error.is::<crate::priority::Interrupted>() {
         error
     } else {
         Box::new(InputError {

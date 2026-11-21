@@ -485,7 +485,7 @@ fn original_merrill_resolutions_render_color_and_monochrome() {
         assert!(source.samples().iter().all(|v| (0. ..=4095.).contains(v)));
         assert!(!source.camf.is_empty());
         let presentation = crate::render::native_extent(&source.metadata).unwrap();
-        let mut session = crate::render::RenderSession::new(source.clone());
+        let mut session = crate::render::NativePhoto::new(source.clone());
         for (rendering, method) in [
             (
                 crate::render::Rendering::Color,
@@ -513,7 +513,7 @@ fn original_merrill_resolutions_render_color_and_monochrome() {
                 settings.rendering = rendering;
                 settings.merrill_noise_method = method;
                 settings.reconstruction = Some(crate::noise::Controls::default());
-                let result = engine.render_session(
+                let result = engine.render_native_photo(
                     &mut session,
                     &settings,
                     &["final"],

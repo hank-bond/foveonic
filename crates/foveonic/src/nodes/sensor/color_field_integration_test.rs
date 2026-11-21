@@ -3,18 +3,18 @@ use super::*;
 use crate::{
     image::RenderedImage,
     inspection::Content,
-    render::{Engine, RenderSession, Settings},
+    render::{Engine, NativePhoto, Settings},
     source::Source,
 };
 
 fn session_layers(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     profile: &mut Profile,
 ) -> RenderedImage {
     let mut result = engine
-        .render_session(session, settings, &["highlight.layers"], || false, profile)
+        .render_native_photo(session, settings, &["highlight.layers"], || false, profile)
         .unwrap()
         .unwrap();
     match result.pop().unwrap().content {
@@ -57,10 +57,10 @@ fn gpu_color_field_cutoff_updates_cached_layers_and_output_without_mutating_reta
             approach,
             ..Controls::default()
         };
-        let mut session = RenderSession::new(Source::open(&path).unwrap());
+        let mut session = NativePhoto::new(Source::open(&path).unwrap());
         let retained = images(
             engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &requested,
@@ -79,7 +79,13 @@ fn gpu_color_field_cutoff_updates_cached_layers_and_output_without_mutating_reta
             let mut profile = Profile::new(crate::profile::Mode::Wall);
             let cached = images(
                 engine
-                    .render_session(&mut session, &settings, &requested, || false, &mut profile)
+                    .render_native_photo(
+                        &mut session,
+                        &settings,
+                        &requested,
+                        || false,
+                        &mut profile,
+                    )
                     .unwrap()
                     .unwrap(),
             );
@@ -142,7 +148,7 @@ fn gpu_color_field_cutoff_updates_cached_layers_and_output_without_mutating_reta
             settings.color_field.selectivity = 0.;
             let before = images(
                 engine
-                    .render_session(
+                    .render_native_photo(
                         &mut session,
                         &settings,
                         &requested,
@@ -155,7 +161,7 @@ fn gpu_color_field_cutoff_updates_cached_layers_and_output_without_mutating_reta
             settings.color_field.selectivity = 1.;
             let after = images(
                 engine
-                    .render_session(
+                    .render_native_photo(
                         &mut session,
                         &settings,
                         &requested,
@@ -206,12 +212,12 @@ fn gpu_color_field_corpus_is_exact_between_fresh_and_cached_solves() {
                 approach,
                 ..Default::default()
             };
-            let mut session = RenderSession::new(Source::open(&path).unwrap());
+            let mut session = NativePhoto::new(Source::open(&path).unwrap());
             for selectivity in [0., 0.25, 1., 0.] {
                 settings.color_field.selectivity = selectivity;
                 let requested = ["highlight.layers", "final"];
                 let cached = engine
-                    .render_session(
+                    .render_native_photo(
                         &mut session,
                         &settings,
                         &requested,
@@ -252,7 +258,7 @@ fn gpu_color_field_session_and_dng_preserve_saved_choices_and_owned_images() {
     let mut settings = crate::sidecar::decode(&original_sidecar).unwrap();
     settings.highlight_mode = HighlightMode::ColorField;
     let engine = Engine::new().unwrap();
-    let mut session = RenderSession::new(Source::open(&path).unwrap());
+    let mut session = NativePhoto::new(Source::open(&path).unwrap());
     let retained = session_layers(&engine, &mut session, &settings, &mut Profile::default());
     let retained_bytes = engine.readback_image(&retained).unwrap();
     for step in 0..6 {

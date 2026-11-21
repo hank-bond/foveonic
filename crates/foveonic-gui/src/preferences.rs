@@ -122,7 +122,8 @@ pub const DEFAULT_MULTI_EDIT_LIMIT: usize = 8;
 
 pub const MIB: u64 = 1024 * 1024;
 pub const DEFAULT_MEMORY_CACHE_BYTES: u64 = 2048 * MIB;
-pub const MEMORY_BYTES_RANGE: std::ops::RangeInclusive<u64> = 64 * MIB..=64 * 1024 * MIB;
+/// The target has no upper bound, so large machines can raise it freely.
+pub const MIN_MEMORY_CACHE_BYTES: u64 = 64 * MIB;
 pub const DEFAULT_THUMBNAIL_BYTES: u64 = DEFAULT_MEMORY_CACHE_BYTES / 4;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -191,15 +192,28 @@ impl Default for Preferences {
     }
 }
 impl Preferences {
-    /// Apply workspace processing preferences without changing the authored recipe.
-    pub fn render_settings(
+    /// The authored recipe with the workspace settings every render uses.
+    pub fn with_workspace_settings(
         &self,
         authored: &foveonic::render::Settings,
     ) -> foveonic::render::Settings {
         let mut settings = authored.clone();
         settings.adaptive_tone_tuning = self.adaptive_tone_tuning;
-        settings.processing_quality = self.processing_quality;
         settings
+    }
+
+    /// Whether an image rendered with `rendered` shows the `authored` edits under
+    /// these preferences. Rendered settings carry workspace values and processing
+    /// geometry the authored recipe does not, so they are compared as edits.
+    pub fn renders_edits(
+        &self,
+        rendered: &foveonic::render::Settings,
+        authored: &foveonic::render::Settings,
+    ) -> bool {
+        crate::rendering::matching::same_authored_edits(
+            rendered,
+            &self.with_workspace_settings(authored),
+        )
     }
 
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Self {
@@ -244,9 +258,7 @@ impl Preferences {
             self.adaptive_tone_tuning = Default::default();
         }
         self.direct_color.normalize();
-        self.memory_cache_bytes = self
-            .memory_cache_bytes
-            .clamp(*MEMORY_BYTES_RANGE.start(), *MEMORY_BYTES_RANGE.end());
+        self.memory_cache_bytes = self.memory_cache_bytes.max(MIN_MEMORY_CACHE_BYTES);
         crate::editor::normalize_sections(&mut self.editing_sections);
         let mut seen = BTreeSet::new();
         self.sections.retain(|s| seen.insert(*s));
@@ -259,9 +271,7 @@ impl Preferences {
     /// Browser thumbnails share the master cache target rather than introducing
     /// an independently growing memory allowance.
     pub fn thumbnail_cache_bytes(&self) -> u64 {
-        self.memory_cache_bytes
-            .clamp(*MEMORY_BYTES_RANGE.start(), *MEMORY_BYTES_RANGE.end())
-            / 4
+        self.memory_cache_bytes.max(MIN_MEMORY_CACHE_BYTES) / 4
     }
     /// Resolve startup intent without probing the filesystem on the UI thread.
     pub fn startup_request(
@@ -304,6 +314,24 @@ impl Preferences {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_image_rendered_under_speed_or_custom_tuning_still_shows_the_edits() {
+        let authored = foveonic::render::Settings::new("", "");
+        let mut preferences = super::Preferences {
+            processing_quality: foveonic::render::ProcessingQuality::Speed,
+            ..Default::default()
+        };
+        preferences.adaptive_tone_tuning.strong.shadows = 0.3;
+        let rendered = preferences.with_workspace_settings(&authored);
+        assert_ne!(
+            rendered, authored,
+            "rendered settings carry workspace values"
+        );
+        assert!(preferences.renders_edits(&rendered, &authored));
+        let mut edited = authored.clone();
+        edited.exposure += 0.5;
+        assert!(!preferences.renders_edits(&rendered, &edited));
+    }
     use super::*;
     #[derive(Default)]
     struct Storage(std::collections::HashMap<String, String>);
@@ -638,10 +666,14 @@ mod preview_tests {
             ..Default::default()
         };
         invalid.normalize();
-        assert_eq!(invalid.memory_cache_bytes, *MEMORY_BYTES_RANGE.start());
+        assert_eq!(invalid.memory_cache_bytes, MIN_MEMORY_CACHE_BYTES);
         invalid.memory_cache_bytes = u64::MAX;
         invalid.normalize();
-        assert_eq!(invalid.memory_cache_bytes, *MEMORY_BYTES_RANGE.end());
+        assert_eq!(
+            invalid.memory_cache_bytes,
+            u64::MAX,
+            "the target has no upper bound"
+        );
     }
     #[test]
     fn processing_quality_defaults_to_quality_and_round_trips_as_workspace_state() {

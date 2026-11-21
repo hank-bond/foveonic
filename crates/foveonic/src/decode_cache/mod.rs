@@ -1,6 +1,6 @@
 //! Reuses decoded sources, original bytes, selection metadata and previews in a bounded temporary disk LRU.
 
-pub use crate::background::Activity;
+use crate::priority::{Gate, Priority};
 mod lru;
 mod window;
 use lru::prune;
@@ -40,7 +40,7 @@ const MAGIC: &[u8; 8] = b"FOVDEC02";
 const PREFIX_BYTES: u64 = (MAGIC.len() + size_of::<u64>() + size_of::<u32>()) as u64;
 const MAX_HEADER: u64 = 1024 * 1024;
 const MAX_CAMF: u64 = 64 * 1024 * 1024;
-const SAMPLES_PER_CHUNK: usize = crate::background::IO_CHUNK_BYTES / size_of::<u16>();
+const SAMPLES_PER_CHUNK: usize = crate::priority::IO_CHUNK_BYTES / size_of::<u16>();
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Recency is best effort. A readable cache entry remains useful if it cannot be updated.
@@ -186,7 +186,7 @@ pub struct Cache {
     control: Arc<Mutex<Control>>,
     status: Arc<Mutex<Status>>,
     writer: mpsc::SyncSender<Command>,
-    gate: Arc<crate::background::Gate>,
+    gate: Arc<Gate>,
 }
 impl Default for Cache {
     fn default() -> Self {
@@ -226,7 +226,7 @@ impl Cache {
             recipe_updates: BTreeMap::new(),
         }));
         let status = Arc::new(Mutex::new(Status::default()));
-        let gate = Arc::new(crate::background::Gate::default());
+        let gate = Arc::new(Gate::default());
         let writer = worker::start(root.clone(), control.clone(), status.clone(), gate.clone());
         Self {
             root,
@@ -241,7 +241,7 @@ impl Cache {
         state.settings = settings;
         state.identities.clear();
         state.restart_prefetch();
-        self.gate.interrupt_prefetch();
+        self.gate.interrupt_speculative();
         drop(state);
         let mut status = self.status.lock().unwrap();
         status.ready.clear();
@@ -260,7 +260,7 @@ impl Cache {
         state.queue.clear();
         state.stores.clear();
         state.generation += 1;
-        self.gate.interrupt_prefetch();
+        self.gate.interrupt_speculative();
         drop(state);
         let mut status = self.status.lock().unwrap();
         status.ready.clear();
@@ -300,7 +300,7 @@ impl Cache {
             .retain(|path, _| watched.contains(path));
         state.selected = selected;
         state.restart_prefetch();
-        self.gate.interrupt_prefetch();
+        self.gate.interrupt_speculative();
         drop(state);
         if order_changed {
             let mut status = self.status.lock().unwrap();
@@ -309,74 +309,14 @@ impl Cache {
         }
         let _ = self.writer.try_send(Command::Maintain);
     }
-    pub fn foreground(&self) -> Activity {
-        self.gate.foreground()
+    /// The app-wide priority gate shared by decoding, file I/O and rendering.
+    pub fn priority(&self) -> &Arc<Gate> {
+        &self.gate
     }
-    /// Reserve navigator or scope work below viewport rendering and above browser reads.
-    pub fn auxiliary_demand(&self) -> Activity {
-        self.gate.auxiliary()
-    }
-    /// Check auxiliary admission without parking the shared render worker.
-    pub fn auxiliary_ready(&self) -> bool {
-        self.gate.auxiliary_ready()
-    }
-    /// Attempt auxiliary work without waiting; viewport arrivals cancel the attempt.
-    pub fn auxiliary_execution<T>(&self, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
-        crate::background::auxiliary_execution(self.gate.clone(), work)
-    }
-    /// Check browser-preview admission without waiting on the render worker.
-    pub fn thumbnail_ready(&self) -> bool {
-        self.gate.thumbnail_ready()
-    }
-    /// Attempt browser work without waiting; viewport or auxiliary arrivals cancel it.
-    pub fn thumbnail_execution<T>(&self, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
-        crate::background::thumbnail_execution(self.gate.clone(), work)
-    }
-    /// Run a small auxiliary submission on its worker after viewport work yields.
-    /// The caller owns its demand guard. Cancellation can retire a queued job while waiting.
-    pub fn auxiliary<T>(&self, cancel: &dyn Fn() -> bool, work: impl FnOnce() -> T) -> Option<T> {
-        crate::background::auxiliary(self.gate.clone(), cancel, work)
-    }
-    /// Observe admission without claiming work or waiting on the render thread.
-    pub fn idle_ready(&self) -> bool {
-        self.gate.idle()
-    }
-    /// Attempt idle work without blocking the renderer behind higher-priority work.
-    /// Any higher-tier arrival invalidates the attempt, including one that already completed.
-    pub fn idle_execution<T>(&self, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
-        crate::background::idle_execution(self.gate.clone(), work)
-    }
-    /// Reserve browser-thumbnail priority while small requests remain queued.
-    /// Active photo work still comes first. Speculative in-memory decodes may finish.
-    pub fn thumbnail_demand(&self) -> Activity {
-        self.gate.thumbnails()
-    }
-    /// Run a small preview read behind the selected photo, ahead of optional jobs.
-    pub fn thumbnail<T>(&self, work: impl FnOnce() -> T) -> T {
-        crate::background::thumbnail(self.gate.clone(), work)
-    }
-    /// Run optional presentation work on a dedicated background thread.
-    /// This lowers that thread's scheduling priority and shares prefetch's foreground gate.
+    /// Run optional work at Speculative priority on a dedicated thread with lowered OS priority.
     pub fn background<T>(&self, work: impl FnOnce() -> T) -> T {
-        crate::background::lower_priority();
-        crate::background::run(Some(self.gate.clone()), || {
-            crate::background::checkpoint();
-            work()
-        })
-    }
-    /// Run one optional attempt only while higher-priority work is absent.
-    /// The cancellation probe also notices foreground work that has already finished.
-    /// Unlike pausable background work, this can run on the foreground executor:
-    /// an arriving foreground request cancels it instead of waiting for that executor.
-    pub fn speculate<T>(&self, work: impl FnOnce(&dyn Fn() -> bool) -> T) -> Option<T> {
-        if !self.gate.idle() {
-            return None;
-        }
-        crate::background::interruptible(self.gate.clone(), || {
-            let context = crate::background::context().expect("speculative context");
-            let cancel = || context.interrupted();
-            (!cancel()).then(|| work(&cancel))
-        })
+        crate::priority::lower_priority();
+        self.gate.run(Priority::Speculative, work)
     }
     /// Background-verified ready paths in the current bounded prefetch order.
     /// This snapshot never reads or stats an original file.
@@ -401,10 +341,6 @@ impl Cache {
             && control.settings.enabled
             && control.settings.max_bytes > 0
             && !control.clear
-    }
-    /// Run requested work behind interaction without maintenance-level throttling.
-    pub fn processing<T>(&self, work: impl FnOnce() -> T) -> T {
-        crate::background::processing(self.gate.clone(), work)
     }
     pub fn status(&self) -> Status {
         self.status.lock().unwrap().clone()
@@ -561,7 +497,7 @@ impl Cache {
                 fields.str("source", &path.to_string_lossy());
             },
         );
-        crate::background::decode_priority();
+        crate::priority::decode_priority();
         let settings = self.control.lock().unwrap().settings.clone();
         if !settings.enabled {
             crate::diagnostics::event(
@@ -659,7 +595,7 @@ impl Cache {
                     },
                 );
                 let rejected = result.as_ref().is_err_and(|error| {
-                    !error.is::<crate::background::Interrupted>() && !error.is::<PolicyMiss>()
+                    !error.is::<crate::priority::Interrupted>() && !error.is::<PolicyMiss>()
                 });
                 if let Err(error) = &result {
                     if reportable_lookup_error(error.as_ref()) {
@@ -737,7 +673,7 @@ fn diagnostic_root(root: PathBuf, namespace: Option<&std::ffi::OsStr>) -> Result
 struct PolicyMiss(&'static str);
 
 fn reportable_lookup_error(error: &(dyn std::error::Error + 'static)) -> bool {
-    !error.is::<crate::background::Interrupted>()
+    !error.is::<crate::priority::Interrupted>()
         && !error.is::<PolicyMiss>()
         && !error
             .downcast_ref::<std::io::Error>()
@@ -747,7 +683,7 @@ fn reportable_lookup_error(error: &(dyn std::error::Error + 'static)) -> bool {
 #[cfg(test)]
 #[test]
 fn cache_warning_excludes_misses_and_cooperative_cancellation() {
-    assert!(!reportable_lookup_error(&crate::background::Interrupted));
+    assert!(!reportable_lookup_error(&crate::priority::Interrupted));
     assert!(!reportable_lookup_error(&PolicyMiss("disabled")));
     assert!(!reportable_lookup_error(&std::io::Error::from(
         std::io::ErrorKind::NotFound
@@ -796,7 +732,7 @@ fn load(
             fields
                 .u64("samples", header.samples)
                 .u64("camf_bytes", header.camf_bytes)
-                .u64("chunk_bytes", crate::background::IO_CHUNK_BYTES as u64);
+                .u64("chunk_bytes", crate::priority::IO_CHUNK_BYTES as u64);
         });
         let compact = matches!(header.sample_encoding, samples::Encoding::Unsigned16)
             && header
@@ -825,7 +761,7 @@ fn load(
         match &mut pixels {
             SensorSamples::Unsigned(pixels) => {
                 for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
-                    crate::background::checkpoint_or_cancel()?;
+                    crate::priority::checkpoint_or_cancel()?;
                     let bytes = bytemuck::cast_slice_mut::<u16, u8>(output);
                     {
                         let _scope = scope(Category::Cache, "cache.decoded.samples.read");
@@ -840,7 +776,7 @@ fn load(
             SensorSamples::Float(pixels) => {
                 let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(pixels.len())];
                 for output in pixels.chunks_mut(SAMPLES_PER_CHUNK) {
-                    crate::background::checkpoint_or_cancel()?;
+                    crate::priority::checkpoint_or_cancel()?;
                     let codes = &mut codes[..output.len()];
                     let bytes = bytemuck::cast_slice_mut::<u16, u8>(codes);
                     {
@@ -859,8 +795,8 @@ fn load(
             }
             SensorSamples::UnsignedPlanes(_) => unreachable!("cache reads use interleaved storage"),
         }
-        for chunk in camf.chunks_mut(crate::background::IO_CHUNK_BYTES) {
-            crate::background::checkpoint_or_cancel()?;
+        for chunk in camf.chunks_mut(crate::priority::IO_CHUNK_BYTES) {
+            crate::priority::checkpoint_or_cancel()?;
             {
                 let _scope = scope(Category::Cache, "cache.decoded.camf.read");
                 file.read_exact(chunk)?;
@@ -1048,7 +984,7 @@ fn for_code_chunks(
     match values {
         SensorSamples::Unsigned(values) => {
             for chunk in values.chunks(SAMPLES_PER_CHUNK) {
-                crate::background::checkpoint_or_cancel()?;
+                crate::priority::checkpoint_or_cancel()?;
                 consume(chunk)?;
             }
         }
@@ -1060,7 +996,7 @@ fn for_code_chunks(
                 .zip(planes[1].chunks(pixels_per_chunk))
                 .zip(planes[2].chunks(pixels_per_chunk))
             {
-                crate::background::checkpoint_or_cancel()?;
+                crate::priority::checkpoint_or_cancel()?;
                 codes.clear();
                 codes.extend(
                     red.iter()
@@ -1074,7 +1010,7 @@ fn for_code_chunks(
         SensorSamples::Float(values) => {
             let mut codes = vec![0_u16; SAMPLES_PER_CHUNK.min(values.len())];
             for chunk in values.chunks(SAMPLES_PER_CHUNK) {
-                crate::background::checkpoint_or_cancel()?;
+                crate::priority::checkpoint_or_cancel()?;
                 let codes = &mut codes[..chunk.len()];
                 encoding.encode(chunk, codes)?;
                 consume(codes)?;

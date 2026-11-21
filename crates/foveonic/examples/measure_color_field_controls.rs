@@ -4,7 +4,7 @@ use foveonic::{
     inspection::{Artifact, Content},
     profile::{Mode, Profile},
     render::{
-        ColorFieldApproach, ColorFieldControls, Engine, HighlightMode, RenderSession, Settings,
+        ColorFieldApproach, ColorFieldControls, Engine, HighlightMode, NativePhoto, Settings,
     },
     sidecar,
     source::{Result, Source},
@@ -292,7 +292,7 @@ fn main() -> Result<()> {
                 approach,
                 ..Default::default()
             };
-            let mut session = RenderSession::new(Source::open(&path)?);
+            let mut session = NativePhoto::new(Source::open(&path)?);
             let mut baseline: Option<Samples> = None;
             let mut retained: Option<(RenderedImage, RenderedImage, Samples)> = None;
             for (name, settings) in variants(&base) {
@@ -333,7 +333,7 @@ fn main() -> Result<()> {
                     None
                 };
                 let mut profile = Profile::new(Mode::Wall);
-                let cached = engine.render_session(
+                let cached = engine.render_native_photo(
                     &mut session,
                     &settings,
                     &["highlight.layers", "final"],

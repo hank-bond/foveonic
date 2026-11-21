@@ -310,11 +310,7 @@ impl Comparison {
 }
 
 /// Preview quality is a workspace choice, independent of photo edits and export.
-pub fn processing_quality(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    selected: &mut ProcessingQuality,
-) -> bool {
+pub fn processing_quality(ui: &mut egui::Ui, selected: &mut ProcessingQuality) -> bool {
     let mut changed = false;
     let explanation = "Quality preserves the selected processing controls at the displayed resolution. Speed uses faster processing for interactive work. Both adapt resolution to each photo's displayed pixel size. The loupe always shows native detail. Exports use Quality.";
     widgets::button_group(ui, |ui| {
@@ -324,11 +320,7 @@ pub fn processing_quality(
                 (ProcessingQuality::Quality, "Quality"),
                 (ProcessingQuality::Speed, "Speed"),
             ] {
-                let response = ui
-                    .add_enabled_ui(enabled, |ui| {
-                        widgets::button(ui, label, *selected == quality, egui::Vec2::ZERO)
-                    })
-                    .inner
+                let response = widgets::button(ui, label, *selected == quality, egui::Vec2::ZERO)
                     .on_hover_text(explanation);
                 if response.clicked() && *selected != quality {
                     *selected = quality;

@@ -2,8 +2,8 @@
 
 use super::*;
 
-fn rendered(outcome: SessionRender) -> crate::image::RenderedImage {
-    let SessionRender::Rendered(mut artifacts) = outcome else {
+fn rendered(outcome: PhotoRender) -> crate::image::RenderedImage {
+    let PhotoRender::Rendered(mut artifacts) = outcome else {
         panic!("expected source-free image");
     };
     let crate::inspection::Content::Image(image) = artifacts.pop().unwrap().content else {
@@ -208,7 +208,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
             let original = Arc::new(Source::open(&path).unwrap());
             let weak = Arc::downgrade(&original);
             let ReducedPreparation::Prepared(mut session) = engine
-                .prepare_reduced_session(original, &settings, || false, &mut Profile::default())
+                .prepare_reduced_photo(original, &settings, || false, &mut Profile::default())
                 .unwrap()
             else {
                 panic!("preparation {name} at{divisor}");
@@ -252,7 +252,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                     }
                 }
                 let mut artifacts = match engine
-                    .render_reduced_session(
+                    .render_reduced_photo(
                         &mut session,
                         &settings,
                         &["final"],
@@ -261,7 +261,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                     )
                     .unwrap()
                 {
-                    SessionRender::Rendered(artifacts) => artifacts,
+                    PhotoRender::Rendered(artifacts) => artifacts,
                     _ => panic!("source-free render {name} scale{divisor} edit{edit}"),
                 };
                 let artifact = artifacts.pop().unwrap();
@@ -314,7 +314,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                     assert!(
                         matches!(
                             engine
-                                .render_reduced_session(
+                                .render_reduced_photo(
                                     &mut session,
                                     &changed,
                                     &["final"],
@@ -322,7 +322,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                                     &mut Profile::default()
                                 )
                                 .unwrap(),
-                            SessionRender::Rendered(_)
+                            PhotoRender::Rendered(_)
                         ),
                         "resized-only filter change {name} scale{divisor}"
                     );
@@ -341,7 +341,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                 assert!(
                     matches!(
                         engine
-                            .render_reduced_session(
+                            .render_reduced_photo(
                                 &mut session,
                                 &changed,
                                 &["final"],
@@ -349,7 +349,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                                 &mut Profile::default()
                             )
                             .unwrap(),
-                        SessionRender::NeedsOriginal(NeedsOriginal::UpstreamChanged)
+                        PhotoRender::NeedsOriginal(NeedsOriginal::UpstreamChanged)
                     ),
                     "real native dependency change {name} scale{divisor}"
                 );
@@ -361,7 +361,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
             }
             assert!(matches!(
                 engine
-                    .render_reduced_session(
+                    .render_reduced_photo(
                         &mut session,
                         &settings,
                         &["final"],
@@ -369,12 +369,12 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                         &mut Profile::default()
                     )
                     .unwrap(),
-                SessionRender::Superseded
+                PhotoRender::Superseded
             ));
             assert!(matches!(
                 engine
                     .executor()
-                    .render_reduced_session(
+                    .render_reduced_photo(
                         &mut session,
                         &settings,
                         &["final"],
@@ -382,7 +382,7 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
                         &mut Profile::default()
                     )
                     .unwrap(),
-                SessionRender::NeedsOriginal(NeedsOriginal::EngineChanged)
+                PhotoRender::NeedsOriginal(NeedsOriginal::EngineChanged)
             ));
             eprintln!("exact source-free {name} scale{divisor}");
         }
@@ -393,53 +393,48 @@ fn full_option_dependency_cuts_release_source_and_match_fresh() {
 #[test]
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
 fn shared_working_set_orders_native_reduced_and_speculative_owners() {
-    use crate::render::{ProcessingWorkingSet, RenderSession, SessionKey, SessionKind, SessionUse};
+    use crate::render::{NativePhoto, PhotoKey, Purpose, Resolution, WorkingSet};
     let path = std::env::var_os("SMALL_PREVIEW_X3F").unwrap();
     let source = Arc::new(Source::open(&path).unwrap());
     let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.working_scale = Scale::new(8).unwrap();
     let ReducedPreparation::Prepared(session) = engine
-        .prepare_reduced_session(source.clone(), &settings, || false, &mut Profile::default())
+        .prepare_reduced_photo(source.clone(), &settings, || false, &mut Profile::default())
         .unwrap()
     else {
         panic!("preparation")
     };
-    let mut working = ProcessingWorkingSet::new();
-    let reduced = SessionKey {
+    let mut working = WorkingSet::new();
+    let reduced = PhotoKey {
         photo: 1,
-        kind: SessionKind::Reduced,
+        resolution: Resolution::Reduced,
     };
-    let active = SessionKey {
+    let edited = PhotoKey {
         photo: 2,
-        kind: SessionKind::Native,
+        resolution: Resolution::Native,
     };
-    let speculative = SessionKey {
+    let speculative = PhotoKey {
         photo: 3,
-        kind: SessionKind::Native,
+        resolution: Resolution::Native,
     };
     working
-        .insert_reduced(1, session, &engine, SessionUse::Foreground)
+        .insert_reduced(1, session, &engine, Purpose::Edit)
         .unwrap();
     working
-        .insert_native(
-            2,
-            RenderSession::new(source.clone()),
-            &engine,
-            SessionUse::Foreground,
-        )
+        .insert_native(2, NativePhoto::new(source.clone()), &engine, Purpose::Edit)
         .unwrap();
     working
         .insert_native(
             3,
-            RenderSession::new(source.clone()),
+            NativePhoto::new(source.clone()),
             &engine,
-            SessionUse::Preparation,
+            Purpose::Speculative,
         )
         .unwrap();
     let first_native = working
         .with_native(2, |session| {
-            engine.render_session(
+            engine.render_native_photo(
                 session,
                 &settings,
                 &["final"],
@@ -454,33 +449,28 @@ fn shared_working_set_orders_native_reduced_and_speculative_owners() {
     let crate::inspection::Content::Image(first_native) = first_native.content else {
         panic!("image")
     };
-    assert!(working.activate(reduced, SessionUse::Foreground));
-    assert!(working.activate(active, SessionUse::Foreground));
-    assert!(working.activate(reduced, SessionUse::Preparation));
+    assert!(working.record_use(reduced, Purpose::Edit).is_some());
+    assert!(working.record_use(edited, Purpose::Edit).is_some());
+    assert!(working.contains(reduced));
     let image = rendered(
         working
             .render_reduced(
                 &engine,
                 1,
                 &settings,
-                SessionUse::Preparation,
+                Purpose::Speculative,
                 || false,
                 &mut Profile::default(),
             )
             .unwrap()
             .unwrap(),
     );
-    assert_eq!(
-        working.active_key(),
-        Some(active),
-        "preparation must not promote or replace foreground"
-    );
-    assert_eq!(working.evict_oldest(), Some(speculative));
-    assert_eq!(working.evict_oldest(), Some(reduced));
-    assert!(working.contains(active));
+    assert_eq!(working.evict_least_recent(), Some(speculative));
+    assert_eq!(working.evict_least_recent(), Some(reduced));
+    assert!(working.contains(edited));
     let replay = working
         .with_native(2, |session| {
-            engine.render_session(
+            engine.render_native_photo(
                 session,
                 &settings,
                 &["final"],
@@ -503,24 +493,26 @@ fn shared_working_set_orders_native_reduced_and_speculative_owners() {
         !engine.readback_image(&image).unwrap().is_empty(),
         "eviction preserves delivered pixels"
     );
-    working.park_active();
-    assert_eq!(working.evict_oldest(), Some(active));
-    assert!(working.is_empty());
+    working.set_visible([edited]);
+    assert_eq!(
+        working.evict_least_recent(),
+        None,
+        "a visible photo is never evicted"
+    );
+    assert!(working.contains(edited));
 }
 
 #[test]
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
-fn reduced_active_cut_survives_shared_budget_pressure() {
-    use crate::render::{
-        MemoryReservation, ProcessingWorkingSet, SessionKey, SessionKind, SessionUse,
-    };
+fn visible_reduced_photo_keeps_its_sensor_data_under_pressure() {
+    use crate::render::{MemoryReservation, PhotoKey, Purpose, Resolution, WorkingSet};
     let source = Arc::new(Source::open(std::env::var_os("SMALL_PREVIEW_X3F").unwrap()).unwrap());
     let weak = Arc::downgrade(&source);
     let engine = Engine::test_executor();
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.working_scale = Scale::new(2).unwrap();
     let ReducedPreparation::Prepared(session) = engine
-        .prepare_reduced_session(source, &settings, || false, &mut Profile::default())
+        .prepare_reduced_photo(source, &settings, || false, &mut Profile::default())
         .unwrap()
     else {
         panic!("preparation")
@@ -538,14 +530,18 @@ fn reduced_active_cut_survives_shared_budget_pressure() {
             + resources.preparation_bytes,
         session.retained_cpu_bytes()
     );
-    let cuts: Vec<_> = session.cache.sealed_buffers().cloned().collect();
-    let mut working = ProcessingWorkingSet::new();
+    let sensor_data: Vec<_> = session.cache.sensor_data_buffers().cloned().collect();
+    let mut working = WorkingSet::new();
     working
-        .insert_reduced(7, session, &engine, SessionUse::Foreground)
+        .insert_reduced(7, session, &engine, Purpose::Edit)
         .unwrap();
-    let key = SessionKey {
+    working.set_visible([PhotoKey {
         photo: 7,
-        kind: SessionKind::Reduced,
+        resolution: Resolution::Reduced,
+    }]);
+    let key = PhotoKey {
+        photo: 7,
+        resolution: Resolution::Reduced,
     };
     for exposure in [0., 0.2, 0.4] {
         settings.exposure = exposure;
@@ -555,7 +551,7 @@ fn reduced_active_cut_survives_shared_budget_pressure() {
                     &engine,
                     7,
                     &settings,
-                    SessionUse::Foreground,
+                    Purpose::Edit,
                     || false,
                     &mut Profile::default(),
                 )
@@ -564,27 +560,27 @@ fn reduced_active_cut_survives_shared_budget_pressure() {
         );
         assert_eq!(image.settings.working_scale, settings.working_scale);
         let trim = engine.trim_memory(&mut working, 1, &MemoryReservation::default());
-        assert!(trim.over_budget_bytes > 0);
+        assert!(trim.over_target_bytes > 0);
         assert!(working.contains(key));
         assert!(
-            cuts.iter().all(|old| working
+            sensor_data.iter().all(|old| working
                 .reduced(7)
                 .unwrap()
                 .cache
-                .sealed_buffers()
+                .sensor_data_buffers()
                 .any(|new| old.shares_storage(new))),
-            "active edits preserve required sensor cuts under pressure"
+            "a visible photo keeps its sensor data under pressure"
         );
     }
-    working.park_active();
+    // A visible photo stays even when nothing fits.
     let trim = engine.trim_memory(&mut working, 0, &MemoryReservation::default());
-    assert!(trim.evicted_sessions.contains(&key));
-    assert!(working.is_empty());
+    assert!(trim.evicted_photos.is_empty());
+    assert!(working.contains(key));
 }
 
 #[test]
 #[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
-fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation() {
+fn verified_reload_preserves_main_sensor_data_and_rejects_other_origins_before_mutation() {
     let path = std::env::var_os("SMALL_PREVIEW_X3F").unwrap();
     let original = Arc::new(Source::open(&path).unwrap());
     let weak = Arc::downgrade(&original);
@@ -601,7 +597,7 @@ fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation
         .get_or_insert_with(Default::default)
         .banding = 4;
     let ReducedPreparation::Prepared(mut session) = engine
-        .prepare_reduced_session(original, &settings, || false, &mut Profile::default())
+        .prepare_reduced_photo(original, &settings, || false, &mut Profile::default())
         .unwrap()
     else {
         panic!("preparation");
@@ -609,7 +605,7 @@ fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation
     assert!(weak.upgrade().is_none());
     let _main = rendered(
         engine
-            .render_reduced_session(
+            .render_reduced_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -618,14 +614,14 @@ fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation
             )
             .unwrap(),
     );
-    let main_buffers: Vec<_> = session.cache.sealed_buffers().cloned().collect();
+    let main_buffers: Vec<_> = session.cache.sensor_data_buffers().cloned().collect();
     assert!(!main_buffers.is_empty());
     let old_metadata = session.metadata().clone();
     let old_bytes = session.cached_bytes();
     let mut unrelated = Source::open(&path).unwrap();
     unrelated.origin = SourceOrigin::default();
     assert!(engine
-        .refresh_reduced_session(
+        .refresh_reduced_photo(
             &mut session,
             &unrelated,
             &settings,
@@ -638,7 +634,7 @@ fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation
     drop(unrelated);
     settings.photographic.color_editor.master.hue = 0.3;
     let changed = engine
-        .render_reduced_session(
+        .render_reduced_photo(
             &mut session,
             &settings,
             &["final"],
@@ -649,8 +645,7 @@ fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation
     assert!(
         matches!(
             changed,
-            SessionRender::Rendered(_)
-                | SessionRender::NeedsOriginal(NeedsOriginal::UpstreamChanged)
+            PhotoRender::Rendered(_) | PhotoRender::NeedsOriginal(NeedsOriginal::UpstreamChanged)
         ),
         "a new guide uses the retained cut or requests its actually missing native dependencies"
     );
@@ -659,7 +654,7 @@ fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation
     assert_eq!(&session.origin, reload.origin());
     assert!(!Arc::ptr_eq(session.metadata(), &reload.metadata));
     assert!(engine
-        .refresh_reduced_session(
+        .refresh_reduced_photo(
             &mut session,
             &reload,
             &settings,
@@ -678,7 +673,7 @@ fn verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation
     assert!(reload_weak.upgrade().is_none());
     let image = rendered(
         engine
-            .render_reduced_session(
+            .render_reduced_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -843,7 +838,7 @@ fn per_output_scale_and_reduced_roi_hint_match_whole_grid() {
         engine.readback_image(&whole).unwrap()
     );
     let ReducedPreparation::Prepared(mut session) = engine
-        .prepare_reduced_session(source, &region, || false, &mut Profile::default())
+        .prepare_reduced_photo(source, &region, || false, &mut Profile::default())
         .unwrap()
     else {
         panic!("ROI execution hint must not exclude source-free ownership");
@@ -851,7 +846,7 @@ fn per_output_scale_and_reduced_roi_hint_match_whole_grid() {
     assert!(weak.upgrade().is_none());
     let retained = rendered(
         engine
-            .render_reduced_session(
+            .render_reduced_photo(
                 &mut session,
                 &region,
                 &["final"],
@@ -895,7 +890,7 @@ fn every_camera_white_balance_matches_source_free_and_fresh_at_native_and_reduce
             let source = Arc::new(Source::open(&path).unwrap());
             let weak = Arc::downgrade(&source);
             let ReducedPreparation::Prepared(mut session) = engine
-                .prepare_reduced_session(source, &settings, || false, &mut Profile::default())
+                .prepare_reduced_photo(source, &settings, || false, &mut Profile::default())
                 .unwrap_or_else(|error| {
                     panic!("white balance {white_balance} scale{divisor}: {error}")
                 })
@@ -906,7 +901,7 @@ fn every_camera_white_balance_matches_source_free_and_fresh_at_native_and_reduce
             engine.clear_preparation();
             let image = rendered(
                 engine
-                    .render_reduced_session(
+                    .render_reduced_photo(
                         &mut session,
                         &settings,
                         &["final"],

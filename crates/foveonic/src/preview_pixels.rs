@@ -51,7 +51,7 @@ impl Preview {
         let table = transfer_table(self.color_space);
         let mut linear = Vec::with_capacity(self.rgb.len());
         for chunk in self.rgb.chunks(TRANSFORM_SAMPLES) {
-            crate::background::checkpoint_or_cancel()?;
+            crate::priority::checkpoint_or_cancel()?;
             linear.extend(chunk.iter().map(|v| table[usize::from(*v)]));
         }
         image::Rgb32FImage::from_raw(self.extent[0], self.extent[1], linear)
@@ -70,7 +70,7 @@ impl Preview {
         let extent = self
             .extent
             .map(|v| (f64::from(v) * scale).round().max(1.) as u32);
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         let view = LinearPreview {
             preview: self,
             table: transfer_table(self.color_space),
@@ -81,7 +81,7 @@ impl Preview {
             extent[1],
             image::imageops::FilterType::Triangle,
         );
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         Ok(image)
     }
 

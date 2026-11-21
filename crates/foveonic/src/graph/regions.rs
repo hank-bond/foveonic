@@ -145,7 +145,7 @@ impl Graph {
                 output_storage[id] = bounds;
             }
             let main = self.nodes[index].outputs[0];
-            if !self.sealed_outputs.contains(&main) {
+            if !self.sensor_data_outputs.contains(&main) {
                 if let (Some(priority), Some(slot)) = (
                     self.session_outputs.iter().position(|&id| id == main),
                     self.nodes[index].operation.regional_restart_input(),

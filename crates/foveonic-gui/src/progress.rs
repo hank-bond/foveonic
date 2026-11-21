@@ -18,7 +18,7 @@ const ELAPSED_REFRESH: std::time::Duration = std::time::Duration::from_millis(50
 
 #[derive(Clone, Copy, Debug)]
 pub struct Snapshot {
-    pub revision: u64,
+    pub request_id: u64,
     pub fraction: f32,
     started: Instant,
     finished: Option<Instant>,
@@ -40,9 +40,9 @@ impl Snapshot {
 #[derive(Clone, Default)]
 pub struct Tracker(Arc<Mutex<Option<Snapshot>>>);
 impl Tracker {
-    pub fn begin(&self, revision: u64, started: Instant) {
+    pub fn begin(&self, request_id: u64, started: Instant) {
         *self.0.lock().unwrap() = Some(Snapshot {
-            revision,
+            request_id,
             fraction: 0.,
             started,
             finished: None,
@@ -55,11 +55,11 @@ impl Tracker {
     pub fn clear(&self) {
         *self.0.lock().unwrap() = None;
     }
-    fn advance(&self, revision: u64, fraction: f32) -> bool {
+    fn advance(&self, request_id: u64, fraction: f32) -> bool {
         let mut state = self.0.lock().unwrap();
         let Some(state) = state
             .as_mut()
-            .filter(|s| s.revision == revision && s.finished.is_none())
+            .filter(|s| s.request_id == request_id && s.finished.is_none())
         else {
             return false;
         };
@@ -70,11 +70,11 @@ impl Tracker {
         false
     }
     /// Finish on UI receipt, including worker queueing, GPU completion and reply delivery.
-    pub fn finish(&self, revision: u64, failed: bool) {
+    pub fn finish(&self, request_id: u64, failed: bool) {
         let mut state = self.0.lock().unwrap();
         if let Some(state) = state
             .as_mut()
-            .filter(|s| s.revision == revision && s.finished.is_none())
+            .filter(|s| s.request_id == request_id && s.finished.is_none())
         {
             state.finished = Some(Instant::now());
             state.failed = failed;
@@ -84,35 +84,38 @@ impl Tracker {
         }
     }
     /// Keep image-stage reporting separate from settlement of the desired render set.
-    pub fn settle(&self, pending: bool, failed_revision: Option<u64>) {
+    pub fn settle(&self, pending: bool, failed_request_id: Option<u64>) {
         let completed = {
             let mut state = self.0.lock().unwrap();
             let Some(state) = state.as_mut() else {
                 return;
             };
-            if failed_revision == Some(state.revision) {
+            if failed_request_id == Some(state.request_id) {
                 state.failed = true;
             }
-            (!pending).then_some((state.revision, state.failed))
+            (!pending).then_some((state.request_id, state.failed))
         };
-        if let Some((revision, failed)) = completed {
-            self.finish(revision, failed);
+        if let Some((request_id, failed)) = completed {
+            self.finish(request_id, failed);
         }
     }
 }
 
 pub struct Reporter {
     tracker: Tracker,
-    revision: u64,
+    request_id: u64,
 }
 impl Reporter {
-    pub fn new(tracker: Tracker, revision: u64) -> Self {
-        Self { tracker, revision }
+    pub fn new(tracker: Tracker, request_id: u64) -> Self {
+        Self {
+            tracker,
+            request_id,
+        }
     }
     fn advance(&self, fraction: f32) {
         // The UI polls the latest value for its elapsed-time label. Reporting
         // must never wait on the UI context or on the image-reply channel.
-        self.tracker.advance(self.revision, fraction);
+        self.tracker.advance(self.request_id, fraction);
     }
     pub fn loaded(&self, stage: LoadStage) {
         self.advance(match stage {
@@ -177,30 +180,28 @@ pub fn show(ui: &mut egui::Ui, snapshot: Option<Snapshot>, show_time: bool) -> e
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rendering::request::RequestId;
 
     fn desire(
         coordinator: &mut crate::rendering::coordinator::RenderCoordinator,
         path: &str,
-        revision: u64,
+        request_id: u64,
     ) -> crate::rendering::coordinator::Stamp {
-        let request = Arc::new(crate::rendering::request::Request {
-            auxiliary_preview: false,
-
+        let request = Arc::new(crate::rendering::request::RenderRequest {
             detail: false,
             framing_preview: false,
             calibration: None,
             rendition: crate::editor::Rendition::Current,
-            revision,
+            id: RequestId(request_id),
             path: path.into(),
             settings: foveonic::render::Settings::new("Sunlight", "Standard"),
             preview_scale: foveonic::render::Scale::new(8).unwrap(),
             processing_quality: foveonic::render::ProcessingQuality::Speed,
             output: "final".into(),
             comparison: false,
-            export: None,
         });
         let target = crate::rendering::coordinator::Target::of(&request);
-        coordinator.desire(request, None, Instant::now());
+        coordinator.desire(request, None, Instant::now(), false);
         coordinator.desired(&target).unwrap().stamp.clone()
     }
 
@@ -211,8 +212,8 @@ mod tests {
         let b = desire(&mut coordinator, "b.x3f", 2);
         let tracker = Tracker::default();
         let began = Instant::now();
-        tracker.begin(b.revision, began);
-        Reporter::new(tracker.clone(), b.revision).rendered(RenderProgress::Stage {
+        tracker.begin(b.request_id.0, began);
+        Reporter::new(tracker.clone(), b.request_id.0).rendered(RenderProgress::Stage {
             completed: 1,
             total: 1,
         });
@@ -227,7 +228,7 @@ mod tests {
         let done = tracker.snapshot().unwrap();
         assert!(!done.running());
         assert_eq!(done.fraction, 1.);
-        assert_eq!(done.revision, b.revision);
+        assert_eq!(done.request_id, b.request_id.0);
         assert_eq!(done.started, began);
     }
 
@@ -237,12 +238,19 @@ mod tests {
         let a = desire(&mut coordinator, "a.x3f", 1);
         let b = desire(&mut coordinator, "b.x3f", 2);
         let tracker = Tracker::default();
-        tracker.begin(b.revision, Instant::now());
+        tracker.begin(b.request_id.0, Instant::now());
         coordinator.finish(&a);
         tracker.settle(coordinator.busy(), None);
         assert!(tracker.snapshot().unwrap().running());
 
-        coordinator.retain_overviews(&["a.x3f".into()], &[]);
+        coordinator.reconcile(
+            &crate::rendering::coordinator::Photos {
+                waiting: vec!["a.x3f".into()],
+                history: vec![],
+                ..Default::default()
+            },
+            &[],
+        );
         tracker.settle(coordinator.busy(), None);
         assert!(!tracker.snapshot().unwrap().running());
         assert_eq!(tracker.snapshot().unwrap().fraction, 1.);

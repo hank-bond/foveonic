@@ -14,6 +14,8 @@ Use the maintained input setup to recreate workloads from pinned originals. Keep
 
 `v0.8.3/apple-m1-pro/native-release-observations.json` records the exact published 0.8.2 and signed draft 0.8.3 Mac apps. It retains every initial and reversed timing observation, paired memory samples, actual-package smoke and symbol identities, and explicit unperformed release checks. It is a release review record, not an automatic publication gate.
 
+`v0.8.4/apple-m1-pro/native-release-observations.json` records the exact published 0.8.3 and signed draft 0.8.4 Mac apps, all initial/reversed observations, paired memory samples, native correctness and package identities. Concurrent correctness footprints are labelled separately from exclusive performance measurements. Findings retain the narrow repeated eight-photo edit difference for owner review.
+
 <!-- INDEX:START -->
 
 <!-- Generated from source summaries and document frontmatter. Do not edit by hand. Run `cargo run -p docs-index`. -->

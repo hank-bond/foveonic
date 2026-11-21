@@ -1,11 +1,12 @@
 //! Keeps navigator previews small and lets the main image reach the screen first.
 
-use crate::{rendering::worker::Frame, viewport};
+use crate::{rendering::worker::RenderResult, viewport};
 use eframe::{egui, egui_wgpu, wgpu};
 use foveonic::image::{ImageTexture, Space};
 use foveonic::{
-    decode_cache::{Activity, Cache},
+    decode_cache::Cache,
     diagnostics as trace,
+    priority::{self, Priority},
 };
 use std::{
     path::PathBuf,
@@ -43,18 +44,21 @@ struct Key {
     rotation: Option<foveonic::rotation::Rotation>,
 }
 impl Key {
-    fn new(frame: &Frame, mapping: viewport::Mapping) -> Self {
-        let rotation = frame.framing_preview.then_some(frame.requested.rotation);
+    fn new(frame: &RenderResult, mapping: viewport::Mapping) -> Self {
+        let rotation = frame
+            .request
+            .framing_preview
+            .then_some(frame.request.settings.rotation);
         let mut extent = frame.view(mapping.input).description().extent;
         if let Some(rotation) = rotation {
             extent = rotation.oriented_extent(extent);
         }
         Self {
             rotation,
-            revision: frame.revision,
+            revision: frame.request.id.0,
             source: SourceId(frame.artifact.metadata.clone()),
-            path: frame.path.clone(),
-            root: frame.output.clone(),
+            path: frame.request.path.clone(),
+            root: frame.request.output.clone(),
             mapping,
             extent,
             space: frame.view(mapping.input).description().space,
@@ -72,10 +76,12 @@ impl Key {
     }
 }
 // Job snapshots share one reservation. Releasing it also cancels a queued worker wait.
-struct Demand(Mutex<Option<Activity>>);
+struct Demand(Mutex<Option<priority::Demand>>);
 impl Demand {
     fn new(cache: &Cache) -> Arc<Self> {
-        Arc::new(Self(Mutex::new(Some(cache.auxiliary_demand()))))
+        Arc::new(Self(Mutex::new(Some(
+            cache.priority().demand(Priority::Auxiliary),
+        ))))
     }
     fn release(&self) {
         self.0.lock().unwrap().take();
@@ -158,7 +164,7 @@ impl Navigator {
                         .str("image_purpose", job.diagnostic_task.purpose);
                 });
             let started = Instant::now();
-            let prepared = worker_cache.auxiliary(&|| job.demand.cancelled(), || {
+            let prepared = worker_cache.priority().when_ready(Priority::Auxiliary, &|| job.demand.cancelled(), || {
                 let size = tile_extent(job.key.extent);
                 let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("Small display-ready navigator"),
@@ -285,7 +291,7 @@ impl Navigator {
     /// work now would delay feedback from the main image.
     pub fn update(
         &mut self,
-        frame: Option<&Frame>,
+        frame: Option<&RenderResult>,
         mapping: viewport::Mapping,
         busy: bool,
         ctx: &egui::Context,
@@ -410,7 +416,7 @@ impl Navigator {
             inventory.texture(*id, crate::memory::texture_bytes(&tile.texture));
         }
     }
-    pub fn image(&self, frame: &Frame, mapping: viewport::Mapping) -> Image {
+    pub fn image(&self, frame: &RenderResult, mapping: viewport::Mapping) -> Image {
         let key = Key::new(frame, mapping);
         Image {
             extent: key.extent,
@@ -424,7 +430,7 @@ impl Navigator {
     /// Reports navigator request state for opt-in smoke evidence.
     pub(crate) fn smoke_state(
         &self,
-        frame: Option<&Frame>,
+        frame: Option<&RenderResult>,
         mapping: viewport::Mapping,
     ) -> serde_json::Value {
         let key = |key: &Key| {
@@ -442,10 +448,10 @@ impl Navigator {
             "queued":pending.job.as_ref().map(|job| key(&job.key)),
             "active":pending.active.as_ref().map(|job| key(&job.key)),
             "ready":pending.ready.iter().map(key).collect::<Vec<_>>(),
-            "auxiliary_allowed":self.cache.auxiliary_ready(),
+            "auxiliary_allowed":self.cache.priority().ready(Priority::Auxiliary),
         })
     }
-    pub fn ready(&self, frame: &Frame, mapping: viewport::Mapping) -> bool {
+    pub fn ready(&self, frame: &RenderResult, mapping: viewport::Mapping) -> bool {
         self.displayed
             .as_ref()
             .is_some_and(|(tile, _)| tile.key == Key::new(frame, mapping))
@@ -476,17 +482,17 @@ mod tests {
         let cache = Cache::new();
         let wanted = Demand::new(&cache);
         let active = wanted.clone();
-        assert!(!cache.idle_ready());
+        assert!(!cache.priority().ready(Priority::Speculative));
         let replacement = Demand::new(&cache);
         wanted.release();
         assert!(active.cancelled());
         drop(wanted);
         drop(active);
-        assert!(!cache.idle_ready());
+        assert!(!cache.priority().ready(Priority::Speculative));
         replacement.release();
-        assert!(cache.idle_ready());
+        assert!(cache.priority().ready(Priority::Speculative));
         replacement.release();
-        assert!(cache.idle_ready());
+        assert!(cache.priority().ready(Priority::Speculative));
     }
 
     #[test]

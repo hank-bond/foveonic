@@ -4,7 +4,7 @@ use foveonic::{
     image::RenderedImage,
     inspection::Content,
     profile::{self, Mode, Profile, RenderSettingsSnapshot},
-    render::{ControlCapabilities, Engine, RenderSession, Scale, Settings},
+    render::{ControlCapabilities, Engine, NativePhoto, Scale, Settings},
     source::Source,
 };
 use serde::Deserialize;
@@ -86,12 +86,12 @@ fn image_data(image: &RenderedImage) -> Value {
 }
 fn render(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     profile: &mut Profile,
 ) -> Result<RenderedImage> {
     let mut artifacts = engine
-        .render_session(session, settings, &["final"], || false, profile)?
+        .render_native_photo(session, settings, &["final"], || false, profile)?
         .ok_or("unexpected cancelled render")?;
     let Content::Image(image) = artifacts.remove(0).content else {
         return Err("final output is not an image".into());
@@ -194,7 +194,7 @@ fn main() -> Result<()> {
         let warm = Engine::new()?;
         mode.check_gpu_features(warm.device().features())?;
         for (_, a, b) in &edits {
-            let mut session = RenderSession::new(source.clone());
+            let mut session = NativePhoto::new(source.clone());
             for settings in [&initial, a, b] {
                 drop(render(
                     &warm,
@@ -222,7 +222,7 @@ fn main() -> Result<()> {
             for trial in 0..repeats {
                 let engine = warm.executor();
                 mode.check_gpu_features(engine.device().features())?;
-                let mut session = RenderSession::new(source.clone());
+                let mut session = NativePhoto::new(source.clone());
                 for (phase, settings) in [
                     ("base", &initial),
                     ("unchanged", &initial),
@@ -250,7 +250,7 @@ fn main() -> Result<()> {
                     )?;
                     if verify {
                         let fresh = warm.executor();
-                        let mut fresh_session = RenderSession::new(source.clone());
+                        let mut fresh_session = NativePhoto::new(source.clone());
                         let expected = render(
                             &fresh,
                             &mut fresh_session,

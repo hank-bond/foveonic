@@ -1,6 +1,7 @@
 //! Checks navigator mapping, preparation cost and restoration of cached photographic sources.
 
 use super::*;
+use crate::rendering::request::RequestId;
 pub(crate) fn state() -> egui_wgpu::RenderState {
     state_for(wgpu::TextureFormat::Rgba8UnormSrgb)
 }
@@ -212,9 +213,8 @@ fn cached_current_sources_restore_after_newer_views_and_photo_switches() {
     use crate::{
         editor::Rendition,
         rendering::{
-            delivery::ViewState,
-            request::Request,
-            worker::{Frame, Update, Worker},
+            request::RenderRequest,
+            worker::{tests::TestWorker, RenderResult, Update},
         },
     };
     use foveonic::render::{Engine, ProcessingQuality, Scale, Settings};
@@ -238,12 +238,12 @@ fn cached_current_sources_restore_after_newer_views_and_photo_switches() {
     }
 
     fn render(
-        worker: &Worker,
+        worker: &TestWorker,
         path: &Path,
         revision: u64,
         rendition: Rendition,
         output: &str,
-    ) -> Frame {
+    ) -> RenderResult {
         let settings = Settings {
             exposure: if rendition == Rendition::Current {
                 if revision == 1 {
@@ -257,34 +257,18 @@ fn cached_current_sources_restore_after_newer_views_and_photo_switches() {
             output_size: Some([32, 48]),
             ..Default::default()
         };
-        worker.set_view(ViewState {
-            processing_quality: ProcessingQuality::Quality,
-            active: Some(path.to_owned()),
-            rendition,
-            output: output.into(),
-            comparison: false,
-            framing_preview: false,
-            exporting: false,
-            calibration: None,
-            settings: settings.clone(),
-            overviews: Vec::new(),
-            displayed_revision: None,
-            detail_revision: None,
-        });
-        worker.submit(Request {
-            auxiliary_preview: false,
+        worker.submit(RenderRequest {
             detail: false,
             framing_preview: false,
             calibration: None,
             rendition,
-            revision,
+            id: RequestId(revision),
             path: path.to_owned(),
             settings,
             preview_scale: Scale::new(8).unwrap(),
             processing_quality: ProcessingQuality::Quality,
             output: output.into(),
             comparison: false,
-            export: None,
         });
         let frame = loop {
             if let Update::Image(reply) = worker
@@ -292,12 +276,12 @@ fn cached_current_sources_restore_after_newer_views_and_photo_switches() {
                 .recv_timeout(Duration::from_secs(30))
                 .unwrap()
             {
-                assert_eq!(reply.revision, revision);
-                break reply.result.unwrap().expect("navigator source pixels");
+                assert_eq!(reply.request.id, RequestId(revision));
+                break reply.result.unwrap_rendered();
             }
         };
         worker.progress.finish(revision, false);
-        worker.delivered(revision);
+        worker.whole_delivered(RequestId(revision));
         let deadline = Instant::now() + Duration::from_secs(5);
         while worker.busy() {
             assert!(Instant::now() < deadline, "source render did not settle");
@@ -306,7 +290,7 @@ fn cached_current_sources_restore_after_newer_views_and_photo_switches() {
         frame
     }
 
-    fn settle(navigator: &mut Navigator, frame: &Frame, context: &egui::Context) -> bool {
+    fn settle(navigator: &mut Navigator, frame: &RenderResult, context: &egui::Context) -> bool {
         let mapping = viewport::Mapping::normal(-1);
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -330,7 +314,7 @@ fn cached_current_sources_restore_after_newer_views_and_photo_switches() {
         rs.adapter.get_info().name,
     )
     .unwrap();
-    let worker = Worker::new(engine, context.clone());
+    let worker = TestWorker::new(engine, context.clone());
     worker.cache.configure(foveonic::decode_cache::Settings {
         enabled: false,
         ..Default::default()

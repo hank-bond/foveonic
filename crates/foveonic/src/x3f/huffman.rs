@@ -208,7 +208,7 @@ impl Table {
         let mut horizontal = [seed; 2];
         let _scope = diagnostics::scope(Category::Cpu, "decode.plane.samples");
         for y in 0..height {
-            crate::background::checkpoint_or_cancel()?;
+            crate::priority::checkpoint_or_cancel()?;
             for x in 0..width {
                 let predictor = if x < 2 {
                     if y < 2 {

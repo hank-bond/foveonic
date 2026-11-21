@@ -75,7 +75,7 @@ pub(super) fn build(
     )?;
     for input in [rgb, evidence, flags] {
         graph.retain_for_session(input);
-        graph.retain_for_seal(input);
+        graph.retain_as_sensor_data(input);
     }
     let unfiltered = rgb;
     let energy = super::pool_noise_energy(geometry.native, geometry.scale);
@@ -114,7 +114,7 @@ pub(super) fn build(
     let blue = graph.add(Operation::ExtractBlue(geometry.extent), &[rgb])?;
     for input in [rgb, blue, highlight_mask].into_iter().chain(recovery_mask) {
         graph.retain_for_session(input);
-        graph.retain_for_seal(input);
+        graph.retain_as_sensor_data(input);
     }
     Ok(WorkingInputs {
         rgb,

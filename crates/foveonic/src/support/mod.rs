@@ -211,7 +211,7 @@ pub fn is_interrupted(error: &(dyn std::error::Error + 'static)) -> bool {
         let Some(cause) = current else {
             break;
         };
-        if cause.is::<crate::background::Interrupted>() {
+        if cause.is::<crate::priority::Interrupted>() {
             return true;
         }
         current = cause.source();

@@ -16,10 +16,6 @@ pub(super) struct ArtifactPlan {
 }
 
 impl ArtifactPlan {
-    pub(super) fn final_image_only(&self, final_id: usize) -> bool {
-        self.targets == [final_id] && self.estimate.is_none()
-    }
-
     pub(super) fn account(&self, retained: &mut crate::recipe::RetainedBytes) {
         retained.add_bytes(self.targets.capacity() * std::mem::size_of::<usize>());
         retained.add_bytes(self.roots.capacity() * std::mem::size_of::<usize>());

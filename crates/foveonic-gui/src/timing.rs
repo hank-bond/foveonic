@@ -277,7 +277,7 @@ pub fn task(
     trace::flow(
         trace::Category::Coordinator,
         phase,
-        flow_id("gui-render", stamp.id.0, stamp.revision),
+        flow_id("gui-render", stamp.id.0, stamp.request_id.0),
         terminating,
         |fields| {
             fields.str("source", &stamp.target.path.to_string_lossy());
@@ -297,10 +297,7 @@ pub fn purpose(purpose: &crate::rendering::request::Purpose) -> &'static str {
         Purpose::Current => "current",
         Purpose::Camera => "camera",
         Purpose::Defaults => "defaults",
-        Purpose::Detail => "detail",
-        Purpose::Preview => "preview",
         Purpose::Inspection(_, _) => "inspection",
-        Purpose::Export => "export",
     }
 }
 
@@ -315,7 +312,7 @@ impl From<&crate::rendering::coordinator::Stamp> for DeliveredTask {
     fn from(stamp: &crate::rendering::coordinator::Stamp) -> Self {
         Self {
             id: stamp.id.0,
-            revision: stamp.revision,
+            revision: stamp.request_id.0,
             purpose: purpose(&stamp.target.purpose),
         }
     }
@@ -359,7 +356,7 @@ impl ImageIdentity {
 pub fn context(stamp: &crate::rendering::coordinator::Stamp) -> trace::Context {
     context_for(
         stamp.id.0,
-        stamp.revision,
+        stamp.request_id.0,
         &stamp.target.path,
         purpose(&stamp.target.purpose),
     )

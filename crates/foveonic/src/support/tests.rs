@@ -597,7 +597,7 @@ fn clear_hides_empty_historical_runs_but_keeps_current_context() {
 
 #[test]
 fn interruption_classification_keeps_real_errors_distinct() {
-    assert!(is_interrupted(&crate::background::Interrupted));
+    assert!(is_interrupted(&crate::priority::Interrupted));
     assert!(!is_interrupted(&std::io::Error::from(
         std::io::ErrorKind::PermissionDenied
     )));

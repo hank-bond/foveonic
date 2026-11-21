@@ -130,16 +130,9 @@ fn trace_graph_outputs(
     }
 }
 
-// Allocation traffic bounds how far stateless work can queue ahead. This is
-// not a residency limit. A single node and retained outputs can exceed it.
-const SUBMISSION_ALLOCATION_WINDOW_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 // Bound completed spare retention separately from live graph and cache ownership.
-// Queued stateless work retains scratch reuse until its existing completion boundary.
 const COMPLETED_SCRATCH_SPARE_BYTES: u64 = 128 * 1024 * 1024;
-
-fn allocated_bytes(activity: crate::profile::GpuActivity) -> u64 {
-    activity.storage_bytes + activity.upload_bytes + activity.uniform_bytes
-}
+pub(crate) const TICK_WAIT_STAGE: &str = "complete graph tick";
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -165,6 +158,17 @@ pub(super) enum Input<'a> {
     Source(&'a Source),
     Metadata(&'a std::sync::Arc<Metadata>),
     Rendered(&'a RenderedImage),
+}
+
+impl Input<'_> {
+    /// Storage extent of the graph's root input.
+    pub(super) fn extent(&self) -> [u32; 2] {
+        match self {
+            Input::Source(source) => source.storage_extent().map(|v| v as u32),
+            Input::Metadata(metadata) => [metadata.width as u32, metadata.height as u32],
+            Input::Rendered(image) => image.description.extent,
+        }
+    }
 }
 
 impl Input<'_> {
@@ -243,7 +247,7 @@ pub(super) fn report_failure(
     // These typed results drive scheduling and must remain directly downcastable.
     if error.is::<SourceRequired>()
         || error.is::<crate::interactive::Superseded>()
-        || error.is::<crate::background::Interrupted>()
+        || error.is::<crate::priority::Interrupted>()
     {
         return error;
     }
@@ -280,37 +284,11 @@ pub(super) fn report_graph_failure(
     )
 }
 
-/// GPU completion is independent of cancellation and input ownership.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Completion {
-    /// Submit work with bounded allocation overlap. Readback waits separately.
-    Queued,
-    /// Complete each operation before reporting progress or advancing.
-    Operation,
-    /// The caller owns and completes a bounded submission window.
-    #[cfg(feature = "wide-experiment")]
-    Window,
-}
-
-impl Completion {
-    fn windowed(self) -> bool {
-        #[cfg(feature = "wide-experiment")]
-        {
-            self == Self::Window
-        }
-        #[cfg(not(feature = "wide-experiment"))]
-        {
-            false
-        }
-    }
-}
-
-/// Owns traversal and live storage between graph operations. Each advancement
+/// Walks one graph's uncached nodes and owns live storage between steps. Each step
 /// borrows the same graph, input, execution cache and profile. An error is terminal.
-pub(super) struct GraphExecution {
+pub(super) struct Traversal {
     next_node: usize,
     graph_id: Option<u64>,
-    completed_allocation_bytes: u64,
     trace: crate::gpu::GpuTrace,
     scratch: Scratch,
     values: Vec<Option<Value>>,
@@ -322,6 +300,8 @@ pub(super) struct GraphExecution {
     stage_total: usize,
     stage_completed: usize,
     pending_stages: usize,
+    /// Profile index of the node observation from the latest step, completed at its tick.
+    pending_observation: Option<usize>,
     shared_ranges: Option<Vec<(usize, usize, usize)>>,
 }
 
@@ -334,11 +314,10 @@ impl Engine {
         profile: &mut Profile,
         execution: &mut Execution<'_>,
         graph_id: Option<u64>,
-    ) -> Result<GraphExecution> {
+    ) -> Result<Traversal> {
         let preparation =
             (profile.mode.enabled() || crate::diagnostics::enabled()).then(Instant::now);
         let gpu = &self.gpu;
-        let completed_allocation_bytes = allocated_bytes(gpu.activity());
         let trace = gpu.trace(profile.mode.gpu(), graph.nodes.len() as u32 * 2);
         let scratch = Scratch::default();
         let values: Vec<Option<Value>> = graph
@@ -363,7 +342,7 @@ impl Engine {
                         dependencies: output.dependencies.clone(),
                         data_type: format!("{:?}", output.data),
                         session_hint: graph.session_outputs.contains(&id),
-                        sealed_cut: graph.sealed_outputs.contains(&id),
+                        sensor_data: graph.sensor_data_outputs.contains(&id),
                     })
                     .collect(),
             });
@@ -434,10 +413,9 @@ impl Engine {
             profile.record("prepare graph execution", start);
         }
         let shared_ranges = profile.mode.gpu().then(Vec::new);
-        Ok(GraphExecution {
+        Ok(Traversal {
             next_node: 0,
             graph_id,
-            completed_allocation_bytes,
             trace,
             scratch,
             values,
@@ -449,25 +427,29 @@ impl Engine {
             stage_total,
             stage_completed,
             pending_stages: 0,
+            pending_observation: None,
             shared_ranges,
         })
     }
 }
 
-impl GraphExecution {
+impl Traversal {
+    pub(super) fn graph_id(&self) -> Option<u64> {
+        self.graph_id
+    }
+
     pub(super) fn next_node(&self) -> usize {
         self.next_node
     }
 
+    /// Estimated GPU allocations for every remaining node, audited where a contract
+    /// exists and generic otherwise, with the bytes each node releases once it has
+    /// read its inputs for the last time. Profiling and diagnostics do not change it.
     pub(super) fn allocation_plan(
         &self,
         graph: &Graph,
-        mode: crate::profile::Mode,
-        regional: bool,
-    ) -> Option<Vec<super::allocation::GpuAllocation>> {
-        if mode != crate::profile::Mode::Off || regional {
-            return None;
-        }
+        context: Input<'_>,
+    ) -> Option<Vec<super::allocation::NodeCost>> {
         let mut extents: Vec<_> = self
             .values
             .iter()
@@ -477,31 +459,54 @@ impl GraphExecution {
                     .and_then(|value| value.description.map(|description| description.extent))
             })
             .collect();
-        let mut allocations = vec![super::allocation::GpuAllocation::default(); graph.nodes.len()];
+        let mut sizes: Vec<u64> = self
+            .values
+            .iter()
+            .map(|value| value.as_ref().map_or(0, |value| value.buffer.size()))
+            .collect();
+        let mut consumers = self.consumers.clone();
+        let mut costs = vec![super::allocation::NodeCost::default(); graph.nodes.len()];
         for (index, node) in graph.nodes.iter().enumerate().skip(self.next_node) {
             let outputs: Vec<_> = node.outputs.iter().map(|id| self.required[*id]).collect();
             if !outputs.iter().any(|required| *required) {
                 continue;
             }
-            let input_extent = self.reads[index].iter().find_map(|id| extents[*id]);
-            allocations[index] = super::allocation::estimate(
-                &node.operation,
-                &outputs,
-                input_extent,
-                mode,
-                regional,
-            )?;
-            let extent = operation_extent(&node.operation, input_extent.unwrap_or([0, 0]));
-            for (&id, required) in node.outputs.iter().zip(outputs) {
-                if required {
-                    extents[id] = graph.outputs[id]
-                        .data
-                        .image_description(extent)
-                        .map(|description| description.extent);
+            let input_extent = self.reads[index]
+                .iter()
+                .find_map(|id| extents[*id])
+                .unwrap_or_else(|| context.extent());
+            let extent = operation_extent(&node.operation, input_extent);
+            let mut output_bytes = 0_u64;
+            for (&id, required) in node.outputs.iter().zip(&outputs) {
+                if *required {
+                    let description = graph.outputs[id].data.image_description(extent);
+                    extents[id] =
+                        Some(description.map_or(extent, |description| description.extent));
+                    sizes[id] = description.map_or_else(
+                        || super::allocation::undescribed_bytes(extent),
+                        |description| Some(description.byte_len()),
+                    )?;
+                    output_bytes = output_bytes.checked_add(sizes[id])?;
                 }
             }
+            let allocation =
+                match super::allocation::estimate(&node.operation, &outputs, Some(input_extent)) {
+                    Some(audited) => audited,
+                    None => super::allocation::generic(output_bytes)?,
+                };
+            let mut released_bytes = 0_u64;
+            for &id in &self.reads[index] {
+                consumers[id] -= 1;
+                if consumers[id] == 0 && !graph.session_outputs.contains(&id) {
+                    released_bytes = released_bytes.checked_add(sizes[id])?;
+                }
+            }
+            costs[index] = super::allocation::NodeCost {
+                allocation,
+                released_bytes,
+            };
         }
-        Some(allocations)
+        Some(costs)
     }
 
     pub(super) fn account(&self, retained: &mut crate::recipe::RetainedBytes) -> Option<()> {
@@ -531,23 +536,21 @@ impl GraphExecution {
             .chain(self.scratch.buffers())
     }
 
-    /// Advance through skipped nodes and at most one required operation.
-    /// A window also consumes trailing skipped nodes before reporting completion.
-    pub(super) fn advance(
+    /// Run skipped nodes and at most one required node without waiting for the GPU.
+    /// Trailing skipped nodes are consumed too, so the last step reports completion.
+    /// The caller completes the step's tick before the next step.
+    pub(super) fn step(
         &mut self,
         engine: &Engine,
         context: Input<'_>,
         graph: &Graph,
         profile: &mut Profile,
         execution: &mut Execution<'_>,
-        completion: Completion,
     ) -> Result<bool> {
-        let grouped = completion.windowed();
         let gpu = &engine.gpu;
         let Self {
             next_node,
             graph_id,
-            completed_allocation_bytes,
             trace,
             scratch,
             values,
@@ -559,6 +562,7 @@ impl GraphExecution {
             stage_total,
             stage_completed,
             pending_stages,
+            pending_observation,
             shared_ranges,
         } = self;
         let graph_id = *graph_id;
@@ -662,7 +666,7 @@ impl GraphExecution {
                 continue;
             }
             let index = node.outputs[0];
-            let mut submission_stage = gpu.background_stage(completion != Completion::Queued);
+            let mut submission_stage = gpu.background_stage();
             let start = Instant::now();
             let input = |slot: usize| {
                 values[node.inputs[slot]].as_ref().unwrap_or_else(|| {
@@ -681,11 +685,7 @@ impl GraphExecution {
                         .and_then(|value| value.description)
                         .map(|d| d.extent)
                 })
-                .unwrap_or_else(|| match &context {
-                    Input::Source(source) => source.storage_extent().map(|v| v as u32),
-                    Input::Metadata(metadata) => [metadata.width as u32, metadata.height as u32],
-                    Input::Rendered(image) => image.description.extent,
-                });
+                .unwrap_or_else(|| context.extent());
             let inherited_scale = reads[node_index]
                 .iter()
                 .find_map(|id| values[*id].as_ref().map(|value| value.working_scale))
@@ -2519,42 +2519,9 @@ impl GraphExecution {
                 reachable.as_deref(),
                 execution,
             );
-            // Interactive work completes each operation. Fresh work bounds allocation
-            // overlap while leaving final completion to its consumer or readback.
-            let pending_allocation_bytes =
-                allocated_bytes(gpu.activity()).saturating_sub(*completed_allocation_bytes);
-            let completed_stage = match completion {
-                Completion::Queued => {
-                    pending_allocation_bytes >= SUBMISSION_ALLOCATION_WINDOW_BYTES
-                }
-                Completion::Operation => true,
-                #[cfg(feature = "wide-experiment")]
-                Completion::Window => false,
-            };
-            if completed_stage {
-                let label = if completion == Completion::Operation {
-                    "complete interactive graph stage"
-                } else {
-                    "complete graph submission window"
-                };
-                let wait = profile.mode.enabled().then(Instant::now);
-                profile.measure(label, || gpu.wait_for_submitted_work())?;
-                if let Some((observation, _, _)) = &mut diagnostic {
-                    observation.completion_wait_ms =
-                        wait.map(|start| start.elapsed().as_secs_f64() * 1000.);
-                }
-                *completed_allocation_bytes = allocated_bytes(gpu.activity());
-            }
             submission_stage.complete();
             *stage_completed += 1;
-            if grouped {
-                *pending_stages += 1;
-            } else if let Some(progress) = execution.progress {
-                progress(super::RenderProgress::Stage {
-                    completed: *stage_completed,
-                    total: *stage_total,
-                });
-            }
+            *pending_stages += 1;
             let retirement = profile.mode.enabled().then(Instant::now);
             for &id in &reads[node_index] {
                 consumers[id] -= 1;
@@ -2571,11 +2538,6 @@ impl GraphExecution {
                     }
                 }
             }
-            if completed_stage {
-                // Newly retired inputs belong to this completed stage too. Trimming
-                // earlier would leave those large spares outside the retention cap.
-                scratch.trim_completed(COMPLETED_SCRATCH_SPARE_BYTES);
-            }
             if let Some((mut observation, started, shared_range)) = diagnostic {
                 observation.retirement_ms =
                     retirement.map(|start| start.elapsed().as_secs_f64() * 1000.);
@@ -2587,9 +2549,10 @@ impl GraphExecution {
                 if let (Some(ranges), Some((start, end))) = (shared_ranges.as_mut(), shared_range) {
                     ranges.push((profile.nodes.len(), start, end));
                 }
+                *pending_observation = Some(profile.nodes.len());
                 profile.nodes.push(observation);
             }
-            if grouped && *stage_completed == *stage_total {
+            if *stage_completed == *stage_total {
                 continue;
             }
             return Ok(true);
@@ -2597,14 +2560,21 @@ impl GraphExecution {
         Ok(false)
     }
 
-    /// Called only after the enclosing submission window has drained.
-    #[cfg(feature = "wide-experiment")]
-    pub(super) fn complete_window(
+    /// Called after the tick's GPU wait. Publishes progress for the step and
+    /// releases spare scratch that the step's retired inputs left behind.
+    pub(super) fn complete_tick(
         &mut self,
-        engine: &Engine,
+        waited: std::time::Duration,
+        profile: &mut Profile,
         progress: Option<&dyn Fn(super::RenderProgress)>,
     ) {
-        self.completed_allocation_bytes = allocated_bytes(engine.gpu.activity());
+        if let Some(index) = self.pending_observation.take() {
+            let waited_ms = waited.as_secs_f64() * 1000.;
+            let observation = &mut profile.nodes[index];
+            observation.completion_wait_ms = Some(waited_ms);
+            observation.total_ms = observation.total_ms.map(|total| total + waited_ms);
+            profile.record_duration(TICK_WAIT_STAGE, waited);
+        }
         if self.pending_stages > 0 {
             if let Some(progress) = progress {
                 progress(super::RenderProgress::Stage {
@@ -2675,7 +2645,7 @@ mod support_failure_tests {
         for (kind, error) in [
             Box::new(SourceRequired) as Box<dyn std::error::Error + Send + Sync>,
             Box::new(crate::interactive::Superseded),
-            Box::new(crate::background::Interrupted),
+            Box::new(crate::priority::Interrupted),
         ]
         .into_iter()
         .enumerate()
@@ -2685,7 +2655,7 @@ mod support_failure_tests {
             assert!(match kind {
                 0 => returned.is::<SourceRequired>(),
                 1 => returned.is::<crate::interactive::Superseded>(),
-                _ => returned.is::<crate::background::Interrupted>(),
+                _ => returned.is::<crate::priority::Interrupted>(),
             });
             assert!(!returned.is::<crate::support::ReportedError>());
         }
@@ -2781,11 +2751,11 @@ mod observation_tests {
 
     #[test]
     #[ignore = "requires a GPU"]
-    fn queued_and_operation_completion_preserve_samples_and_wait_boundaries() {
+    fn each_tick_waits_once_and_preserves_samples_and_progress() {
         let engine = Engine::new().unwrap();
         let (image, graph, target) = resumable_fixture(&engine);
         let never_cancel = || false;
-        for completion in [Completion::Queued, Completion::Operation] {
+        {
             for cancellable in [false, true] {
                 let progress = std::cell::RefCell::new(Vec::new());
                 let report = |stage| progress.borrow_mut().push(stage);
@@ -2802,7 +2772,6 @@ mod observation_tests {
                         &[target],
                         &mut profile,
                         &mut execution,
-                        completion,
                     )
                     .unwrap();
                 assert_eq!(profile.nodes.iter().filter(|node| node.executed).count(), 2);
@@ -2812,12 +2781,8 @@ mod observation_tests {
                         .iter()
                         .filter(|node| node.completion_wait_ms.is_some())
                         .count(),
-                    if completion == Completion::Operation {
-                        2
-                    } else {
-                        0
-                    },
-                    "{completion:?}, cancellable={cancellable}",
+                    2,
+                    "cancellable={cancellable}",
                 );
                 assert_eq!(
                     *progress.borrow(),
@@ -2844,7 +2809,6 @@ mod observation_tests {
                 &[target, usize::MAX],
                 &mut Profile::default(),
                 &mut Execution::default(),
-                Completion::Queued,
             )
             .err()
             .expect("unknown target must be rejected");
@@ -2895,48 +2859,23 @@ mod observation_tests {
             )
             .unwrap();
         assert!(state
-            .advance(
-                &engine,
-                context,
-                &graph,
-                &mut profile,
-                &mut execution,
-                Completion::Operation,
-            )
+            .step(&engine, context, &graph, &mut profile, &mut execution,)
             .unwrap());
+        assert!(progress.borrow().is_empty(), "progress waits for the tick");
+        state.complete_tick(std::time::Duration::ZERO, &mut profile, execution.progress);
         assert_eq!(*progress.borrow(), [(1, 2)]);
         // The caller regains control with a live input and can resume later.
         assert!(state.values[0].is_some());
-        assert!(state
-            .advance(
-                &engine,
-                context,
-                &graph,
-                &mut profile,
-                &mut execution,
-                Completion::Operation,
-            )
-            .unwrap());
+        assert!(
+            !state
+                .step(&engine, context, &graph, &mut profile, &mut execution,)
+                .unwrap(),
+            "the last required node also consumes trailing skipped nodes"
+        );
+        state.complete_tick(std::time::Duration::ZERO, &mut profile, execution.progress);
         assert_eq!(*progress.borrow(), [(1, 2), (2, 2)]);
         assert!(!state
-            .advance(
-                &engine,
-                context,
-                &graph,
-                &mut profile,
-                &mut execution,
-                Completion::Operation,
-            )
-            .unwrap());
-        assert!(!state
-            .advance(
-                &engine,
-                context,
-                &graph,
-                &mut profile,
-                &mut execution,
-                Completion::Operation,
-            )
+            .step(&engine, context, &graph, &mut profile, &mut execution,)
             .unwrap());
         assert_eq!(profile.nodes.len(), 3);
         assert!(!profile.nodes[2].executed);
@@ -2971,26 +2910,12 @@ mod observation_tests {
             )
             .unwrap();
         assert!(state
-            .advance(
-                &engine,
-                context,
-                &graph,
-                &mut profile,
-                &mut execution,
-                Completion::Operation,
-            )
+            .step(&engine, context, &graph, &mut profile, &mut execution,)
             .unwrap());
         cancelled.set(true);
         let before = engine.gpu_activity();
         assert!(state
-            .advance(
-                &engine,
-                context,
-                &graph,
-                &mut profile,
-                &mut execution,
-                Completion::Operation,
-            )
+            .step(&engine, context, &graph, &mut profile, &mut execution,)
             .is_err());
         assert_eq!(engine.gpu_activity().dispatches, before.dispatches);
         assert!(state.values[target].is_none());
@@ -3080,7 +3005,6 @@ mod observation_tests {
             &[target],
             &mut profile,
             &mut execution,
-            Completion::Operation,
         );
         assert!(result.is_err());
         assert!(profile
@@ -3151,7 +3075,6 @@ mod observation_tests {
                 &[main],
                 &mut Profile::default(),
                 &mut execution,
-                Completion::Operation,
             )
             .unwrap()
             .remove(0);
@@ -3164,7 +3087,6 @@ mod observation_tests {
                 &[main, side],
                 &mut profile,
                 &mut execution,
-                Completion::Operation,
             )
             .unwrap();
         assert!(retained.buffer.shares_storage(&results[0].buffer));

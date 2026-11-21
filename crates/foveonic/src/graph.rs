@@ -163,7 +163,7 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     pub outputs: Vec<Output>,
     pub(crate) session_outputs: Vec<usize>,
-    pub(crate) sealed_outputs: Vec<usize>,
+    pub(crate) sensor_data_outputs: Vec<usize>,
 }
 
 impl Graph {
@@ -174,7 +174,7 @@ impl Graph {
         retained.add_bytes(self.nodes.capacity() * std::mem::size_of::<Node>());
         retained.add_bytes(self.outputs.capacity() * std::mem::size_of::<Output>());
         retained.add_bytes(self.session_outputs.capacity() * std::mem::size_of::<usize>());
-        retained.add_bytes(self.sealed_outputs.capacity() * std::mem::size_of::<usize>());
+        retained.add_bytes(self.sensor_data_outputs.capacity() * std::mem::size_of::<usize>());
         let mut complete = true;
         for node in &self.nodes {
             retained.add_bytes(node.inputs.capacity() * std::mem::size_of::<usize>());
@@ -204,10 +204,10 @@ impl Graph {
 
     /// Immutable camera dependencies needed after decoded samples are released.
     /// Their exact operation ancestry determines whether a retained value is reusable.
-    pub(crate) fn retain_for_seal(&mut self, output: usize) {
+    pub(crate) fn retain_as_sensor_data(&mut self, output: usize) {
         assert!(output < self.outputs.len());
-        if !self.sealed_outputs.contains(&output) {
-            self.sealed_outputs.push(output);
+        if !self.sensor_data_outputs.contains(&output) {
+            self.sensor_data_outputs.push(output);
         }
     }
 
@@ -352,8 +352,8 @@ impl Graph {
         for id in branch.session_outputs {
             self.retain_for_session(mapping[id]);
         }
-        for id in branch.sealed_outputs {
-            self.retain_for_seal(mapping[id]);
+        for id in branch.sensor_data_outputs {
+            self.retain_as_sensor_data(mapping[id]);
         }
         mapping
     }

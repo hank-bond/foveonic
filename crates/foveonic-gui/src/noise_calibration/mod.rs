@@ -1,6 +1,7 @@
 //! Coordinates cap review and one user calibration through explicit background jobs and immutable profile selection.
 
 use eframe::egui;
+use foveonic::priority::Priority;
 use foveonic::{
     noise_calibration::{self as calibration, Calibration, Capture, Condition, TrainingProgress},
     render::Engine,
@@ -293,8 +294,10 @@ impl State {
                 "Calibration training started",
                 training_fields,
             );
+            let _demand = cache.priority().demand(Priority::Export);
             let result = cache
-                .processing(|| {
+                .priority()
+                .run(Priority::Export, || {
                     let profile = engine.train_noise_calibration(
                         &captures,
                         |p| {

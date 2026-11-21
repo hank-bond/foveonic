@@ -4,8 +4,8 @@ use super::{
     prepare_decoded, previews, prune, publish_decoded, read_header, ready, store_checked, Command,
     Control, EntryState, Identity, Settings, Status, NAMESPACE,
 };
-use crate::background::{self, Gate};
 use crate::diagnostics::{self as diag, Category};
+use crate::priority::{self, Gate};
 use crate::source::{ProcessingFamily, Result};
 use std::{
     collections::{HashMap, HashSet},
@@ -48,15 +48,15 @@ pub(super) fn start(
         // Shared CPU workers also serve foreground loads. Create them before
         // this I/O actor lowers its inherited Linux scheduling priority.
         let pool = crate::decode_pool::shared();
-        background::lower_priority();
-        background::run(Some(gate.clone()), || {
+        priority::lower_priority();
+        priority::with_context(gate.context(priority::Priority::Speculative), || {
             let mut initialized = false;
             let mut last_scan = Instant::now();
             let mut families = HashMap::new();
             loop {
                 let work_ready = {
                     let state = control.lock().unwrap();
-                    gate.idle()
+                    gate.ready(priority::Priority::Speculative)
                         && state.settings.enabled
                         && state.settings.max_bytes > 0
                         && !state.queue.is_empty()
@@ -179,9 +179,9 @@ pub(super) fn start(
                     }
                     control.lock().unwrap().stores.remove(&path);
                 }
-                if gate.idle() && !clear {
+                if gate.ready(priority::Priority::Speculative) && !clear {
                     loop {
-                        background::checkpoint();
+                        priority::checkpoint();
                         let update = {
                             let mut state = control.lock().unwrap();
                             state.recipe_updates.pop_first().and_then(|(path, recipe)| {
@@ -221,13 +221,13 @@ pub(super) fn start(
                         !state.queue.is_empty(),
                     )
                 };
-                let prefetched = gate.idle()
+                let prefetched = gate.ready(priority::Priority::Speculative)
                     && prefetch_settings.enabled
                     && prefetch_settings.max_bytes > 0
                     && queued;
                 if prefetched {
                     if let Ok(pool) = &pool {
-                        background::interruptible(gate.clone(), || {
+                        priority::interruptible(gate.clone(), || {
                             prefetch_pass(
                                 &root,
                                 &control,
@@ -248,11 +248,12 @@ pub(super) fn start(
                 }
                 if maintenance
                     || prefetched
-                    || (gate.idle() && last_scan.elapsed() >= READINESS_SCAN_INTERVAL)
+                    || (gate.ready(priority::Priority::Speculative)
+                        && last_scan.elapsed() >= READINESS_SCAN_INTERVAL)
                 {
                     // A scan must not keep the actor on an obsolete folder walk
                     // after selection changes or foreground work interrupts it.
-                    let refreshed = background::interruptible(gate.clone(), || {
+                    let refreshed = priority::interruptible(gate.clone(), || {
                         refresh(&root, &control, &status, &mut families)
                     });
                     if refreshed.is_ok() {
@@ -283,7 +284,7 @@ fn prefetch_pass(
 ) {
     let publication = Mutex::new(());
     let order = Arc::new(crate::decode_pool::Order::default());
-    let scheduling = background::context();
+    let scheduling = priority::context();
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..photo_workers(pool.threads()))
             .map(|_| {
@@ -291,8 +292,8 @@ fn prefetch_pass(
                 let order = &order;
                 let scheduling = scheduling.clone();
                 scope.spawn(move || {
-                    background::with_context(scheduling, || loop {
-                        if background::checkpoint_or_cancel().is_err() {
+                    priority::with_context(scheduling, || loop {
+                        if priority::checkpoint_or_cancel().is_err() {
                             break;
                         }
                         let next = {
@@ -312,7 +313,7 @@ fn prefetch_pass(
                                 fields.u64("generation", generation);
                             });
                         status.lock().unwrap().prefetching.push(path.clone());
-                        let result = background::decoder(
+                        let result = priority::decoder(
                             crate::decode_pool::Task {
                                 pool: pool.clone(),
                                 turn,
@@ -343,7 +344,7 @@ fn prefetch_pass(
                             && !current.clear
                             && result
                                 .as_ref()
-                                .is_err_and(|e| e.is::<background::Interrupted>())
+                                .is_err_and(|e| e.is::<priority::Interrupted>())
                         {
                             // Several coordinators can unwind in any order. Restore only
                             // unfinished paths, in the current neighborhood's priority order.
@@ -426,7 +427,7 @@ fn photo_outcome<T>(path: &Path, generation: u64, event: &'static str, result: &
             "outcome",
             match result {
                 Ok(_) => "completed",
-                Err(error) if error.is::<background::Interrupted>() => "interrupted",
+                Err(error) if error.is::<priority::Interrupted>() => "interrupted",
                 Err(_) => "failed",
             },
         );
@@ -446,7 +447,7 @@ fn publication_lock(publication: &Mutex<()>) -> Result<MutexGuard<'_, ()>> {
     let _scope = diag::scope(Category::Cache, "cache.publication.wait");
     const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(1);
     loop {
-        background::checkpoint_or_cancel()?;
+        priority::checkpoint_or_cancel()?;
         match publication.try_lock() {
             Ok(guard) => return Ok(guard),
             Err(TryLockError::Poisoned(_)) => return Err("cache publication lock poisoned".into()),
@@ -466,7 +467,7 @@ fn prefetch(
     current: impl Fn() -> bool,
     published: impl Fn(),
 ) -> Result<()> {
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     if !current() {
         diag::event(Category::Cache, "cache.prefetch.skipped", |fields| {
             fields.str("source", &path.to_string_lossy());
@@ -493,10 +494,10 @@ fn prefetch(
         return Ok(());
     };
     source.validate()?;
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     let decoded = crate::decode_pool::cpu(|| prepare_decoded(identity.clone(), &source))?;
     let selection = super::selection::prepare_assets(path, &identity, &source.metadata, &original)?;
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     {
         let _scope = diag::scope_with(Category::Cache, "cache.prefetch.publish", |fields| {
             fields.str("source", &path.to_string_lossy());
@@ -600,13 +601,13 @@ pub(super) fn refresh(
     status: &Mutex<Status>,
     families: &mut FamilyCatalog,
 ) -> Result<()> {
-    background::checkpoint_or_cancel()?;
+    priority::checkpoint_or_cancel()?;
     let (settings, watched, generation, queued, nearby, known, rejected) = {
         let state = control.lock().unwrap();
         // Newly queued neighbors take precedence over a directory-wide scan.
         // This also handles a replacement arriving just after the prior pass exits.
         if state.settings.enabled && state.settings.max_bytes > 0 && !state.queue.is_empty() {
-            return Err(Box::new(background::Interrupted));
+            return Err(Box::new(priority::Interrupted));
         }
         (
             state.settings.clone(),
@@ -625,13 +626,13 @@ pub(super) fn refresh(
     };
     let entries = match prune(root, settings.max_bytes, &nearby) {
         Ok(entries) => entries,
-        Err(error) if error.is::<background::Interrupted>() => return Err(error),
+        Err(error) if error.is::<priority::Interrupted>() => return Err(error),
         Err(_) => Vec::new(),
     };
     let watching = watched.iter().cloned().collect::<HashSet<_>>();
     families.retain(|p, _| watching.contains(p));
     for (path, identity) in known {
-        background::checkpoint_or_cancel()?;
+        priority::checkpoint_or_cancel()?;
         if watching.contains(&path) && !families.contains_key(&path) {
             let family = File::open(root.join(identity.name()))
                 .ok()
@@ -648,7 +649,7 @@ pub(super) fn refresh(
     let files: HashMap<_, _> = watched
         .into_iter()
         .map(|path| -> Result<_> {
-            background::checkpoint_or_cancel()?;
+            priority::checkpoint_or_cancel()?;
             let state = entry_state(
                 root,
                 &path,
@@ -657,7 +658,7 @@ pub(super) fn refresh(
                 families,
                 &rejected,
             );
-            background::checkpoint_or_cancel()?;
+            priority::checkpoint_or_cancel()?;
             if state == EntryState::Ready && Identity::read(&path).is_ok() {
                 if let Some((identity, _)) = families.get(&path) {
                     let previous = control.lock().unwrap().recipes.get(&path).cloned();
@@ -700,7 +701,7 @@ pub(super) fn refresh(
             families.get(p).map(|(i, _)| (p.clone(), i.clone()))
         })
         .collect();
-    background::checkpoint_or_cancel()?;
+    priority::checkpoint_or_cancel()?;
     let mut state = control.lock().unwrap();
     let mut status = status.lock().unwrap();
     status.entries = entries
@@ -734,7 +735,7 @@ mod tests {
     fn readiness_yields_to_replacement_neighbors_and_cancels_with_the_old_epoch() {
         let folder = tempfile::tempdir().unwrap();
         let cache = super::super::Cache::at(folder.path().join("cache"));
-        let foreground = cache.foreground();
+        let foreground = cache.priority().demand(crate::priority::Priority::Viewport);
         cache.configure(Settings::default());
         let first = folder.path().join("first.x3f");
         let second = folder.path().join("second.x3f");
@@ -743,19 +744,19 @@ mod tests {
         assert!(
             refresh(&cache.root, &cache.control, &cache.status, &mut families)
                 .unwrap_err()
-                .is::<background::Interrupted>()
+                .is::<priority::Interrupted>()
         );
         assert!(
             families.is_empty(),
             "pending neighbors must run before source scanning"
         );
-        background::interruptible(cache.gate.clone(), || {
+        priority::interruptible(cache.gate.clone(), || {
             drop(foreground);
             cache.prefetch_window(vec![first, second.clone()], Some(second));
             assert!(
                 refresh(&cache.root, &cache.control, &cache.status, &mut families)
                     .unwrap_err()
-                    .is::<background::Interrupted>()
+                    .is::<priority::Interrupted>()
             );
         });
         assert!(
@@ -769,11 +770,11 @@ mod tests {
         let publication = Mutex::new(());
         let _busy = publication.lock().unwrap();
         let gate = Arc::new(Gate::default());
-        background::interruptible(gate.clone(), || {
-            let _foreground = gate.foreground();
+        priority::interruptible(gate.clone(), || {
+            let _foreground = gate.demand(crate::priority::Priority::Viewport);
             assert!(publication_lock(&publication)
                 .unwrap_err()
-                .is::<background::Interrupted>());
+                .is::<priority::Interrupted>());
         });
     }
 }

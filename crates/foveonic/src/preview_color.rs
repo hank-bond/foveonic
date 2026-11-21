@@ -123,7 +123,7 @@ impl Encoding {
             .chunks(TRANSFORM_PIXELS * RGB_CHANNELS)
             .zip(converted.chunks_mut(TRANSFORM_PIXELS * RGB_CHANNELS))
         {
-            crate::background::checkpoint_or_cancel()?;
+            crate::priority::checkpoint_or_cancel()?;
             input.clear();
             input.extend(chunk.iter().map(|v| u16::from(*v) * RGB8_TO_RGB16));
             transform.transform(&input, output)?;

@@ -183,8 +183,8 @@ impl Drag {
         if let Some(snapshot) = automation::snapshot() {
             self.frames.push(Frame {
                 time_seconds: snapshot.time_seconds,
-                revision: app.revision,
-                worker_busy: app.worker.busy(),
+                revision: app.last_request_id.0,
+                worker_busy: app.view_busy(),
                 panel: snapshot.panel,
                 control: snapshot
                     .controls
@@ -195,14 +195,13 @@ impl Drag {
                     .paths
                     .iter()
                     .map(|path| {
-                        app.frame
-                            .as_ref()
-                            .filter(|frame| frame.path == *path)
-                            .or_else(|| app.multi_edit_frame(path))
+                        app.active_image()
+                            .filter(|frame| frame.request.path == *path)
+                            .or_else(|| app.photo_layers(path)[0])
                             .map(|frame| Rendered {
                                 task: frame.diagnostic_task.id,
                                 revision: frame.diagnostic_task.revision,
-                                requested_value: serde_json::to_value(&frame.requested)
+                                requested_value: serde_json::to_value(&frame.request.settings)
                                     .ok()
                                     .and_then(|settings| {
                                         settings

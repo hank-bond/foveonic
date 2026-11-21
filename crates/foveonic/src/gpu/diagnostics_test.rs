@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::{
-    background,
     diagnostics::{CaptureConfig, Recorder},
+    priority,
     profile::{Mode, Profile},
 };
 use std::{path::PathBuf, sync::mpsc, time::Duration};
@@ -72,18 +72,26 @@ fn manual_capture_resolves_on_normal_poll_without_a_foreground_gate_wait() {
     assert_eq!(trace.passes[0].context.unwrap().node, Some(42));
     let executor = gpu.executor();
     assert!(Arc::ptr_eq(&gpu.diagnostics, &executor.diagnostics));
-    let gate = Arc::new(background::Gate::default());
-    let foreground = gate.foreground();
+    let gate = Arc::new(priority::Gate::default());
+    let job_gate = gate.clone();
+    let (entered_send, entered) = mpsc::channel();
+    let (proceed, proceed_receive) = mpsc::channel();
     let (send, receive) = mpsc::channel();
     let (trace, profile) = std::thread::scope(|scope| {
         let job = scope.spawn(move || {
-            background::run(Some(gate), || {
+            job_gate.run(priority::Priority::Speculative, || {
+                entered_send.send(()).unwrap();
+                // Viewport demand arrives while the capture is resolving.
+                proceed_receive.recv().unwrap();
                 let mut profile = Profile::default();
                 executor.finish_trace(&trace, &mut profile).unwrap();
                 send.send(()).unwrap();
                 (trace, profile)
             })
         });
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        let foreground = gate.demand(crate::priority::Priority::Viewport);
+        proceed.send(()).unwrap();
         let completed = receive.recv_timeout(Duration::from_secs(5));
         // Always release the gate before joining if a regression reintroduces blocking.
         drop(foreground);

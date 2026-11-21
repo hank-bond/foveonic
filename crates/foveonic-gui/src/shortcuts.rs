@@ -155,7 +155,6 @@ const BINDINGS: &[Binding] = &[
 ];
 
 pub struct Availability {
-    pub enabled: bool,
     pub browser: bool,
     pub import: bool,
     pub settings: bool,
@@ -164,28 +163,27 @@ pub struct Availability {
 }
 impl Availability {
     fn allows(&self, action: Action) -> bool {
-        self.enabled
-            && match action {
-                Action::Browser(BrowserAction::TogglePick) => {
-                    self.browser && self.import && !self.viewport_hovered
-                }
-                Action::Browser(BrowserAction::Hide) => self.browser && self.import,
-                Action::Browser(_) => self.browser,
-                Action::FinishTool => self.settings && self.framing_active,
-                Action::DirectColor
-                | Action::Crop
-                | Action::Rotate
-                | Action::RotateLeft
-                | Action::RotateRight
-                | Action::CycleRotate
-                | Action::Pointer
-                | Action::Loupe
-                | Action::ExitTool
-                | Action::CopySettings
-                | Action::PasteSettings
-                | Action::BeforeCamera
-                | Action::BeforeDefaults => self.settings,
+        match action {
+            Action::Browser(BrowserAction::TogglePick) => {
+                self.browser && self.import && !self.viewport_hovered
             }
+            Action::Browser(BrowserAction::Hide) => self.browser && self.import,
+            Action::Browser(_) => self.browser,
+            Action::FinishTool => self.settings && self.framing_active,
+            Action::DirectColor
+            | Action::Crop
+            | Action::Rotate
+            | Action::RotateLeft
+            | Action::RotateRight
+            | Action::CycleRotate
+            | Action::Pointer
+            | Action::Loupe
+            | Action::ExitTool
+            | Action::CopySettings
+            | Action::PasteSettings
+            | Action::BeforeCamera
+            | Action::BeforeDefaults => self.settings,
+        }
     }
 }
 
@@ -196,7 +194,7 @@ pub fn capture(
     available: Availability,
 ) -> Vec<Invocation> {
     let mut actions = Vec::new();
-    if !available.enabled || !input.focused {
+    if !input.focused {
         return actions;
     }
     let (focused, modal) =

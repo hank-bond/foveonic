@@ -1,7 +1,8 @@
 //! Keeps rotation smoke gestures, readiness and assertions with their capture steps.
 
 use super::{App, Smoke};
-use crate::{rendering::worker::Frame, viewport::Viewport};
+use crate::rendering::request::RequestId;
+use crate::{rendering::worker::RenderResult, viewport::Viewport};
 use eframe::egui;
 use foveonic::render::ProcessingQuality;
 use foveonic::render::Settings;
@@ -31,12 +32,12 @@ pub(super) const TARGETS: &[&str] = &[
 pub(super) fn check(
     ctx: &egui::Context,
     smoke: &mut Smoke,
-    frame: &Frame,
+    frame: &RenderResult,
     settings: &Settings,
     viewport: &Viewport,
 ) {
     let target = smoke.targets[smoke.index];
-    assert_eq!(frame.requested.rotation, settings.rotation);
+    assert_eq!(frame.request.settings.rotation, settings.rotation);
     match target {
         "rotate-draft" => {
             assert!(
@@ -85,7 +86,7 @@ pub(super) fn check(
     }
     if matches!(target, "rotate-fast" | "rotate-smart") {
         assert_eq!(
-            frame.processing_quality,
+            frame.processing_quality(),
             if target == "rotate-fast" {
                 ProcessingQuality::Speed
             } else {
@@ -95,13 +96,13 @@ pub(super) fn check(
         assert!(frame.artifact.settings.preview_region.is_none());
     }
     if target == "rotate-shared-zoom" {
-        smoke.name_revision = Some(frame.revision);
+        smoke.name_revision = Some(frame.request.id.0);
         smoke.current_texture = Some(frame.texture.clone());
         smoke.fast_region = viewport.visible_pixels();
     }
     if matches!(target, "rotate-crop" | "rotate-return") {
         assert_eq!(
-            Some(frame.revision),
+            Some(frame.request.id.0),
             smoke.name_revision,
             "switching tools submitted a render"
         );
@@ -123,8 +124,7 @@ pub(super) fn check(
 }
 
 impl App {
-    pub(super) fn smoke_rotate_enter(&mut self) {
-        let smoke = self.smoke.as_mut().unwrap();
+    pub(super) fn smoke_rotate_enter(&mut self, smoke: &mut super::Smoke) {
         match smoke.targets[smoke.index] {
             "rotate-ready" | "rotate-reopen" | "rotate-pointer" | "rotate-crop"
             | "rotate-return" | "rotate-done" => {
@@ -160,7 +160,7 @@ impl App {
                 } else {
                     foveonic::render::ProcessingQuality::Quality
                 };
-                self.submit(None);
+                self.submit_photos();
             }
             "rotate-first-click" | "rotate-click-applied" => {
                 let point = self
@@ -196,7 +196,7 @@ impl App {
             }
             "rotate-quarter" => {
                 self.settings.rotation.turn(true, &mut self.settings.crop);
-                self.submit(None);
+                self.submit_photos();
             }
             "rotate-draft" | "rotate-freehand-draft" => {
                 let freehand = smoke.targets[smoke.index] == "rotate-freehand-draft";
@@ -264,7 +264,7 @@ pub(super) fn ready(
     ctx: &egui::Context,
     smoke: &Smoke,
     settings: &Settings,
-    frame: Option<&Frame>,
+    frame: Option<&RenderResult>,
     revision: u64,
 ) -> bool {
     smoke.preview_pending()
@@ -287,9 +287,12 @@ pub(super) fn ready(
                 _ => true,
             }
             && frame.is_some_and(|f| {
-                f.revision == revision
-                    && crate::rendering::matching::same_authored_edits(&f.requested, settings)
-                    && f.framing_preview
+                f.request.id == RequestId(revision)
+                    && crate::rendering::matching::same_authored_edits(
+                        &f.request.settings,
+                        settings,
+                    )
+                    && f.request.framing_preview
                         == matches!(
                             smoke.targets[smoke.index],
                             "rotate-ready"

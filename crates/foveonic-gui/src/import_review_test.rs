@@ -1,5 +1,6 @@
 //! Checks frozen Browse selection processing and destination-scoped import completion receipts.
 
+use foveonic::priority::Priority;
 #[test]
 fn unpicking_disables_process_unless_a_hidden_decision_has_changed() {
     let mut browser = Browser::new(egui::Context::default());
@@ -96,6 +97,101 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Files already handled for a destination hide almost as soon as the folder lists.
+const HIDE_LATENCY: Duration = Duration::from_millis(250);
+
+#[test]
+#[ignore = "requires a GPU"]
+fn import_history_hides_files_while_rendering_holds_settings_back() {
+    use foveonic::importing::{Disposition, History, Identity, Record};
+    let source = tempfile::tempdir().unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    let paths: Vec<_> = ["handled.x3f", "new.x3f"]
+        .into_iter()
+        .map(|name| {
+            let path = source.path().join(name);
+            // Hiding needs filesystem metadata only; the saved recipe avoids decoding.
+            fs::write(&path, b"camera bytes").unwrap();
+            foveonic::sidecar::save(&path, &foveonic::render::Settings::new("Shade", "Vivid"))
+                .unwrap();
+            path
+        })
+        .collect();
+    let mut history = History::default();
+    history.set(Record {
+        identity: Identity::read(&paths[0]).unwrap(),
+        source: paths[0].display().to_string(),
+        disposition: Disposition::Hidden,
+    });
+    history.save(destination.path()).unwrap();
+    let context = egui::Context::default();
+    let cache = Arc::new(Cache::new());
+    let mut review = Review::new(Engine::new().unwrap(), cache.clone(), context.clone());
+    let mut browser = Browser::new(context);
+    browser.import_mode = true;
+    browser.files = paths.clone();
+    browser.reindex_files();
+    let rendering = cache.priority().demand(Priority::Viewport);
+    review.rescan(&mut browser, Some(destination.path()));
+    let deadline = Instant::now() + HIDE_LATENCY;
+    while browser.recorded_marks.get(&paths[0]) != Some(&Mark::Hidden) {
+        review.update(&mut browser);
+        assert!(Instant::now() < deadline, "hiding waited for rendering");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(!browser.recorded_marks.contains_key(&paths[1]));
+    std::thread::sleep(Duration::from_millis(100));
+    review.update(&mut browser);
+    assert!(review.scanning, "settings must yield to rendering");
+    drop(rendering);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while review.scanning {
+        review.update(&mut browser);
+        assert!(Instant::now() < deadline, "settings did not finish");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(review.sources.len(), 2);
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn a_new_destination_hides_files_while_an_earlier_scan_waits_for_rendering() {
+    use foveonic::importing::{Disposition, History, Identity, Record};
+    let source = tempfile::tempdir().unwrap();
+    let path = source.path().join("photo.x3f");
+    fs::write(&path, b"camera bytes").unwrap();
+    foveonic::sidecar::save(&path, &foveonic::render::Settings::new("Shade", "Vivid")).unwrap();
+    let handled = tempfile::tempdir().unwrap();
+    let mut history = History::default();
+    history.set(Record {
+        identity: Identity::read(&path).unwrap(),
+        source: path.display().to_string(),
+        disposition: Disposition::Hidden,
+    });
+    history.save(handled.path()).unwrap();
+    let fresh = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let cache = Arc::new(Cache::new());
+    let mut review = Review::new(Engine::new().unwrap(), cache.clone(), context.clone());
+    let mut browser = Browser::new(context);
+    browser.import_mode = true;
+    browser.files = vec![path.clone()];
+    browser.reindex_files();
+    let _rendering = cache.priority().demand(Priority::Viewport);
+    review.rescan(&mut browser, Some(fresh.path()));
+    std::thread::sleep(Duration::from_millis(50));
+    review.rescan(&mut browser, Some(handled.path()));
+    let deadline = Instant::now() + HIDE_LATENCY;
+    while browser.recorded_marks.get(&path) != Some(&Mark::Hidden) {
+        review.update(&mut browser);
+        assert!(
+            Instant::now() < deadline,
+            "hiding waited for an earlier scan"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR"]
 fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_policy() {
@@ -106,7 +202,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
     use foveonic::{
         importing::{ConflictPolicy, Identity},
         profile::Profile,
-        render::{RenderSession, Settings},
+        render::{NativePhoto, Settings},
     };
     let directory = tempfile::tempdir().unwrap();
     let fixture = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
@@ -160,7 +256,6 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
         &context,
         &mut input,
         crate::shortcuts::Availability {
-            enabled: true,
             browser: true,
             import: browser.import_mode,
             settings: false,
@@ -196,7 +291,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
     }
     recipes[0].exposure = 1.2;
     sidecars.edited(&recipes[0]);
-    let priority = cache.foreground();
+    let priority = cache.priority().demand(Priority::Viewport);
     let mut options = processing::Settings {
         format: ExportFormat::Tiff,
         ..Default::default()
@@ -217,7 +312,7 @@ fn browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_poli
     for (index, recipe) in recipes.iter().enumerate() {
         export::write(
             &engine,
-            &mut RenderSession::new(source.clone()),
+            &mut NativePhoto::new(source.clone()),
             recipe,
             &fixture,
             &Export {

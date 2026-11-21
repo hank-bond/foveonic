@@ -2,6 +2,8 @@
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+use crate::rendering::request::RequestId;
+use foveonic::priority::Priority;
 use foveonic::render::ProcessingQuality;
 mod actions;
 mod activity;
@@ -64,7 +66,7 @@ use foveonic::{
     source::Metadata,
 };
 use preferences::{FolderMode, Section};
-use rendering::{delivery, matching, request, smart, worker};
+use rendering::{request, smart, worker};
 use std::{path::PathBuf, sync::Arc};
 
 // Keep folder readiness responsive during prefetch without polling idle folders at frame rate.
@@ -75,7 +77,7 @@ const TOOLS_DEFAULT_WIDTH: f32 = 330.;
 
 /// Opening starts at selection, including recipe reads before worker submission.
 struct Opening {
-    _priority: foveonic::decode_cache::Activity,
+    _priority: foveonic::priority::Demand,
     began: std::time::Instant,
 }
 
@@ -90,6 +92,8 @@ struct App {
     comparison_layout: comparison_view::State,
     viewport_paths: Arc<[PathBuf]>,
     displayed_paths: Vec<PathBuf>,
+    /// Each displayed photo's view as last planned.
+    views: std::collections::HashMap<PathBuf, rendering::views::PhotoView>,
     viewport_paths_key: Option<(u64, Option<PathBuf>)>,
     viewport_paths_limit: usize,
     editor_ui: editor::State,
@@ -111,24 +115,27 @@ struct App {
     output: String,
     channel: i32,
     comparison: inspect::Comparison,
-    frame: Option<worker::Frame>,
-    preview_scales: std::collections::BTreeMap<PathBuf, foveonic::render::Scale>,
+    /// Every rendered image the app holds, keyed by photo, look and output.
+    images: rendering::rendered::RenderedImages<worker::RenderResult>,
     preview_densities: std::collections::BTreeMap<PathBuf, f32>,
-    preview_demand_changed: bool,
+    fit_densities: std::collections::BTreeMap<PathBuf, f32>,
+    /// Zoomed photos' moving regions. Planning reads views, so motion uses interior mutability.
+    view_motion:
+        std::cell::RefCell<std::collections::BTreeMap<PathBuf, rendering::view_plan::Motion>>,
     scope_images: Option<scopes::Images>,
     scope_snapshot: Option<worker::ScopeSnapshot>,
     scope_key: Option<worker::ScopeKey>,
     viewports: photo_views::PhotoViews,
     navigator: navigator::Navigator,
     previews: previews::Previews,
-    revision: u64,
+    /// The last request id issued.
+    last_request_id: RequestId,
     busy: bool,
     memory_key: Vec<u64>,
     memory_reply_epoch: u64,
-    exporting: bool,
     preferences: preferences::Preferences,
     support_preferences: Option<preferences::Preferences>,
-    support_photo: Option<(Option<PathBuf>, u64)>,
+    support_photo: Option<(Option<PathBuf>, RequestId)>,
     support_context_due: Option<std::time::Instant>,
     support_log_open: bool,
     activity: activity::Log,
@@ -187,15 +194,15 @@ impl App {
         serde_json::json!({"workspace_mode":if self.browser.import_mode {"import"} else {"browse"},
             "active_photo":self.selected.as_deref().map(|path|path.to_string_lossy()),"targets":self.edit_selection.paths().iter().map(|path|path.to_string_lossy()).collect::<Vec<_>>(),"photos":photos,
             "settings":self.settings,"processing_quality":self.preferences.processing_quality,
-            "displayed":self.frame.as_ref().map(|frame|serde_json::json!({"source":frame.path.to_string_lossy(),
+            "displayed":self.active_image().map(|frame|serde_json::json!({"source":frame.request.path.to_string_lossy(),
                 "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
-                "presentation_revision":frame.revision,"artifact":frame.artifact.name,
+                "presentation_revision":frame.request.id,"artifact":frame.artifact.name,
                 "scale":frame.artifact.settings.working_scale.divisor(),"purpose":frame.diagnostic_task.purpose})),
             "output":self.output,"rendition":format!("{:?}",self.before.active),
             "render_pending":self.worker.busy(),"opening":self.opening.is_some(),
             "disk_cache":self.preferences.decode_cache,
             "background_full_image_completion":self.preferences.background_full_image_completion,"memory_cache_bytes":self.preferences.memory_cache_bytes,"multi_edit_limit":self.preferences.multi_edit_limit,
-            "render_concurrency":if cfg!(feature = "wide-experiment") { "automatic" } else { "serial" },
+            "render_concurrency":"automatic",
             "hardware":self.diagnostic_hardware()})
     }
     pub(crate) fn viewport(&self) -> &viewport::Viewport {
@@ -218,9 +225,9 @@ impl App {
                 .processing_selection(self.selected.as_deref())
                 .into();
             self.viewport_paths_key = Some(key);
-            self.preview_scales
-                .retain(|path, _| self.viewport_paths.contains(path));
             self.preview_densities
+                .retain(|path, _| self.viewport_paths.contains(path));
+            self.fit_densities
                 .retain(|path, _| self.viewport_paths.contains(path));
         }
         if changed || self.viewport_paths_limit != self.preferences.multi_edit_limit {
@@ -289,7 +296,6 @@ impl App {
         let training_engine = engine.executor();
         let batch_engine = engine.executor();
         let worker = worker::Worker::new(engine, context.clone());
-        worker.set_background_completion(preferences.background_full_image_completion);
         let navigator =
             navigator::Navigator::new(rs.clone(), context.clone(), worker.cache.clone());
         let import =
@@ -320,6 +326,7 @@ impl App {
             comparison_layout: Default::default(),
             viewport_paths: Arc::default(),
             displayed_paths: Vec::new(),
+            views: Default::default(),
             viewport_paths_key: None,
             viewport_paths_limit: 0,
             editor_ui: Default::default(),
@@ -347,20 +354,19 @@ impl App {
             output: "final".into(),
             channel: -1,
             comparison: Default::default(),
-            frame: None,
-            preview_scales: Default::default(),
+            images: Default::default(),
             preview_densities: Default::default(),
-            preview_demand_changed: false,
+            fit_densities: Default::default(),
+            view_motion: Default::default(),
             scope_images: None,
             scope_snapshot: None,
             scope_key: None,
             viewports: Default::default(),
             navigator,
-            revision: 0,
+            last_request_id: RequestId::default(),
             busy: false,
             memory_key: Vec::new(),
             memory_reply_epoch: 0,
-            exporting: false,
             preferences,
             support_preferences: None,
             support_photo: None,
@@ -404,9 +410,6 @@ impl App {
             .request(path, folder_loader::Mode::Fixed(mode));
     }
     fn receive_folder(&mut self) {
-        if self.exporting {
-            return;
-        }
         let Some(reply) = self.folder_loader.receive() else {
             return;
         };
@@ -437,7 +440,7 @@ impl App {
     fn clear_selection(&mut self) {
         self.before = Default::default();
         self.browser.invalidate_prefetch();
-        self.revision += 1;
+        self.last_request_id = self.last_request_id.next();
         self.selected = None;
         self.edit_selection
             .sync_browser(&[], self.preferences.multi_edit_limit);
@@ -447,28 +450,28 @@ impl App {
         self.sidecars.resolve_settings(&[]);
         self.capture.select(None);
         self.metadata = None;
-        self.frame = None;
-        self.cancel_smart();
         self.scope_images = None;
         self.scope_snapshot = None;
         self.scope_key = None;
         self.busy = false;
         self.worker.clear_all();
+        self.images.clear();
         self.viewport_mut().reset();
         viewport::clear(&self.render_state);
     }
     fn reusable_photograph(
         &self,
         path: &std::path::Path,
-        frame: &worker::Frame,
+        frame: &worker::RenderResult,
         settings: &Settings,
     ) -> bool {
-        let settings = self.preferences.render_settings(settings);
-        frame.path == path
+        frame.request.path == path
             && frame.is_photographic()
-            && frame.requested.processing_quality == self.preferences.processing_quality
-            && matching::same_authored_edits(&frame.requested, &settings)
-            && frame.calibration_signature.as_deref()
+            && frame.processing_quality() == self.preferences.processing_quality
+            && self
+                .preferences
+                .renders_edits(&frame.request.settings, settings)
+            && frame.calibration_signature()
                 == self
                     .noise_calibration
                     .selected(self.preferences.noise_profile)
@@ -488,270 +491,54 @@ impl App {
             })
     }
 
-    pub(crate) fn restore_photograph(&mut self, presentation_revision: u64) {
-        if self.before.active != editor::Rendition::Current
-            || self.output != "final"
-            || self.comparison.requested()
-            || self.framing_preview_active()
-            || self
-                .frame
-                .as_ref()
-                .is_some_and(worker::Frame::is_photographic)
-        {
-            return;
-        }
-        let Some(path) = self.selected.clone() else {
-            return;
-        };
-        if !self
-            .multi_edit
-            .frame(&path)
-            .is_some_and(|frame| self.reusable_photograph(&path, frame, &self.view_settings()))
-        {
-            return;
-        }
-        let mut frame = self.multi_edit.take_frame(&path).unwrap();
-        frame.revision = presentation_revision;
-        self.worker.delivered(presentation_revision);
-        self.scope_key = None;
-        viewport::clear(&self.render_state);
-        self.frame = Some(frame);
-    }
-
+    /// Select a photo. Its view is planned like any other, so existing images for
+    /// its look are reused and work for photos that left the view stops by reconciling.
     fn select(&mut self, path: PathBuf, preserve_viewport: bool) {
-        let rendition = self.before.active;
-        self.cache_before_view();
         let carried = preserve_viewport.then(|| self.viewport().transform());
         if self.selected.as_ref() != Some(&path) || carried.is_some() {
             self.viewports.select(&path, carried);
         }
         self.multi_edit.selected(&path);
-        if let Some(frame) = self.frame.take() {
-            self.multi_edit.retain(frame);
+        if !self.edit_selection.contains(&path) {
+            self.before.active = editor::Rendition::Current;
         }
-        let cached_frame = self.multi_edit.take_frame(&path);
-        let cached_metadata = self.multi_edit.metadata(&path);
-        let cached_settings = self.multi_edit.settings(&path).cloned();
-        let cached_selection = cached_frame.as_ref().is_some_and(|frame| {
-            cached_settings
-                .as_ref()
-                .is_some_and(|settings| self.reusable_photograph(&path, frame, settings))
-        });
-        let retain_current = self.selected.as_ref() == Some(&path) && cached_selection;
-        let keep_before = self.edit_selection.contains(&path);
-        if !keep_before {
-            for previous in self.multi_edit.retained_paths() {
-                self.worker.retire_before(&previous);
-            }
-        }
-        self.worker.activate(&path);
-        self.before = Default::default();
-        self.before.active = if keep_before {
-            rendition
-        } else {
-            editor::Rendition::Current
-        };
         self.browser.invalidate_prefetch();
-        timing::selected(self.revision + 1, &path);
+        timing::selected(self.last_request_id.next().0, &path);
         let began = std::time::Instant::now();
-        self.opening = (!cached_selection).then(|| Opening {
-            _priority: self.worker.cache.foreground(),
+        self.opening = Some(Opening {
+            _priority: self.worker.cache.priority().demand(Priority::Viewport),
             began,
         });
         self.capture.select(Some(path.clone()));
         self.sidecars.select(path.clone());
+        self.metadata = self.multi_edit.metadata(&path);
+        self.settings = self
+            .multi_edit
+            .settings(&path)
+            .cloned()
+            .unwrap_or_else(|| Settings::new("", ""));
         self.selected = Some(path);
-        self.settings = cached_settings.unwrap_or_else(|| Settings::new("", ""));
-        self.revision += 1;
-        if !self.multi_photo_overview() && !retain_current {
-            self.worker.clear();
-        }
-        if !cached_selection {
-            self.worker.progress.begin(self.revision, began);
-        }
-        self.busy = self.worker.busy();
-        self.metadata = cached_metadata;
+        self.last_request_id = self.last_request_id.next();
+        self.worker.progress.begin(self.last_request_id.0, began);
         self.output = "final".into();
         self.channel = -1;
-        if cached_selection {
-            if let Some(frame) = &cached_frame {
-                self.update_browser_preview(frame);
-            }
-        }
-        self.frame = cached_frame;
-        if cached_selection {
-            if let Some(frame) = &mut self.frame {
-                // Reusing pixels starts a new presentation, while their delivered
-                // task identity continues to describe the original work.
-                frame.revision = self.revision;
-            }
-        }
-        self.restore_before_view();
         self.scope_key = None;
         viewport::clear(&self.render_state);
     }
-    fn navigator_uses_preview(&self) -> bool {
-        let mapping = self.displayed_mapping();
-        if self.before.active != editor::Rendition::Current
-            || self.output != "final"
-            || self.comparison.requested()
-            || self.framing_preview_active()
-            || mapping.input
-            || mapping.difference_gain != 0.
-        {
-            return false;
-        }
-        let Some(path) = self.selected.as_deref() else {
-            return false;
-        };
-        let Some(preview) = self.multi_edit.preview(path) else {
-            return false;
-        };
-        let calibration = self
-            .noise_calibration
-            .selected(self.preferences.noise_profile);
-        let origin = self.worker.cache.source_origin(path);
-        let info = delivery::ImageInfo::from(preview);
-        delivery::auxiliary_preview_matches(
-            &info,
-            &self.preferences.render_settings(&self.settings),
-            self.preferences.processing_quality,
-            calibration.as_ref().map(|profile| profile.signature()),
-            origin.as_ref(),
-        ) && delivery::prefer_auxiliary_preview(
-            self.frame
-                .as_ref()
-                .filter(|frame| frame.path == path && frame.is_photographic())
-                .map(delivery::ImageInfo::from)
-                .as_ref(),
-            &info,
-        )
+    pub(crate) fn navigator_source(&self) -> Option<&worker::RenderResult> {
+        self.active_image()
     }
-    pub(crate) fn navigator_source(&self) -> Option<&worker::Frame> {
-        if self.navigator_uses_preview() {
-            self.selected
-                .as_deref()
-                .and_then(|path| self.multi_edit.preview(path))
-        } else {
-            self.frame.as_ref()
-        }
-    }
-    fn update_browser_preview(&mut self, frame: &worker::Frame) {
+    fn update_browser_preview(&mut self, frame: &worker::RenderResult) {
         update_browser_preview(&mut self.browser, &mut self.previews, frame);
     }
-    fn submit(&mut self, export: Option<export::Export>) {
-        if export.is_some() {
-            self.exit_before();
-        }
-        if export.is_none()
-            && (self.before.active != editor::Rendition::Current
-                || (self.output == "final" && !self.comparison.requested()))
-        {
-            if self.before.active == editor::Rendition::Current {
-                if let Some(path) = &self.selected {
-                    self.multi_edit.invalidate_photo(path);
-                }
-            }
-            self.submit_photos();
-            return;
-        }
-        self.submit_with_quality(export, None, self.preferences.processing_quality);
-    }
-    fn submit_with_quality(
-        &mut self,
-        export: Option<export::Export>,
-        region: Option<[u32; 4]>,
-        quality: ProcessingQuality,
-    ) {
-        if !self.sidecars.ready() {
-            return;
-        }
-        self.restore_photograph(self.revision + 1);
-        self.publish_render_view();
-        if let Some(path) = &self.selected {
-            self.revision += 1;
-
-            self.busy = true;
-            self.exporting = export.is_some();
-            timing::requested(self.revision, path, &self.output, &self.settings);
-            let request = self
-                .active_render_request(self.revision, export, region, quality)
-                .unwrap();
-            if let Some(opening) = &self.opening {
-                self.worker.submit_at(request, opening.began);
-            } else {
-                self.worker.submit(request);
-            }
-            self.opening = None;
-            self.busy = self.worker.busy() || self.exporting;
-        }
-    }
-    fn active_render_request(
-        &self,
-        revision: u64,
-        export: Option<export::Export>,
-        region: Option<[u32; 4]>,
-        quality: ProcessingQuality,
-    ) -> Option<request::Request> {
-        let path = self.selected.as_ref()?;
-        let quality = if export.is_some() {
-            ProcessingQuality::Quality
-        } else {
-            rendering::quality::for_view(
-                quality,
-                self.before.active,
-                &self.output,
-                self.comparison.requested(),
-            )
-        };
-        let mut requested = self.view_settings();
-        requested.processing_quality = quality;
-        requested.working_scale = foveonic::render::Scale::NATIVE;
-        requested.preview_region = region;
-        let preview_scale = if region.is_some() {
-            foveonic::render::Scale::NATIVE
-        } else {
-            self.preview_scale_for(path, quality)
-        };
-        Some(request::Request {
-            auxiliary_preview: false,
-
-            detail: region.is_some(),
-            framing_preview: export.is_none() && self.framing_preview_active(),
-            calibration: self
-                .noise_calibration
-                .selected(self.preferences.noise_profile),
-            rendition: self.before.active,
-            revision,
-            path: path.clone(),
-            settings: requested,
-            preview_scale,
-            processing_quality: quality,
-            output: if self.before.active == editor::Rendition::Current {
-                self.output.clone()
-            } else {
-                "final".into()
-            },
-            comparison: self.before.active == editor::Rendition::Current
-                && self.comparison.requested()
-                && foveonic::inspection::comparison_input(
-                    &self.settings,
-                    &self.output,
-                    self.metadata.as_deref(),
-                )
-                .is_some(),
-            export,
-        })
-    }
-    fn sync_render_progress(&mut self, failed_revision: Option<u64>) {
-        self.busy = self.worker.busy() || self.exporting;
+    fn sync_render_progress(&mut self, failed_request_id: Option<u64>) {
+        self.busy = self.view_busy();
         self.worker
             .progress
-            .settle(self.busy || self.opening.is_some(), failed_revision);
+            .settle(self.busy || self.opening.is_some(), failed_request_id);
     }
 
     fn receive(&mut self, ctx: &egui::Context) {
-        self.publish_render_view();
         let _scope = foveonic::diagnostics::scope(
             foveonic::diagnostics::Category::Coordinator,
             "ui.receive",
@@ -789,15 +576,15 @@ impl App {
                         && self
                             .navigator_source()
                             .into_iter()
-                            .chain(self.detail_frame())
-                            .any(|frame| frame.revision == key.revision)
+                            .chain(self.active_patch())
+                            .any(|frame| frame.request.id == key.request_id)
                         && self.scope_key == Some(key)
                     {
                         match result {
                             Ok(data) => {
                                 self.scope_images = Some(scopes::Images::new(&data));
                                 self.scope_snapshot = Some(worker::ScopeSnapshot { key, data });
-                                timing::event(key.revision, "scopes_received");
+                                timing::event(key.request_id.0, "scopes_received");
                             }
                             Err(error) => {
                                 if !self.busy {
@@ -814,201 +601,91 @@ impl App {
                 "reply_dequeued",
                 || serde_json::json!({"mailbox":"image_replies"}),
             );
-            if reply.exported.is_some() {
-                self.exporting = false;
-            }
-            let update = self.render_result_for_view(&reply);
-            let current = update.current;
-            if reply.stamp.target.purpose == request::Purpose::Preview {
-                if update.destination == Some(delivery::Destination::Preview) {
-                    match reply.result {
-                        Ok(Some(frame)) => {
-                            timing::task(
-                                &reply.stamp,
-                                "image_accepted",
-                                || serde_json::json!({"current":current,"destination":"preview","scale":frame.artifact.settings.working_scale.divisor()}),
-                            );
-                            if let Some(frame) = self.multi_edit.retain_preview(frame) {
-                                update_browser_preview(
-                                    &mut self.browser,
-                                    &mut self.previews,
-                                    frame,
-                                );
-                            }
-                        }
-                        Err(error) => timing::task(
-                            &reply.stamp,
-                            "preview_failed",
-                            || serde_json::json!({"error":error}),
-                        ),
-                        Ok(None) => {}
-                    }
+            self.receive_image(ctx, reply);
+        }
+    }
+    /// Store a result the coordinator accepted as an image in use, unless an
+    /// image of the same kind is newer, and apply its side effects.
+    fn receive_image(&mut self, ctx: &egui::Context, reply: worker::Reply) {
+        let handling = reply
+            .handling
+            .unwrap_or(rendering::coordinator::ResultUpdate {
+                current: false,
+                accepted: false,
+            });
+        self.sync_render_progress(
+            (handling.current && reply.result.failed()).then_some(reply.request.id.0),
+        );
+        if handling.current && reply.request.rendition == editor::Rendition::Current {
+            self.multi_edit.complete(
+                &reply.request.path,
+                reply.metadata.clone(),
+                reply.numeric_settings.clone(),
+                reply.reset_settings.clone(),
+                &reply.settings,
+            );
+            if self.selected.as_ref() == Some(&reply.request.path) {
+                if let Some(metadata) = &reply.metadata {
+                    self.metadata = Some(metadata.clone());
                 }
-                continue;
             }
-            self.sync_render_progress((current && reply.result.is_err()).then_some(reply.revision));
-            if update.update_photo && reply.rendition == editor::Rendition::Current {
-                self.multi_edit.complete(
-                    &reply.path,
-                    reply.metadata.clone(),
-                    reply.numeric_settings.clone(),
-                    reply.reset_settings.clone(),
-                    &reply.settings,
+        }
+        match reply.result {
+            worker::RenderOutcome::Rendered(frame) if handling.accepted => {
+                timing::image_received(
+                    &reply.stamp,
+                    handling.current,
+                    frame.queued_at,
+                    frame.milliseconds,
                 );
-            }
-            let Some(destination) = update.destination else {
-                timing::task(&reply.stamp, "result_view_skipped", || {
-                    serde_json::json!({
-                        "coordinator_had_destination":reply.handling.is_some_and(|handling|handling.destination.is_some()),
-                        "current_after_recheck":update.current,
-                        "active_photo":self.selected,
-                        "overview_visible":self.multi_edit.rendering(&reply.path),
-                    })
+                timing::task(&reply.stamp, "image_accepted", || {
+                    serde_json::json!({"current":handling.current,
+                    "scale":frame.artifact.settings.working_scale.divisor(),"artifact":frame.artifact.name,
+                    "extent":frame.texture.description().extent})
                 });
-                // A photo can leave the viewport while its completed edit is in
-                // transit. Keep the valid result for an unchanged re-add.
-                if update.update_photo {
-                    if let Ok(Some(frame)) = reply.result {
-                        self.update_browser_preview(&frame);
-                        self.multi_edit.retain(frame);
-                    }
-                }
-                continue;
-            };
-            if self.smoke.is_some() {
-                if let Ok(Some(frame)) = &reply.result {
-                    let visible = self.current_photo_frame(&frame.path).and_then(|base| {
-                        let window = base.display_window(false);
-                        self.viewports
-                            .view(Some(&frame.path))
-                            .visible_pixels()
-                            .map(|pixels| {
-                                [
-                                    pixels.top_left[0] + window[0],
-                                    pixels.top_left[1] + window[1],
-                                    pixels.bottom_right[0] + 1 + window[0],
-                                    pixels.bottom_right[1] + 1 + window[1],
-                                ]
-                            })
-                    });
+                if self.smoke.is_some() {
+                    let visible = self.visible_region(&frame.request.path);
                     if let Some(smoke) = &mut self.smoke {
-                        smoke.observe_admitted(frame, current, destination, visible);
+                        smoke.observe_admitted(&frame, handling.current, visible);
                     }
                 }
-            }
-            if destination == delivery::Destination::Overview {
-                match reply.result {
-                    Ok(Some(frame)) => {
-                        timing::image_received(
-                            &reply.stamp,
-                            current,
-                            frame.queued_at,
-                            frame.milliseconds,
-                        );
-                        timing::task(&reply.stamp, "image_accepted", || {
-                            serde_json::json!({"current":current,
-                            "destination":"overview","scale":frame.artifact.settings.working_scale.divisor(),
-                            "artifact":frame.artifact.name,"extent":frame.texture.description().extent})
-                        });
-                        if frame.rendition == editor::Rendition::Current {
-                            self.update_browser_preview(&frame);
-                            self.multi_edit.retain(frame);
-                        } else {
-                            self.multi_edit.retain_before(frame);
-                        }
-                    }
-                    Err(error) if current => self
-                        .activity
-                        .error_reported(format!("{}: {error}", reply.path.display())),
-                    _ => {}
-                }
-                continue;
-            }
-            if current {
-                if let Some(metadata) = reply.metadata {
-                    self.metadata = Some(metadata);
-                }
-            }
-            match reply.result {
-                Ok(Some(frame)) => {
-                    self.worker.delivered(frame.revision);
-                    if current
-                        && frame.rendition == editor::Rendition::Current
-                        && frame.artifact.settings.dehaze_estimate
-                    {
-                        editor::dehaze::set_estimate(
-                            ctx,
-                            &self.settings,
-                            frame.artifact.dehaze_estimate,
-                        );
-                    }
-                    if frame.rendition != editor::Rendition::Current {
-                        self.before.retain_current(&mut self.frame);
-                    }
-                    if frame.rendition == editor::Rendition::Current
-                        && !frame.detail
-                        && !frame.is_photographic()
-                    {
-                        if let Some(previous) = self.frame.take() {
-                            self.multi_edit.retain(previous);
-                        }
-                    }
-                    timing::image_received(
-                        &reply.stamp,
-                        current,
-                        frame.queued_at,
-                        frame.milliseconds,
+                if handling.current
+                    && self.selected.as_ref() == Some(&frame.request.path)
+                    && frame.request.rendition == editor::Rendition::Current
+                    && frame.artifact.settings.dehaze_estimate
+                {
+                    editor::dehaze::set_estimate(
+                        ctx,
+                        &self.settings,
+                        frame.artifact.dehaze_estimate,
                     );
-                    timing::task(&reply.stamp, "image_accepted", || {
-                        serde_json::json!({"current":current,
-                        "scale":frame.artifact.settings.working_scale.divisor(),"artifact":frame.artifact.name,
-                        "extent":frame.texture.description().extent})
-                    });
+                }
+                if frame.is_photographic() {
                     self.update_browser_preview(&frame);
-                    // Keep the last completed scopes until this frame has replacements.
-                    if !self.loupe_inspecting(&frame.path) {
-                        self.scope_key = None;
-                    }
-                    if frame.detail {
-                        if frame.rendition == editor::Rendition::Current {
-                            self.multi_edit.retain(frame);
-                        } else {
-                            self.before.detail = Some(frame);
-                        }
-                    } else {
-                        viewport::clear(&self.render_state);
-                        if frame.rendition == editor::Rendition::Current {
-                            self.multi_edit.supersede_detail(&frame);
-                        }
-                        if self
-                            .before
-                            .detail
-                            .as_ref()
-                            .is_some_and(|detail| frame.supersedes_detail(detail))
-                        {
-                            self.before.detail = None;
-                        }
-                        self.frame = Some(frame);
-                    }
                 }
-                Ok(None) => {
-                    if let Some(export) = &reply.exported {
-                        self.activity.operation(format!(
-                            "Saved {}: {}",
-                            export.format.label(),
-                            export.path.display()
-                        ));
-                        self.submit(None);
+                let active = self.selected.as_ref() == Some(&frame.request.path);
+                let whole = !frame.request.detail;
+                if self.images.accept(*frame) && active {
+                    if whole {
+                        self.worker.whole_delivered(reply.request.id);
                     }
+                    self.scope_key = None;
+                    viewport::clear(&self.render_state);
                 }
-                Err(e) => {
-                    assert!(
-                        self.smoke
-                            .as_ref()
-                            .is_none_or(|smoke| smoke.expects_failure(&reply.path)),
-                        "native smoke processing failed: {e}"
-                    );
-                    self.activity.error_reported(e);
+            }
+            worker::RenderOutcome::Rendered(_) | worker::RenderOutcome::Cancelled => {}
+            worker::RenderOutcome::Failed(error) => {
+                assert!(
+                    self.smoke
+                        .as_ref()
+                        .is_none_or(|smoke| smoke.expects_failure(&reply.request.path)),
+                    "native smoke processing failed: {error}"
+                );
+                if handling.accepted {
+                    self.images.fail(reply.request.clone());
+                }
+                if handling.current {
+                    self.activity.error_reported(error);
                 }
             }
         }
@@ -1018,19 +695,11 @@ impl App {
             self.scope_key = None;
             return;
         }
-        let window = self
-            .frame
-            .as_ref()
-            .map_or([0; 4], |f| f.display_window(false));
-        let visible = self.viewport().visible_pixels().map(|p| {
-            [
-                p.top_left[0] + window[0],
-                p.top_left[1] + window[1],
-                p.bottom_right[0] + 1 + window[0],
-                p.bottom_right[1] + 1 + window[1],
-            ]
-        });
-        let detail = self.smart_detail().filter(|detail| {
+        let visible = self
+            .selected
+            .as_deref()
+            .and_then(|path| self.visible_region(path));
+        let detail = self.active_patch().filter(|detail| {
             self.preferences.scope_viewport
                 && visible.is_some_and(|visible| smart::contains(detail.detail_region(), visible))
         });
@@ -1039,15 +708,16 @@ impl App {
             return;
         };
         let region = if self.preferences.scope_viewport {
-            if frame.framing_preview {
+            if frame.request.framing_preview {
                 // Drafts only move the texture. Analyze the visible part of the saved framing.
                 let foveonic::inspection::Content::Image(image) = &frame.artifact.content else {
                     return;
                 };
                 let [l, t, r, b] = frame
-                    .requested
+                    .request
+                    .settings
                     .rotation
-                    .framing_bounds(frame.camera_extent(), frame.requested.crop)
+                    .framing_bounds(frame.camera_extent(), frame.request.settings.crop)
                     .map(|v| v as f32);
                 let framing = egui::Rect::from_min_max(egui::pos2(l, t), egui::pos2(r, b));
                 let visible = self.viewport().visible_uv().intersect(framing);
@@ -1078,18 +748,13 @@ impl App {
                 else {
                     return;
                 };
-                Some([
-                    pixels.top_left[0],
-                    pixels.top_left[1],
-                    pixels.bottom_right[0] + 1,
-                    pixels.bottom_right[1] + 1,
-                ])
+                Some(pixels.bounds())
             }
         } else {
             None
         };
         let key = worker::ScopeKey {
-            revision: frame.revision,
+            request_id: frame.request.id,
             region,
         };
         if self.scope_key == Some(key) {
@@ -1102,7 +767,7 @@ impl App {
         self.worker.submit_scopes(worker::ScopeRequest {
             key,
             image: (**image).clone(),
-            photo: foveonic::diagnostics::photo_id(&frame.path),
+            photo: foveonic::diagnostics::photo_id(&frame.request.path),
             parent_render_task: frame.diagnostic_task.id,
             parent_render_revision: frame.diagnostic_task.revision,
         });
@@ -1157,7 +822,6 @@ impl App {
                 let actions = toolbar::show(
                     ui,
                     toolbar::State {
-                        enabled: !self.exporting,
                         process_blocker,
                         importing: self.browser.import_mode,
                         destination: self.preferences.processing_destination.as_deref(),
@@ -1252,22 +916,20 @@ impl App {
 
     fn photo_toolbar(&mut self, ui: &mut egui::Ui) -> bool {
         let extent = self
-            .frame
-            .as_ref()
+            .active_image()
             .filter(|f| {
-                self.selected.as_ref() == Some(&f.path)
-                    && f.output == "final"
-                    && f.rendition == editor::Rendition::Current
+                self.selected.as_ref() == Some(&f.request.path)
+                    && f.request.output == "final"
+                    && f.request.rendition == editor::Rendition::Current
                     && self.output == "final"
                     && self.before.active == editor::Rendition::Current
                     && !self.comparison.requested()
                     && self.sidecars.ready()
-                    && self.edit_selection.contains(&f.path)
+                    && self.edit_selection.contains(&f.request.path)
             })
             .map(|frame| self.settings.rotation.extent(frame.camera_extent()));
         photo_tools::show(
             ui,
-            !self.exporting,
             &mut self.settings.crop,
             &mut self.settings.rotation,
             extent,
@@ -1313,8 +975,7 @@ impl App {
             Section::Editing => {
                 let mut changed = false;
                 ui.add_enabled_ui(
-                    !self.exporting
-                        && self.sidecars.ready()
+                    self.sidecars.ready()
                         && !self.edit_selection.paths().is_empty()
                         && (!self.multi_edit.multiple() || self.multi_edit.editable_ready()),
                     |ui| {
@@ -1378,7 +1039,7 @@ impl App {
                                             .ok()
                                             .map(|c| c.family)
                                     })
-                                    .filter(|_| !self.exporting && self.sidecars.ready()),
+                                    .filter(|_| self.sidecars.ready()),
                                 library: &self.preferences.editor,
                                 state: &mut self.editor_ui,
                             }
@@ -1415,7 +1076,10 @@ impl App {
         }
         // The displayed image may belong to an older request. Using the new
         // component choice now could show its samples with the wrong meaning.
-        if self.frame.as_ref().is_some_and(|f| f.output == self.output) {
+        if self
+            .active_image()
+            .is_some_and(|f| f.request.output == self.output)
+        {
             self.channel
         } else {
             -1
@@ -1427,11 +1091,10 @@ impl App {
         }
         let channel = self.displayed_channel();
         let has_pair = self
-            .frame
-            .as_ref()
-            .is_some_and(|frame| frame.output == self.output && frame.comparison.is_some());
+            .active_image()
+            .is_some_and(|frame| frame.request.output == self.output && frame.comparison.is_some());
         let mut mapping = self.comparison.mapping(channel, has_pair);
-        if let Some(frame) = &self.frame {
+        if let Some(frame) = self.active_image() {
             let description = frame.texture.description();
             if matches!(description.space, foveonic::image::Space::LinearRgb(_)) {
                 mapping.signal_scale = 4095. / description.linear_white as f32;
@@ -1440,6 +1103,9 @@ impl App {
         mapping
     }
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
+        let shown_pair = self
+            .active_image()
+            .map(|frame| (frame.request.output.clone(), frame.comparison.is_some()));
         let _scope =
             foveonic::diagnostics::scope(foveonic::diagnostics::Category::Ui, "ui.viewport");
         let mut changed = false;
@@ -1450,15 +1116,12 @@ impl App {
             ui,
             background_width,
             |ui| {
-                changed |= inspect::processing_quality(
-                    ui,
-                    !self.exporting,
-                    &mut self.preferences.processing_quality,
-                );
+                changed |=
+                    inspect::processing_quality(ui, &mut self.preferences.processing_quality);
                 widgets::button_group(ui, |ui| {
                     widgets::centered_control_row(ui, |ui| {
                         ui.weak("Inspect");
-                        ui.add_enabled_ui(!self.exporting, |ui| {
+                        ui.scope(|ui| {
                             changed |= inspect::show(
                                 ui,
                                 &self.settings,
@@ -1480,9 +1143,10 @@ impl App {
                                 self.channel,
                                 self.metadata.as_deref(),
                             );
-                            let has_pair = self.frame.as_ref().is_some_and(|frame| {
-                                frame.output == self.output && frame.comparison.is_some()
-                            });
+                            let has_pair =
+                                shown_pair.as_ref().is_some_and(|(output, comparison)| {
+                                    *output == self.output && *comparison
+                                });
                             changed |= requested && (self.busy || !has_pair);
                         });
                     });
@@ -1500,7 +1164,7 @@ impl App {
         }
         let mapping = self.displayed_mapping();
         if mapping.difference_gain > 0. {
-            let frame = self.frame.as_ref().unwrap();
+            let frame = self.active_image().unwrap();
             let input = frame.comparison.as_ref().unwrap().input;
             let (range, units) = if matches!(
                 frame.texture.description().space,
@@ -1521,23 +1185,21 @@ impl App {
             ui.add(
                 egui::Label::new(format!(
                     "Δ {} − {input} · dark − / gray 0 / light + · ±{:.3} {units} · scopes: output",
-                    frame.output,
+                    frame.request.output,
                     range / mapping.difference_gain,
                 ))
                 .wrap(),
             );
         } else {
             let name = self
-                .frame
-                .as_ref()
-                .map_or("preview", |frame| frame.output.as_str());
+                .active_image()
+                .map_or("preview", |frame| frame.request.output.as_str());
             let label = if self.comparison.difference {
                 Some(format!("Difference pending. Showing {name}."))
             } else if self.comparison.input {
                 Some(if mapping.input {
                     let input = self
-                        .frame
-                        .as_ref()
+                        .active_image()
                         .unwrap()
                         .comparison
                         .as_ref()
@@ -1547,10 +1209,10 @@ impl App {
                 } else {
                     format!("Input pending. Showing {name}.")
                 })
-            } else if self.frame.as_ref().is_some_and(|frame| {
+            } else if self.active_image().is_some_and(|frame| {
                 foveonic::inspection::comparison_input(
                     &frame.artifact.settings,
-                    &frame.output,
+                    &frame.request.output,
                     Some(&frame.artifact.metadata),
                 )
                 .is_some()
@@ -1599,17 +1261,15 @@ impl App {
             },
         );
         let path = self
-            .frame
-            .as_ref()
-            .map(|f| &f.path)
+            .active_image()
+            .map(|f| &f.request.path)
             .or(self.selected.as_ref());
         let filename = path
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
         let properties = self
-            .frame
-            .as_ref()
+            .active_image()
             .map(|f| &f.artifact.metadata.properties)
             .or_else(|| self.metadata.as_ref().map(|metadata| &metadata.properties))
             .or(self.capture.properties.as_ref());
@@ -1618,21 +1278,19 @@ impl App {
     }
 
     fn photo_interaction_available(&self, mapping: viewport::Mapping) -> bool {
-        !self.exporting
-            && self
-                .selected
-                .as_deref()
-                .is_some_and(|path| self.edit_selection.contains(path))
+        self.selected
+            .as_deref()
+            .is_some_and(|path| self.edit_selection.contains(path))
             && self.sidecars.ready()
             && self.before.active == editor::Rendition::Current
             && self.output == "final"
             && !mapping.input
             && mapping.difference_gain == 0.
-            && self.frame.as_ref().is_some_and(|f| {
-                !f.framing_preview
-                    && self.selected.as_ref() == Some(&f.path)
-                    && f.output == "final"
-                    && f.rendition == editor::Rendition::Current
+            && self.active_image().is_some_and(|f| {
+                !f.request.framing_preview
+                    && self.selected.as_ref() == Some(&f.request.path)
+                    && f.request.output == "final"
+                    && f.request.rendition == editor::Rendition::Current
             })
     }
 
@@ -1644,13 +1302,11 @@ impl App {
                 .is_some_and(|path| self.edit_selection.contains(path));
         self.viewport_mut().group_target = group_target;
         let allowed = self.photo_interaction_available(mapping);
-        let framing_active =
-            self.framing_preview_active() && !self.exporting && self.sidecars.ready();
+        let framing_active = self.framing_preview_active() && self.sidecars.ready();
         let crop_active = framing_active && crop_tool::active(ui.ctx());
         self.viewport_mut().framing = self
-            .frame
-            .as_ref()
-            .filter(|f| framing_active && f.framing_preview)
+            .active_image()
+            .filter(|f| framing_active && f.request.framing_preview)
             .map(|frame| framing::Presentation {
                 rotation: rotate_tool::displayed(ui.ctx(), self.settings.rotation),
                 native_extent: frame.camera_extent(),
@@ -1661,8 +1317,17 @@ impl App {
             } else {
                 allowed
             };
-        if let Some(frame) = &self.frame {
-            let detail = self.smart_detail().map(|detail| viewport::ImageLayer {
+        let content = self.active_image().map(|frame| {
+            (
+                frame.view(mapping.input).clone(),
+                frame.display_extent(mapping.input),
+                frame.comparison.as_ref().map(|c| c.texture.clone()),
+                frame.diagnostic_identity(mapping.input),
+                frame.display_window(false),
+            )
+        });
+        if let Some((texture, extent, comparison, identity, window)) = content {
+            let detail = self.active_patch().map(|detail| viewport::ImageLayer {
                 texture: detail.texture.clone(),
                 coverage: detail.detail_region(),
                 identity: detail.diagnostic_identity(false),
@@ -1671,24 +1336,17 @@ impl App {
             viewport.zoom_snap = self.preferences.zoom_snap;
             viewport.show(
                 ui,
-                frame.view(mapping.input).clone(),
-                viewport.framing.map_or_else(
-                    || frame.display_extent(mapping.input),
-                    framing::Presentation::extent,
-                ),
-                frame.comparison.as_ref().map(|c| c.texture.clone()),
+                texture,
+                viewport
+                    .framing
+                    .map_or(extent, framing::Presentation::extent),
+                comparison,
                 mapping,
                 self.srgb_target,
-                frame.diagnostic_identity(mapping.input),
+                identity,
             );
             if let Some(layer) = detail {
-                viewport.show_region(
-                    ui,
-                    layer,
-                    frame.display_window(false),
-                    mapping,
-                    self.srgb_target,
-                );
+                viewport.show_region(ui, layer, window, mapping, self.srgb_target);
             }
         } else if let Some(path) = &self.selected {
             if let Some(preview) = self.browser.preview(path) {
@@ -1733,9 +1391,8 @@ impl App {
         ) {
             if framing_active {
                 if let (Some(frame), Some((canvas, image))) = (
-                    self.frame
-                        .as_ref()
-                        .filter(|f| f.framing_preview && &f.path == path),
+                    self.active_image()
+                        .filter(|f| f.request.framing_preview && &f.request.path == path),
                     self.viewport().image_rectangles(),
                 ) {
                     return framing::photo(
@@ -1753,16 +1410,17 @@ impl App {
             // Existing gestures can continue while their render catches up. Start a new
             // selection only from a frame that represents the current authored recipe.
             let uv = uv.filter(|_| {
-                self.frame
-                    .as_ref()
-                    .is_some_and(|f| f.requested == self.settings)
+                self.active_image().is_some_and(|image| {
+                    self.preferences
+                        .renders_edits(&image.request.settings, &self.settings)
+                })
             });
             let (changed, request) =
                 photo_tools::pick(ui, &response, uv, path, &mut self.settings, allowed);
             if let Some(request) = request {
-                if let Some(frame) = &self.frame {
+                if let Some(frame) = self.active_image() {
                     self.worker
-                        .pick_color(request, frame.revision, Some(frame.origin.clone()));
+                        .pick_color(request, frame.request.id, Some(frame.origin.clone()));
                 }
             }
             return changed;
@@ -1784,7 +1442,7 @@ impl eframe::App for App {
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.diagnostics.poll(ctx);
-        let _update = timing::Span::new(self.revision, "ui_update");
+        let _update = timing::Span::new(self.last_request_id.0, "ui_update");
         if let Some(ready) = self.startup_ready.take() {
             foveonic::support::event(
                 foveonic::support::Level::Info,
@@ -1804,7 +1462,7 @@ impl eframe::App for App {
                 .replace(began)
                 .map(|last| began.duration_since(last).as_secs_f64() * 1000.);
             timing::native_frame(
-                self.frame.as_ref().map_or(0, |image| image.revision),
+                self.active_image().map_or(0, |image| image.request.id.0),
                 frame.info().cpu_usage,
                 gap,
                 self.busy,
@@ -1828,7 +1486,7 @@ impl eframe::App for App {
         if let Some(saved) = self.sidecars.receive() {
             if let Some(path) = &self.selected {
                 if let Some(opening) = &self.opening {
-                    timing::selection_ready(self.revision, path, opening.began);
+                    timing::selection_ready(self.last_request_id.0, path, opening.began);
                 }
                 self.settings = sidecars::selection_settings(saved, &self.camera_overrides);
                 inspect::normalize(
@@ -1844,23 +1502,6 @@ impl eframe::App for App {
                             foveonic::source::ProcessingFamily::from_camera_model(model)
                         }),
                 );
-                let retained_current = self.frame.as_ref().is_some_and(|frame| {
-                    frame.path == *path
-                        && frame.rendition == editor::Rendition::Current
-                        && frame.output == "final"
-                        && self.output == "final"
-                        && frame.framing_preview == self.framing_preview_active()
-                        && matching::same_authored_edits(&frame.requested, &self.view_settings())
-                        && self
-                            .worker
-                            .cache
-                            .source_origin(path)
-                            .is_none_or(|origin| origin == frame.origin)
-                        && self.worker.is_settled_and_admitted(frame)
-                });
-                if !retained_current {
-                    self.submit(None);
-                }
             }
         }
         if self
@@ -1876,11 +1517,7 @@ impl eframe::App for App {
             .poll(&mut self.preferences.noise_profile);
         self.noise_calibration
             .show(ctx, &mut self.preferences.noise_profile);
-        if !self.exporting && self.noise_calibration.take_changed() {
-            self.multi_edit.invalidate();
-            self.multi_edit.clear_details();
-            self.before.detail = None;
-            self.cancel_smart();
+        if self.noise_calibration.take_changed() {
             let selected = self
                 .noise_calibration
                 .selected(self.preferences.noise_profile);
@@ -1890,7 +1527,6 @@ impl eframe::App for App {
             self.import.set_noise_calibration(selected);
             self.browser.invalidate_previews();
             self.previews.invalidate();
-            self.submit(None);
         }
         self.smoke_tick(ctx);
         automation::begin_frame(ctx);
@@ -1928,7 +1564,7 @@ impl eframe::App for App {
                 diagnostics::Action::Mark(label) => {
                     self.diagnostics.mark(
                         &label,
-                        serde_json::json!({"source":self.selected,"revision":self.revision}),
+                        serde_json::json!({"source":self.selected,"revision":self.last_request_id}),
                     );
                     Ok(())
                 }
@@ -1943,8 +1579,6 @@ impl eframe::App for App {
             }
         }
         application_settings::adaptive(ctx, &mut self.preferences);
-        self.worker
-            .set_background_completion(self.preferences.background_full_image_completion);
         self.browser
             .set_thumbnail_budget(self.preferences.thumbnail_cache_bytes());
         if previous_gamut != self.preferences.display_gamut {
@@ -1979,29 +1613,20 @@ impl eframe::App for App {
                 let browser_focus = ui.make_persistent_id("organizer focus");
                 self.browser.sort = self.preferences.browser_sort;
                 self.browser.show_ratings = self.preferences.browser_show_ratings;
-                self.browser.header(
-                    ui,
-                    &mut self.preferences.organizer,
-                    !self.exporting,
-                    browser_focus,
-                );
+                self.browser
+                    .header(ui, &mut self.preferences.organizer, browser_focus);
                 ui.separator();
-                ui.add_enabled_ui(!self.exporting, |ui| {
-                    select = self.browser.organizer(
-                        ui,
-                        self.selected.as_deref(),
-                        self.preferences.organizer,
-                    );
-                });
+                select = self.browser.organizer(
+                    ui,
+                    self.selected.as_deref(),
+                    self.preferences.organizer,
+                );
                 self.preferences.browser_sort = self.browser.sort;
                 self.preferences.browser_show_ratings = self.browser.show_ratings;
             });
         let actions_changed = self.dispatch_actions(ctx);
         let tuning_changed = previous_limits != self.preferences.adaptive_tone_tuning;
         if tuning_changed {
-            self.multi_edit.invalidate();
-            self.multi_edit.clear_details();
-            self.before.detail = None;
             self.browser.invalidate_previews();
             self.previews.invalidate();
         }
@@ -2096,8 +1721,6 @@ impl eframe::App for App {
             self.sidecars.edited(&self.settings);
         }
         self.preferences.direct_color = editor::direct_color::configuration(ctx);
-        let preview_changed = std::mem::take(&mut self.preview_demand_changed);
-        let mut submit_active = false;
         if std::mem::take(&mut self.browser.clear_selection) {
             self.clear_selection();
         } else if let Some(request) = self.comparison_selection.take() {
@@ -2137,17 +1760,10 @@ impl eframe::App for App {
                     .unwrap_or(selection.path)
             };
             self.select(path, selection.preserve_viewport);
-        } else if (changed || preview_changed) && !self.exporting {
-            if changed {
-                self.exit_before();
-            }
-            submit_active = true;
-        }
-        if submit_active {
-            self.submit(None);
+        } else if changed {
+            self.exit_before();
         }
         self.submit_photos();
-        self.update_loupe();
         if let Some(paths) = self.browser.take_prefetch_order(self.selected.as_deref()) {
             self.worker
                 .cache
@@ -2164,7 +1780,7 @@ impl eframe::App for App {
                     .selected(self.preferences.noise_profile),
             });
         self.editor_ui.dialog(ctx, &mut self.preferences.editor);
-        let support_photo = (self.selected.clone(), self.revision);
+        let support_photo = (self.selected.clone(), self.last_request_id);
         let source_changed = self
             .support_photo
             .as_ref()
@@ -2189,7 +1805,7 @@ impl eframe::App for App {
             foveonic::support::update_context(
                 "requested_workspace",
                 serde_json::json!({
-                    "source":self.selected.as_deref().map(crate::support::path),"revision":self.revision,
+                    "source":self.selected.as_deref().map(crate::support::path),"revision":self.last_request_id,
                     "settings":foveonic::support::settings_snapshot(&self.settings),"quality":self.preferences.processing_quality,"output":self.output,
                     "camera_overrides":self.camera_overrides,
                 }),
@@ -2198,42 +1814,32 @@ impl eframe::App for App {
         }
         self.support_log_open = self.activity.is_open();
         self.activity.show(ctx);
-        if !self.multi_photo_overview() {
-            self.update_framing_preview();
-        }
         self.update_scopes();
         self.smoke_check_scope_retention();
         self.sync_render_progress(None);
-        self.previews.update(self.frame.as_ref(), self.busy, ctx);
-        let use_preview = self.navigator_uses_preview();
         let mapping = self.displayed_mapping();
-        let navigator_source = if self.multi_edit.multiple() {
-            None
-        } else if use_preview {
-            self.selected
-                .as_deref()
-                .and_then(|path| self.multi_edit.preview(path))
-        } else {
-            self.frame.as_ref()
-        };
+        let active = self.active_key();
+        let frame = active.as_ref().and_then(|(key, origin)| {
+            rendering::views::whole_image(&self.images, key, origin.as_ref())
+        });
+        self.previews.update(frame, self.busy, ctx);
+        let navigator_source = frame.filter(|_| !self.multi_edit.multiple());
         self.navigator
             .update(navigator_source, mapping, self.busy, ctx);
         self.update_memory();
-        self.publish_render_view();
     }
 }
 fn update_browser_preview(
     browser: &mut browser::Browser,
     previews: &mut previews::Previews,
-    frame: &worker::Frame,
+    frame: &worker::RenderResult,
 ) {
-    // Selection can change presentation revision without changing pixels.
-    let revision = frame.content_revision();
-    if browser.has_rendered_preview(&frame.path, revision) {
+    let revision = frame.request.id;
+    if browser.has_rendered_preview(&frame.request.path, revision.0) {
         return;
     }
     if let Some((thumbnail, preview)) = previews.snapshot(frame) {
-        browser.rendered_texture(frame.path.clone(), revision, thumbnail, preview);
+        browser.rendered_texture(frame.request.path.clone(), revision.0, thumbnail, preview);
     }
 }
 fn multi_photo_overview(paths: &[PathBuf], active: Option<&std::path::Path>) -> bool {

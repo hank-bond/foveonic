@@ -269,6 +269,9 @@ pub(super) struct Scenario {
     drag_layout: Option<([f32; 4], [f32; 4], usize)>,
     failure_screenshot: Option<Instant>,
     screenshot_finished: bool,
+    /// Each target's settled image, taken in the frame the last step settled, so a
+    /// later speculative full-size image cannot replace what is checked.
+    final_images: Vec<(serde_json::Value, foveonic::image::RenderedImage)>,
     image_captures: Option<Vec<ImageCapture>>,
     journey: Option<super::selection::SelectionJourney>,
     prefetched_exposure: Option<super::journey::ExposureJourney>,
@@ -303,16 +306,15 @@ struct SessionCase {
 impl Scenario {
     pub(super) fn observe_admitted(
         &mut self,
-        frame: &crate::rendering::worker::Frame,
+        frame: &crate::rendering::worker::RenderResult,
         current: bool,
-        destination: crate::rendering::delivery::Destination,
         visible: Option<[u32; 4]>,
     ) {
         if matches!(self.phase, Phase::Running)
             && matches!(self.action, Some(Action::CacheWorkflow))
         {
             if let Some(driver) = &mut self.cache_workflow {
-                driver.observe_admitted(&self.paths, frame, current, destination, visible);
+                driver.observe_admitted(&self.paths, frame, current, visible);
             }
         }
     }
@@ -372,12 +374,13 @@ impl Scenario {
             "cached switching needs at least two photographs"
         );
         assert!(
-            config.name != Case::CacheWorkflow || config.photo_count == 2,
-            "cache workflow requires exactly two photographs"
+            config.name != Case::CacheWorkflow || config.photo_count >= 2,
+            "cache workflow needs at least two photographs"
         );
         assert!(
-            config.name != Case::CacheWorkflow || (1..=2).contains(&config.native_photo_count),
-            "cache workflow native photo count must be one or two"
+            config.name != Case::CacheWorkflow
+                || (1..=config.photo_count).contains(&config.native_photo_count),
+            "cache workflow zooms between one and all of its photographs"
         );
         assert!(
             config.name != Case::SliderDrag
@@ -545,6 +548,7 @@ impl Scenario {
             drag_layout: None,
             failure_screenshot: None,
             screenshot_finished: false,
+            final_images: Vec::new(),
             image_captures: None,
             journey,
             prefetched_exposure,
@@ -601,7 +605,9 @@ impl Scenario {
                     let desired = self.exposure_model().unwrap().exposures()[index];
                     let shown = self
                         .frame(app, &self.paths[index])
-                        .filter(|frame| frame.rendition == crate::editor::Rendition::Current)
+                        .filter(|frame| {
+                            frame.request.rendition == crate::editor::Rendition::Current
+                        })
                         .map(|frame| frame.artifact.settings.exposure);
                     if let Err(error) = self.feedback[index].observe(desired, shown) {
                         self.failed = Some(format!("photo {index}: {error}"));
@@ -623,7 +629,7 @@ impl Scenario {
         }
         match self.phase {
             Phase::Setup => {
-                if app.worker.busy() || !app.sidecars.ready() || app.frame.is_none() {
+                if app.view_busy() || !app.sidecars.ready() || app.active_image().is_none() {
                     return;
                 }
                 app.preferences.multi_edit_limit = self.config.photo_count;
@@ -688,7 +694,7 @@ impl Scenario {
                 if app.folder_loader.loading()
                     || app.browser.import_mode != (self.config.folder_mode == FolderMode::Import)
                     || !app.sidecars.ready()
-                    || app.worker.busy()
+                    || app.view_busy()
                 {
                     return;
                 }
@@ -712,7 +718,7 @@ impl Scenario {
                     }
                     return;
                 }
-                if app.worker.busy() || !app.sidecars.ready() {
+                if app.view_busy() || !app.sidecars.ready() {
                     return;
                 }
                 let ready = app.worker.cache.status().ready;
@@ -825,7 +831,7 @@ impl Scenario {
                         self.cache_workflow
                             .as_mut()
                             .unwrap()
-                            .advance(app, ctx, &self.paths);
+                            .advance(app, ctx, smoke, &self.paths);
                     self.update_journey_expectations();
                     match completed {
                         Ok(false) => return,
@@ -1017,7 +1023,7 @@ impl Scenario {
                     {
                         return;
                     }
-                    self.minimum_revision = app.revision + 1;
+                    self.minimum_revision = app.last_request_id.next().0;
                     self.journey.as_mut().unwrap().model.adjust_exposure(0.0625);
                     apply_exposure(app, 0.0625);
                     self.update_journey_expectations();
@@ -1125,7 +1131,7 @@ impl Scenario {
                         .filter(|frame| self.matches(app, path, frame, self.minimum_revision))
                     {
                         if !self.observed.contains_key(path) {
-                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.expected_frame_quality()), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
+                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.request.id,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.expected_frame_quality()), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
                             self.observed.insert(path.clone(), frame.diagnostic_task.id);
                         }
                     }
@@ -1205,12 +1211,12 @@ impl Scenario {
                             .max(size[1] / native_extent[1].max(1) as f32) * pixels_per_point
                     });
                     serde_json::json!({"source":path,"family":frame.artifact.metadata.processing_family().ok(),
-                        "processing_quality":frame.processing_quality,
+                        "processing_quality":frame.processing_quality(),
                         "requested_processing_quality":app.preferences.processing_quality,
                         "display_density":display_density,"display_size_points":display_size_points,
                         "native_extent":native_extent,"pixels_per_point":pixels_per_point,
                         "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
-                        "presentation_revision":frame.revision,"scale_divisor":frame.artifact.settings.working_scale.divisor(),
+                        "presentation_revision":frame.request.id,"scale_divisor":frame.artifact.settings.working_scale.divisor(),
                         "settings":self.settings(app,path)})
                 }).collect::<Vec<_>>();
                 self.results.push(serde_json::json!({"step":self.step,"action":self.action.unwrap().name(),"coverage":self.action.unwrap().coverage(),"baseline_elapsed_ms":if self.config.mode==Mode::Off && !matches!(self.action,Some(Action::CacheWorkflow)) {Some(self.began.elapsed().as_secs_f64()*1000.)}else{None},"photos":photos,"retained":app.worker.memory_status().resources}));
@@ -1337,7 +1343,7 @@ impl Scenario {
                                 "sidecar_requested":app.sidecars.requested_settings(path),
                                 "frame":self.frame(app,path).map(|frame|serde_json::json!({
                                     "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
-                                    "presentation_revision":frame.revision,"requested":frame.requested,
+                                    "presentation_revision":frame.request.id,"requested":frame.request.settings,
                                     "scale_divisor":frame.artifact.settings.working_scale.divisor(),
                                     "admitted":app.worker.is_settled_and_admitted(frame),
                                     "matches_expected_final":self.matches(app,path,frame,self.minimum_revision),
@@ -1433,7 +1439,7 @@ impl Scenario {
         self.geometry = serde_json::json!({"window_points":[window.x,window.y],
             "viewport_points":[viewport.x,viewport.y],"pixels_per_point":ctx.pixels_per_point()});
         let mut sample = serde_json::json!({"elapsed_ms":started.elapsed().as_secs_f64()*1000.,
-            "action":self.action.map_or("initial-selection",Action::name),"worker_busy":app.worker.busy()});
+            "action":self.action.map_or("initial-selection",Action::name),"worker_busy":app.view_busy()});
         if self.session.is_some() && matches!(self.action, Some(Action::SliderDrag)) {
             let (position, down) = ctx.input(|input| {
                 (
@@ -1512,21 +1518,18 @@ impl Scenario {
         }
     }
 
-    fn capture_images(&mut self, app: &App, directory: &Path) -> Result<bool, String> {
-        if self.image_captures.is_none() {
-            let mut captures = Vec::new();
-            for (index, path) in self.targets.iter().enumerate() {
-                let frame = self
-                    .frame(app, path)
-                    .ok_or("missing settled frame for capture")?;
-                let foveonic::inspection::Content::Image(image) = &frame.artifact.content else {
-                    return Err("settled frame does not contain an image".into());
-                };
-                let description = image.description();
-                let view = image.view();
-                let destination = directory.join(format!("image-{index:02}.f32"));
-                let evidence = serde_json::json!({
-                    "source":path,"file":destination,"task":frame.diagnostic_task.id,
+    fn snapshot_images(&mut self, app: &App) -> Result<(), String> {
+        for path in &self.targets {
+            let frame = self
+                .frame(app, path)
+                .ok_or("missing settled frame for capture")?;
+            let foveonic::inspection::Content::Image(image) = &frame.artifact.content else {
+                return Err("settled frame does not contain an image".into());
+            };
+            let description = image.description();
+            let view = image.view();
+            let evidence = serde_json::json!({
+                    "source":path,"task":frame.diagnostic_task.id,
                     "revision":frame.diagnostic_task.revision,
                     "settings":foveonic::profile::RenderSettingsSnapshot::from(image.settings()),
                     "extent":description.extent,"layout":format!("{:?}",description.layout),
@@ -1534,10 +1537,24 @@ impl Scenario {
                     "view_baked":description.view_baked,"view_extent":view.extent,
                     "view_crop":view.crop,"view_rotation":view.rotation,
                     "endianness":if cfg!(target_endian="little") {"little"} else {"big"},
-                });
+            });
+            self.final_images.push((evidence, (**image).clone()));
+        }
+        Ok(())
+    }
+
+    fn capture_images(&mut self, app: &App, directory: &Path) -> Result<bool, String> {
+        if self.image_captures.is_none() {
+            let mut captures = Vec::new();
+            for (index, (mut evidence, image)) in std::mem::take(&mut self.final_images)
+                .into_iter()
+                .enumerate()
+            {
+                let destination = directory.join(format!("image-{index:02}.f32"));
+                evidence["file"] = serde_json::json!(destination);
                 captures.push(ImageCapture {
                     evidence,
-                    result: app.worker.capture_image((**image).clone(), destination),
+                    result: app.worker.capture_image(image, destination),
                     finished: false,
                 });
             }
@@ -1560,14 +1577,13 @@ impl Scenario {
         &self,
         app: &'a App,
         path: &PathBuf,
-    ) -> Option<&'a crate::rendering::worker::Frame> {
+    ) -> Option<&'a crate::rendering::worker::RenderResult> {
         if matches!(self.action, Some(Action::TransitionJourney)) {
             return super::transitions::TransitionJourney::smart_feedback(app, path, false);
         }
-        app.frame
-            .as_ref()
-            .filter(|frame| frame.path == *path)
-            .or_else(|| app.multi_edit_frame(path))
+        app.active_image()
+            .filter(|frame| frame.request.path == *path)
+            .or_else(|| app.photo_layers(path)[0])
     }
     fn expected_frame_quality(&self) -> ProcessingQuality {
         // The transition sequence ends with Restore in Speed. Setup still uses
@@ -1582,27 +1598,27 @@ impl Scenario {
         &self,
         app: &App,
         path: &PathBuf,
-        frame: &crate::rendering::worker::Frame,
+        frame: &crate::rendering::worker::RenderResult,
         minimum: u64,
     ) -> bool {
-        frame.rendition == crate::editor::Rendition::Current
+        frame.request.rendition == crate::editor::Rendition::Current
             && (matches!(self.action, Some(Action::CacheWorkflow))
                 || frame.diagnostic_task.revision >= minimum)
             && (matches!(self.action, Some(Action::CacheWorkflow))
-                || frame.processing_quality == self.expected_frame_quality()
+                || frame.processing_quality() == self.expected_frame_quality()
                     && frame.artifact.settings.working_scale.divisor()
                         <= app
                             .preview_scale_for(path, self.expected_frame_quality())
                             .divisor())
             && crate::rendering::matching::same_authored_edits(
-                &frame.requested,
+                &frame.request.settings,
                 self.expected
                     .get(path)
                     .unwrap_or_else(|| self.settings(app, path)),
             )
     }
     fn ready(&self, app: &App, minimum: u64) -> bool {
-        !app.worker.busy()
+        !app.view_busy()
             // Coordinator idleness can become visible before the UI settles progress.
             && app.worker.progress.snapshot().is_none_or(|progress| !progress.running())
             && app.sidecars.ready()
@@ -1757,25 +1773,26 @@ impl Scenario {
         self.marker("begin", expectation);
         match action {
             Action::Initial => {
-                self.minimum_revision = app.revision + 1;
+                self.minimum_revision = app.last_request_id.next().0;
                 if self.config.name != Case::PrefetchedSelection {
+                    // Start cold: no work and no images to reuse.
                     app.worker.clear_all();
+                    app.images.clear();
                 }
-                app.multi_edit.invalidate();
                 app.browser.set_actions(vec![(
                     crate::shortcuts::BrowserAction::SelectAll,
                     egui::Modifiers::COMMAND,
                 )]);
                 if self.paths.len() == 1 {
-                    app.submit(None);
+                    app.submit_photos();
                 }
             }
             Action::Edit(delta) => {
-                self.minimum_revision = app.revision + 1;
+                self.minimum_revision = app.last_request_id.next().0;
                 self.edit(app, delta);
             }
             Action::PrepareGrid => {
-                self.minimum_revision = app.revision + 1;
+                self.minimum_revision = app.last_request_id.next().0;
                 self.edit(app, 0.125);
             }
             Action::Switch(index) => self.click(app, ctx, smoke, index, egui::Modifiers::NONE),
@@ -1785,7 +1802,7 @@ impl Scenario {
             }
             Action::Readd => self.click(app, ctx, smoke, 1, egui::Modifiers::ALT),
             Action::Rapid => {
-                self.minimum_revision = app.revision + 1;
+                self.minimum_revision = app.last_request_id.next().0;
                 self.rapid_left = self.config.rapid_edits;
             }
             Action::Pressure => {
@@ -1857,12 +1874,12 @@ impl Scenario {
                 .frame(app, path)
                 .ok_or("shutdown requires an existing frame")?;
             photos.push(serde_json::json!({"source":path,"initial_exposure":initial,
-                "expected_exposure":*initial + 0.25_f32,"old_presented_revision":frame.revision,
+                "expected_exposure":*initial + 0.25_f32,"old_presented_revision":frame.request.id,
                 "old_task_revision":frame.diagnostic_task.revision}));
         }
-        let before = app.revision;
+        let before = app.last_request_id;
         apply_exposure(app, 0.25);
-        let after = app.revision;
+        let after = app.last_request_id;
         if after <= before {
             return Err("shutdown edit did not advance the requested revision".into());
         }
@@ -1886,6 +1903,11 @@ impl Scenario {
     }
 
     fn finish(&mut self, app: &mut App) {
+        if self.config.capture_images && self.failed.is_none() {
+            if let Err(error) = self.snapshot_images(app) {
+                self.failed = Some(error);
+            }
+        }
         if let Some(journey) = &mut self.source_loading {
             journey.release();
         }
@@ -1900,7 +1922,7 @@ impl Scenario {
                 "failed",
                 serde_json::json!({"error":error,
                 "expected_selection":self.targets,"actual_selection":app.edit_selection.paths(),
-                "worker_busy":app.worker.busy()}),
+                "worker_busy":app.view_busy()}),
             );
         }
         if !self.config.save_on_exit && self.config.mode != Mode::Off && app.diagnostics.active() {
@@ -2117,7 +2139,7 @@ pub(super) fn apply_exposure(app: &mut App, delta: f64) {
                 .observe_active(path, &app.settings, app.metadata.as_ref());
         }
     }
-    app.submit(None);
+    app.submit_photos();
 }
 
 #[cfg(test)]

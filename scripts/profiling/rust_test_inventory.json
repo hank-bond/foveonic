@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "Ignored tests only. Ordinary workspace tests remain required separately. Classification is not execution or a release waiver.",
-  "classification_basis": "Reconciled release selection plus wide-rendering correctness on workspace test binaries built with foveonic-gui/wide-experiment. Matched timing and GPU-attribution experiments remain explicit measurement exclusions.",
+  "classification_basis": "Reconciled release selection plus wide-rendering correctness on workspace test binaries. Matched timing and GPU-attribution experiments remain explicit measurement exclusions.",
   "fixture_policy": "Use disposable full file copies, not source originals, file symlinks or hard links. Directory-scanning sets are exact. All planned tests remain serial per adapter; SDK groups also use one test per process.",
   "suites": [
     {
@@ -355,95 +355,7 @@
         "directory": "standard"
       }
     },
-    "none": {},
-    "wide_width_2": {
-      "FOVEONIC_FIXTURE_DIR": {
-        "directory": "standard"
-      },
-      "MERRILL_X3F": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "QUATTRO_X3F": {
-        "file": "dp2-quattro.x3f"
-      },
-      "TIGER_X3F": {
-        "file": "sd-quattro-h.x3f"
-      },
-      "CLASSIC_X3F": {
-        "file": "sd9.x3f"
-      },
-      "FOVEONIC_FINISH_SOURCE": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "FOVEONIC_TONAL_SOURCE": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "SMALL_PREVIEW_X3F": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "FOVEONIC_CACHE_X3F": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "SESSION_SCALE_X3F": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "CLASSIC_SAMPLE_DIR": {
-        "directory": "standard"
-      },
-      "QUATTRO_SAMPLE_DIR": {
-        "directory": "standard"
-      },
-      "QUATTRO_FIXTURE_DIR": {
-        "directory": "standard"
-      },
-      "FOVEONIC_WIDE_RENDER_WIDTH": {
-        "value": "2"
-      }
-    },
-    "wide_width_8": {
-      "FOVEONIC_FIXTURE_DIR": {
-        "directory": "standard"
-      },
-      "MERRILL_X3F": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "QUATTRO_X3F": {
-        "file": "dp2-quattro.x3f"
-      },
-      "TIGER_X3F": {
-        "file": "sd-quattro-h.x3f"
-      },
-      "CLASSIC_X3F": {
-        "file": "sd9.x3f"
-      },
-      "FOVEONIC_FINISH_SOURCE": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "FOVEONIC_TONAL_SOURCE": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "SMALL_PREVIEW_X3F": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "FOVEONIC_CACHE_X3F": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "SESSION_SCALE_X3F": {
-        "file": "blue-parking-sign.x3f"
-      },
-      "CLASSIC_SAMPLE_DIR": {
-        "directory": "standard"
-      },
-      "QUATTRO_SAMPLE_DIR": {
-        "directory": "standard"
-      },
-      "QUATTRO_FIXTURE_DIR": {
-        "directory": "standard"
-      },
-      "FOVEONIC_WIDE_RENDER_WIDTH": {
-        "value": "8"
-      }
-    }
+    "none": {}
   },
   "unset_environment": {
     "names": [
@@ -606,7 +518,7 @@
         "render::interactive_tests::sessions_bind_inputs_to_engine_and_selective_roots",
         "render::interactive_tests::texture_edits_reuse_filtering_and_match_fresh_images",
         "render::interactive_tests::white_balance_patch_samples_linear_input_and_rejects_invalid_samples",
-        "render::memory::tests::coordinated_budget_evicts_cold_history_before_actual_active_photos",
+        "render::memory::tests::target_evicts_the_least_recent_photo_first",
         "render::memory::tests::native_fine_edits_keep_their_restart_frontier_under_memory_pressure",
         "render::memory::tests::shared_reservations_and_processing_owners_are_counted_once",
         "render::monochrome_tests::mono_inspection_stops_before_unrelated_processing_and_keeps_original_layers",
@@ -685,9 +597,9 @@
         "render::reduced::tests::every_camera_white_balance_matches_source_free_and_fresh_at_native_and_reduced_scales",
         "render::reduced::tests::full_option_dependency_cuts_release_source_and_match_fresh",
         "render::reduced::tests::per_output_scale_and_reduced_roi_hint_match_whole_grid",
-        "render::reduced::tests::reduced_active_cut_survives_shared_budget_pressure",
+        "render::reduced::tests::visible_reduced_photo_keeps_its_sensor_data_under_pressure",
         "render::reduced::tests::shared_working_set_orders_native_reduced_and_speculative_owners",
-        "render::reduced::tests::verified_reload_preserves_main_cuts_and_rejects_other_origins_before_mutation",
+        "render::reduced::tests::verified_reload_preserves_main_sensor_data_and_rejects_other_origins_before_mutation",
         "render::tests::automatic_color_dq_matches_native_gain_manual_override_and_preserves_source",
         "render::tests::camera_repair_matches_manual_cutoff_and_sensor_inspection_skips_selection",
         "render::tests::merrill_auto_zero_sharpen_skips_signal_for_final_but_keeps_inspection",
@@ -710,14 +622,17 @@
         "render::driver::tests::native_final_missing_failure_and_submitted_cancel_preserve_attempted_settings_and_retry",
         "render::driver::named_tests::native_named_outputs_match_ordinary_order_samples_and_warm_root_changes",
         "render::driver::named_tests::native_named_failure_and_submitted_cancel_preserve_attempts_profile_and_exact_retry",
-        "render::driver::experimental::tests::four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_completion",
-        "render::driver::experimental::tests::cancelled_peer_retries_without_source_while_unchanged_peer_commits",
-        "render::driver::experimental::tests::native_regions_width_one_and_two_match_ordinary_pixels_and_geometry",
-        "render::driver::experimental::tests::native_cancelled_submission_retires_claim_and_preserves_peer_and_retry",
-        "render::driver::experimental::tests::native_prepare_failure_and_early_cancel_release_claim_without_submission",
-        "render::driver::experimental::tests::execution_inventory_deduplicates_two_live_graphs_caches_and_frontend_owners",
-        "render::working_set::tests::claimed_sessions_keep_checkpoints_and_accounting_under_pressure",
-        "render::working_set::tests::one_photo_cannot_execute_both_representations_or_be_partly_invalidated"
+        "render::driver::execution_tests::four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_completion",
+        "render::driver::execution_tests::cancelled_peer_retries_without_source_while_unchanged_peer_commits",
+        "render::driver::execution_tests::native_regions_width_one_and_two_match_ordinary_pixels_and_geometry",
+        "render::driver::execution_tests::native_cancelled_submission_retires_claim_and_preserves_peer_and_retry",
+        "render::driver::execution_tests::native_prepare_failure_and_early_cancel_release_claim_without_submission",
+        "render::driver::execution_tests::execution_inventory_deduplicates_two_live_graphs_caches_and_frontend_owners",
+        "render::working_set::tests::guarded_photos_keep_checkpoints_and_accounting_under_pressure",
+        "render::working_set::tests::one_photo_cannot_execute_both_representations_or_be_partly_invalidated",
+        "render::driver::tests::estimates_exist_for_every_family_and_view_and_cover_measured_peaks",
+        "render::scheduler::tests::one_job_per_photo_and_loading_waits_until_alone",
+        "render::scheduler::tests::waiting_job_stays_queued_until_ready"
       ]
     },
     {
@@ -747,14 +662,13 @@
         "gpu_test::activity_counts_engine_owned_transfers_and_not_device_copies_as_readbacks",
         "gpu_test::shader_black_calibration_and_orientation",
         "image::composition_tests::composition_shares_samples_and_rejects_regional_or_resized_results",
-        "interactive::cache_tests::admission_counts_shared_protected_allocations_once",
         "interactive::cache_tests::existing_version_admission_keeps_its_original_buffer",
         "interactive::cache_tests::optional_frontier_history_recovers_an_older_geometry_without_a_quality_label",
         "interactive::cache_tests::pressure_discards_old_cuts_and_uncached_descriptors_before_current_inputs",
-        "interactive::cache_tests::rejected_admission_preserves_existing_checkpoints",
-        "interactive::cache_tests::sealed_cut_matches_across_scopes_and_is_invalidated_by_upstream_parameters",
-        "interactive::cache_tests::successful_admission_preserves_eviction_priority_and_recency",
-        "interactive::tests::active_pressure_keeps_restart_inputs_and_the_complete_graph_identity",
+        "interactive::cache_tests::restart_inputs_leave_by_edit_recency",
+        "interactive::cache_tests::sensor_data_matches_across_scopes_and_is_invalidated_by_upstream_parameters",
+        "render::working_set::tests::one_recency_pass_orders_restart_inputs_and_photos",
+        "interactive::tests::pressure_keeps_restart_inputs_and_the_complete_graph_identity",
         "interactive::tests::cached_aliases_count_one_allocation",
         "interactive::tests::cached_edit_boundary_does_not_refill_evicted_upstream_checkpoints",
         "interactive::tests::exact_output_probe_preserves_planning_and_rejects_missing_or_changed_ancestry",
@@ -973,7 +887,7 @@
         "render::tests::interpolated_waveforms_conserve_weight_reduce_column_beats_and_track_sub_bin_levels",
         "render::tests::scalar_fields_preserve_geometry_and_values_without_rgb_storage",
         "render::tests::viewport_scopes_use_oriented_region_and_crop_relative_columns",
-        "render::execute::observation_tests::queued_and_operation_completion_preserve_samples_and_wait_boundaries",
+        "render::execute::observation_tests::each_tick_waits_once_and_preserves_samples_and_progress",
         "render::execute::observation_tests::resumed_graph_preserves_signed_samples_progress_and_trailing_observations",
         "render::execute::observation_tests::cancellation_between_advancements_does_not_execute_the_next_operation"
       ]
@@ -1004,6 +918,8 @@
         "display_image::tests::thumbnail_quarter_turns_preserve_direction_and_linear_wide_colors",
         "import_review::tests::browse_processes_all_highlights_with_frozen_per_photo_edits_and_conflict_policy",
         "import_review::tests::destination_probe_tracks_disconnect_reconnect_and_changed_paths_off_thread",
+        "import_review::tests::a_new_destination_hides_files_while_an_earlier_scan_waits_for_rendering",
+        "import_review::tests::import_history_hides_files_while_rendering_holds_settings_back",
         "navigator::draw_tests::romm_presentation_converts_and_clips_without_changing_float_source",
         "navigator::draw_tests::rotation_presentation_preserves_quarter_turn_pixel_locations",
         "navigator::draw_tests::signed_difference_subtracts_unmapped_samples_and_preserves_display_neutral",
@@ -1019,30 +935,24 @@
         "rendering::worker::presentation::tests::same_path_replacement_does_not_reactivate_old_reduced_metadata",
         "rendering::worker::presentation::tests::smart_resolution_upgrades_cannot_reuse_coarser_unchanged_pixels",
         "rendering::worker::presentation::tests::whole_detail_stays_native_after_reduced_composition_changes",
-        "rendering::worker::preview_tests::fast_preference_exports_full_files_and_returns_to_fast_preview",
-        "rendering::worker::preview_tests::merrill_smart_exports_full_files_and_returns_to_fast_preview",
         "rendering::worker::processing::tests::native_photo_return_reuses_source_and_replacement_invalidates_both_grids",
-        "rendering::worker::processing::tests::reduced_photo_switches_reseal_and_native_promotion_match_fresh",
+        "rendering::worker::processing::tests::reduced_photo_switches_reprepare_and_native_promotion_match_fresh",
         "rendering::worker::processing::tests::speculative_thumb_reuses_pixels_preserves_active_and_releases_source",
         "rendering::worker::tests::comparison_frames_pair_operation_inputs_with_the_same_configuration",
         "rendering::worker::tests::continuous_drag_makes_progress_then_settles_with_matching_scopes",
-        "rendering::worker::tests::detail_layers_keep_only_the_latest_section_and_preserve_compatible_overviews",
         "rendering::worker::tests::latest_multi_edit_batch_delivers_every_target_at_thumb",
         "rendering::worker::tests::mixed_native_and_reduced_edits_preserve_warm_native_work",
-        "rendering::worker::tests::multi_photo_details_keep_own_delivery_storage_order_and_bounded_retention",
         "rendering::worker::tests::photo_selection_retains_native_and_reduced_history_until_explicit_clear",
-        "rendering::worker::tests::quattro_dng_export_uses_original_source_from_any_inspection_view",
-        "rendering::worker::tests::refinement_continues_without_ui_receipt_and_keeps_regional_admission",
         "rendering::worker::tests::shared_source_consumption_resumes_current_before_and_pick",
         "rendering::worker::tests::speculative_whole_yields_to_new_foreground_then_completes",
         "rendering::worker::tests::viewport_scope_jobs_reuse_the_displayed_image_and_settle_on_latest_region",
         "rendering::worker::tests::worker_coalesces_identical_requests_and_rejects_table_inspection",
         "sidecars::tests::merrill_preview_scale_does_not_save_defaults_or_reenable_saved_off",
-        "rendering::worker::tests::idle_continuation_yields_to_thumbnails_and_disables_without_losing_detail",
-        "rendering::worker::tests::shared_preview_with_idle_completion_off_matches_fresh_render_and_reuses_native_source",
-        "rendering::worker::tests::native_pan_keeps_overlay_and_settles_latest_coverage_without_idle_completion",
         "rendering::worker::presentation::tests::retained_snapshots_and_presentation_count_shared_frame_resources_once",
-        "rendering::worker::processing::tests::newly_sealed_cancelled_inputs_remain_accounted_and_retry_without_reloading"
+        "rendering::worker::processing::tests::newly_prepared_cancelled_sensor_data_remains_accounted_and_retries_without_reloading",
+        "rendering::worker::tests::before_render_keeps_the_current_edit_warm",
+        "rendering::worker::tests::speculative_whole_image_waits_for_free_memory_and_keeps_the_edited_region_warm",
+        "rendering::worker::tests::every_family_renders_identically_at_every_width"
       ]
     },
     {
@@ -1057,44 +967,6 @@
         "diagnostics::review_exit_saves_active_and_starting_captures",
         "diagnostics::smoke_panic_saves_active_sdk_capture",
         "startup::tests::early_setup_intervals_survive_asynchronous_recorder_start"
-      ]
-    },
-    {
-      "id": "gui_wide_auto",
-      "suite": "foveonic-gui",
-      "resource": "gpu",
-      "environment": "standard",
-      "one_test_per_process": true,
-      "tests": [
-        "rendering::worker::wide_tests::native::native_admission_limits_extra_work_then_recovers_after_headroom_returns",
-        "rendering::worker::wide_tests::native::live_width_and_budget_reduction_retires_peers_and_settles_latest_work",
-        "rendering::worker::wide_tests::native::constrained_noise_to_tone_edits_keep_warm_inputs_and_reduce_concurrency",
-        "rendering::worker::wide_tests::previews::warm_previews_group_below_navigator_and_preserve_native_overlays",
-        "rendering::worker::wide_tests::previews::preview_preparation_waits_for_viewport_and_browser_waits_for_auxiliary",
-        "rendering::worker::wide_tests::previews::submitted_preview_batch_yields_without_settlement_then_retries_after_viewport"
-      ]
-    },
-    {
-      "id": "gui_wide_2",
-      "suite": "foveonic-gui",
-      "resource": "gpu",
-      "environment": "wide_width_2",
-      "one_test_per_process": true,
-      "tests": [
-        "rendering::worker::wide_tests::native::submitted_native_replacement_preserves_peer_and_latest_pixels"
-      ]
-    },
-    {
-      "id": "gui_wide_8",
-      "suite": "foveonic-gui",
-      "resource": "gpu",
-      "environment": "wide_width_8",
-      "one_test_per_process": true,
-      "tests": [
-        "rendering::worker::wide_tests::mixed::cached_viewport_arrival_preserves_exact_warm_peers_and_reuses_pixels",
-        "rendering::worker::wide_tests::mixed::cold_viewport_arrival_settles_warm_peers_before_held_source_and_matches_fresh",
-        "rendering::worker::wide_tests::mixed::cached_viewport_arrival_preserves_exact_native_peers_and_reuses_pixels",
-        "rendering::worker::wide_tests::mixed::cold_viewport_arrival_settles_native_peers_before_held_source_and_matches_fresh"
       ]
     }
   ],
@@ -2179,31 +2051,10 @@
     },
     {
       "suite": "foveonic-gui",
-      "test": "rendering::worker::wide_tests::real_worker_warm_edit_experiment",
-      "reason": "Explicit matched performance or GPU-attribution experiment; ordinary correctness checks cover its behavioral boundaries.",
-      "requirements": "requires GPU, pinned FOVEONIC_FIXTURE_DIR and isolated wide-experiment process",
-      "source": "crates/foveonic-gui/src/rendering/worker/wide_test.rs"
-    },
-    {
-      "suite": "foveonic-gui",
-      "test": "rendering::worker::wide_tests::wide_profiled_edit_attribution",
-      "reason": "Explicit matched performance or GPU-attribution experiment; ordinary correctness checks cover its behavioral boundaries.",
-      "requirements": "requires GPU timestamps, pinned fixtures, WIDTH=8 and FOVEONIC_WIDE_CAPTURE_DIR; run alone",
-      "source": "crates/foveonic-gui/src/rendering/worker/wide_test.rs"
-    },
-    {
-      "suite": "foveonic-gui",
-      "test": "rendering::worker::wide_tests::wide_native_profiled_edit_attribution",
-      "reason": "Explicit matched performance or GPU-attribution experiment; ordinary correctness checks cover its behavioral boundaries.",
-      "requirements": "requires GPU timestamps, pinned fixtures, WIDTH=2 and FOVEONIC_WIDE_CAPTURE_DIR; run alone",
-      "source": "crates/foveonic-gui/src/rendering/worker/wide_test.rs"
-    },
-    {
-      "suite": "foveonic-gui",
-      "test": "rendering::worker::wide_tests::previews::warm_browser_preview_cohort_experiment",
-      "reason": "Explicit matched performance or GPU-attribution experiment; ordinary correctness checks cover its behavioral boundaries.",
-      "requirements": "requires GPU, pinned Merrill fixtures and an explicit serial/automatic comparison",
-      "source": "crates/foveonic-gui/src/rendering/worker/wide_preview_test.rs"
+      "test": "rendering::worker::tests::warm_group_latency_by_width",
+      "reason": "Timing experiment, not correctness.",
+      "requirements": "requires GPU, an uncontended host and FOVEONIC_FIXTURE_DIR with every camera family",
+      "source": "crates/foveonic-gui/src/rendering/worker/mod.rs"
     }
   ]
 }

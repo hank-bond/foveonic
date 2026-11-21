@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from scenarios import compare_scenario_images
-from cache_workflow import associate_trace
+from cache_workflow import associate_trace, retention_assertion, zoom_action
 from scenario_checks import validate_choice_recipes, check_cache_workflow, checked_scenario_images, check_detail_layers
 
 
@@ -212,7 +212,7 @@ class ScenarioCheckTests(unittest.TestCase):
         action('zoom-a-200', 10)
         for photo, item in enumerate(inputs):
             frame('reuse-observed', 'zoom-a-200', photo, item['settings']['exposure'], 10, photo + 1)
-        frame('whole-settled', 'zoom-a-200', 0, 0., 10, 4)
+        frame('behind-current', 'zoom-a-200', 0, 0., 10, 4)
         for index, (delta, offset) in enumerate(zip((0.125, 0.125, -0.125, 0.25), (0.125, 0.25, 0.125, 0.375))):
             name=f'exposure-{index}'
             start=20+10*index
@@ -221,7 +221,11 @@ class ScenarioCheckTests(unittest.TestCase):
                 frame('first-current' if photo == 0 else 'first-current-observed', name, photo,
                       item['settings']['exposure'] + offset, start, photo + 1)
             rows.append({'event':'all-foreground-observed', 'action':name, 'elapsed_ms':start+3, 'action_elapsed_ms':3})
-            frame('whole-settled', name, 0, offset, start, 4)
+            frame('behind-current', name, 0, offset, start, 4)
+        action('drag', 55)
+        rows.append({'event':'drag-last-move', 'action':'drag', 'elapsed_ms':56, 'action_elapsed_ms':1})
+        rows.append({'event':'drag-patch-current', 'action':'drag', 'elapsed_ms':58, 'action_elapsed_ms':3,
+                     'since_last_move_ms':200, 'covered_by':'patch'})
         action('return-fit', 60)
         rows.append({'event':'fit-current', 'action':'return-fit', 'elapsed_ms':61, 'action_elapsed_ms':1})
         native={'passed':True, 'steps':[{'action':'initial-selection', 'photos':initial},
@@ -233,10 +237,10 @@ class ScenarioCheckTests(unittest.TestCase):
         for row in both_rows:
             if row.get('action') == 'zoom-a-200': row['action'] = 'zoom-both-200'
         for row in list(reversed(both_rows)):
-            if row.get('event') == 'whole-settled':
+            if row.get('event') == 'behind-current':
                 other = dict(row, photo=1, source='b', exposure=row['exposure'] + 0.5)
                 both_rows.insert(both_rows.index(row) + 1, other)
-        zoom_b = next(row for row in both_rows if row.get('event') == 'whole-settled' and row.get('photo') == 1)
+        zoom_b = next(row for row in both_rows if row.get('event') == 'behind-current' and row.get('photo') == 1)
         zoom_b['elapsed_ms'] += 0.1
         zoom_b['action_elapsed_ms'] += 0.1
         result = check_cache_workflow(both, inputs, 2)
@@ -246,15 +250,15 @@ class ScenarioCheckTests(unittest.TestCase):
         self.assertEqual(checked_scenario_images(both, inputs, Path('.'), native_photo_count=2)[0], 'cache-workflow')
         with self.assertRaisesRegex(ValueError, 'declared count'):
             checked_scenario_images(both, inputs, Path('.'), native_photo_count=1)
-        self.assertEqual(len(result['actions'][0]['whole_settled_by_photo']), 2)
-        self.assertAlmostEqual(result['actions'][0]['whole_settled_observed_ms'], 4.1)
+        self.assertEqual(len(result['actions'][0]['behind_current_by_photo']), 2)
+        self.assertAlmostEqual(result['actions'][0]['behind_current_observed_ms'], 4.1)
         with self.assertRaisesRegex(ValueError, 'declared count'):
             check_cache_workflow(both, inputs, 1)
-        extra = next(row for row in both_rows if row.get('event') == 'whole-settled' and row.get('photo') == 1)
+        extra = next(row for row in both_rows if row.get('event') == 'behind-current' and row.get('photo') == 1)
         both_rows.remove(extra)
-        with self.assertRaisesRegex(ValueError, 'every native photo'):
+        with self.assertRaisesRegex(ValueError, 'behind every native photo'):
             check_cache_workflow(both, inputs, 2)
-        both_rows.insert(both_rows.index(next(row for row in both_rows if row.get('event') == 'whole-settled')) + 1, extra)
+        both_rows.insert(both_rows.index(next(row for row in both_rows if row.get('event') == 'behind-current')) + 1, extra)
         second = next(row for row in both_rows if row.get('event') == 'reuse-observed' and row.get('photo') == 1)
         second['effective_scale'] = 4
         with self.assertRaisesRegex(ValueError, 'insufficient scale'):
@@ -270,7 +274,7 @@ class ScenarioCheckTests(unittest.TestCase):
         self.assertEqual(len(edit['first_current_observations']), 1)
         self.assertEqual(edit['foreground_on_admission_ms'], [])
         self.assertEqual(edit['foreground_by_observation_ms'], [3])
-        self.assertEqual(edit['whole_settled_observed_ms'], 4)
+        self.assertEqual(edit['behind_current_observed_ms'], 4)
         final[0]['settings']['exposure'] = 99
         with self.assertRaisesRegex(ValueError, 'independent expectation'):
             check_cache_workflow(native, inputs)
@@ -306,10 +310,48 @@ class ScenarioCheckTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'foreground completion'):
             check_cache_workflow(native, inputs)
         foreground['event'] = 'all-foreground-observed'
-        whole = next(row for row in rows if row['event'] == 'whole-settled' and row['action'] == 'exposure-0')
+        whole = next(row for row in rows if row['event'] == 'behind-current' and row['action'] == 'exposure-0')
         whole['exposure'] = 0.
-        with self.assertRaisesRegex(ValueError, 'Whole settlement'):
+        with self.assertRaisesRegex(ValueError, 'behind the patch is stale'):
             check_cache_workflow(native, inputs)
+        whole['exposure'] = 0.125
+        drag = next(row for row in rows if row['event'] == 'drag-patch-current')
+        drag['since_last_move_ms'] = 521
+        with self.assertRaisesRegex(ValueError, 'latency target'):
+            check_cache_workflow(native, inputs)
+        drag['since_last_move_ms'] = 2
+        with self.assertRaisesRegex(ValueError, 'latency target'):
+            check_cache_workflow(native, inputs)
+        drag['covered_by'] = 'full-size'
+        with self.assertRaisesRegex(ValueError, 'not covered by a new patch'):
+            check_cache_workflow(native, inputs)
+        drag['covered_by'] = 'patch'
+        drag['since_last_move_ms'] = 200
+        moving = {'event':'drag-patch-requested-while-moving', 'action':'drag', 'elapsed_ms':56.5,
+                  'action_elapsed_ms':1.5}
+        rows.insert(rows.index(drag), moving)
+        with self.assertRaisesRegex(ValueError, 'while the view was moving'):
+            check_cache_workflow(native, inputs)
+        rows.remove(moving)
+        rows.insert(rows.index(drag), {'event':'drag-patch-accepted', 'action':'drag', 'elapsed_ms':57,
+                                        'action_elapsed_ms':2, 'stale':True})
+        with self.assertRaisesRegex(ValueError, 'region the view had left'):
+            check_cache_workflow(native, inputs)
+
+class RetentionTests(unittest.TestCase):
+    def trace(self, decisions, evicted=0):
+        actions = [{'action':name, 'window_native_decisions':decisions, 'window_event_counts':{'cache.processing.evicted':evicted}}
+                   for name in ('zoom-6-200', 'exposure-0', 'exposure-1', 'exposure-2', 'exposure-3')]
+        return {'available':True, 'actions':actions}
+
+    def test_warm_edits_must_not_reload_or_evict_visible_photos(self):
+        self.assertEqual(retention_assertion(self.trace({'hit:same_source':6}))['outcome'], 'passed')
+        self.assertEqual(retention_assertion(self.trace({'loaded:not_retained':1}))['outcome'], 'failed')
+        self.assertEqual(retention_assertion(self.trace({}, evicted=1))['outcome'], 'failed')
+        self.assertEqual(retention_assertion({'available':False, 'reason':'no trace'})['outcome'], 'unverified')
+
+    def test_zoom_names_stay_comparable_with_baselines(self):
+        self.assertEqual([zoom_action(n) for n in (1, 2, 6)], ['zoom-a-200', 'zoom-both-200', 'zoom-6-200'])
 
 
 if __name__ == '__main__':

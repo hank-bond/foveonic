@@ -9,7 +9,7 @@ impl App {
         if self.editor_ui.actions.is_empty() {
             return false;
         }
-        if self.exporting || !self.sidecars.ready() {
+        if !self.sidecars.ready() {
             self.editor_ui.actions.clear();
             return false;
         }

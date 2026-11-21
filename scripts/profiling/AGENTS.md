@@ -18,7 +18,7 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 
 - **[acceptance.py](./acceptance.py)** Run or merge selected acceptance evidence and report maintained user-path coverage.
 - **[behavioral.py](./behavioral.py)** Run declared real-app slider cases across camera fixtures and report observed coverage.
-- **[cache_workflow.py](./cache_workflow.py)** Check and report the two-photo native-detail cache workflow.
+- **[cache_workflow.py](./cache_workflow.py)** Check and report the multi-photo native-detail cache workflow.
 - **[checkpoint_trace.py](./checkpoint_trace.py)** Explain observed graph rebuilds using task timing and scalar checkpoint snapshots.
 - **[checkpoints.py](./checkpoints.py)** Analyze graph checkpoint storage and measured GPU ancestry without changing retention.
 - **[compare.py](./compare.py)** Compare matched, uncontended native Off reports with explicit optional regression budgets.

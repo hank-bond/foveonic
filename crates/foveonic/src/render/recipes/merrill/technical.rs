@@ -156,7 +156,7 @@ pub(super) fn build(
         profile,
     )?;
     if preview.is_none() {
-        graph.retain_for_seal(calibrated);
+        graph.retain_as_sensor_data(calibrated);
     }
     if policy.retain_calibrated {
         graph.retain_for_session(calibrated);

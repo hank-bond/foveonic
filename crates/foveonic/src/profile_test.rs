@@ -143,7 +143,7 @@ fn retained_observations_survive_off_mode_and_count_nested_capacity() {
             dependencies: Vec::with_capacity(7),
             data_type: String::with_capacity(29),
             session_hint: false,
-            sealed_cut: false,
+            sensor_data: false,
         }],
         boundary_memory_scope: "example",
     });

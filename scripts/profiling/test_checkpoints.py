@@ -12,17 +12,16 @@ def resource(allocation, size, generation=0):
 
 def entry(allocation, version, **flags):
     return {**resource(allocation, 100), 'version':version, 'role':'linear', 'names':['final.linear'],
-            **({'selected':False, 'primary':False, 'restart':False, 'pinned':False,
-                'required_cut':False, 'priority':None, 'used_frame':0} | flags)}
+            **({'selected':False, 'primary':False, 'restart':False, 'sensor_data':False, 'priority':None, 'used_frame':0} | flags)}
 
 
 def fixture():
-    snapshot={'entries':[entry(1, 10, selected=True), entry(1, 11, restart=True), entry(2, 12, pinned=True)],
+    snapshot={'entries':[entry(1, 10, selected=True), entry(1, 11, restart=True), entry(2, 12, sensor_data=True)],
               'cache_structure_bytes':5, 'parameter_payload_bytes':8, 'preparation_bytes':3, 'output_parameters':[], 'versions':[]}
     graph={'id':1, 'requested_roots':[2], 'outputs':[
-        {'id':0, 'name':'sensor', 'producer':0, 'dependencies':[], 'data_type':'rgb', 'session_hint':False, 'sealed_cut':False},
-        {'id':1, 'name':'linear', 'producer':1, 'dependencies':[0], 'data_type':'rgb', 'session_hint':True, 'sealed_cut':False},
-        {'id':2, 'name':'final', 'producer':2, 'dependencies':[0,1], 'data_type':'rgb', 'session_hint':False, 'sealed_cut':False}]}
+        {'id':0, 'name':'sensor', 'producer':0, 'dependencies':[], 'data_type':'rgb', 'session_hint':False, 'sensor_data':False},
+        {'id':1, 'name':'linear', 'producer':1, 'dependencies':[0], 'data_type':'rgb', 'session_hint':True, 'sensor_data':False},
+        {'id':2, 'name':'final', 'producer':2, 'dependencies':[0,1], 'data_type':'rgb', 'session_hint':False, 'sensor_data':False}]}
     def node(ordinal, rid, start, end, shared_start=None, shared_end=None):
         return {'graph_id':1, 'ordinal':ordinal, 'operation':f'op{ordinal}', 'executed':True,
                 'started_ms':ordinal*2., 'host_milliseconds':0.5, 'nested_gpu_start':start, 'nested_gpu_end':end,
@@ -67,7 +66,7 @@ class CheckpointTests(unittest.TestCase):
     def test_cached_sibling_is_not_ranked_as_new_producer_work(self):
         profile,snapshot=fixture()
         profile['graphs'][0]['outputs'].append({'id':3,'name':'sibling','producer':1,
-            'dependencies':[0], 'data_type':'rgb', 'session_hint':False, 'sealed_cut':False})
+            'dependencies':[0], 'data_type':'rgb', 'session_hint':False, 'sensor_data':False})
         profile['nodes'][1]['outputs'].append({'id':3, 'resource':resource(1,100),
             'required':True, 'cached_available':True, 'requested_for_execution':False, 'published':False})
         graph=analyze_profile(profile,snapshot)['graphs'][0]

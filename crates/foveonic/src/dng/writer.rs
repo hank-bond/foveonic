@@ -78,7 +78,7 @@ fn samples<W: Write + Seek>(
     let mut offsets = Vec::new();
     let mut counts = Vec::new();
     for strip in packed.chunks(strip_bytes) {
-        crate::background::checkpoint();
+        crate::priority::checkpoint();
         let rgb: Vec<u16> = strip
             .as_chunks::<8>()
             .0

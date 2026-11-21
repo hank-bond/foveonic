@@ -8,13 +8,16 @@ use std::time::{Duration, UNIX_EPOCH};
 fn speculative_executor_never_waits_for_foreground_on_its_own_thread() {
     let fixture = Fixture::new();
     let cache = Cache::at(fixture.root.join("speculation"));
-    let foreground = cache.foreground();
-    assert!(cache.speculate(|_| panic!("foreground must win")).is_none());
+    let foreground = cache.priority().demand(crate::priority::Priority::Viewport);
+    assert!(cache
+        .priority()
+        .speculate(|_| panic!("foreground must win"))
+        .is_none());
     drop(foreground);
     assert_eq!(
-        cache.speculate(|cancel| {
+        cache.priority().speculate(|cancel| {
             assert!(!cancel());
-            let foreground = cache.foreground();
+            let foreground = cache.priority().demand(crate::priority::Priority::Viewport);
             assert!(cancel());
             drop(foreground);
             assert!(
@@ -25,7 +28,7 @@ fn speculative_executor_never_waits_for_foreground_on_its_own_thread() {
         }),
         Some(7)
     );
-    assert_eq!(cache.speculate(|cancel| !cancel()), Some(true));
+    assert_eq!(cache.priority().speculate(|cancel| !cancel()), Some(true));
 }
 
 #[test]
@@ -107,9 +110,9 @@ impl Fixture {
             timings: vec![],
         }
     }
-    fn ready_cache(&self) -> (Cache, Activity, Identity) {
+    fn ready_cache(&self) -> (Cache, crate::priority::Demand, Identity) {
         let cache = Cache::at(self.root.join("cache"));
-        let foreground = cache.foreground();
+        let foreground = cache.priority().demand(crate::priority::Priority::Viewport);
         let identity = Identity::read(&self.source).unwrap();
         let settings = Settings::default();
         store(
@@ -240,8 +243,8 @@ fn missing_ready_decode_immediately_loses_its_trusted_identity() {
 fn interrupted_cache_reads_and_policy_misses_do_not_reject_valid_payloads() {
     let fixture = Fixture::new();
     let (cache, _foreground, identity) = fixture.ready_cache();
-    crate::background::interruptible(cache.gate.clone(), || {
-        let _interrupt = cache.foreground();
+    crate::priority::interruptible(cache.gate.clone(), || {
+        let _interrupt = cache.priority().demand(crate::priority::Priority::Viewport);
         assert!(cache.open_cached(&fixture.source, |_| {}).is_none());
     });
     assert!(cache.status().ready.contains(&fixture.source));
@@ -284,7 +287,7 @@ fn complete_selection_uses_only_local_cache_when_the_original_and_sidecar_are_un
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    let _foreground = cache.foreground();
+    let _foreground = cache.priority().demand(crate::priority::Priority::Viewport);
     let identity = Identity::read(&fixture.source).unwrap();
     let selection = cache.selection(&fixture.source).unwrap();
     assert_eq!(selection.settings, Some(recipe.clone()));
@@ -1005,7 +1008,7 @@ fn folder_readiness_obeys_foreground_priority_identity_and_policy() {
         &|| true,
     )
     .unwrap();
-    let foreground = cache.foreground();
+    let foreground = cache.priority().demand(crate::priority::Priority::Viewport);
     cache.configure(Settings::default());
     cache.prefetch_window(vec![fixture.source.clone()], Some(fixture.source.clone()));
     std::thread::sleep(Duration::from_millis(30));
@@ -1059,7 +1062,7 @@ fn original_folder_prefetch_waits_for_foreground_and_skips_disabled_families() {
     let quattro = root.join("dp0-quattro.x3f");
     let merrill = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
     let classic = root.join("sd15.x3f");
-    let foreground = cache.foreground();
+    let foreground = cache.priority().demand(crate::priority::Priority::Viewport);
     cache.configure(Settings::default());
     cache.prefetch_window(
         vec![quattro.clone(), merrill.clone(), classic.clone()],
@@ -1098,7 +1101,7 @@ fn original_folder_prefetch_waits_for_foreground_and_skips_disabled_families() {
 fn prefetch_from_first_photo_follows_browser_order_for_one_window() {
     let fixture = Fixture::new();
     let cache = Cache::at(fixture.root.join("cache"));
-    let _foreground = cache.foreground();
+    let _foreground = cache.priority().demand(crate::priority::Priority::Viewport);
     let paths = [
         "card/a.x3f",
         "card/DCIM/100SIGMA/a.x3f",
@@ -1290,7 +1293,7 @@ fn foreground_open_interrupts_inflight_prefetch_then_resumes_browser_order() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let cancelling = Instant::now();
-    let active = cache.foreground();
+    let active = cache.priority().demand(crate::priority::Priority::Viewport);
     while !cache.status().prefetching.is_empty() {
         assert!(
             Instant::now() < deadline,
@@ -1315,7 +1318,7 @@ fn foreground_open_interrupts_inflight_prefetch_then_resumes_browser_order() {
         "foreground source open during interrupted prefetch: {:.1} ms",
         began.elapsed().as_secs_f64() * 1000.
     );
-    assert!(!cache.gate.idle());
+    assert!(!cache.gate.ready(crate::priority::Priority::Speculative));
     assert!(!ready(&cache.root, &first, &Settings::default()));
     drop(active);
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -1368,7 +1371,7 @@ fn parallel_prefetch_throughput_preserves_exact_samples_and_disk_budget() {
         began.elapsed().as_secs_f64() * 1000.
     );
     assert!(cache.status().bytes <= settings.max_bytes);
-    let active = cache.foreground();
+    let active = cache.priority().demand(crate::priority::Priority::Viewport);
     for path in &paths {
         let restored = cache.open_cached(path, |_| {}).unwrap();
         assert_eq!(
@@ -1383,7 +1386,7 @@ fn parallel_prefetch_throughput_preserves_exact_samples_and_disk_budget() {
 fn selection_replaces_the_window_without_restarting_a_finished_or_cleared_pass() {
     let fixture = Fixture::new();
     let cache = Cache::at(fixture.root.join("cache"));
-    let _foreground = cache.foreground();
+    let _foreground = cache.priority().demand(crate::priority::Priority::Viewport);
     cache.configure(Settings::default());
     let files: Vec<_> = (0..40).map(|i| PathBuf::from(format!("{i}.x3f"))).collect();
     cache.prefetch_window(files.clone(), Some(files[10].clone()));
@@ -1516,7 +1519,7 @@ fn navigation_keeps_nearest_decodes_when_the_window_exceeds_the_disk_budget() {
             .sum();
         assert!(stored_bytes <= settings.max_bytes);
         assert!(cache.status().bytes <= settings.max_bytes);
-        let _foreground = cache.foreground();
+        let _foreground = cache.priority().demand(crate::priority::Priority::Viewport);
         for path in &nearest {
             let identity = Identity::read(path).unwrap();
             let original_copy = cache.root.join(identity.name()).with_extension("original");
@@ -1558,7 +1561,7 @@ fn compare_active_and_speculative_decode_wall_time() {
     );
     drop(source);
     for workers in [3, 5] {
-        let gate = Arc::new(crate::background::Gate::default());
+        let gate = Arc::new(crate::priority::Gate::default());
         let pool = Arc::new(crate::decode_pool::Pool::new(workers).unwrap());
         let order = Arc::new(crate::decode_pool::Order::default());
         std::thread::scope(|scope| {
@@ -1568,9 +1571,9 @@ fn compare_active_and_speculative_decode_wall_time() {
                 let turn = order.issue();
                 let path = &path;
                 scope.spawn(move || {
-                    crate::background::interruptible(gate, || {
+                    crate::priority::interruptible(gate, || {
                         let began = Instant::now();
-                        crate::background::decoder(crate::decode_pool::Task { pool, turn }, || {
+                        crate::priority::decoder(crate::decode_pool::Task { pool, turn }, || {
                             let source = Source::open(path).unwrap();
                             eprintln!(
                                 "{workers} layer workers, photo {photo}: {:.1} ms {:?}",

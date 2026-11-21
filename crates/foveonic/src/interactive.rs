@@ -13,14 +13,14 @@ use std::{
     sync::{Arc, Weak},
 };
 
-/// Keep the original photo and the inputs needed to restart the active edit.
-/// Retaining every stage would spend memory without helping that edit.
-pub struct RenderSession {
+/// Keep the original photo and the inputs recent edits restart from.
+/// Retaining every stage would spend memory without helping those edits.
+pub struct NativePhoto {
     pub(crate) source: Arc<Source>,
     pub(crate) cache: Cache,
     pub(crate) last_settings: Option<Settings>,
 }
-impl RenderSession {
+impl NativePhoto {
     /// Read-only scalar checkpoint inventory, intended for use outside timed rendering.
     pub fn checkpoints(&self) -> crate::profile::CacheSnapshot {
         let resources = self.resources();
@@ -34,11 +34,11 @@ impl RenderSession {
         }
     }
     /// Inspect all retained processing owners outside timed interactions.
-    pub fn resources(&self) -> crate::render::SessionResources {
+    pub fn resources(&self) -> crate::render::PhotoResources {
         let mut retained = crate::recipe::RetainedBytes::default();
         let containers = self.cache.account_keys(&mut retained);
         let payloads = retained.payload_bytes();
-        crate::render::SessionResources {
+        crate::render::PhotoResources {
             source_bytes: self.source.retained_source_bytes(),
             metadata_bytes: self.source.metadata.retained_bytes(),
             owner_bytes: self.owner_bytes(),
@@ -330,7 +330,6 @@ struct Version {
 struct Entry {
     version: Arc<Version>,
     value: Value,
-    pinned: bool,
     used: u64,
 }
 struct RepairSlot {
@@ -340,11 +339,11 @@ struct RepairSlot {
 }
 
 #[derive(Default)]
-struct WorkingSet {
+struct PlannedRecipe {
     versions: HashMap<String, Arc<Version>>,
     selected: Vec<String>,
     primary: Vec<String>,
-    cuts: HashSet<u64>,
+    sensor_data: HashSet<u64>,
     restart: HashSet<u64>,
 }
 #[derive(Default)]
@@ -353,17 +352,16 @@ pub(crate) struct Cache {
     owner: Option<Arc<()>>,
     source: Option<crate::source::SourceOrigin>,
     repair: Option<RepairSlot>,
-    working: WorkingSet,
+    planned: PlannedRecipe,
     identities: HashMap<u64, Vec<Weak<Version>>>,
     counter: u64,
     frame: u64,
     entries: Vec<Entry>,
-    required_cuts: HashSet<u64>,
-    active_restart: HashSet<u64>,
+    sensor_data: HashSet<u64>,
+    /// Each retained restart input's latest edit use, comparable across photos.
+    restart_uses: HashMap<u64, u64>,
 }
 impl Cache {
-    pub(crate) const LIMIT: u64 = 1024 * 1024 * 1024;
-
     pub(crate) fn diagnostic_id(&self) -> u64 {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         *self
@@ -372,7 +370,7 @@ impl Cache {
     }
 
     pub(crate) fn diagnostic_version(&self, name: &str) -> Option<u64> {
-        self.working
+        self.planned
             .versions
             .get(name)
             .map(|version| version.generation)
@@ -393,7 +391,7 @@ impl Cache {
             .into_iter()
             .map(|version| {
                 let mut names: Vec<_> = self
-                    .working
+                    .planned
                     .versions
                     .iter()
                     .filter(|(_, known)| known.generation == version.generation)
@@ -420,7 +418,7 @@ impl Cache {
             .map(|entry| {
                 let generation = entry.version.generation;
                 let mut names: Vec<_> = self
-                    .working
+                    .planned
                     .versions
                     .iter()
                     .filter(|(_, version)| version.generation == generation)
@@ -429,8 +427,8 @@ impl Cache {
                 names.sort();
                 let selected = names
                     .iter()
-                    .any(|name| self.working.selected.contains(name));
-                let primary = names.iter().any(|name| self.working.primary.contains(name));
+                    .any(|name| self.planned.selected.contains(name));
+                let primary = names.iter().any(|name| self.planned.primary.contains(name));
                 let (allocation_id, buffer_generation) = entry.value.buffer.identity();
                 crate::profile::CheckpointEntry {
                     names,
@@ -448,11 +446,10 @@ impl Cache {
                     working_scale: entry.value.working_scale.divisor(),
                     selected,
                     primary,
-                    restart: self.active_restart.contains(&generation)
-                        || self.working.restart.contains(&generation),
-                    pinned: entry.pinned,
-                    required_cut: self.required_cuts.contains(&generation)
-                        || self.working.cuts.contains(&generation),
+                    restart: self.is_restart_input(generation)
+                        || self.planned.restart.contains(&generation),
+                    sensor_data: self.sensor_data.contains(&generation)
+                        || self.planned.sensor_data.contains(&generation),
                     priority: self.current_priority(generation),
                     used_frame: entry.used,
                 }
@@ -531,7 +528,7 @@ impl Cache {
         fields.u64("cache_frame", self.frame);
     }
     fn observe_invalidation(&self, reason: &'static str) {
-        if self.entries.is_empty() && self.working.versions.is_empty() {
+        if self.entries.is_empty() && self.planned.versions.is_empty() {
             return;
         }
         diagnostics::event(Category::Cache, "cache.checkpoint.invalidated", |fields| {
@@ -565,13 +562,10 @@ impl Cache {
                 )
                 .bool(
                     "sensor_dependency",
-                    self.required_cuts.contains(&version.generation)
-                        || self.working.cuts.contains(&version.generation),
+                    self.sensor_data.contains(&version.generation)
+                        || self.planned.sensor_data.contains(&version.generation),
                 )
-                .bool(
-                    "restart_input",
-                    self.active_restart.contains(&version.generation),
-                );
+                .bool("restart_input", self.is_restart_input(version.generation));
         });
     }
     /// Referenced bytes identify the entry, not memory freed: display frames or
@@ -588,18 +582,18 @@ impl Cache {
     }
     pub(crate) fn account_keys(&self, retained: &mut crate::recipe::RetainedBytes) -> usize {
         let mut bytes = self.entries.capacity() * std::mem::size_of::<Entry>()
-            + (self.required_cuts.capacity()
-                + self.active_restart.capacity()
-                + self.working.cuts.capacity()
-                + self.working.restart.capacity())
+            + self.restart_uses.capacity() * std::mem::size_of::<(u64, u64)>()
+            + (self.sensor_data.capacity()
+                + self.planned.sensor_data.capacity()
+                + self.planned.restart.capacity())
                 * std::mem::size_of::<u64>()
-            + self.working.selected.capacity() * std::mem::size_of::<String>()
-            + self.working.primary.capacity() * std::mem::size_of::<String>();
+            + self.planned.selected.capacity() * std::mem::size_of::<String>()
+            + self.planned.primary.capacity() * std::mem::size_of::<String>();
         bytes += self
-            .working
+            .planned
             .selected
             .iter()
-            .chain(&self.working.primary)
+            .chain(&self.planned.primary)
             .map(String::capacity)
             .sum::<usize>();
         bytes += match &self.source {
@@ -607,9 +601,9 @@ impl Cache {
             Some(crate::source::SourceOrigin::Memory(_)) => 2 * std::mem::size_of::<usize>(),
             None => 0,
         };
-        bytes += self.working.versions.capacity() * std::mem::size_of::<(String, Arc<Version>)>()
+        bytes += self.planned.versions.capacity() * std::mem::size_of::<(String, Arc<Version>)>()
             + self
-                .working
+                .planned
                 .versions
                 .keys()
                 .map(String::capacity)
@@ -632,7 +626,7 @@ impl Cache {
     fn retained_versions(&self) -> Vec<Arc<Version>> {
         let mut seen = HashSet::new();
         let mut pending: Vec<_> = self
-            .working
+            .planned
             .versions
             .values()
             .cloned()
@@ -671,41 +665,11 @@ impl Cache {
         self.entries.iter().map(|entry| &entry.value.buffer)
     }
     #[cfg(test)]
-    pub(crate) fn sealed_buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
+    pub(crate) fn sensor_data_buffers(&self) -> impl Iterator<Item = &crate::gpu::ReadGuard> {
         self.entries
             .iter()
-            .filter(|entry| entry.pinned)
+            .filter(|entry| self.sensor_data.contains(&entry.version.generation))
             .map(|entry| &entry.value.buffer)
-    }
-    fn room_for(&self, value: &Value, limit: u64) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.value.buffer.shares_storage(&value.buffer))
-            || self.bytes() + value.buffer.size() <= limit
-    }
-    fn can_evict(&self, entry: &Entry, pinned: bool, priority: (u8, usize)) -> bool {
-        pinned
-            || (!entry.pinned
-                && self
-                    .current_priority(entry.version.generation)
-                    .is_none_or(|rank| rank > priority))
-    }
-    fn room_after_eviction(
-        &self,
-        value: &Value,
-        pinned: bool,
-        priority: (u8, usize),
-        limit: u64,
-    ) -> bool {
-        let mut allocations = HashSet::from([value.buffer.identity()]);
-        let retained_bytes: u64 = self
-            .entries
-            .iter()
-            .filter(|entry| !self.can_evict(entry, pinned, priority))
-            .filter(|entry| allocations.insert(entry.value.buffer.identity()))
-            .map(|entry| entry.value.buffer.size())
-            .sum();
-        value.buffer.size() + retained_bytes <= limit
     }
     fn intern(&mut self, recipe: Recipe, parents: Vec<Arc<Version>>) -> Arc<Version> {
         let bucket = self.identities.entry(recipe.bucket()).or_default();
@@ -727,20 +691,20 @@ impl Cache {
         version
     }
     fn resolve(&mut self, graph: &Graph) -> Vec<bool> {
-        let previous = std::mem::take(&mut self.working.versions);
+        let previous = std::mem::take(&mut self.planned.versions);
         let mut dirty = vec![false; graph.outputs.len()];
         for (id, output) in graph.outputs.iter().enumerate() {
             let parents: Vec<_> = output
                 .dependencies
                 .iter()
-                .map(|input| self.working.versions[&graph.outputs[*input].cache_name()].clone())
+                .map(|input| self.planned.versions[&graph.outputs[*input].cache_name()].clone())
                 .collect();
             let recipe = Recipe::for_output(graph, id, &parents);
             dirty[id] = previous
                 .get(&output.cache_name())
                 .is_none_or(|old| old.recipe != recipe);
             let version = self.intern(recipe, parents);
-            self.working.versions.insert(output.cache_name(), version);
+            self.planned.versions.insert(output.cache_name(), version);
         }
         dirty
     }
@@ -779,11 +743,11 @@ impl Cache {
         &mut self,
         graph: &Graph,
         targets: &[usize],
-        sealing: bool,
+        preparing: bool,
     ) -> crate::source::Result<Vec<usize>> {
         self.frame += 1;
         let required = graph.required(targets)?;
-        let initial = self.working.versions.is_empty();
+        let initial = self.planned.versions.is_empty();
         let mut dirty = self.resolve(graph);
         let changed = required
             .iter()
@@ -844,9 +808,9 @@ impl Cache {
             }
             // The dependency cut restarts this edit. Finishing shortcuts and
             // recipe hints added below are useful alternatives, not that cut.
-            self.working.restart = frontier
+            self.planned.restart = frontier
                 .iter()
-                .map(|name| self.working.versions[name].generation)
+                .map(|name| self.planned.versions[name].generation)
                 .collect();
             // Any new finishing identity can feed the next exposure edit. Its
             // geometry and dependencies decide reuse, including after a grid switch.
@@ -855,39 +819,43 @@ impl Cache {
                     frontier.push(name.clone());
                 }
             }
-            self.working.selected = frontier;
+            self.planned.selected = frontier;
         }
-        self.working.primary = finishing
+        self.planned.primary = finishing
             .into_iter()
-            .filter(|name| self.working.selected.contains(name))
+            .filter(|name| self.planned.selected.contains(name))
             .collect();
-        self.working.cuts.clear();
-        if sealing {
-            self.working.selected.clear();
-            self.working.primary.clear();
-            self.working.restart.clear();
+        self.planned.sensor_data.clear();
+        if preparing {
+            self.planned.selected.clear();
+            self.planned.primary.clear();
+            self.planned.restart.clear();
         }
-        for &id in graph.session_outputs.iter().chain(&graph.sealed_outputs) {
-            if sealing && !graph.sealed_outputs.contains(&id) {
+        for &id in graph
+            .session_outputs
+            .iter()
+            .chain(&graph.sensor_data_outputs)
+        {
+            if preparing && !graph.sensor_data_outputs.contains(&id) {
                 continue;
             }
             if !required[id] {
                 continue;
             }
             let name = graph.outputs[id].cache_name();
-            if graph.sealed_outputs.contains(&id) {
-                self.working
-                    .cuts
-                    .insert(self.working.versions[&name].generation);
+            if graph.sensor_data_outputs.contains(&id) {
+                self.planned
+                    .sensor_data
+                    .insert(self.planned.versions[&name].generation);
             }
-            if !self.working.primary.contains(&name) {
-                self.working.primary.push(name.clone());
+            if !self.planned.primary.contains(&name) {
+                self.planned.primary.push(name.clone());
             }
-            if !self.working.selected.contains(&name) {
-                self.working.selected.push(name);
+            if !self.planned.selected.contains(&name) {
+                self.planned.selected.push(name);
             }
         }
-        self.working.selected.sort_by_key(|name| {
+        self.planned.selected.sort_by_key(|name| {
             graph
                 .session_outputs
                 .iter()
@@ -895,11 +863,6 @@ impl Cache {
                 .position(|id| graph.outputs[*id].cache_name() == *name)
                 .unwrap_or(usize::MAX)
         });
-        for entry in &mut self.entries {
-            if self.working.cuts.contains(&entry.version.generation) {
-                entry.pinned = true;
-            }
-        }
         let cached: Vec<_> = graph
             .outputs
             .iter()
@@ -910,7 +873,7 @@ impl Cache {
             if !needed[id] || !cached[id] {
                 continue;
             }
-            let generation = self.working.versions[&output.cache_name()].generation;
+            let generation = self.planned.versions[&output.cache_name()].generation;
             if let Some(entry) = self
                 .entries
                 .iter_mut()
@@ -924,7 +887,7 @@ impl Cache {
             fields
                 .bool("initial", initial)
                 .bool("changed", changed)
-                .bool("sealing", sealing)
+                .bool("preparing", preparing)
                 .u64("outputs", graph.outputs.len() as u64)
                 .u64("targets", targets.len() as u64)
                 .u64(
@@ -939,14 +902,14 @@ impl Cache {
                         .filter(|(needed, cached)| **needed && **cached)
                         .count() as u64,
                 )
-                .u64("selected_inputs", self.working.selected.len() as u64)
+                .u64("selected_inputs", self.planned.selected.len() as u64)
                 .u64(
                     "missing_selected_inputs",
-                    self.working
+                    self.planned
                         .selected
                         .iter()
                         .filter(|name| {
-                            self.working.versions.get(*name).is_some_and(|version| {
+                            self.planned.versions.get(*name).is_some_and(|version| {
                                 !self
                                     .entries
                                     .iter()
@@ -957,7 +920,7 @@ impl Cache {
                 )
                 .u64(
                     "missing_restart_inputs",
-                    self.working
+                    self.planned
                         .restart
                         .iter()
                         .filter(|generation| {
@@ -974,54 +937,35 @@ impl Cache {
             .iter()
             .enumerate()
             .filter_map(|(id, output)| {
-                (needed[id] && self.working.selected.contains(&output.cache_name())).then_some(id)
+                (needed[id] && self.planned.selected.contains(&output.cache_name())).then_some(id)
             })
             .collect())
     }
     fn get(&self, name: &str) -> Option<Value> {
-        let generation = self.working.versions.get(name)?.generation;
+        let generation = self.planned.versions.get(name)?.generation;
         self.entries
             .iter()
             .find(|entry| entry.version.generation == generation)
             .map(|entry| entry.value.clone())
     }
+    /// Store a selected output. The working set trims retained outputs against the
+    /// memory target after the render, through one ordering for every photo.
     fn put(&mut self, name: &str, value: &Value) {
-        self.put_with_limit(name, value, Self::LIMIT);
-    }
-    fn put_with_limit(&mut self, name: &str, value: &Value, limit: u64) {
-        if value.buffer.size() > limit {
-            if self
-                .working
-                .selected
-                .iter()
-                .any(|selected| selected == name)
-            {
-                self.observe_checkpoint(
-                    "cache.checkpoint.rejected",
-                    "value-capacity",
-                    &self.working.versions[name],
-                    value.buffer.size(),
-                    value.buffer.identity(),
-                );
-            }
-            return;
-        }
         if !self
-            .working
+            .planned
             .selected
             .iter()
             .any(|selected| selected == name)
         {
             return;
         }
-        let version = self.working.versions[name].clone();
+        let version = self.planned.versions[name].clone();
         if let Some(entry) = self
             .entries
             .iter_mut()
             .find(|entry| entry.version.generation == version.generation)
         {
             entry.used = self.frame;
-            entry.pinned |= self.working.cuts.contains(&version.generation);
             let allocation = entry.value.buffer.identity();
             let bytes = entry.value.buffer.size();
             self.observe_checkpoint(
@@ -1033,54 +977,9 @@ impl Cache {
             );
             return;
         }
-        let pinned = self.working.cuts.contains(&version.generation);
-        let priority = self
-            .current_priority(version.generation)
-            .unwrap_or((u8::MAX, usize::MAX));
-        // A rejected result must not discard useful checkpoints on its way to
-        // discovering that the protected allocations leave too little room.
-        if !self.room_for(value, limit) && !self.room_after_eviction(value, pinned, priority, limit)
-        {
-            self.observe_checkpoint(
-                "cache.checkpoint.rejected",
-                "local-priority",
-                &version,
-                value.buffer.size(),
-                value.buffer.identity(),
-            );
-            return;
-        }
-        while !self.room_for(value, limit) {
-            let candidate = self
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| self.can_evict(entry, pinned, priority))
-                .max_by_key(|(_, entry)| {
-                    (
-                        u8::from(!entry.pinned),
-                        self.current_priority(entry.version.generation)
-                            .unwrap_or((u8::MAX, usize::MAX)),
-                        std::cmp::Reverse(entry.used),
-                    )
-                })
-                .map(|(index, _)| index);
-            let Some(index) = candidate else {
-                self.observe_checkpoint(
-                    "cache.checkpoint.rejected",
-                    "local-priority",
-                    &version,
-                    value.buffer.size(),
-                    value.buffer.identity(),
-                );
-                return;
-            };
-            self.remove_entry(index, "local-pixel-capacity");
-        }
         self.entries.push(Entry {
             version,
             value: value.clone(),
-            pinned,
             used: self.frame,
         });
         let entry = self.entries.last().unwrap();
@@ -1093,18 +992,18 @@ impl Cache {
         );
     }
     fn current_priority(&self, generation: u64) -> Option<(u8, usize)> {
-        self.working
+        self.planned
             .selected
             .iter()
             .enumerate()
             .find_map(|(rank, name)| {
-                self.working
+                self.planned
                     .versions
                     .get(name)
                     .filter(|version| version.generation == generation)?;
-                let priority = if self.working.restart.contains(&generation) {
+                let priority = if self.planned.restart.contains(&generation) {
                     0
-                } else if self.working.primary.contains(name) {
+                } else if self.planned.primary.contains(name) {
                     1
                 } else {
                     2
@@ -1118,53 +1017,36 @@ impl Cache {
             !bucket.is_empty()
         });
     }
-    fn logical_bytes(&self) -> u64 {
-        let mut retained = crate::recipe::RetainedBytes::default();
-        self.bytes() + self.account_keys(&mut retained) as u64 + retained.bytes() as u64
-    }
     /// Commit the immutable inputs of a completed recipe. An unsuccessful
     /// request must not make the previous valid recipe's inputs expendable.
-    pub(crate) fn commit(&mut self) {
-        self.required_cuts.clone_from(&self.working.cuts);
-        self.active_restart.clone_from(&self.working.restart);
-    }
-    /// A parked photo needs retained values and their exact ancestry. Uncached
-    /// side-output descriptors from its last complete graph need no owner.
-    pub(crate) fn park(&mut self) {
-        self.working.versions.retain(|_, version| {
-            self.entries
+    /// A render that counts as an edit stamps the inputs it restarts from.
+    pub(crate) fn commit(&mut self, edit_use: Option<u64>) {
+        self.sensor_data.clone_from(&self.planned.sensor_data);
+        if let Some(edit_use) = edit_use {
+            for generation in &self.planned.restart {
+                self.restart_uses.insert(*generation, edit_use);
+            }
+        }
+        let entries = &self.entries;
+        self.restart_uses.retain(|generation, _| {
+            entries
                 .iter()
-                .any(|entry| entry.version.generation == version.generation)
+                .any(|entry| entry.version.generation == *generation)
         });
-        self.working
-            .selected
-            .retain(|name| self.working.versions.contains_key(name));
-        self.working
-            .primary
-            .retain(|name| self.working.versions.contains_key(name));
-        self.prune_identities();
     }
-    /// Drop one optional version under an enclosing working-set budget.
-    /// Older unselected versions go first; current restart inputs remain useful
-    /// after every old alternative has been removed. Required cuts are never
-    /// removed here, so pressure cannot silently turn a photo into a source miss.
+    fn is_restart_input(&self, generation: u64) -> bool {
+        self.restart_uses.contains_key(&generation)
+    }
+    /// Drop one optional version that is not a restart input. Older unselected
+    /// versions go first. Sensor data is never removed, so pressure cannot
+    /// silently turn a photo into a source miss.
     pub(crate) fn trim_optional(&mut self, obsolete_only: bool) -> bool {
-        self.trim_optional_for(obsolete_only, false)
-    }
-    /// The active photo keeps its last successful edit's dependency cut.
-    /// Opportunistic finishing inputs remain expendable under the same budget.
-    pub(crate) fn trim_active_optional(&mut self, obsolete_only: bool) -> bool {
-        self.trim_optional_for(obsolete_only, true)
-    }
-    fn trim_optional_for(&mut self, obsolete_only: bool, active: bool) -> bool {
         let candidate = self
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| !self.required_cuts.contains(&entry.version.generation))
-            .filter(|(_, entry)| {
-                !active || !self.active_restart.contains(&entry.version.generation)
-            })
+            .filter(|(_, entry)| !self.sensor_data.contains(&entry.version.generation))
+            .filter(|(_, entry)| !self.is_restart_input(entry.version.generation))
             .filter(|(_, entry)| {
                 !obsolete_only || self.current_priority(entry.version.generation).is_none()
             })
@@ -1188,46 +1070,56 @@ impl Cache {
         self.prune_identities();
         true
     }
-    pub(crate) fn finish(&mut self) {
-        self.prune_identities();
-        // Small images may have much larger parameter ancestry. Bound both
-        // owners so history cannot grow unbounded merely because pixels are tiny.
-        while self.logical_bytes() > Self::LIMIT {
-            let candidate = self
-                .entries
+    fn oldest_restart_input(&self, keep_latest: bool) -> Option<(usize, u64)> {
+        let inputs = || {
+            self.entries
                 .iter()
                 .enumerate()
-                .max_by_key(|(_, entry)| {
-                    (
-                        u8::from(!entry.pinned),
-                        self.current_priority(entry.version.generation)
-                            .unwrap_or((u8::MAX, usize::MAX)),
-                        std::cmp::Reverse(entry.used),
-                    )
+                .filter(|(_, entry)| !self.sensor_data.contains(&entry.version.generation))
+                .filter_map(|(index, entry)| {
+                    Some((index, *self.restart_uses.get(&entry.version.generation)?))
                 })
-                .map(|(index, _)| index);
-            let Some(index) = candidate else {
-                break;
-            };
-            self.remove_entry(index, "local-owner-capacity");
-            self.prune_identities();
-        }
+        };
+        let latest = inputs().map(|(_, edit_use)| edit_use).max();
+        inputs()
+            .filter(|(_, edit_use)| !keep_latest || Some(*edit_use) != latest)
+            .min_by_key(|(_, edit_use)| *edit_use)
     }
-    /// A seal admits only declared cuts. A refresh preserves older valid optional
+    /// The edit use of this photo's least recently used restart input.
+    /// `keep_latest` leaves out the latest edit's inputs, which a visible photo
+    /// keeps so the edit in progress never restarts from the file.
+    pub(crate) fn oldest_restart_use(&self, keep_latest: bool) -> Option<u64> {
+        self.oldest_restart_input(keep_latest)
+            .map(|(_, edit_use)| edit_use)
+    }
+    pub(crate) fn drop_oldest_restart_input(&mut self, keep_latest: bool) -> bool {
+        let Some((index, _)) = self.oldest_restart_input(keep_latest) else {
+            return false;
+        };
+        let generation = self.entries[index].version.generation;
+        self.remove_entry(index, "shared-restart-recency");
+        self.restart_uses.remove(&generation);
+        self.prune_identities();
+        true
+    }
+    pub(crate) fn finish(&mut self) {
+        self.prune_identities();
+    }
+    /// Preparation admits only declared sensor data. A refresh preserves older valid optional
     /// inputs, while the initial empty owner carries no speculative native frames.
-    pub(crate) fn finish_seal(&mut self) -> bool {
-        let required = std::mem::take(&mut self.working.cuts);
+    pub(crate) fn finish_sensor_data(&mut self) -> bool {
+        let required = std::mem::take(&mut self.planned.sensor_data);
         self.repair = None;
-        self.working = WorkingSet::default();
+        self.planned = PlannedRecipe::default();
         self.finish();
         let retained = required.iter().all(|generation| {
             self.entries
                 .iter()
-                .any(|entry| entry.pinned && entry.version.generation == *generation)
+                .any(|entry| entry.version.generation == *generation)
         });
         if retained {
-            self.required_cuts = required;
-            self.active_restart.clear();
+            self.sensor_data = required;
+            self.restart_uses.clear();
         }
         retained
     }
@@ -1283,7 +1175,7 @@ impl Execution<'_> {
         }
         Ok(())
     }
-    pub(crate) fn plan_seal(
+    pub(crate) fn plan_sensor_data(
         &mut self,
         graph: &Graph,
         targets: &[usize],
@@ -1337,7 +1229,7 @@ mod tests {
         );
         let name = graph.outputs[root].cache_name();
         cache.entries.push(Entry {
-            version: cache.working.versions[&name].clone(),
+            version: cache.planned.versions[&name].clone(),
             value: Value {
                 working_scale: crate::render::Scale::NATIVE,
                 view: None,
@@ -1345,7 +1237,6 @@ mod tests {
                 buffer: gpu.upload("Cache probe fixture", &[1_f32; 3]).unwrap(),
                 description: None,
             },
-            pinned: false,
             used: 17,
         });
         let state = (
@@ -1355,7 +1246,7 @@ mod tests {
             cache.entries[0].value.buffer.readers(),
         );
         let versions: Vec<_> = cache
-            .working
+            .planned
             .versions
             .iter()
             .map(|(k, v)| (k.clone(), v.generation))
@@ -1371,7 +1262,7 @@ mod tests {
             )
         );
         for (name, generation) in versions {
-            assert_eq!(cache.working.versions[&name].generation, generation);
+            assert_eq!(cache.planned.versions[&name].generation, generation);
         }
         let (changed, changed_root) = graph_for_detail(0.5);
         assert!(!cache.contains_output(&changed, changed_root));
@@ -1423,13 +1314,13 @@ mod tests {
         };
         let (first, root) = build(0);
         cache.plan(&first, &[root]).unwrap();
-        let original = cache.working.versions["sensor.layers"].generation;
+        let original = cache.planned.versions["sensor.layers"].generation;
         let (same, root) = build(0);
         cache.plan(&same, &[root]).unwrap();
-        assert_eq!(cache.working.versions["sensor.layers"].generation, original);
+        assert_eq!(cache.planned.versions["sensor.layers"].generation, original);
         let (changed, root) = build(1);
         cache.plan(&changed, &[root]).unwrap();
-        assert_ne!(cache.working.versions["sensor.layers"].generation, original);
+        assert_ne!(cache.planned.versions["sensor.layers"].generation, original);
     }
     #[test]
     fn repair_slot_is_bounded_and_reset_for_another_engine() {
@@ -1590,7 +1481,7 @@ mod tests {
         );
     }
     #[test]
-    fn only_successful_dependency_frontiers_become_active_restart_inputs() {
+    fn only_successful_dependency_frontiers_become_committed_restart_inputs() {
         let (mut graph, root) = graph_for_detail(1.);
         let original = graph.nodes[0].outputs[0];
         graph.retain_for_session(original);
@@ -1616,37 +1507,37 @@ mod tests {
             .unwrap();
         let mut cache = Cache::default();
         cache.plan(&graph, &[root, finishing]).unwrap();
-        assert_eq!(cache.working.restart.len(), 3);
+        assert_eq!(cache.planned.restart.len(), 3);
         assert!(!cache
-            .working
+            .planned
             .restart
-            .contains(&cache.working.versions[&graph.outputs[original].cache_name()].generation));
+            .contains(&cache.planned.versions[&graph.outputs[original].cache_name()].generation));
         let finishing_name = graph.outputs[finishing_input].cache_name();
-        assert!(cache.working.selected.contains(&finishing_name));
+        assert!(cache.planned.selected.contains(&finishing_name));
         assert!(!cache
-            .working
+            .planned
             .restart
-            .contains(&cache.working.versions[&finishing_name].generation));
-        let restart = *cache.working.restart.iter().next().unwrap();
+            .contains(&cache.planned.versions[&finishing_name].generation));
+        let restart = *cache.planned.restart.iter().next().unwrap();
         assert!(
             cache.current_priority(restart).unwrap()
                 < cache
-                    .current_priority(cache.working.versions[&finishing_name].generation)
+                    .current_priority(cache.planned.versions[&finishing_name].generation)
                     .unwrap()
         );
-        assert!(cache.active_restart.is_empty());
-        cache.commit();
-        let completed = cache.active_restart.clone();
+        assert!(cache.restart_uses.is_empty());
+        cache.commit(Some(1));
+        let completed = cache.restart_uses.clone();
         // Planning another root does not commit an interrupted request's cut.
         let mut other = Graph::default();
         let other_root = other.add(crate::graph::Operation::Source, &[]).unwrap();
         cache.plan(&other, &[other_root]).unwrap();
-        assert!(cache.working.restart.is_empty());
-        assert_eq!(cache.active_restart, completed);
+        assert!(cache.planned.restart.is_empty());
+        assert_eq!(cache.restart_uses, completed);
     }
     #[test]
     #[ignore = "requires a GPU"]
-    fn active_pressure_keeps_restart_inputs_and_the_complete_graph_identity() {
+    fn pressure_keeps_restart_inputs_and_the_complete_graph_identity() {
         let gpu = crate::gpu::Gpu::test_executor();
         let (mut graph, root) = graph_for_detail(1.);
         let original = graph.nodes[0].outputs[0];
@@ -1663,27 +1554,20 @@ mod tests {
         for id in checkpoints {
             cache.put(&graph.outputs[id].cache_name(), &value);
         }
-        cache.commit();
-        let identities = cache.working.versions.len();
-        let restart = cache.active_restart.clone();
+        cache.commit(Some(1));
+        let identities = cache.planned.versions.len();
+        let restart = cache.planned.restart.clone();
         assert_eq!(cache.entries.len(), 4);
-        assert!(
-            cache.trim_active_optional(false),
-            "the session hint is optional"
-        );
+        assert!(cache.trim_optional(false), "the session hint is optional");
         assert_eq!(cache.entries.len(), 3);
         assert!(
-            !cache.trim_active_optional(false),
-            "the active cut is essential"
+            !cache.trim_optional(false),
+            "restart inputs leave only by edit recency"
         );
-        assert_eq!(cache.working.versions.len(), identities);
+        assert_eq!(cache.planned.versions.len(), identities);
         let (next, root) = graph_for_detail(1.2);
         cache.plan(&next, &[root]).unwrap();
-        assert_eq!(cache.working.restart, restart);
-        assert!(
-            cache.trim_optional(false),
-            "inactive history may shed the same cut"
-        );
+        assert_eq!(cache.planned.restart, restart);
     }
     #[test]
     fn detail_changes_only_its_own_recipe_and_keeps_three_input_versions() {
@@ -1696,18 +1580,18 @@ mod tests {
             .map(|id| {
                 (
                     first.outputs[*id].name,
-                    cache.working.versions[first.outputs[*id].name].generation,
+                    cache.planned.versions[first.outputs[*id].name].generation,
                 )
             })
             .collect();
-        let previous = cache.working.versions["texture.layers-tiles"].generation;
+        let previous = cache.planned.versions["texture.layers-tiles"].generation;
         let (second, root) = graph_for_detail(1.2);
         cache.plan(&second, &[root]).unwrap();
         for (name, version) in inputs {
-            assert_eq!(cache.working.versions[name].generation, version);
+            assert_eq!(cache.planned.versions[name].generation, version);
         }
         assert_ne!(
-            cache.working.versions["texture.layers-tiles"].generation,
+            cache.planned.versions["texture.layers-tiles"].generation,
             previous
         );
     }
@@ -1716,19 +1600,19 @@ mod tests {
         let mut cache = Cache::default();
         let (full, root) = graph_for_detail(1.);
         cache.plan(&full, &[root]).unwrap();
-        let input = cache.working.versions["noise.tiles"].generation;
-        let retained_full = cache.working.versions["texture.layers-tiles"].clone();
+        let input = cache.planned.versions["noise.tiles"].generation;
+        let retained_full = cache.planned.versions["texture.layers-tiles"].clone();
         let full_result = retained_full.generation;
         let (preview, root) = graph_for_detail(1.2);
         cache.plan(&preview, &[root]).unwrap();
-        assert_eq!(cache.working.versions["noise.tiles"].generation, input);
+        assert_eq!(cache.planned.versions["noise.tiles"].generation, input);
         assert_ne!(
-            cache.working.versions["texture.layers-tiles"].generation,
+            cache.planned.versions["texture.layers-tiles"].generation,
             full_result
         );
         cache.plan(&full, &[root]).unwrap();
         assert_eq!(
-            cache.working.versions["texture.layers-tiles"].generation,
+            cache.planned.versions["texture.layers-tiles"].generation,
             full_result
         );
         // Invalidating an upstream recipe in Full must also invalidate preview
@@ -1739,12 +1623,12 @@ mod tests {
         };
         params.reduction[0] = 0.25;
         cache.plan(&changed, &[root]).unwrap();
-        let new_input = cache.working.versions["noise.tiles"].generation;
+        let new_input = cache.planned.versions["noise.tiles"].generation;
         assert_ne!(new_input, input);
         cache.plan(&changed, &[root]).unwrap();
-        assert_eq!(cache.working.versions["noise.tiles"].generation, new_input);
+        assert_eq!(cache.planned.versions["noise.tiles"].generation, new_input);
         assert_ne!(
-            cache.working.versions["texture.layers-tiles"].generation,
+            cache.planned.versions["texture.layers-tiles"].generation,
             full_result
         );
     }
@@ -1808,7 +1692,7 @@ mod tests {
         let inputs = graph.nodes[detail_node].inputs.clone();
         let frontier = cache.plan(&graph, &[final_id]).unwrap();
         assert!(inputs.iter().all(|id| frontier.contains(id)));
-        let old_signal = cache.working.versions["detail.signal"].generation;
+        let old_signal = cache.planned.versions["detail.signal"].generation;
         graph.nodes[detail_node].operation = O::Texture {
             params,
             prepared: crate::nodes::color::texture::Prepared::new(
@@ -1828,7 +1712,7 @@ mod tests {
         assert!(inputs.iter().all(|id| frontier.contains(id)));
         assert_ne!(
             old_signal,
-            cache.working.versions["detail.signal"].generation
+            cache.planned.versions["detail.signal"].generation
         );
         graph.nodes[graph.outputs[final_id].producer].operation = O::Tone {
             curve: vec![0., 1.].into(),
@@ -1898,14 +1782,14 @@ mod tests {
         let mut cache = Cache::default();
         let frontier = cache.plan(&graph, &[root]).unwrap();
         assert_eq!(frontier, vec![rgb, blue, mask]);
-        let previous = cache.working.versions["residual.rgb"].generation;
+        let previous = cache.planned.versions["residual.rgb"].generation;
         graph.nodes[graph.outputs[root].producer].operation = finish(1.2);
         // A detail edit can use the initial checkpoints before reconstruction.
         assert_eq!(
             cache.plan(&graph, &[root]).unwrap(),
             vec![reconstructed, residual, mask]
         );
-        assert_ne!(cache.working.versions["residual.rgb"].generation, previous);
+        assert_ne!(cache.planned.versions["residual.rgb"].generation, previous);
         graph.nodes[graph.outputs[reconstructed].producer].operation = O::BlueGuidedReconstruct(
             Arc::new(blue_guided_reconstruct::Prepared::new([8, 8], 0.5, [0.; 3], None).unwrap()),
         );
@@ -2008,23 +1892,20 @@ mod tests {
         let (graph, root) = graph_for_detail(1.);
         let mut cache = Cache::default();
         cache.plan(&graph, &[root]).unwrap();
-        let version = cache.working.versions["noise.tiles"].clone();
+        let version = cache.planned.versions["noise.tiles"].clone();
         cache.entries = vec![
             Entry {
                 version: version.clone(),
                 value: value.clone(),
-                pinned: false,
                 used: 0,
             },
             Entry {
                 version,
                 value: value.clone(),
-                pinned: false,
                 used: 0,
             },
         ];
         assert_eq!(cache.bytes(), value.buffer.size());
-        assert!(cache.room_for(&value, Cache::LIMIT));
     }
 
     #[test]
@@ -2101,4 +1982,4 @@ mod scale_tests;
 
 #[cfg(test)]
 #[path = "interactive_cache_test.rs"]
-mod cache_tests;
+pub(crate) mod cache_tests;

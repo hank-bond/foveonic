@@ -88,7 +88,7 @@ impl LifecycleJourney {
     fn ready(app: &App, path: &PathBuf) -> bool {
         !app.folder_loader.loading()
             && app.sidecars.ready()
-            && !app.worker.busy()
+            && !app.view_busy()
             && app.selected.as_ref() == Some(path)
     }
     fn matches(a: &Settings, b: &Settings) -> bool {
@@ -147,7 +147,7 @@ impl LifecycleJourney {
                 if app.folder_loader.loading()
                     || app.browser.import_mode
                     || !app.sidecars.ready()
-                    || app.worker.busy()
+                    || app.view_busy()
                 {
                     return Ok(false);
                 }
@@ -222,7 +222,7 @@ impl LifecycleJourney {
                 if app.folder_loader.loading()
                     || !app.browser.import_mode
                     || !app.sidecars.ready()
-                    || app.worker.busy()
+                    || app.view_busy()
                 {
                     return Ok(false);
                 }
@@ -344,7 +344,7 @@ impl LifecycleJourney {
                     json!({"expected":0.75,"actual":app.settings.saturation}),
                 )?;
                 app.sidecars.edited(&app.settings);
-                app.submit(None);
+                app.submit_photos();
                 self.phase = Phase::DefaultReset;
             }
             Phase::DefaultReset => {
@@ -363,7 +363,7 @@ impl LifecycleJourney {
                     json!({"expected":0.75,"actual":app.settings.saturation}),
                 )?;
                 app.sidecars.edited(&app.settings);
-                app.submit(None);
+                app.submit_photos();
                 self.phase = Phase::Paste;
             }
             Phase::Paste => {
@@ -377,7 +377,7 @@ impl LifecycleJourney {
                 let changed = app.dispatch_actions(ctx);
                 self.check("paste-copied-settings", changed && Self::matches(&app.settings, self.review.as_ref().unwrap()), json!({"actual_exposure":app.settings.exposure,"expected_exposure":self.review.as_ref().unwrap().exposure}))?;
                 app.sidecars.edited(&app.settings);
-                app.submit(None);
+                app.submit_photos();
                 self.phase = Phase::InvalidPaste;
             }
             Phase::InvalidPaste => {
@@ -617,7 +617,7 @@ impl LifecycleJourney {
                 if app.folder_loader.loading()
                     || app.browser.import_mode
                     || !app.sidecars.ready()
-                    || app.worker.busy()
+                    || app.view_busy()
                 {
                     return Ok(false);
                 }

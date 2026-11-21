@@ -16,17 +16,15 @@ impl App {
         let aspects: Vec<_> = paths[..shown]
             .iter()
             .map(|path| {
-                let frame = self
-                    .frame
-                    .as_ref()
-                    .filter(|frame| frame.path == *path)
-                    .or_else(|| self.multi_edit.frame(path));
+                let frame = self.photo_layers(path)[0];
                 frame
                     .map(|frame| {
                         let settings = if self.selected.as_ref() == Some(path) {
                             &self.settings
                         } else {
-                            self.multi_edit.settings(path).unwrap_or(&frame.requested)
+                            self.multi_edit
+                                .settings(path)
+                                .unwrap_or(&frame.request.settings)
                         };
                         // Camera/Defaults and framing previews share the camera's
                         // dimensions but must use this photo's authored composition.
@@ -84,8 +82,7 @@ impl App {
                     .id_salt(("comparison photo content", path)),
             );
             child.set_clip_rect(image_rect.intersect(ui.clip_rect()));
-            let has_active_frame = self.frame.as_ref().is_some_and(|frame| frame.path == *path);
-            if active && (has_active_frame || self.multi_edit_frame(path).is_none()) {
+            if active {
                 let temporary_pan = ui.input(|input| input.key_down(egui::Key::Space));
                 let editing = crate::photo_tools::takes_pointer(ui.ctx()) && !temporary_pan;
                 if editing
@@ -96,26 +93,19 @@ impl App {
                 changed |= self.show_photo(&mut child, mapping);
                 self.before_badge(&child, image_rect);
             } else {
-                let rendition = self.photo_rendition(path);
-                let frame = self
-                    .rendition_frame(path, rendition)
-                    .or_else(|| self.current_photo_frame(path));
-                let detail = self
-                    .photo_view_settings(path)
-                    .and_then(|settings| self.photo_detail(path, frame, &settings, rendition))
-                    .map(|detail| viewport::ImageLayer {
-                        texture: detail.texture.clone(),
-                        coverage: detail.detail_region(),
-                        identity: detail.diagnostic_identity(false),
-                    });
+                let [frame, detail] = self.photo_layers(path);
+                let detail = detail.map(|detail| viewport::ImageLayer {
+                    texture: detail.texture.clone(),
+                    coverage: detail.detail_region(),
+                    identity: detail.diagnostic_identity(false),
+                });
                 let content = frame.map(|frame| {
                     (
                         frame.view(false).clone(),
                         frame.display_extent(false),
                         frame.diagnostic_identity(false),
                         frame.display_window(false),
-                        frame.native_display_extent(),
-                        frame.rendition,
+                        frame.request.rendition,
                     )
                 });
                 let group_target = target && self.edit_selection.paths().len() > 1;
@@ -124,59 +114,46 @@ impl App {
                 view.editing = crate::photo_tools::takes_pointer(ui.ctx());
                 view.framing = None;
                 view.zoom_snap = self.preferences.zoom_snap;
-                let native_extent =
-                    if let Some((texture, extent, identity, window, native, actual_rendition)) =
-                        content
-                    {
-                        view.show(
+                if let Some((texture, extent, identity, window, actual_rendition)) = content {
+                    view.show(
+                        &mut child,
+                        texture,
+                        extent,
+                        None,
+                        crate::viewport::Mapping::normal(-1),
+                        self.srgb_target,
+                        identity,
+                    );
+                    if let Some(layer) = detail {
+                        view.show_region(
                             &mut child,
-                            texture,
-                            extent,
-                            None,
+                            layer,
+                            window,
                             crate::viewport::Mapping::normal(-1),
                             self.srgb_target,
-                            identity,
                         );
-                        if let Some(layer) = detail {
-                            view.show_region(
-                                &mut child,
-                                layer,
-                                window,
-                                crate::viewport::Mapping::normal(-1),
-                                self.srgb_target,
-                            );
-                        }
-                        if actual_rendition != crate::editor::Rendition::Current {
-                            crate::widgets::overlay_badge(&child, image_rect, "Before");
-                        }
-                        Some(native)
+                    }
+                    if actual_rendition != crate::editor::Rendition::Current {
+                        crate::widgets::overlay_badge(&child, image_rect, "Before");
+                    }
+                } else {
+                    let preview = if target {
+                        self.browser.preview(path)
                     } else {
-                        let preview = if target {
-                            self.browser.preview(path)
-                        } else {
-                            self.browser.thumbnail(path)
-                        };
-                        if let Some(preview) = preview {
-                            view.show_preview(
-                                &mut child,
-                                &preview.texture,
-                                preview.native_extent,
-                                Default::default(),
-                            );
-                            Some(preview.native_extent)
-                        } else {
-                            view.show_empty(&mut child);
-                            None
-                        }
+                        self.browser.thumbnail(path)
                     };
-                if let Some((extent, (_, image))) = native_extent.zip(view.image_rectangles()) {
-                    let density = crate::rendering::quality::display_density(
-                        [image.width(), image.height()],
-                        extent,
-                        ui.ctx().pixels_per_point(),
-                    );
-                    self.observe_preview_density(path, density);
-                }
+                    if let Some(preview) = preview {
+                        view.show_preview(
+                            &mut child,
+                            &preview.texture,
+                            preview.native_extent,
+                            Default::default(),
+                        );
+                    } else {
+                        view.show_empty(&mut child);
+                    }
+                };
+                self.observe_photo_view_density(path, ui.ctx().pixels_per_point());
             }
             // The image owns its gestures. Only the non-overlapping caption
             // needs a separate selection response.

@@ -1,6 +1,6 @@
-//! Prepares source-free camera dependency cuts and renders reduced sessions.
+//! Prepares sensor data downsampled to the working scale and renders reduced working photos.
 
-use super::{execute::Completion, recipes, Engine, Scale, SessionRender, Settings};
+use super::{recipes, Engine, PhotoRender, Scale, Settings};
 use crate::{
     interactive::{Cache, Execution, Superseded},
     profile::Profile,
@@ -30,13 +30,13 @@ pub enum NeedsOriginal {
 }
 
 pub enum ReducedPreparation {
-    Prepared(Box<ReducedSession>),
+    Prepared(Box<ReducedPhoto>),
     Superseded,
 }
 
 /// Retains immutable recipe-declared camera inputs, never decoded source samples.
 /// The complete camera and photographic recipes still author every render.
-pub struct ReducedSession {
+pub struct ReducedPhoto {
     pub(super) metadata: Arc<Metadata>,
     pub(super) origin: SourceOrigin,
     pub(super) owner: Arc<()>,
@@ -59,7 +59,7 @@ pub struct ParameterResources {
 /// Per-session payloads may also be shared with Engine preparation; working-set
 /// totals deduplicate those allocations rather than summing these diagnostics.
 #[derive(Clone, Debug, serde::Serialize)]
-pub struct SessionResources {
+pub struct PhotoResources {
     pub metadata_bytes: u64,
     pub owner_bytes: u64,
     pub cache_gpu_bytes: u64,
@@ -69,15 +69,15 @@ pub struct SessionResources {
     pub source_bytes: u64,
     pub output_parameters: Vec<ParameterResources>,
 }
-impl ReducedSession {
+impl ReducedPhoto {
     /// Inspect resource ownership outside timed editing interactions.
-    pub fn resources(&self) -> SessionResources {
+    pub fn resources(&self) -> PhotoResources {
         let mut retained = crate::recipe::RetainedBytes::default();
         let cache_containers = self.cache.account_keys(&mut retained);
         let payloads = retained.payload_bytes();
         let cache_bytes = retained.bytes();
         let scalar_containers = self.preparation.account(&mut retained);
-        SessionResources {
+        PhotoResources {
             source_bytes: 0,
             metadata_bytes: self.metadata_bytes,
             owner_bytes: self.owned_cpu_bytes() - self.metadata_bytes,
@@ -136,7 +136,7 @@ pub(super) fn unique_buffer_bytes<'a>(
 impl Engine {
     /// Consume native samples after materializing recipe-declared immutable inputs.
     /// Other owners, such as a pending disk-cache write, may temporarily share them.
-    pub fn prepare_reduced_session(
+    pub fn prepare_reduced_photo(
         &self,
         source: impl Into<Arc<Source>>,
         settings: &Settings,
@@ -169,7 +169,7 @@ impl Engine {
         };
         let prepared = (|| -> Result<()> {
             execution.check()?;
-            let graph = recipes::sealing_inputs(
+            let graph = recipes::sensor_data_graph(
                 self,
                 recipes::RecipeInput::Preparing {
                     source: &source,
@@ -179,22 +179,21 @@ impl Engine {
                 profile,
                 &mut execution,
             )?;
-            let roots = &graph.sealed_outputs;
+            let roots = &graph.sensor_data_outputs;
             if roots.is_empty() {
                 return Err("camera recipe declared no immutable sensor dependencies".into());
             }
-            execution.plan_seal(&graph, roots)?;
+            execution.plan_sensor_data(&graph, roots)?;
             self.run_graph(
                 super::Input::Source(&source),
                 &graph,
                 roots,
                 profile,
                 &mut execution,
-                Completion::Operation,
             )?;
             Ok(())
         })();
-        let retained = cache.finish_seal();
+        let retained = cache.finish_sensor_data();
         self.release_native_preparation(&source.metadata);
         match prepared {
             Ok(()) if !retained => Err(failure(
@@ -203,7 +202,7 @@ impl Engine {
                 &source.metadata,
                 settings,
             )),
-            Ok(()) => Ok(ReducedPreparation::Prepared(Box::new(ReducedSession {
+            Ok(()) => Ok(ReducedPreparation::Prepared(Box::new(ReducedPhoto {
                 metadata_bytes: source.metadata.retained_bytes(),
                 metadata: source.metadata.clone(),
                 origin: source.origin().clone(),
@@ -225,12 +224,12 @@ impl Engine {
         }
     }
 
-    /// Recover missing native dependencies while preserving every still-valid cut.
+    /// Recover missing sensor data while preserving everything still valid.
     /// The caller supplies a freshly verified load of the same original; metadata
     /// remains the numerical owner and is never replaced to forge source identity.
-    pub fn refresh_reduced_session(
+    pub fn refresh_reduced_photo(
         &self,
-        session: &mut ReducedSession,
+        session: &mut ReducedPhoto,
         source: &Source,
         settings: &Settings,
         cancel: impl Fn() -> bool,
@@ -264,7 +263,7 @@ impl Engine {
         };
         let prepared = (|| -> Result<()> {
             execution.check()?;
-            let graph = recipes::sealing_inputs(
+            let graph = recipes::sensor_data_graph(
                 self,
                 recipes::RecipeInput::Preparing {
                     source,
@@ -274,18 +273,17 @@ impl Engine {
                 profile,
                 &mut execution,
             )?;
-            execution.plan_seal(&graph, &graph.sealed_outputs)?;
+            execution.plan_sensor_data(&graph, &graph.sensor_data_outputs)?;
             self.run_graph(
                 super::Input::Source(source),
                 &graph,
-                &graph.sealed_outputs,
+                &graph.sensor_data_outputs,
                 profile,
                 &mut execution,
-                Completion::Operation,
             )?;
             Ok(())
         })();
-        let retained = session.cache.finish_seal();
+        let retained = session.cache.finish_sensor_data();
         self.release_native_preparation(&source.metadata);
         match prepared {
             Ok(()) if !retained => Err(failure(
@@ -310,27 +308,27 @@ impl Engine {
         }
     }
 
-    pub fn render_reduced_session(
+    pub fn render_reduced_photo(
         &self,
-        session: &mut ReducedSession,
+        session: &mut ReducedPhoto,
         settings: &Settings,
         names: &[&str],
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
-    ) -> Result<SessionRender> {
-        self.render_reduced_session_observed(session, settings, names, cancel, profile, None)
+    ) -> Result<PhotoRender> {
+        self.render_reduced_photo_observed(session, settings, names, cancel, profile, None)
     }
     #[allow(clippy::too_many_arguments)]
-    pub fn render_reduced_session_with_progress(
+    pub fn render_reduced_photo_with_progress(
         &self,
-        session: &mut ReducedSession,
+        session: &mut ReducedPhoto,
         settings: &Settings,
         names: &[&str],
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
         progress: impl Fn(super::RenderProgress),
-    ) -> Result<SessionRender> {
-        self.render_reduced_session_observed(
+    ) -> Result<PhotoRender> {
+        self.render_reduced_photo_observed(
             session,
             settings,
             names,
@@ -340,15 +338,15 @@ impl Engine {
         )
     }
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn render_reduced_session_observed(
+    pub(super) fn render_reduced_photo_observed(
         &self,
-        session: &mut ReducedSession,
+        session: &mut ReducedPhoto,
         settings: &Settings,
         names: &[&str],
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
         progress: Option<&dyn Fn(super::RenderProgress)>,
-    ) -> Result<SessionRender> {
+    ) -> Result<PhotoRender> {
         settings.validate_values().map_err(|error| {
             failure(
                 error,
@@ -358,7 +356,7 @@ impl Engine {
             )
         })?;
         if !Arc::ptr_eq(&session.owner, &self.owner) {
-            return Ok(SessionRender::NeedsOriginal(NeedsOriginal::EngineChanged));
+            return Ok(PhotoRender::NeedsOriginal(NeedsOriginal::EngineChanged));
         }
         session.cache.bind(&self.owner);
         session.cache.bind_source(&session.origin);
@@ -378,27 +376,26 @@ impl Engine {
             recipes::Recipe::Photographic(names),
             profile,
             &mut execution,
-            Completion::Operation,
         );
         if result.is_ok() {
-            session.cache.commit();
+            session.cache.commit(None);
         }
         session.cache.finish();
         match result {
             Ok(artifacts) => {
                 session.scale = settings.working_scale;
                 session.last_settings = Some(Box::new(settings.clone()));
-                Ok(SessionRender::Rendered(artifacts))
+                Ok(PhotoRender::Rendered(artifacts))
             }
             Err(error)
                 if error
                     .downcast_ref::<super::execute::SourceRequired>()
                     .is_some() =>
             {
-                Ok(SessionRender::NeedsOriginal(NeedsOriginal::UpstreamChanged))
+                Ok(PhotoRender::NeedsOriginal(NeedsOriginal::UpstreamChanged))
             }
             Err(error) if error.downcast_ref::<Superseded>().is_some() => {
-                Ok(SessionRender::Superseded)
+                Ok(PhotoRender::Superseded)
             }
             Err(error) => Err(failure(
                 error,

@@ -1,4 +1,4 @@
-//! Defers background submission waits to the executor's existing completed-stage boundary.
+//! Groups submitted graph steps into ticks that share one GPU wait.
 
 use super::Gpu;
 use std::cell::Cell;
@@ -16,10 +16,11 @@ pub(crate) struct BackgroundStage<'a> {
     previous: Option<Option<u64>>,
 }
 impl Gpu {
-    /// Operation and window completion already bound unfinished graph work.
+    /// The enclosing tick already bounds unfinished graph work.
     /// Avoid an additional wait after each dispatch within that boundary.
-    pub(crate) fn background_stage(&self, managed_completion: bool) -> BackgroundStage<'_> {
-        let previous = (managed_completion && crate::background::context().is_some())
+    pub(crate) fn background_stage(&self) -> BackgroundStage<'_> {
+        let previous = crate::priority::context()
+            .is_some()
             .then(|| STAGE.with(|stage| stage.replace(Some(self.diagnostics.clock))));
         BackgroundStage {
             gpu: self,
@@ -55,42 +56,40 @@ impl Drop for BackgroundStage<'_> {
     }
 }
 
-/// Owns completion for the opt-in worker experiment's bounded window.
-#[cfg(feature = "wide-experiment")]
-pub(crate) struct SubmissionWindow<'a> {
+/// One GPU wait shared by every step submitted since the tick began.
+/// Drop waits for an unfinished tick before its caller can release live jobs.
+pub(crate) struct Tick<'a> {
     gpu: &'a Gpu,
     background: BackgroundStage<'a>,
     initial_submissions: u64,
-    drained: bool,
+    completed: bool,
 }
-#[cfg(feature = "wide-experiment")]
 impl Gpu {
-    pub(crate) fn submission_window(&self) -> SubmissionWindow<'_> {
-        SubmissionWindow {
+    pub(crate) fn tick(&self) -> Tick<'_> {
+        Tick {
             gpu: self,
-            background: self.background_stage(true),
+            background: self.background_stage(),
             initial_submissions: self.activity().submissions,
-            drained: false,
+            completed: false,
         }
     }
 }
-#[cfg(feature = "wide-experiment")]
-impl SubmissionWindow<'_> {
-    pub(crate) fn complete(mut self) -> crate::source::Result<bool> {
-        let submitted = self.gpu.activity().submissions != self.initial_submissions;
-        if submitted {
+impl Tick<'_> {
+    /// Returns how long the wait took, zero when nothing was submitted.
+    pub(crate) fn complete(mut self) -> crate::source::Result<std::time::Duration> {
+        let started = std::time::Instant::now();
+        if self.gpu.activity().submissions != self.initial_submissions {
             self.gpu.wait_for_submitted_work()?;
         }
         self.background.complete();
-        self.drained = true;
-        Ok(submitted)
+        self.completed = true;
+        Ok(started.elapsed())
     }
 }
-#[cfg(feature = "wide-experiment")]
-impl Drop for SubmissionWindow<'_> {
+impl Drop for Tick<'_> {
     fn drop(&mut self) {
-        if !self.drained {
-            // Errors cannot leave an unfinished window behind a later request.
+        if !self.completed {
+            // Errors cannot leave unfinished work behind a later request.
             if self.gpu.activity().submissions != self.initial_submissions {
                 let _ = self.gpu.wait_for_submitted_work();
             }

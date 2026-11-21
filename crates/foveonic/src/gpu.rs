@@ -42,11 +42,10 @@ mod diagnostics;
 mod field;
 mod kernels;
 mod scheduling;
+pub(crate) use scheduling::Tick;
 pub(crate) mod scratch;
 mod storage;
 pub use kernels::Kernel;
-#[cfg(feature = "wide-experiment")]
-pub(crate) use scheduling::SubmissionWindow;
 pub(crate) use storage::{Binding, ReadGuard, WriteGuard};
 
 pub(crate) struct Retirement {
@@ -286,7 +285,7 @@ impl Gpu {
         // Import renders inherit the cache's foreground gate. Never queue an
         // entire batch ahead of interactive work on the shared device queue.
         if !diagnostic {
-            crate::background::checkpoint();
+            crate::priority::checkpoint();
         }
         let id = self.diagnostics.submission();
         let command = {
@@ -311,9 +310,7 @@ impl Gpu {
             );
             self.queue.submit(Some(command));
         };
-        if !diagnostic
-            && crate::background::context().is_some()
-            && !scheduling::stage_controls(self)
+        if !diagnostic && crate::priority::context().is_some() && !scheduling::stage_controls(self)
         {
             let _scope = crate::diagnostics::scope_with(
                 crate::diagnostics::Category::Gpu,
@@ -340,7 +337,7 @@ impl Gpu {
                     .u64("bytes", std::mem::size_of_val(values) as u64);
             },
         );
-        crate::background::checkpoint();
+        crate::priority::checkpoint();
         self.check_size(std::mem::size_of_val(values) as u64)?;
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
@@ -382,7 +379,7 @@ impl Gpu {
                 fields.str("label", label).u64("bytes", bytes);
             },
         );
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         self.check_size(bytes)?;
         {
             let mut activity = self.activity.lock().expect("GPU activity counter");
@@ -401,26 +398,26 @@ impl Gpu {
             let mut mapped = buffer.slice(..).get_mapped_range_mut();
             match values {
                 SensorSamples::Unsigned(values) => {
-                    let values_per_chunk = crate::background::IO_CHUNK_BYTES / 4;
+                    let values_per_chunk = crate::priority::IO_CHUNK_BYTES / 4;
                     for (output, input) in mapped
                         .chunks_mut(values_per_chunk * 4)
                         .zip(values.chunks(values_per_chunk))
                     {
-                        crate::background::checkpoint_or_cancel()?;
+                        crate::priority::checkpoint_or_cancel()?;
                         for (out, &value) in output.as_chunks_mut::<4>().0.iter_mut().zip(input) {
                             out.copy_from_slice(&f32::from(value).to_ne_bytes());
                         }
                     }
                 }
                 SensorSamples::UnsignedPlanes(planes) => {
-                    let pixels_per_chunk = crate::background::IO_CHUNK_BYTES / 12;
+                    let pixels_per_chunk = crate::priority::IO_CHUNK_BYTES / 12;
                     for (((output, red), green), blue) in mapped
                         .chunks_mut(pixels_per_chunk * 12)
                         .zip(planes[0].chunks(pixels_per_chunk))
                         .zip(planes[1].chunks(pixels_per_chunk))
                         .zip(planes[2].chunks(pixels_per_chunk))
                     {
-                        crate::background::checkpoint_or_cancel()?;
+                        crate::priority::checkpoint_or_cancel()?;
                         for (((out, &r), &g), &b) in output
                             .as_chunks_mut::<12>()
                             .0
@@ -939,7 +936,7 @@ impl Gpu {
 /// Shared nonblocking polling keeps completion waits outside device locks.
 /// Background readback retains its existing priority and interruption policy.
 pub fn map_readback(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<()> {
-    let background = crate::background::context().is_some();
+    let background = crate::priority::context().is_some();
     let _wait =
         crate::diagnostics::scope_with(crate::diagnostics::Category::Gpu, "gpu.wait", |fields| {
             fields
@@ -962,7 +959,7 @@ pub fn map_readback(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<()> 
         });
     completion::wait(device, rx, || {
         if background {
-            crate::background::checkpoint_or_cancel()?;
+            crate::priority::checkpoint_or_cancel()?;
         }
         Ok(())
     })??;
@@ -981,7 +978,7 @@ mod scheduling_tests {
     #[ignore = "requires a working GPU adapter"]
     fn compact_sensor_upload_preserves_every_unsigned_code() {
         let gpu = Gpu::test_executor();
-        let count = crate::background::IO_CHUNK_BYTES / 4 + 17;
+        let count = crate::priority::IO_CHUNK_BYTES / 4 + 17;
         let codes: Vec<u16> = (0..count).map(|v| v as u16).collect();
         let expected: Vec<f32> = codes.iter().map(|&v| f32::from(v)).collect();
         let actual = gpu
@@ -1000,7 +997,7 @@ mod scheduling_tests {
     #[ignore = "requires a working GPU adapter"]
     fn planar_sensor_upload_interleaves_channels_across_chunks() {
         let gpu = Gpu::test_executor();
-        let count = crate::background::IO_CHUNK_BYTES / 12 + 7;
+        let count = crate::priority::IO_CHUNK_BYTES / 12 + 7;
         let planes: [Vec<u16>; 3] =
             std::array::from_fn(|c| (0..count).map(|i| (i * 31 + c * 83) as u16).collect());
         let expected: Vec<f32> = (0..count)
@@ -1022,15 +1019,15 @@ mod scheduling_tests {
     #[ignore = "requires a working GPU adapter"]
     fn cancelled_compact_upload_does_not_allocate() {
         let gpu = Gpu::new().unwrap();
-        let gate = Arc::new(crate::background::Gate::default());
+        let gate = Arc::new(crate::priority::Gate::default());
         let before = gpu.activity();
-        crate::background::interruptible(gate.clone(), || {
-            gate.interrupt_prefetch();
+        crate::priority::interruptible(gate.clone(), || {
+            gate.interrupt_speculative();
             let result = gpu.upload_sensor(
                 "Cancelled compact sensor",
                 &crate::source::SensorSamples::Unsigned(vec![1; 16]),
             );
-            assert!(result.unwrap_err().is::<crate::background::Interrupted>());
+            assert!(result.unwrap_err().is::<crate::priority::Interrupted>());
         });
         assert_eq!(gpu.activity().since(before).allocations, 0);
     }
@@ -1047,15 +1044,17 @@ mod scheduling_tests {
                 contents: bytemuck::cast_slice(&expected),
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             });
-        let gate = Arc::new(crate::background::Gate::default());
-        let active = gate.foreground();
+        let gate = Arc::new(crate::priority::Gate::default());
         let background_gate = gate.clone();
         let device = gpu.device.clone();
         let (entered_tx, entered_rx) = mpsc::channel();
+        let (proceed_tx, proceed_rx) = mpsc::channel();
         let (done_tx, done_rx) = mpsc::channel();
         let thread = std::thread::spawn(move || {
-            crate::background::run(Some(background_gate), || {
+            background_gate.run(crate::priority::Priority::Speculative, || {
                 entered_tx.send(()).unwrap();
+                // Viewport demand arrives while the readback is under way.
+                proceed_rx.recv().unwrap();
                 map_readback(&device, &staging).unwrap();
                 let actual = staging.slice(..).get_mapped_range().to_vec();
                 staging.unmap();
@@ -1063,6 +1062,8 @@ mod scheduling_tests {
             })
         });
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let active = gate.demand(crate::priority::Priority::Viewport);
+        proceed_tx.send(()).unwrap();
         assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
         let input = gpu.upload("Foreground fixture", &expected).unwrap();
         assert_eq!(
@@ -1082,13 +1083,13 @@ mod scheduling_tests {
     fn background_executor_yields_submissions_and_keeps_activity_separate() {
         let foreground = Gpu::new().unwrap();
         let background = foreground.executor();
-        let gate = Arc::new(crate::background::Gate::default());
+        let gate = Arc::new(crate::priority::Gate::default());
         let (entered_tx, entered_rx) = mpsc::channel();
         let (advance_tx, advance_rx) = mpsc::channel();
         let (done_tx, done_rx) = mpsc::channel();
         let background_gate = gate.clone();
         let thread = std::thread::spawn(move || {
-            crate::background::run(Some(background_gate), || {
+            background_gate.run(crate::priority::Priority::Speculative, || {
                 background.submit(
                     background
                         .device
@@ -1107,7 +1108,7 @@ mod scheduling_tests {
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         // Interrupt an executor that has already submitted work, rather than
         // only holding a job before its first render begins.
-        let active = gate.foreground();
+        let active = gate.demand(crate::priority::Priority::Viewport);
         advance_tx.send(()).unwrap();
         assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
         foreground.submit(

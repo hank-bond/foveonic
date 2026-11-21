@@ -63,7 +63,7 @@ impl Smoke {
     }
     pub(super) fn diagnostic_checked(
         &self,
-        frame: Option<&crate::rendering::worker::Frame>,
+        frame: Option<&crate::rendering::worker::RenderResult>,
         worker_busy: bool,
     ) {
         self.diagnostic_marker("checked", frame, worker_busy);
@@ -71,7 +71,7 @@ impl Smoke {
     fn diagnostic_marker(
         &self,
         phase: &str,
-        frame: Option<&crate::rendering::worker::Frame>,
+        frame: Option<&crate::rendering::worker::RenderResult>,
         worker_busy: bool,
     ) {
         trace::event(Category::Scenario, "smoke.step", |fields| {
@@ -99,12 +99,12 @@ impl Smoke {
                 if let Some(frame) = frame {
                     fields.u64("task", frame.diagnostic_task.id);
                     fields.u64("revision", frame.diagnostic_task.revision);
-                    fields.u64("presentation_revision", frame.revision);
+                    fields.u64("presentation_revision", frame.request.id.0);
                     fields.u64(
                         "scale_divisor",
                         frame.artifact.settings.working_scale.divisor() as u64,
                     );
-                    fields.str("artifact", &frame.output);
+                    fields.str("artifact", &frame.request.output);
                     if let Some(identity) = frame.diagnostic_identity(false) {
                         fields.u64("photo", identity.context.photo);
                     }

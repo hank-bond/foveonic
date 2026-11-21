@@ -164,7 +164,7 @@ fn compose(
         params = grid.encode;
         prepared.color.extent = grid.extent().map(|v| v as usize);
     } else {
-        graph.retain_for_seal(final_id);
+        graph.retain_as_sensor_data(final_id);
     }
     let mut dehaze_matrix = None;
     if route.high_iso()? {

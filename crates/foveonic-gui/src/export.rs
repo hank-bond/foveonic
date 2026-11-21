@@ -6,7 +6,7 @@ use foveonic::{
     importing::ConflictPolicy,
     inspection::Content,
     profile::Profile,
-    render::{Engine, RenderSession, Settings},
+    render::{Engine, NativePhoto, Settings},
     source::Metadata,
 };
 use std::{
@@ -52,7 +52,7 @@ pub fn next_path(
 /// Publish complete single-photo and batch outputs using the same Quality recipes.
 pub fn write(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     source_path: &Path,
     export: &Export,
@@ -119,7 +119,7 @@ pub fn write(
                 _ => {
                     phase = "render-image";
                     let mut artifacts = engine
-                        .render_session_with_progress(
+                        .render_native_photo_with_progress(
                             session,
                             &settings,
                             &["final"],

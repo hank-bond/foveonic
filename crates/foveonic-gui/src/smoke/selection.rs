@@ -137,7 +137,7 @@ impl SelectionJourney {
         match self.stage {
             0 => {
                 self.observe(app, paths)?;
-                let revision = app.revision + 1;
+                let revision = app.last_request_id.next().0;
                 self.hold = Some(app.worker.hold_delivery(paths[0].clone(), revision));
                 self.events.push(serde_json::json!({"action": "hold_delivery", "photo": 0, "minimum_revision": revision}));
                 self.edit(app, 0.25);

@@ -42,7 +42,7 @@ def cache_report():
                         'foreground_on_admission_ms':[] if name == 'zoom-a-200' else [4],
                         'foreground_by_observation_ms':[],
                         'whole_current_admissions':[{'action_elapsed_ms':2.5}],
-                        'whole_settled_observed_ms':8})
+                        'behind_current_observed_ms':8})
     trial = result['trials'][0]
     trial['steps'] = [{'action':'initial-selection', 'baseline_elapsed_ms':10},
                       {'action':'cache-workflow', 'baseline_elapsed_ms':None}]
@@ -59,12 +59,12 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(actions['initial-selection']['median']['before_ms'], 10)
         self.assertEqual(actions['zoom-a-200/foreground']['median']['before_ms'], 3)
         self.assertEqual(actions['exposure-0/foreground']['median']['before_ms'], 4)
-        self.assertEqual(actions['exposure-0/whole-observed']['median']['before_ms'], 8)
+        self.assertEqual(actions['exposure-0/behind-observed']['median']['before_ms'], 8)
         for mutation in (lambda trial:trial['cache_workflow']['actions'].pop(),
-                         lambda trial:trial['cache_workflow']['actions'][1].update(whole_settled_observed_ms=float('nan')),
+                         lambda trial:trial['cache_workflow']['actions'][1].update(behind_current_observed_ms=float('nan')),
                          lambda trial:trial['cache_workflow']['actions'][1].update(foreground_on_admission_ms=[]),
                          lambda trial:trial['cache_workflow']['actions'][1].update(foreground_on_admission_ms=[1]),
-                         lambda trial:trial['cache_workflow']['actions'][1].update(whole_settled_observed_ms=-1),
+                         lambda trial:trial['cache_workflow']['actions'][1].update(behind_current_observed_ms=-1),
                          lambda trial:trial['cache_workflow']['actions'][0].update(first_current_observations=[]),
                          lambda trial:trial.update(steps=trial['steps'][:1]),
                          lambda trial:trial.update(mode='wall')):
@@ -82,7 +82,7 @@ class CompareTests(unittest.TestCase):
         workflow['native_photo_count'] = 2
         workflow['actions'][0]['action'] = 'zoom-both-200'
         actions = {row['action'] for row in compare_reports(both, both)['actions']}
-        self.assertIn('zoom-both-200/whole-observed', actions)
+        self.assertIn('zoom-both-200/behind-observed', actions)
         self.assertEqual(len(actions), 21)
         with self.assertRaisesRegex(ValueError, 'different workload'):
             compare_reports(cache_report(), both)

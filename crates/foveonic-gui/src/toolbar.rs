@@ -26,7 +26,6 @@ pub struct Actions {
 }
 
 pub struct State<'a> {
-    pub enabled: bool,
     pub process_blocker: Option<&'a str>,
     pub importing: bool,
     pub destination: Option<&'a std::path::Path>,
@@ -187,42 +186,44 @@ pub fn status(ui: &mut egui::Ui, message: &str) -> egui::Response {
 /// Return actions so folder dialogs and processing stay owned by the app.
 pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
     let mut actions = Actions::default();
-    ui.add_enabled_ui(state.enabled, |ui| {
-        widgets::button_group(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                for (mode, label, help) in [
-                    (
-                        FolderMode::Browse,
-                        "Browse…",
-                        "Open a folder and save edits beside its originals.",
-                    ),
-                    (
-                        FolderMode::Import,
-                        "Import…",
-                        "Open a folder for import. Source edits stay temporary and are saved only with imported originals.",
-                    ),
-                ] {
-                    let selected = state.importing == (mode == FolderMode::Import);
-                    if widgets::button(ui, label, selected, egui::Vec2::ZERO)
-                        .on_hover_text(help)
-                        .clicked()
-                    {
-                        actions.open_folder = Some(mode);
-                    }
+    widgets::button_group(ui, |ui| {
+        ui.horizontal_top(|ui| {
+            for (mode, label, help) in [
+                (
+                    FolderMode::Browse,
+                    "Browse…",
+                    "Open a folder and save edits beside its originals.",
+                ),
+                (
+                    FolderMode::Import,
+                    "Import…",
+                    "Open a folder for import. Source edits stay temporary and are saved only with imported originals.",
+                ),
+            ] {
+                let selected = state.importing == (mode == FolderMode::Import);
+                if widgets::button(ui, label, selected, egui::Vec2::ZERO)
+                    .on_hover_text(help)
+                    .clicked()
+                {
+                    actions.open_folder = Some(mode);
                 }
-            });
+            }
         });
-        let label = state.destination.map_or_else(
-            || "Destination…".into(),
-            |path| {
-                format!(
-                    "Destination: {}",
-                    path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
-                )
-            },
-        );
-        let destination_unavailable = state.destination.is_some() && state.destination_unavailable;
-        let response = ui.scope(|ui| {
+    });
+    let label = state.destination.map_or_else(
+        || "Destination…".into(),
+        |path| {
+            format!(
+                "Destination: {}",
+                path.file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy()
+            )
+        },
+    );
+    let destination_unavailable = state.destination.is_some() && state.destination_unavailable;
+    let response = ui
+        .scope(|ui| {
             ui.spacing_mut().button_padding = widgets::button_padding(ui);
             let width = egui::WidgetText::from(label.as_str())
                 .into_galley(
@@ -232,26 +233,33 @@ pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
                     egui::TextStyle::Button,
                 )
                 .size()
-                .x + 2. * widgets::button_padding(ui).x;
+                .x
+                + 2. * widgets::button_padding(ui).x;
             let button = widgets::notice_style(ui, label, destination_unavailable).truncate();
             ui.add_sized(
-                egui::vec2(width.min(DESTINATION_MAX_WIDTH), widgets::control_height(ui)),
+                egui::vec2(
+                    width.min(DESTINATION_MAX_WIDTH),
+                    widgets::control_height(ui),
+                ),
                 button,
             )
-        }).inner;
-        let destination_help = state.destination.map_or_else(
-            || "Choose the output folder".into(),
-            |path| {
-                if destination_unavailable {
-                    format!("Destination folder unavailable\n{}", path.display())
-                } else {
-                    path.display().to_string()
-                }
-            },
-        );
-        actions.destination = response.on_hover_text(destination_help).clicked();
-        actions.settings = widgets::button(ui, "Processing settings…", false, egui::Vec2::ZERO).clicked();
-        actions.process = ui.add_enabled_ui(state.process_blocker.is_none(), |ui| {
+        })
+        .inner;
+    let destination_help = state.destination.map_or_else(
+        || "Choose the output folder".into(),
+        |path| {
+            if destination_unavailable {
+                format!("Destination folder unavailable\n{}", path.display())
+            } else {
+                path.display().to_string()
+            }
+        },
+    );
+    actions.destination = response.on_hover_text(destination_help).clicked();
+    actions.settings =
+        widgets::button(ui, "Processing settings…", false, egui::Vec2::ZERO).clicked();
+    actions.process = ui
+        .add_enabled_ui(state.process_blocker.is_none(), |ui| {
             let help = if state.importing {
                 "Process picked photos and save hidden decisions using Import settings."
             } else {
@@ -259,9 +267,10 @@ pub fn show(ui: &mut egui::Ui, state: State<'_>) -> Actions {
             };
             widgets::button(ui, "Process", false, egui::Vec2::ZERO)
                 .on_hover_text(help)
-                .on_disabled_hover_text(state.process_blocker.unwrap_or("Finish saving the current output first."))
-        }).inner.clicked();
-    });
+                .on_disabled_hover_text(state.process_blocker.unwrap_or_default())
+        })
+        .inner
+        .clicked();
     actions
 }
 
@@ -552,7 +561,6 @@ mod tests {
     fn frame(
         ctx: &egui::Context,
         events: Vec<egui::Event>,
-        enabled: bool,
         ready: bool,
         importing: bool,
     ) -> (Actions, egui::FullOutput) {
@@ -573,7 +581,6 @@ mod tests {
                             actions = show(
                                 ui,
                                 State {
-                                    enabled,
                                     process_blocker: (!ready).then_some("Not ready"),
                                     importing,
                                     destination: None,
@@ -591,11 +598,11 @@ mod tests {
     #[test]
     fn both_modes_share_one_row_and_process_obeys_readiness() {
         for importing in [false, true] {
-            for (enabled, ready) in [(true, true), (true, false), (false, true)] {
+            for ready in [true, false] {
                 let ctx = egui::Context::default();
                 widgets::install_style(&ctx);
-                frame(&ctx, vec![], enabled, ready, importing);
-                let (_, output) = frame(&ctx, vec![], enabled, ready, importing);
+                frame(&ctx, vec![], ready, importing);
+                let (_, output) = frame(&ctx, vec![], ready, importing);
                 let y = text_center(&output, "Browse…").y;
                 for label in ["Import…", "Destination…", "Processing settings…", "Process"] {
                     let point = text_center(&output, label);
@@ -609,17 +616,16 @@ mod tests {
                     frame(
                         &ctx,
                         vec![egui::Event::PointerMoved(point), pointer(true)],
-                        enabled,
                         ready,
                         importing,
                     );
-                    let (actions, _) = frame(&ctx, vec![pointer(false)], enabled, ready, importing);
-                    assert_eq!(actions.process, enabled && ready && label == "Process");
-                    assert_eq!(actions.settings, enabled && label == "Processing settings…");
-                    assert_eq!(actions.destination, enabled && label == "Destination…");
+                    let (actions, _) = frame(&ctx, vec![pointer(false)], ready, importing);
+                    assert_eq!(actions.process, ready && label == "Process");
+                    assert_eq!(actions.settings, label == "Processing settings…");
+                    assert_eq!(actions.destination, label == "Destination…");
                     assert_eq!(
                         actions.open_folder,
-                        (enabled && label == "Import…").then_some(FolderMode::Import)
+                        (label == "Import…").then_some(FolderMode::Import)
                     );
                 }
             }

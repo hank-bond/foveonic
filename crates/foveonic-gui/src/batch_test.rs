@@ -1,6 +1,7 @@
 //! Checks frozen batch exports, copy-only imports, failures, and source-side write isolation.
 
 use super::*;
+use foveonic::priority::Priority;
 use std::time::{Duration, Instant};
 
 #[test]
@@ -197,22 +198,28 @@ fn scanning_restores_destination_decisions_without_decoding_originals() {
         disposition: Disposition::Hidden,
     });
     history.save(destination.path()).unwrap();
-    let scan = scan_files(
-        Scan {
-            defaults: Default::default(),
+    let cache = Cache::new();
+    let recorded = read_history(
+        &Lookup {
             generation: 7,
-            destination: Some(destination.path().to_owned()),
+            destination: destination.path().to_owned(),
             files: vec![path.clone()],
         },
         3,
-        &Cache::new(),
-        || {},
+        &cache,
     );
+    let scan = Scan {
+        defaults: Default::default(),
+        generation: 7,
+        destination: Some(destination.path().to_owned()),
+        files: vec![path.clone()],
+    };
+    let scan = read_settings(&scan, &cache, || false).unwrap();
     assert!(scan.errors.is_empty());
     assert_eq!(scan.generation, 7);
     assert_eq!(scan.sources[&path].settings.as_ref().unwrap(), &settings);
-    assert_eq!(scan.completed_imports, 3);
-    assert!(matches!(scan.dispositions[&path], Disposition::Hidden));
+    assert_eq!(recorded.completed_imports, 3);
+    assert!(matches!(recorded.dispositions[&path], Disposition::Hidden));
 }
 
 #[test]
@@ -232,21 +239,27 @@ fn history_matching_and_hidden_identity_do_not_require_a_readable_editing_recipe
         disposition: Disposition::Hidden,
     });
     history.save(destination.path()).unwrap();
-    let scan = scan_files(
-        Scan {
-            defaults: Default::default(),
+    let cache = Cache::new();
+    let recorded = read_history(
+        &Lookup {
             generation: 1,
-            destination: Some(destination.path().to_owned()),
+            destination: destination.path().to_owned(),
             files: vec![path.clone()],
         },
         0,
-        &Cache::new(),
-        || {},
+        &cache,
     );
+    let scan = Scan {
+        defaults: Default::default(),
+        generation: 1,
+        destination: Some(destination.path().to_owned()),
+        files: vec![path.clone()],
+    };
+    let scan = read_settings(&scan, &cache, || false).unwrap();
     assert_eq!(scan.errors.len(), 1);
     assert_eq!(scan.sources[&path].identity, identity);
     assert!(scan.sources[&path].settings.is_err());
-    assert!(matches!(scan.dispositions[&path], Disposition::Hidden));
+    assert!(matches!(recorded.dispositions[&path], Disposition::Hidden));
 }
 
 #[test]
@@ -260,7 +273,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
     let engine = Engine::new().unwrap();
     let cache = Arc::new(Cache::new());
     let worker = Worker::new(engine.executor(), cache.clone(), egui::Context::default());
-    let active = cache.foreground();
+    let active = cache.priority().demand(Priority::Viewport);
     let mut requested = Settings::new("Sunlight", "Standard");
     requested.exposure = 0.35;
     requested.output_size = Some([600, 400]);
@@ -311,7 +324,7 @@ fn frozen_batch_matches_full_exports_and_does_not_block_foreground_or_write_sour
     requested.exposure = 1.35;
     // Complete actual foreground work while the submitted batch waits behind it.
     let source = Arc::new(foveonic::source::Source::open(&path).unwrap());
-    let session = RenderSession::new(source);
+    let session = NativePhoto::new(source);
     let baseline = engine
         .render(session.source(), &output_settings, &mut Profile::default())
         .unwrap();

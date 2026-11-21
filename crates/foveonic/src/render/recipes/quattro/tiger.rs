@@ -255,7 +255,6 @@ mod tests {
                     &[reconstruction.inputs[3]],
                     &mut Profile::default(),
                     &mut crate::interactive::Execution::default(),
-                    crate::render::execute::Completion::Queued,
                 )
                 .unwrap();
             engine.gpu.readback(&blue[0].buffer).unwrap()

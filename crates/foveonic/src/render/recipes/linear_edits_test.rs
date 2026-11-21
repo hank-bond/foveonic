@@ -5,7 +5,7 @@ use crate::{
     inspection::Content,
     profile::{Mode, Profile},
     render::{
-        ControlCapabilities, Engine, PhotographicMethod, RenderSession, Rendering, Scale, Settings,
+        ControlCapabilities, Engine, NativePhoto, PhotographicMethod, Rendering, Scale, Settings,
     },
     source::Source,
 };
@@ -32,14 +32,14 @@ fn original_dehaze_swatch_reports_auto_at_zero_and_freezes_without_an_image_chan
                 .unwrap();
             let neutral = engine.readback_image(&neutral).unwrap();
             settings.dehaze_estimate = true;
-            let mut session = RenderSession::new(source.clone());
+            let mut session = NativePhoto::new(source.clone());
             let mut automatic_pixels = None;
             let mut color = None;
             for (amount, manual) in [(0., false), (35., false), (35., true), (0., false)] {
                 settings.dehaze.amount = amount;
                 settings.dehaze.shadow = if manual { color } else { None };
                 let mut artifacts = engine
-                    .render_session(
+                    .render_native_photo(
                         &mut session,
                         &settings,
                         &["final"],
@@ -146,7 +146,6 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
                         &plan.roots,
                         &mut profile,
                         &mut execution,
-                        crate::render::execute::Completion::Queued,
                     )
                     .unwrap();
                 engine.package_artifacts(input, &settings, &built.graph, plan, values)
@@ -181,14 +180,14 @@ fn original_dehaze_shares_whole_frame_analysis_with_fast_and_regional_correction
                 fast_pixels = Some(bytes);
             }
         }
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         settings.working_scale = Scale::new(2).unwrap();
         settings.preview_region = None;
         for amount in [35., 45., 35.] {
             settings.dehaze.amount = amount;
             let mut profile = Profile::new(Mode::Wall);
             let mut artifacts = engine
-                .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+                .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
                 .unwrap()
                 .unwrap();
             let Content::Image(image) = artifacts.pop().unwrap().content else {
@@ -219,9 +218,9 @@ fn original_dehaze_matches_cached_edits_dng_and_full_preview() {
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         settings.dehaze.amount = 35.;
         let started = std::time::Instant::now();
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         let mut artifacts = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["dehaze.input", "linear.edits"],
@@ -299,10 +298,10 @@ fn original_dehaze_matches_cached_edits_dng_and_full_preview() {
         // Quality analysis follows the working grid. Seed Half independently
         // so this section tests amount-only reuse, without also changing scale.
         settings.working_scale = Scale::new(2).unwrap();
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         let mut profile = Profile::new(Mode::Wall);
         let mut artifacts = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["linear.edits"],
@@ -326,7 +325,7 @@ fn original_dehaze_matches_cached_edits_dng_and_full_preview() {
             let start = std::time::Instant::now();
             let mut profile = Profile::new(Mode::Wall);
             let mut artifacts = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["linear.edits"],
@@ -441,11 +440,11 @@ fn original_selected_lightness_match_dng_and_cached_color_and_monochrome() {
                 assert_eq!(actual_values[i][1], actual_values[i][2]);
             }
         }
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         for enabled in [true, false, true] {
             settings.photographic.color_editor.advanced.ranges[0].enabled = enabled;
             let mut result = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["linear.edits"],
@@ -599,10 +598,10 @@ fn original_spatial_edits_bake_same_gain_into_dng_and_keep_appearance_separate()
         drop(full);
         s.working_scale = Scale::NATIVE;
         s.preview_region = None;
-        let mut session = RenderSession::new(source.clone());
-        let render = |session: &mut RenderSession, s: &Settings, p: &mut Profile| {
+        let mut session = NativePhoto::new(source.clone());
+        let render = |session: &mut NativePhoto, s: &Settings, p: &mut Profile| {
             let mut a = engine
-                .render_session(session, s, &["final"], || false, p)
+                .render_native_photo(session, s, &["final"], || false, p)
                 .unwrap()
                 .unwrap();
             let Content::Image(image) = a.remove(0).content else {
@@ -735,9 +734,9 @@ fn original_perceptual_neutral_and_cached_edits_keep_reconstruction_unchanged() 
     s.photographic.brightness = 0.3;
     s.photographic.perceptual.saturation = 0.15;
     s.photographic.perceptual.contrast = -0.3;
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let _ = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &s,
             &["final"],
@@ -757,7 +756,7 @@ fn original_perceptual_neutral_and_cached_edits_keep_reconstruction_unchanged() 
     s.photographic.color_editor.advanced.push(range);
     let mut profile = Profile::new(Mode::Wall);
     let mut cached = engine
-        .render_session(&mut session, &s, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &s, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap();
     assert!(
@@ -1215,10 +1214,10 @@ fn original_auto_exposure_matches_manual_preview_cache_and_dng_appearance() {
         auto.exposure = 2.75;
         auto.exposure_auto = true;
         auto.exposure_auto_compensation = choice;
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         for _ in 0..2 {
             let mut images = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &auto,
                     &["final"],
@@ -1392,7 +1391,6 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                                 &plan.roots,
                                 &mut profile,
                                 &mut execution,
-                                crate::render::execute::Completion::Queued,
                             )
                             .unwrap();
                         engine.package_artifacts(input, &settings, &built.graph, plan, values)
@@ -1507,12 +1505,12 @@ fn original_reference_saturation_policy_changes_all_families_and_invalidates_cac
         settings.photographic.saturation_method = PhotographicMethod::Reference;
         settings.saturation = 2.;
         settings.output_size = Some([400, 400]);
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         let mut outputs = Vec::new();
         for protect in [false, true, false] {
             settings.prevent_color_clipping = protect;
             let mut artifacts = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["final"],
@@ -1623,11 +1621,11 @@ fn original_dynamic_range_guide_reuses_across_moving_sections() {
     ] {
         settings.processing_quality = policy;
         for whole_first in [false, true] {
-            let mut session = RenderSession::new(source.clone());
+            let mut session = NativePhoto::new(source.clone());
             if whole_first {
                 settings.preview_region = None;
                 engine
-                    .render_session(
+                    .render_native_photo(
                         &mut session,
                         &settings,
                         &["final"],
@@ -1643,7 +1641,13 @@ fn original_dynamic_range_guide_reuses_across_moving_sections() {
                 settings.preview_region = Some(region);
                 let mut profile = Profile::new(Mode::Wall);
                 let mut artifacts = engine
-                    .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+                    .render_native_photo(
+                        &mut session,
+                        &settings,
+                        &["final"],
+                        || false,
+                        &mut profile,
+                    )
                     .unwrap()
                     .unwrap();
                 let Content::Image(image) = artifacts.remove(0).content else {

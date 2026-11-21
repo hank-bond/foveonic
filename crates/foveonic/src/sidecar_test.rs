@@ -399,7 +399,7 @@ fn sidecar_paths_preserve_non_utf8_filenames() {
 fn restored_recipe_replays_exact_photographic_pixels() {
     use crate::{
         profile::Profile,
-        render::{Engine, RenderSession},
+        render::{Engine, NativePhoto},
         source::Source,
     };
     let input = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
@@ -418,9 +418,9 @@ fn restored_recipe_replays_exact_photographic_pixels() {
     let original = engine
         .render(&source, &settings, &mut Profile::default())
         .unwrap();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let mut artifacts = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &restored,
             &["final"],

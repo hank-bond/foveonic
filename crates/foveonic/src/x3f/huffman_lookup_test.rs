@@ -36,7 +36,7 @@ fn category_plane(
     let mut vertical = [[seed; 2]; 2];
     let mut horizontal = [seed; 2];
     for y in 0..height {
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         for x in 0..width {
             let predictor = if x < 2 {
                 if y < 2 {
@@ -124,11 +124,11 @@ fn fused_planes_preserve_predictors_damage_and_geometry_limits() {
     ] {
         assert!(table.decode(&[], width, height, seed).is_err());
     }
-    let gate = std::sync::Arc::new(crate::background::Gate::default());
-    crate::background::interruptible(gate.clone(), || {
-        gate.interrupt_prefetch();
+    let gate = std::sync::Arc::new(crate::priority::Gate::default());
+    crate::priority::interruptible(gate.clone(), || {
+        gate.interrupt_speculative();
         let error = table.decode(&[0], 4, 2, 512).unwrap_err();
-        assert!(error.is::<crate::background::Interrupted>());
+        assert!(error.is::<crate::priority::Interrupted>());
     });
 }
 

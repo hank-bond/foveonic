@@ -82,9 +82,9 @@ fn classic_original_inspection_session_and_tiff() {
         }
     }
     drop(artifacts);
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let first = engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap()
         .pop()
@@ -96,7 +96,7 @@ fn classic_original_inspection_session_and_tiff() {
     let activity = engine.gpu_activity();
     settings.exposure = 0.5;
     let second = engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap()
         .pop()

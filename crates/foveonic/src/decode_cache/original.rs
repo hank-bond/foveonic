@@ -44,13 +44,13 @@ pub(super) fn store(
             .create_new(true)
             .write(true)
             .open(&temporary)?;
-        for chunk in original.chunks(crate::background::IO_CHUNK_BYTES) {
-            crate::background::checkpoint_or_cancel()?;
+        for chunk in original.chunks(crate::priority::IO_CHUNK_BYTES) {
+            crate::priority::checkpoint_or_cancel()?;
             file.write_all(chunk)?;
         }
         file.set_modified(std::time::SystemTime::now())?;
         drop(file);
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         if !current() {
             return Err("original cache preparation superseded".into());
         }
@@ -114,11 +114,11 @@ impl Cache {
         let mut temporary = tempfile::NamedTempFile::new_in(
             destination.parent().ok_or("destination has no parent")?,
         )?;
-        let mut chunk = vec![0; crate::background::IO_CHUNK_BYTES];
+        let mut chunk = vec![0; crate::priority::IO_CHUNK_BYTES];
         let mut checksum = crc32fast::Hasher::new();
         let mut length = 0;
         loop {
-            crate::background::checkpoint();
+            crate::priority::checkpoint();
             let size = match file.read(&mut chunk) {
                 Ok(size) => size,
                 Err(_) => return Ok(false),

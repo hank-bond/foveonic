@@ -64,7 +64,6 @@ fn extreme_graph_probe(
         &targets,
         &mut Profile::default(),
         &mut Execution::default(),
-        crate::render::execute::Completion::Queued,
     )?;
     for ((id, old), fresh) in targets.into_iter().zip(retained).zip(values) {
         let name = recipe.graph.outputs[id].cache_name();
@@ -302,7 +301,6 @@ fn interchangeable_native_phase_correction_precedes_reduced_reconstruction() {
                     &plan.roots,
                     &mut profile,
                     &mut execution,
-                    crate::render::execute::Completion::Queued,
                 )
                 .unwrap();
             engine.package_artifacts(input, &settings, &recipe.graph, plan, values)
@@ -389,7 +387,6 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
                 &[restored, blue, mask],
                 &mut Profile::default(),
                 &mut crate::interactive::Execution::default(),
-                crate::render::execute::Completion::Queued,
             )
             .unwrap();
         let histories: Vec<_> = values
@@ -481,9 +478,9 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
         controls.luminance = 4;
         controls.detail = 0.;
         edited.exposure = 0.25;
-        let mut session = crate::interactive::RenderSession::new(source.clone());
+        let mut session = crate::interactive::NativePhoto::new(source.clone());
         let warm = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -499,7 +496,7 @@ fn small_color_grids_preserve_native_histories_and_requested_controls() {
         };
         assert!(engine.readback_image(&warm).unwrap() == bytes);
         let warm = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &edited,
                 &["final"],
@@ -626,10 +623,10 @@ fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention()
                     _ => {}
                 }
             }
-            let mut session = crate::interactive::RenderSession::new(source.clone());
+            let mut session = crate::interactive::NativePhoto::new(source.clone());
             let mut initial_profile = Profile::new(crate::profile::Mode::Wall);
             let initial = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["final"],
@@ -689,7 +686,7 @@ fn first_small_edits_restart_from_corrected_pools_without_native_gpu_retention()
             let mut profile = Profile::new(crate::profile::Mode::Wall);
             let before = engine.gpu_activity();
             let edited = engine
-                .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+                .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
                 .unwrap()
                 .unwrap()
                 .pop()

@@ -374,7 +374,7 @@ fn rendered_handoff_rejects_settings_that_are_newer_or_older_than_the_recipe() {
     let fixture = Fixture::new();
     let cache = Cache::at(fixture.root.join("cache"));
     cache.control.lock().unwrap().settings = Settings::default();
-    let activity = cache.foreground();
+    let activity = cache.priority().demand(crate::priority::Priority::Viewport);
     let settings = crate::render::Settings::new("Sunlight", "Standard");
     sidecar::save(&fixture.source, &settings).unwrap();
     let metadata = Metadata {

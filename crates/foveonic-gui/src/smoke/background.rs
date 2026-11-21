@@ -143,8 +143,8 @@ impl BackgroundEdit {
                         "destination": progress.destination,
                         "processing":app.preferences.import_processing,
                         "exposure_control":exposure,
-                        "expected_export_extent":app.multi_edit.frame(&paths[0])
-                            .or_else(||app.frame.as_ref().filter(|frame|frame.path == paths[0]))
+                        "expected_export_extent":app.photo_layers(&paths[0])[0]
+                            .or_else(||app.active_image().filter(|frame|frame.request.path == paths[0]))
                             .map(|frame|frame.display_extent(false)),
                     }));
                     self.model.adjust_exposure(0.25);

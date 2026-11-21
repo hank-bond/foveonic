@@ -123,7 +123,7 @@ fn recovery_and_speckle_share_one_sensor_reduction_per_grid() {
     assert_eq!(graph.nodes.len(), 2);
     let smaller = thumb.append(&mut graph, source).unwrap();
     assert_ne!(smaller, pooled);
-    assert_eq!(graph.sealed_outputs, [pooled, smaller]);
+    assert_eq!(graph.sensor_data_outputs, [pooled, smaller]);
 }
 
 #[test]
@@ -251,13 +251,13 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
     use crate::{
         inspection::Content,
         profile::{Mode, Profile},
-        render::{Engine, RenderSession, Scale, Settings},
+        render::{Engine, NativePhoto, Scale, Settings},
         source::Source,
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = std::sync::Arc::new(Source::open(root.join("blue-parking-sign.x3f")).unwrap());
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
     let saved_edits = crate::sidecar::encode(&settings).unwrap();
@@ -333,7 +333,7 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
             _ => {}
         }
         let mut artifacts = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -563,7 +563,7 @@ fn regional_detail_matches_full_and_continues_without_repeating_whole_sensor_inp
     use crate::{
         inspection::Content,
         profile::{Mode, Profile},
-        render::{Engine, RenderSession, Scale, Settings},
+        render::{Engine, NativePhoto, Scale, Settings},
         source::Source,
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
@@ -621,10 +621,10 @@ fn regional_detail_matches_full_and_continues_without_repeating_whole_sensor_inp
                 .unwrap();
             let full_bytes = engine.readback_image(&full).unwrap();
             let full_pixels: &[f32] = bytemuck::cast_slice(&full_bytes);
-            let mut session = RenderSession::new(source.clone());
+            let mut session = NativePhoto::new(source.clone());
             settings.working_scale = Scale::new(2).unwrap();
             let overview = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["final"],
@@ -652,7 +652,13 @@ fn regional_detail_matches_full_and_continues_without_repeating_whole_sensor_inp
                 .unwrap();
                 let mut profile = Profile::new(Mode::Wall);
                 let artifacts = engine
-                    .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+                    .render_native_photo(
+                        &mut session,
+                        &settings,
+                        &["final"],
+                        || false,
+                        &mut profile,
+                    )
                     .unwrap()
                     .unwrap();
                 let Content::Image(detail) = &artifacts[0].content else {
@@ -680,7 +686,7 @@ fn regional_detail_matches_full_and_continues_without_repeating_whole_sensor_inp
                 settings.preview_region = None;
                 let mut continuation = Profile::new(Mode::Wall);
                 let artifacts = engine
-                    .render_session(
+                    .render_native_photo(
                         &mut session,
                         &settings,
                         &["final"],
@@ -722,7 +728,7 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
     use crate::{
         inspection::Content,
         profile::{Mode, Profile},
-        render::{Engine, RenderSession, Settings},
+        render::{Engine, NativePhoto, Settings},
         source::Source,
     };
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
@@ -773,7 +779,7 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
         .render(&source, &neutral_only, &mut Profile::default())
         .unwrap();
     assert!(engine.readback_image(&image).unwrap() == engine.readback_image(&bypass).unwrap());
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     for (noise, detail) in [
         (true, false),
         (false, true),
@@ -793,7 +799,7 @@ fn independent_groups_match_neutral_bypass_and_cached_refinement() {
             .any(|s| s.stage == "submit reference column conditioning");
         assert_eq!(has_column, noise);
         let artifacts = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -981,7 +987,7 @@ fn color_field_recovery_inputs_share_the_sensor_working_grid() {
                     recipe.graph.outputs[node.inputs[2]].data,
                     DataType::BlackLevels
                 );
-                assert!(recipe.graph.sealed_outputs.contains(&node.inputs[2]));
+                assert!(recipe.graph.sensor_data_outputs.contains(&node.inputs[2]));
                 for index in [0, 1, 3, 4] {
                     let output = &recipe.graph.outputs[node.inputs[index]];
                     match &recipe.graph.nodes[output.producer].operation {

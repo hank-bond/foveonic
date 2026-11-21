@@ -88,10 +88,9 @@ impl App {
                     .take(2)
                     .map(|path| {
                         let frame = self
-                            .frame
-                            .as_ref()
-                            .filter(|frame| frame.path == *path)
-                            .or_else(|| self.multi_edit_frame(path))
+                            .active_image()
+                            .filter(|frame| frame.request.path == *path)
+                            .or_else(|| self.photo_layers(path)[0])
                             .unwrap();
                         (
                             std::sync::Arc::downgrade(&frame.texture),
@@ -127,16 +126,15 @@ impl App {
                 .iter()
                 .map(|path| {
                     let frame = self
-                        .frame
-                        .as_ref()
-                        .filter(|frame| frame.path == *path)
-                        .or_else(|| self.multi_edit_frame(path));
+                        .active_image()
+                        .filter(|frame| frame.request.path == *path)
+                        .or_else(|| self.photo_layers(path)[0]);
                     let cached = smoke.multi_paths.iter().position(|candidate| candidate == path)
                         .and_then(|index| smoke.multi_cached_textures.get(index))
                         .and_then(std::sync::Weak::upgrade);
                     serde_json::json!({"path":path,"requested":self.multi_edit.settings(path),
-                    "delivered":frame.map(|frame| &frame.requested),
-                    "revision":frame.map(|frame| frame.revision),
+                    "delivered":frame.map(|frame| &frame.request.settings),
+                    "revision":frame.map(|frame| frame.request.id),
                     "scale":frame.map(|frame| frame.artifact.settings.working_scale.divisor()),
                     "extent":frame.map(|frame| frame.texture.description().extent),
                     "same_cached_texture":frame.zip(cached.as_ref()).map(|(frame,cached)| std::sync::Arc::ptr_eq(&frame.texture,cached))})
@@ -146,11 +144,11 @@ impl App {
             std::fs::write(smoke.directory.join(format!("{target}.json")),
                 serde_json::to_vec_pretty(&serde_json::json!({"target":target,
                     "process_id":std::process::id(),"browser_count":self.browser.processing_selection(self.selected.as_deref()).len(),
-                    "active":self.selected,"request_revision":self.revision,"worker_busy":self.worker.busy(),
+                    "active":self.selected,"request_revision":self.last_request_id,"worker_busy":self.worker.busy(),
                     "progress_running":progress.map(|progress| progress.running()),"progress_fraction":progress.map(|progress| progress.fraction),
                     "photos":photos,"retained":memory.resources,
-                    "over_budget_bytes":memory.over_budget_bytes,"sweep_group_ms":smoke.multi_sweep_ms})).unwrap()).unwrap();
-            smoke.diagnostic_checked(self.frame.as_ref(), self.worker.busy());
+                    "over_target_bytes":memory.over_target_bytes,"sweep_group_ms":smoke.multi_sweep_ms})).unwrap()).unwrap();
+            smoke.diagnostic_checked(self.active_image(), self.worker.busy());
             smoke.index += 1;
             smoke.awaiting = false;
             smoke.settled_frames = 0;
@@ -230,9 +228,8 @@ impl App {
         }
         if target == "final" {
             return self
-                .frame
-                .as_ref()
-                .is_some_and(|frame| self.selected.as_ref() == Some(&frame.path));
+                .active_image()
+                .is_some_and(|frame| self.selected.as_ref() == Some(&frame.request.path));
         }
         let count = match target {
             "multi-replace" | "multi-switch-a" | "multi-switch-b" | "multi-remove"
@@ -245,21 +242,20 @@ impl App {
         }
         if target == "multi-before" {
             return self
-                .frame
-                .as_ref()
-                .is_some_and(|frame| frame.rendition == crate::editor::Rendition::Camera);
+                .active_image()
+                .is_some_and(|frame| frame.request.rendition == crate::editor::Rendition::Camera);
         }
         if count > 1 && !self.multi_edit.editable_ready() {
             return false;
         }
         self.edit_selection.paths().iter().all(|path| {
             let frame = self
-                .frame
-                .as_ref()
+                .active_image()
                 .filter(|frame| {
-                    frame.path == *path && frame.rendition == crate::editor::Rendition::Current
+                    frame.request.path == *path
+                        && frame.request.rendition == crate::editor::Rendition::Current
                 })
-                .or_else(|| self.multi_edit_frame(path));
+                .or_else(|| self.photo_layers(path)[0]);
             let expected = smoke
                 .multi_paths
                 .iter()
@@ -267,8 +263,11 @@ impl App {
                 .map(|index| &smoke.multi_expected[index]);
             frame.is_some_and(|frame| {
                 expected.is_none_or(|expected| {
-                    crate::rendering::matching::same_authored_edits(&frame.requested, expected)
-                }) && frame.processing_quality == self.preferences.processing_quality
+                    crate::rendering::matching::same_authored_edits(
+                        &frame.request.settings,
+                        expected,
+                    )
+                }) && frame.processing_quality() == self.preferences.processing_quality
                     && frame.artifact.settings.working_scale.divisor()
                         <= self
                             .preview_scale_for(path, self.preferences.processing_quality)
@@ -281,13 +280,12 @@ impl App {
         if target == "multi-eight" {
             for path in &smoke.multi_paths {
                 let frame = self
-                    .frame
-                    .as_ref()
-                    .filter(|frame| frame.path == *path)
-                    .or_else(|| self.multi_edit_frame(path))
+                    .active_image()
+                    .filter(|frame| frame.request.path == *path)
+                    .or_else(|| self.photo_layers(path)[0])
                     .unwrap();
                 assert_eq!(
-                    frame.processing_quality,
+                    frame.processing_quality(),
                     self.preferences.processing_quality
                 );
                 let bound = super::automatic_scale_bound(
@@ -345,10 +343,9 @@ impl App {
                     .upgrade()
                     .expect("unchanged overview texture was discarded");
                 let frame = self
-                    .frame
-                    .as_ref()
-                    .filter(|frame| frame.path == *path)
-                    .or_else(|| self.multi_edit_frame(path))
+                    .active_image()
+                    .filter(|frame| frame.request.path == *path)
+                    .or_else(|| self.photo_layers(path)[0])
                     .unwrap();
                 assert_eq!(
                     frame.artifact.settings.working_scale, smoke.multi_cached_scales[index],
@@ -361,8 +358,8 @@ impl App {
                     frame.diagnostic_task.id,
                     frame.diagnostic_task.revision,
                     frame.diagnostic_task.purpose,
-                    self.revision,
-                    frame.requested.working_scale,
+                    self.last_request_id,
+                    frame.request.settings.working_scale,
                 );
                 assert!(
                     std::sync::Arc::ptr_eq(&cached, &frame.texture),

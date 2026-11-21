@@ -1,7 +1,9 @@
 //! Reframes one immutable whole-image result without reopening sources or running photographic nodes.
 
 use super::Comparison;
-use crate::rendering::request::Request;
+use crate::rendering::request::RenderRequest;
+#[cfg(test)]
+use crate::rendering::request::RequestId;
 use crate::{
     editor::Rendition,
     export::resolve_camera_settings,
@@ -78,7 +80,7 @@ impl Snapshot {
     pub fn origin(&self) -> &SourceOrigin {
         &self.0.identity
     }
-    pub fn from_frame(frame: &super::Frame, request: &Request) -> Option<Self> {
+    pub fn from_frame(frame: &super::RenderResult, request: &RenderRequest) -> Option<Self> {
         if request.detail
             || request.comparison
             || frame.artifact.settings.preview_region.is_some()
@@ -90,14 +92,14 @@ impl Snapshot {
             return None;
         };
         Some(Self(Whole {
-            path: frame.path.clone(),
-            root: frame.output.clone(),
-            rendition: frame.rendition,
+            path: frame.request.path.clone(),
+            root: frame.request.output.clone(),
+            rendition: frame.request.rendition,
             comparison: false,
             calibration: request.calibration.clone(),
             policy: request.processing_quality,
             settings: frame.artifact.settings.clone(),
-            framing: frame.framing_preview,
+            framing: frame.request.framing_preview,
             identity: frame.origin.clone(),
             images: vec![Image {
                 name: frame.artifact.name,
@@ -108,7 +110,7 @@ impl Snapshot {
             display: Some(Display {
                 texture: frame.texture.clone(),
                 comparison: None,
-                framing: frame.framing_preview,
+                framing: frame.request.framing_preview,
             }),
         }))
     }
@@ -141,7 +143,11 @@ impl Presentation {
     }
     /// Pixel edits can be pending when composition changes. They still need a
     /// render, using the existing working grid rather than a new framing policy.
-    pub fn quality_for_view_change(&self, request: &Request, cache: &DecodeCache) -> Option<Scale> {
+    pub fn quality_for_view_change(
+        &self,
+        request: &RenderRequest,
+        cache: &DecodeCache,
+    ) -> Option<Scale> {
         if request.detail {
             return None;
         }
@@ -168,8 +174,7 @@ impl Presentation {
         {
             return None;
         }
-        (request.export.is_none()
-            && request.settings.preview_region.is_none()
+        (request.settings.preview_region.is_none()
             && request.settings.output_size.is_none()
             && whole.path == request.path
             && whole.root == request.output
@@ -183,12 +188,15 @@ impl Presentation {
                 || whole.settings.rotation != request.settings.rotation))
             .then_some(whole.images[0].image.settings().working_scale)
     }
-    pub fn prepare(&self, request: &Request, cache: &DecodeCache) -> Result<Option<Prepared>> {
+    pub fn prepare(
+        &self,
+        request: &RenderRequest,
+        cache: &DecodeCache,
+    ) -> Result<Option<Prepared>> {
         let Some(whole) = &self.whole else {
             return Ok(None);
         };
-        if request.export.is_some()
-            || request.settings.preview_region.is_some()
+        if request.settings.preview_region.is_some()
             || request.settings.output_size.is_some()
             || whole.path != request.path
             || whole.root != request.output
@@ -249,13 +257,12 @@ impl Presentation {
     /// regional Smart reply never replaces coverage with a partial buffer.
     pub fn retain(
         &mut self,
-        request: &Request,
+        request: &RenderRequest,
         settings: &Settings,
         artifacts: &[Artifact],
         origin: &SourceOrigin,
     ) -> bool {
         if request.detail
-            || request.export.is_some()
             || artifacts.is_empty()
             || artifacts.len() > 2
             || artifacts.iter().any(|artifact| {
@@ -314,7 +321,7 @@ impl Presentation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rendering::worker::{tests::TestWorker as Worker, Frame};
+    use crate::rendering::worker::{tests::TestWorker, RenderResult};
     use eframe::{egui, wgpu};
     use foveonic::{profile::Profile, render::Engine, source::Source};
     use std::sync::atomic::Ordering;
@@ -326,12 +333,10 @@ mod tests {
         policy: ProcessingQuality,
         settings: &Settings,
         framing: bool,
-    ) -> Request {
-        Request {
-            auxiliary_preview: false,
-
+    ) -> RenderRequest {
+        RenderRequest {
             path: path.to_owned(),
-            revision,
+            id: RequestId(revision),
             settings: Settings {
                 processing_quality: policy,
                 ..settings.clone()
@@ -344,18 +349,17 @@ mod tests {
             rendition: Default::default(),
             output: "final".into(),
             comparison: false,
-            export: None,
         }
     }
-    fn receive(worker: &Worker, revision: u64) -> Frame {
+    fn receive(worker: &TestWorker, revision: u64) -> RenderResult {
         loop {
             let reply = super::super::tests::receive(worker);
-            if reply.revision == revision {
-                return reply.result.unwrap().unwrap();
+            if reply.request.id == RequestId(revision) {
+                return reply.result.unwrap_rendered();
             }
         }
     }
-    fn dispatches(worker: &Worker, revision: u64) -> u64 {
+    fn dispatches(worker: &TestWorker, revision: u64) -> u64 {
         worker
             .checks
             .recipes
@@ -369,7 +373,7 @@ mod tests {
     #[test]
     #[ignore = "requires GPU and pinned Merrill FOVEONIC_FIXTURE_DIR original"]
     fn retained_snapshots_and_presentation_count_shared_frame_resources_once() {
-        use foveonic::render::ProcessingWorkingSet;
+        use foveonic::render::WorkingSet;
         use sha2::{Digest, Sha256};
 
         let manifest: serde_json::Value = serde_json::from_str(include_str!(
@@ -385,7 +389,7 @@ mod tests {
         );
         let engine = Engine::new().unwrap();
         let verifier = engine.executor();
-        let worker = Worker::new(engine, egui::Context::default());
+        let worker = TestWorker::new(engine, egui::Context::default());
         let request = request(
             &path,
             1,
@@ -395,12 +399,12 @@ mod tests {
             false,
         );
         worker.submit(request.clone());
-        let frame = receive(&worker, request.revision);
+        let frame = receive(&worker, request.id.0);
         let snapshot = Snapshot::from_frame(&frame, &request).unwrap();
         let mut presentation = Presentation::default();
         presentation.seed(&snapshot);
 
-        let working = ProcessingWorkingSet::new();
+        let working = WorkingSet::new();
         let resources = |inventory: &crate::memory::Inventory| {
             verifier.memory_resources(&working, inventory.reservation())
         };
@@ -467,10 +471,15 @@ mod tests {
         buffer.unmap();
         result
     }
-    fn matches_fresh(engine: &Engine, frame: &Frame, path: &std::path::Path, settings: &Settings) {
+    fn matches_fresh(
+        engine: &Engine,
+        frame: &RenderResult,
+        path: &std::path::Path,
+        settings: &Settings,
+    ) {
         let mut settings = settings.clone();
         settings.working_scale = frame.artifact.settings.working_scale;
-        settings.processing_quality = frame.processing_quality;
+        settings.processing_quality = frame.processing_quality();
         settings.preview_region = None;
         let fresh = engine
             .render(
@@ -479,7 +488,7 @@ mod tests {
                 &mut Profile::default(),
             )
             .unwrap();
-        let image = if frame.framing_preview {
+        let image = if frame.request.framing_preview {
             fresh.without_composition()
         } else {
             fresh
@@ -496,7 +505,7 @@ mod tests {
         let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
         let engine = Engine::new().unwrap();
         let verifier = engine.executor();
-        let worker = Worker::new(engine, egui::Context::default());
+        let worker = TestWorker::new(engine, egui::Context::default());
         let settings = Settings::new("Sunlight", "Standard");
         for (index, quality) in [
             Scale::new(8).unwrap(),
@@ -528,7 +537,7 @@ mod tests {
         let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
         let engine = Engine::new().unwrap();
         let verifier = engine.executor();
-        let worker = Worker::new(engine, egui::Context::default());
+        let worker = TestWorker::new(engine, egui::Context::default());
         let mut settings = Settings::new("Sunlight", "Standard");
         worker.submit(request(
             &path,
@@ -553,7 +562,7 @@ mod tests {
         detail.detail = true;
         worker.submit(detail);
         let frame = receive(&worker, 2);
-        assert!(frame.detail);
+        assert!(frame.request.detail);
         assert!(!frame.is_photographic());
         assert_eq!(frame.artifact.settings.working_scale, Scale::NATIVE);
         assert_eq!(frame.artifact.settings.preview_region, None);
@@ -568,7 +577,7 @@ mod tests {
             false,
         ));
         let main = receive(&worker, 3);
-        assert!(!main.detail);
+        assert!(!main.request.detail);
         assert_eq!(main.artifact.settings.working_scale, Scale::new(8).unwrap());
         matches_fresh(&verifier, &main, &path, &settings);
     }
@@ -580,7 +589,7 @@ mod tests {
         for policy in [ProcessingQuality::Speed, ProcessingQuality::Quality] {
             let engine = Engine::new().unwrap();
             let verifier = engine.executor();
-            let worker = Worker::new(engine, egui::Context::default());
+            let worker = TestWorker::new(engine, egui::Context::default());
             let mut settings = Settings::new("Sunlight", "Standard");
             settings.reconstruction = Some(Default::default());
             worker.submit(request(
@@ -670,7 +679,7 @@ mod tests {
     #[ignore = "requires GPU and MERRILL_X3F"]
     fn a_new_full_zoom_pass_while_framing_is_active_is_numerical() {
         let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
-        let worker = Worker::new(Engine::new().unwrap(), egui::Context::default());
+        let worker = TestWorker::new(Engine::new().unwrap(), egui::Context::default());
         let settings = Settings::new("Sunlight", "Standard");
         worker.submit(request(
             &path,
@@ -709,7 +718,7 @@ mod tests {
         ] {
             let engine = Engine::new().unwrap();
             let verifier = engine.executor();
-            let worker = Worker::new(engine, egui::Context::default());
+            let worker = TestWorker::new(engine, egui::Context::default());
             let mut settings = Settings::new("Sunlight", "Standard");
             settings.reconstruction = Some(Default::default());
             worker.submit(request(
@@ -795,7 +804,7 @@ mod tests {
         std::fs::copy(fixtures.join("blue-parking-sign.x3f"), &path).unwrap();
         let engine = Engine::new().unwrap();
         let verifier = engine.executor();
-        let worker = Worker::new(engine, egui::Context::default());
+        let worker = TestWorker::new(engine, egui::Context::default());
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.reconstruction = Some(Default::default());
         worker.submit(request(
@@ -847,7 +856,7 @@ mod completed_sampling_tests {
     use super::*;
     use crate::rendering::{
         coordinator::{RenderCoordinator, Target},
-        worker::{tests::TestWorker, Frame},
+        worker::{tests::TestWorker, RenderResult},
     };
     use std::time::Instant;
 
@@ -859,14 +868,12 @@ mod completed_sampling_tests {
             foveonic::render::Engine::new().unwrap(),
             eframe::egui::Context::default(),
         );
-        let first = Request {
-            auxiliary_preview: false,
-
+        let first = RenderRequest {
             detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Rendition::Current,
-            revision: 1,
+            id: RequestId(1),
             path: path.clone(),
             settings: Settings {
                 processing_quality: ProcessingQuality::Speed,
@@ -876,34 +883,33 @@ mod completed_sampling_tests {
             processing_quality: ProcessingQuality::Speed,
             output: "final".into(),
             comparison: false,
-            export: None,
         };
         worker.submit(first.clone());
-        let frame: Frame = super::super::tests::receive(&worker)
+        let frame: RenderResult = super::super::tests::receive(&worker)
             .result
-            .unwrap()
-            .unwrap();
-        let seeded = |next: Request, origin: SourceOrigin| {
+            .unwrap_rendered();
+        let seeded = |next: RenderRequest, origin: SourceOrigin| {
             let mut coordinator = RenderCoordinator::default();
             let target = Target::of(&first);
             coordinator.desire(
                 Arc::new(first.clone()),
                 Some(frame.origin.clone()),
                 Instant::now(),
+                false,
             );
             let original = coordinator.desired(&target).unwrap().stamp.clone();
             coordinator.finish(&original);
             assert!(coordinator.admit(&original, &frame.origin));
             coordinator.note_pixels(&original, &frame);
             let target = Target::of(&next);
-            coordinator.desire(Arc::new(next), Some(origin), Instant::now());
+            coordinator.desire(Arc::new(next), Some(origin), Instant::now(), false);
             let task = coordinator.desired(&target).unwrap().clone();
             assert_ne!(task.stamp.id, original.id);
             (coordinator, task)
         };
         let cache = DecodeCache::new();
         let mut coarser = first.clone();
-        coarser.revision = 2;
+        coarser.id = RequestId(2);
         coarser.preview_scale = Scale::new(8).unwrap();
         let (_, task) = seeded(coarser.clone(), frame.origin.clone());
         let mut presenter = Presentation::default();
@@ -939,10 +945,15 @@ mod completed_sampling_tests {
         let (mut coordinator, task) = seeded(coarser.clone(), replaced.clone());
         assert!(task.seed.is_none());
         let mut finer_replacement = coarser.clone();
-        finer_replacement.revision = 3;
+        finer_replacement.id = RequestId(3);
         finer_replacement.preview_scale = Scale::new(2).unwrap();
         let target = Target::of(&finer_replacement);
-        coordinator.desire(Arc::new(finer_replacement), Some(replaced), Instant::now());
+        coordinator.desire(
+            Arc::new(finer_replacement),
+            Some(replaced),
+            Instant::now(),
+            false,
+        );
         assert!(
             coordinator.desired(&target).unwrap().seed.is_none(),
             "a pending replacement must not revive an earlier source's snapshot"
@@ -951,8 +962,7 @@ mod completed_sampling_tests {
         worker.submit(coarser);
         let retained = super::super::tests::receive(&worker)
             .result
-            .unwrap()
-            .unwrap();
+            .unwrap_rendered();
         assert_eq!(
             retained.artifact.settings.working_scale,
             Scale::new(4).unwrap()

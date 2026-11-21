@@ -9,7 +9,7 @@ use crate::{
     interactive::Execution,
     nodes::sensor::calibration,
     profile::Profile,
-    render::{Engine, MerrillNoiseMethod, RenderSession, Rendering, Scale, Settings},
+    render::{Engine, MerrillNoiseMethod, NativePhoto, Rendering, Scale, Settings},
     source::Source,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -34,9 +34,9 @@ fn settings() -> Settings {
     }
 }
 
-fn cached(engine: &Engine, session: &mut RenderSession, settings: &Settings) -> RenderedImage {
+fn cached(engine: &Engine, session: &mut NativePhoto, settings: &Settings) -> RenderedImage {
     let mut artifacts = engine
-        .render_session(
+        .render_native_photo(
             session,
             settings,
             &["final"],
@@ -89,7 +89,7 @@ fn assert_same(label: &str, actual: &[u8], expected: &[u8]) {
 fn multiscale_cached_switches_and_inactive_bypasses_match_fresh() {
     let source = fixture();
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let mut settings = settings();
     settings.output_size = Some([240, 160]);
     let retained = cached(&engine, &mut session, &settings);
@@ -529,7 +529,7 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     settings.rendering = Rendering::Color;
     settings.working_scale = Scale::NATIVE;
     settings.output_size = Some([240, 160]);
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let retained = cached(&engine, &mut session, &settings);
     let retained_bytes = engine.readback_image(&retained).unwrap();
     for (axis, strength, size) in [(0, 1., 63), (1, 0.5, 79), (0, 0., 63)] {
@@ -559,7 +559,7 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     settings.merrill_banding.rows.bands[1].strength = 0.7;
     let mut profile = Profile::new(crate::profile::Mode::Wall);
     engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap();
     assert!(profile
@@ -585,7 +585,7 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     settings.merrill_banding.rows.bands[0].strength = 0.7;
     let mut profile = Profile::new(crate::profile::Mode::Wall);
     let edited = engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap();
     assert!(profile
@@ -611,7 +611,7 @@ fn directional_banding_controls_share_native_exports_and_cached_results() {
     settings.merrill_banding.rows.bands[0].size = 25;
     let mut profile = Profile::new(crate::profile::Mode::Wall);
     let edited = engine
-        .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap();
     assert!(profile
@@ -743,7 +743,7 @@ fn monochrome_regional_views_match_whole_frame() {
                 .unwrap();
             let expected_bytes = engine.readback_image(&full).unwrap();
             let expected: &[f32] = bytemuck::cast_slice(&expected_bytes);
-            let mut session = RenderSession::new(source.clone());
+            let mut session = NativePhoto::new(source.clone());
             let [w, h] = full.view().extent;
             for rect in [
                 [0, 0, 200, 220],
@@ -807,7 +807,7 @@ fn monochrome_regional_views_match_whole_frame() {
 fn speckle_method_threshold_and_size_cached_results_match_fresh() {
     let engine = Engine::test_executor();
     let source = fixture();
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let mut selected = settings();
     let original = pixels(&engine, &source, &selected);
     for (method, threshold, size) in [
@@ -840,7 +840,7 @@ fn speckle_method_threshold_and_size_cached_results_match_fresh() {
 fn neutralize_shadows_cached_switches_and_neutral_bypass_match_fresh() {
     let engine = Engine::test_executor();
     let source = fixture();
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let mut selected = settings();
     let baseline = pixels(&engine, &source, &selected);
     selected.neutralize_shadows.strength = 0.8;
@@ -876,7 +876,7 @@ fn neutralize_shadows_cached_switches_and_neutral_bypass_match_fresh() {
     selected.neutralize_shadows.color_tolerance = 0.4;
     let mut profile = Profile::new(crate::profile::Mode::Wall);
     engine
-        .render_session(&mut session, &selected, &["final"], || false, &mut profile)
+        .render_native_photo(&mut session, &selected, &["final"], || false, &mut profile)
         .unwrap()
         .unwrap();
     assert!(profile

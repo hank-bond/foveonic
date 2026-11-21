@@ -1,14 +1,15 @@
-//! Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering.
+//! Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering; import-history matching never waits for rendering.
 
 use crate::export::{self, Export, ExportFormat};
 use eframe::egui;
 use foveonic::diagnostics as trace;
+use foveonic::priority::Priority;
 use foveonic::support::{self, Level, OperationContext};
 use foveonic::{
     decode_cache::Cache,
     importing::{self, ConflictPolicy, Disposition, History, Identity, Record},
     profile::Profile,
-    render::{Engine, RenderSession, Settings},
+    render::{Engine, NativePhoto, Settings},
     source::Result,
 };
 use std::{
@@ -41,13 +42,29 @@ pub struct Scan {
     pub destination: Option<PathBuf>,
     pub files: Vec<PathBuf>,
 }
-pub struct Scanned {
+/// Import history for a scan, published before its settings so handled files hide at once.
+pub struct Recorded {
     pub generation: u64,
-    pub sources: HashMap<PathBuf, SourceInfo>,
-    // This worker serializes scans with imports. Earlier completions are already in history.
+    // Counted before reading history, and imports save history before counting,
+    // so these completions are already in it.
     pub completed_imports: usize,
     pub dispositions: HashMap<PathBuf, Disposition>,
     pub errors: Vec<String>,
+}
+pub struct Scanned {
+    pub generation: u64,
+    pub sources: HashMap<PathBuf, SourceInfo>,
+    pub errors: Vec<String>,
+}
+struct Lookup {
+    generation: u64,
+    destination: PathBuf,
+    files: Vec<PathBuf>,
+}
+#[derive(Default)]
+struct Lookups {
+    next: Option<Lookup>,
+    stop: bool,
 }
 pub struct Batch {
     pub calibration: Option<Arc<foveonic::noise_calibration::Calibration>>,
@@ -108,6 +125,8 @@ struct Pending {
 pub struct Worker {
     pending: Arc<(Mutex<Pending>, Condvar)>,
     progress: Arc<Mutex<Progress>>,
+    lookups: Arc<(Mutex<Lookups>, Condvar)>,
+    recorded: Arc<Mutex<Option<Recorded>>>,
     scans: Arc<Mutex<Option<Scanned>>>,
     directory: Arc<Mutex<Option<(PathBuf, bool)>>>,
 }
@@ -119,6 +138,15 @@ impl Worker {
         let status = progress.clone();
         let scans = Arc::new(Mutex::new(None));
         let scanned = scans.clone();
+        let lookups = Arc::new((Mutex::new(Lookups::default()), Condvar::new()));
+        let recorded = Arc::new(Mutex::new(None));
+        start_history_lookups(
+            lookups.clone(),
+            recorded.clone(),
+            progress.clone(),
+            cache.clone(),
+            context.clone(),
+        );
         let directory = Arc::new(Mutex::new(None));
         let checked_directory = directory.clone();
         let mut engine = engine;
@@ -216,27 +244,34 @@ impl Worker {
                     *checked_directory.lock().unwrap() = Some((path, available));
                 }
                 if let Some(scan) = scan {
-                    let completed = status.lock().unwrap().imported.len();
                     let result = cache.background(|| {
-                        scan_files(scan, completed, &cache, || cache.background(|| ()))
+                        read_settings(&scan, &cache, || {
+                            cache.background(|| ());
+                            slot.0.lock().unwrap().scan.is_some()
+                        })
                     });
                     // A stale scan can be discarded. Batch completion never waits for UI receipt.
-                    *scanned.lock().unwrap() = Some(result);
+                    if result.is_some() {
+                        *scanned.lock().unwrap() = result;
+                    }
                 }
                 if let Some(batch) = batch {
                     engine.set_noise_calibration(batch.calibration.clone());
-                    cache.processing(|| {
+                    let _demand = cache.priority().demand(Priority::Export);
+                    cache.priority().run(Priority::Export, || {
                         run_batch(&engine, &cache, batch, &status, &context, || {
                             let (stop, scan) = {
                                 let mut state = slot.0.lock().unwrap();
                                 (state.stop, state.scan.take())
                             };
                             if let Some(scan) = scan {
-                                let completed = status.lock().unwrap().imported.len();
-                                *scanned.lock().unwrap() =
-                                    Some(scan_files(scan, completed, &cache, || {
-                                        cache.processing(|| ())
-                                    }));
+                                let result = read_settings(&scan, &cache, || {
+                                    cache.priority().run(Priority::Export, || ());
+                                    slot.0.lock().unwrap().scan.is_some()
+                                });
+                                if result.is_some() {
+                                    *scanned.lock().unwrap() = result;
+                                }
                                 context.request_repaint();
                             }
                             stop
@@ -265,13 +300,26 @@ impl Worker {
         Self {
             pending,
             progress,
+            lookups,
+            recorded,
             scans,
             directory,
         }
     }
     pub fn scan(&self, scan: Scan) {
+        if let Some(destination) = &scan.destination {
+            self.lookups.0.lock().unwrap().next = Some(Lookup {
+                generation: scan.generation,
+                destination: destination.clone(),
+                files: scan.files.clone(),
+            });
+            self.lookups.1.notify_one();
+        }
         self.pending.0.lock().unwrap().scan = Some(scan);
         self.pending.1.notify_one();
+    }
+    pub fn receive_history(&self) -> Option<Recorded> {
+        self.recorded.lock().unwrap().take()
     }
     pub fn receive_scan(&self) -> Option<Scanned> {
         self.scans.lock().unwrap().take()
@@ -313,15 +361,106 @@ impl Drop for Worker {
         state.batch = None;
         state.directory = None;
         self.pending.1.notify_one();
+        self.lookups.0.lock().unwrap().stop = true;
+        self.lookups.1.notify_one();
     }
 }
 
-fn scan_files(
-    scan: Scan,
-    completed_imports: usize,
-    cache: &Cache,
-    checkpoint: impl Fn(),
-) -> Scanned {
+/// History matching gets its own thread so it never queues behind a settings pass
+/// paused by rendering.
+fn start_history_lookups(
+    lookups: Arc<(Mutex<Lookups>, Condvar)>,
+    recorded: Arc<Mutex<Option<Recorded>>>,
+    progress: Arc<Mutex<Progress>>,
+    cache: Arc<Cache>,
+    context: egui::Context,
+) {
+    std::thread::Builder::new()
+        .name("import-history".into())
+        .spawn(move || loop {
+            let lookup = {
+                let mut state = lookups.0.lock().unwrap();
+                while !state.stop && state.next.is_none() {
+                    state = lookups.1.wait(state).unwrap();
+                }
+                if state.stop {
+                    break;
+                }
+                state.next.take().unwrap()
+            };
+            let completed = progress.lock().unwrap().imported.len();
+            *recorded.lock().unwrap() = Some(read_history(&lookup, completed, &cache));
+            context.request_repaint();
+        })
+        .expect("start import history thread");
+}
+
+/// Matching uses filesystem metadata only, so it never waits for rendering.
+fn read_history(lookup: &Lookup, completed_imports: usize, cache: &Cache) -> Recorded {
+    let _context = trace::enabled().then(|| {
+        trace::enter(trace::Context {
+            task: 0,
+            revision: lookup.generation,
+            photo: 0,
+            purpose: "import_scan",
+            node: None,
+        })
+    });
+    let _scan = trace::scope_with(trace::Category::Io, "batch.scan_history", |fields| {
+        fields
+            .u64("generation", lookup.generation)
+            .u64("files", lookup.files.len() as u64)
+            .str("destination", &lookup.destination.to_string_lossy());
+    });
+    let mut recorded = Recorded {
+        generation: lookup.generation,
+        completed_imports,
+        dispositions: HashMap::new(),
+        errors: Vec::new(),
+    };
+    let history = match History::load(&lookup.destination) {
+        Ok(history) => history,
+        Err(error) => {
+            support::report_error(
+                "import.scan_history",
+                error.as_ref(),
+                OperationContext {
+                    component: Some("import-scan".into()),
+                    phase: Some("load-history".into()),
+                    destination: Some(
+                        History::path(&lookup.destination)
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                    revision: Some(lookup.generation.to_string()),
+                    ..Default::default()
+                },
+            );
+            recorded.errors.push(error.to_string());
+            return recorded;
+        }
+    };
+    for path in &lookup.files {
+        // The settings pass reports unreadable files.
+        let Ok(identity) = cache
+            .import_identity(path)
+            .map(Ok)
+            .unwrap_or_else(|| Identity::read(path))
+        else {
+            continue;
+        };
+        if let Some(disposition) = history.disposition(&lookup.destination, &identity) {
+            recorded
+                .dispositions
+                .insert(path.clone(), disposition.clone());
+        }
+    }
+    recorded
+}
+
+/// Settings read the card and may decode, so this pass yields at each photo and
+/// returns `None` once a newer scan is waiting.
+fn read_settings(scan: &Scan, cache: &Cache, superseded: impl Fn() -> bool) -> Option<Scanned> {
     let _context = trace::enabled().then(|| {
         trace::enter(trace::Context {
             task: 0,
@@ -335,45 +474,14 @@ fn scan_files(
         fields
             .u64("generation", scan.generation)
             .u64("files", scan.files.len() as u64);
-        if let Some(path) = &scan.destination {
-            fields.str("destination", &path.to_string_lossy());
-        }
     });
     let mut result = Scanned {
         generation: scan.generation,
         sources: HashMap::new(),
-        completed_imports,
-        dispositions: HashMap::new(),
         errors: Vec::new(),
     };
-    let history = scan
-        .destination
-        .as_ref()
-        .map(|destination| History::load(destination))
-        .transpose();
-    let history = match history {
-        Ok(history) => history,
-        Err(error) => {
-            support::report_error(
-                "import.scan_history",
-                error.as_ref(),
-                OperationContext {
-                    component: Some("import-scan".into()),
-                    phase: Some("load-history".into()),
-                    destination: scan
-                        .destination
-                        .as_ref()
-                        .map(|p| History::path(p).to_string_lossy().into_owned()),
-                    revision: Some(scan.generation.to_string()),
-                    ..Default::default()
-                },
-            );
-            result.errors.push(error.to_string());
-            return result;
-        }
-    };
     let mut ratings = HashMap::new();
-    for path in scan.files {
+    for path in scan.files.iter().cloned() {
         let _context = trace::enabled().then(|| {
             trace::enter(crate::timing::context_for(
                 0,
@@ -385,7 +493,9 @@ fn scan_files(
         let _photo = trace::scope_with(trace::Category::Cpu, "batch.scan_photo", |fields| {
             fields.str("source", &path.to_string_lossy());
         });
-        checkpoint();
+        if superseded() {
+            return None;
+        }
         let identity = match cache
             .import_identity(&path)
             .map(Ok)
@@ -403,13 +513,6 @@ fn scan_files(
                 continue;
             }
         };
-        if let Some((destination, history)) = scan.destination.as_ref().zip(history.as_ref()) {
-            if let Some(disposition) = history.disposition(destination, &identity) {
-                result
-                    .dispositions
-                    .insert(path.clone(), disposition.clone());
-            }
-        }
         let settings = (|| -> Result<Settings> {
             if let Some(selection) = cache.selection(&path) {
                 selection
@@ -468,7 +571,7 @@ fn scan_files(
             },
         );
     }
-    result
+    Some(result)
 }
 
 fn apply_decisions(history: &mut History, destination: &std::path::Path, decisions: Vec<Decision>) {
@@ -671,7 +774,7 @@ fn export_photo(
             None => Arc::new(foveonic::source::Source::open(&photo.path)?),
         };
         source_loaded(&photo.path, &source, None);
-        let mut session = RenderSession::new(source);
+        let mut session = NativePhoto::new(source);
         for &format in &output.formats {
             phase = "choose-output-path";
             let path =
@@ -801,7 +904,7 @@ fn import_photo(
                 None => Arc::new(foveonic::source::Source::open(&original)?),
             };
             source_loaded(&photo.path, &source, Some(&original));
-            let mut session = RenderSession::new(source);
+            let mut session = NativePhoto::new(source);
             for (&format, path) in formats.iter().zip(rendered) {
                 phase = "write-output";
                 write_export(
@@ -930,7 +1033,7 @@ fn source_loaded(
 
 fn write_export(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     photo: &Photo,
     output: &Export,
 ) -> Result<()> {

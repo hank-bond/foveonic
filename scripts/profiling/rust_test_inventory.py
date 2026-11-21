@@ -238,7 +238,7 @@ def command_plan(document, discovered, fixtures, environ=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compiler-json', type=Path, required=True,
-                        help='stdout from cargo test --workspace --features foveonic-gui/wide-experiment --no-run --message-format=json; never builds here')
+                        help='stdout from cargo test --workspace --no-run --message-format=json; never builds here')
     parser.add_argument('--manifest', type=Path, default=MANIFEST)
     parser.add_argument('--fixture-dir', type=Path, required=True, help='disposable full-copy directory with the declared original set')
     parser.add_argument('--merrill-fixture-dir', type=Path, required=True, help='disposable Merrill-HI-only fixture directory')

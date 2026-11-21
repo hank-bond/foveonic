@@ -103,7 +103,7 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
     use crate::{
         inspection::Content,
         profile::Profile,
-        render::{ControlCapabilities, Engine, RenderSession, Rendering},
+        render::{ControlCapabilities, Engine, NativePhoto, Rendering},
         source::{ProcessingFamily, Source},
     };
     let directory = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
@@ -131,7 +131,7 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
         settings.color_mode = capabilities.default_color_mode(&source.metadata).unwrap();
         settings.reconstruction = Some(Default::default());
         let requested = settings.reconstruction;
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         for divisor in [2, 4, 8, 16] {
             let scale = Scale::new(divisor).unwrap();
             settings.working_scale = scale;
@@ -199,7 +199,7 @@ fn classic_small_preview_originals_keep_controls_and_match_fresh_sessions() {
                 settings.exposure = if edit == 1 { 0.25 } else { 0. };
                 settings.reconstruction = if edit == 2 { None } else { requested };
                 let cached = engine
-                    .render_session(
+                    .render_native_photo(
                         &mut session,
                         &settings,
                         &["final"],

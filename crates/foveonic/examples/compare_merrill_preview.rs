@@ -4,7 +4,7 @@ use foveonic::{
     image::RenderedImage,
     inspection::Content,
     profile::{Mode, Profile},
-    render::{Engine, RenderSession, Scale, Settings, TiffColorSpace},
+    render::{Engine, NativePhoto, Scale, Settings, TiffColorSpace},
     source::{Result, Source},
 };
 use image::ImageEncoder;
@@ -51,11 +51,11 @@ fn complete(
 
 fn session_image(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
 ) -> Result<RenderedImage> {
     let artifact = engine
-        .render_session(
+        .render_native_photo(
             session,
             settings,
             &["final"],
@@ -131,7 +131,7 @@ fn main() -> Result<()> {
         }
         let mut sessions = Vec::new();
         for variant in ["reduced", "skip-speckle"] {
-            let mut session = RenderSession::new(source.clone());
+            let mut session = NativePhoto::new(source.clone());
             let mut selected = settings(variant);
             let (_, first) = complete(&engine, || session_image(&engine, &mut session, &selected))?;
             selected.exposure = 0.5;

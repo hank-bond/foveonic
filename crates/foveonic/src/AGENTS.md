@@ -27,7 +27,6 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 
 ### Source files
 
-- **[background.rs](./background.rs)** Prioritizes viewport, navigator/scopes and thumbnails over batches and interruptible idle work.
 - **[capture_metadata.rs](./capture_metadata.rs)** Translates source capture details into shared EXIF directories for all exports.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 - **[crop.rs](./crop.rs)** Composes saved oriented crop coordinates with camera framing and final output sizing.
@@ -49,6 +48,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 - **[preview.rs](./preview.rs)** Decodes embedded bitmap and JPEG previews while retaining their declared colors at RGB16 precision.
 - **[preview_color.rs](./preview_color.rs)** Preserves embedded display colors from camera metadata and JPEG profiles in declared RGB16 spaces.
 - **[preview_pixels.rs](./preview_pixels.rs)** Resizes bounded preview samples in linear light while retaining their declared RGB primaries.
+- **[priority.rs](./priority.rs)** Orders all work in one set of tiers and lets lower tiers yield to higher-tier demand across threads.
 - **[profile.rs](./profile.rs)** Collects render timings, activity counts and replayable diagnostic settings.
 - **[recipe.rs](./recipe.rs)** Keeps compact parameter fingerprints with shared immutable payloads and exact collision checks.
 - **[render.rs](./render.rs)** Shares GPU engine entry points for photographic rendering, inspection, display, and export.

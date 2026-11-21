@@ -41,28 +41,18 @@ Native sectional results **should** match samples from the same region of a Whol
 
 Execution may begin with straightforward dependency-order scheduling. Add caching and scheduling machinery when concrete responsiveness needs justify it.
 
-### Resumable serial execution
+### Resumable execution
 
-Graph execution may own traversal state between operations while borrowing the prepared graph, immutable input context, execution cache and profile for each advancement. The ordinary render APIs must drive that same dispatcher to completion at width one. This extraction must preserve output samples and geometry, dependency selection, retained-input validity, cancellation checks, completion waits, progress, scratch retirement and diagnostics. It must not enable concurrent photographs or change application scheduling by itself.
+A job steps through its graph. Traversal owns its state between steps while borrowing the prepared graph, immutable input context, working photo and profile for each step. Every render uses this one execution path, whether it runs alone or with other jobs in a tick. Execution must preserve output samples and geometry, dependency selection, retained-input validity, cancellation checks, progress, scratch retirement and diagnostics at every width.
 
-An execution error is terminal. Successful cache commit and unconditional session finalization retain their existing caller-owned boundaries. Pausing between operations must not commit an incomplete recipe. Diagnostic context and background completion guards must remain scoped to the advancement performing the work.
+An execution error is terminal. A successful job stores its results in its working photo when it finishes. Pausing between steps must not store an incomplete recipe. Diagnostic context and priority checks must remain scoped to the step performing the work.
 
-### Execution session protection
+### Working photo guards
 
-An execution using a retained processing session must protect that exact session until its submitted work and cache finalization have completed. Foreground recency and execution protection are separate. Several different photographs may be protected without changing the foreground selection. Within a working set, only one execution may mutate either representation of the same photo identity at a time.
+A job must hold a guard on its working photo until its submitted work has retired and its results are stored. Several photographs may be guarded at once. Only one job may use either resolution of the same photo at a time. The working set must not trim or drop a guarded entry, and shared preparation trimming must keep a guarded entry's metadata and source identity. A guard is not a memory reservation or a GPU wait.
 
-Automatic maintenance must not park, trim or evict an executing session, and shared preparation trimming must protect its metadata and source origin. Existing accounting must continue counting the retained resources once. A protection claim is not a second reservation or a completion fence. Within-operation temporary admission remains a separate concern.
+Removal, replacement and explicit clearing must wait for or reject guarded entries before changing them. The job must retire submitted work before releasing its guard.
 
-Removal, replacement and explicit clearing must reject live executions before changing retained owners or verified source mappings. Compound changes must leave existing owners intact when rejected. After execution retirement, deferred parking and ordinary maintenance may proceed. The execution owner must drain submitted work before releasing protection or clearing its sessions.
+### Scheduling
 
-### Private execution driver
-
-The driver owns prepared native/reduced jobs, resumable traversal, immutable request context, profiling and execution settlement. Sessions remain in the shared working set and are borrowed only during preparation, advancement and finalization. The application coordinator retains authority over wanted work, source identity, replacement and request settlement. The worker chooses admitted work and priority without duplicating the numerical graph. Fresh and borrowed inputs use synchronous adapters to the same numerical lifecycle.
-
-Width one must use the shared lifecycle and preserve its explicit completion policy. Successful jobs commit independently; every terminal outcome finalizes its cache and releases protection after submitted work retires. Early rejection without submitted work must not introduce a queue wait. Diagnostic context must be applied per advancement.
-
-Live graph values, job CPU containers and scratch must join the existing deduplicated memory inventory. Resolved operation forecasts may reserve conservative GPU headroom for additional admission. Temporary CPU allocations and driver overhead remain outside a complete peak bound. Unknown estimates must deny additional admission. One mandatory render may exceed the existing soft target, with that known overage reported explicitly.
-
-### Wide execution
-
-The GUI enables the shared wide driver by default for eligible warm Merrill reduced and native-region work. Several independently claimed photographs may advance through one bounded GPU submission window. The application runtime owns automatic concurrency, priority and memory admission under [render orchestration](./render-orchestration.md). Ordinary synchronous render APIs retain width-one execution. Completed progress and image publication must follow the shared completion fence. Failure or cancellation must drain submitted work before releasing session protection, while successful peers settle independently through existing application result handling. Admission estimates and external process-footprint guards remain coarse safeguards rather than a hard process-memory bound.
+The [Scheduler](./render-scheduling.md) owns admission, priority, ticks and the working set. Fresh and retained inputs, exports and the CLI use the same execution path.

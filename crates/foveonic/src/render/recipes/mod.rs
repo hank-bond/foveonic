@@ -304,7 +304,7 @@ fn build_photographic(
 }
 
 /// Select only declared sensor inputs reachable in this exact photographic graph.
-pub(super) fn sealing_inputs(
+pub(super) fn sensor_data_graph(
     engine: &Engine,
     source: RecipeInput<'_>,
     settings: &Settings,
@@ -336,7 +336,7 @@ pub(super) fn sealing_inputs(
         }
     }
     let required = built.graph.required(&roots)?;
-    built.graph.sealed_outputs.retain(|id| required[*id]);
+    built.graph.sensor_data_outputs.retain(|id| required[*id]);
     Ok(built.graph)
 }
 

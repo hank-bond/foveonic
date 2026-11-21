@@ -34,7 +34,7 @@ pub(crate) fn resolve(policy: ProcessingQuality, pixels_per_native_pixel: Option
 }
 
 /// Drawn bounds exclude letterboxing and captions and include zoom.
-pub(crate) fn display_density(size: [f32; 2], extent: [u32; 2], pixels_per_point: f32) -> f32 {
+fn display_density(size: [f32; 2], extent: [u32; 2], pixels_per_point: f32) -> f32 {
     (size[0] / extent[0].max(1) as f32).max(size[1] / extent[1].max(1) as f32) * pixels_per_point
 }
 
@@ -58,40 +58,34 @@ pub(crate) fn view_density(
 }
 
 impl App {
+    /// Record the scales a photo's tile resolves, after it is drawn or its
+    /// transform changes.
     pub(crate) fn observe_photo_view_density(&mut self, path: &Path, pixels_per_point: f32) {
         let view = self.viewports.view(Some(path));
+        if let Some(density) = view.fit_density(pixels_per_point) {
+            self.fit_densities.insert(path.to_owned(), density);
+        }
         let frame = if self.selected.as_deref() == Some(path) {
             if self.output != "final"
                 || self.comparison.requested()
                 || self
-                    .frame
-                    .as_ref()
-                    .is_some_and(|frame| frame.output != "final")
+                    .active_image()
+                    .is_some_and(|frame| frame.request.output != "final")
                 || (self.framing_preview_active() && !view.explicit_zoom_pending())
             {
                 return;
             }
-            self.frame.as_ref()
+            self.active_image()
         } else {
-            self.rendition_frame(path, self.photo_rendition(path))
-                .or_else(|| self.current_photo_frame(path))
+            self.photo_layers(path)[0]
         };
         if let Some(density) = view_density(
             view,
             frame.map(|frame| frame.native_display_extent()),
             pixels_per_point,
         ) {
-            self.observe_preview_density(path, density);
+            self.preview_densities.insert(path.to_owned(), density);
         }
-    }
-
-    pub(crate) fn current_processing_quality(&self) -> ProcessingQuality {
-        for_view(
-            self.preferences.processing_quality,
-            Rendition::Current,
-            &self.output,
-            self.comparison.requested(),
-        )
     }
 
     pub(crate) fn preview_scale_for(&self, path: &Path, policy: ProcessingQuality) -> Scale {
@@ -102,15 +96,9 @@ impl App {
             .unwrap_or_else(|| resolve(policy, None))
     }
 
-    /// Only a change of resolved grid creates new photographic demand.
-    pub(crate) fn observe_preview_density(&mut self, path: &Path, density: f32) {
-        let scale = resolve(self.preferences.processing_quality, Some(density));
-        self.preview_densities.insert(path.to_owned(), density);
-        let previous = self
-            .preview_scales
-            .insert(path.to_owned(), scale)
-            .unwrap_or_else(|| resolve(self.preferences.processing_quality, None));
-        self.preview_demand_changed |= self.selected.as_deref() == Some(path) && previous != scale;
+    /// The scale this photo's tile resolves when not zoomed.
+    pub(crate) fn fit_scale_for(&self, path: &Path, policy: ProcessingQuality) -> Scale {
+        resolve(policy, self.fit_densities.get(path).copied())
     }
 }
 

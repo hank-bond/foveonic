@@ -5,7 +5,7 @@ use crate::{
     inspection::Content,
     nodes::sensor::calibration,
     profile::{Mode, Profile},
-    render::{Engine, RenderSession, Scale, Settings},
+    render::{Engine, NativePhoto, Scale, Settings},
     source::Source,
 };
 use std::sync::Arc;
@@ -46,12 +46,12 @@ fn regional_tonal_support_preserves_the_gain_grid_at_each_rotation() {
 
 fn session_image(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     profile: &mut Profile,
 ) -> RenderedImage {
     let mut artifacts = engine
-        .render_session(session, settings, &["final"], || false, profile)
+        .render_native_photo(session, settings, &["final"], || false, profile)
         .unwrap()
         .unwrap();
     let Content::Image(image) = artifacts.remove(0).content else {
@@ -69,7 +69,7 @@ fn gpu_tonal_ranges_match_cached_reduced_and_regional_rendering() {
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.photographic.tone_method = crate::render::PhotographicMethod::Universal;
     settings.reconstruction = Some(Default::default());
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let baseline = session_image(&engine, &mut session, &settings, &mut Profile::default());
     let baseline_bytes = engine.readback_image(&baseline).unwrap();
     let neutral = engine

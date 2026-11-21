@@ -1,6 +1,7 @@
 //! Checks disabled GUI probes and capture device capabilities without creating a GPU.
 
 use super::*;
+use crate::rendering::request::RequestId;
 
 #[test]
 fn painter_pass_identity_matches_the_last_completed_ui_pass() {
@@ -64,8 +65,9 @@ fn task_context_reuses_coordinator_identity_without_owning_photo_data() {
         target: crate::rendering::coordinator::Target {
             path: "photo.x3f".into(),
             purpose: crate::rendering::request::Purpose::Current,
+            patch: false,
         },
-        revision: 42,
+        request_id: RequestId(42),
     };
     let context = context(&stamp);
     assert_eq!(context.task, 7);

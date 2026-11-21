@@ -1,19 +1,20 @@
 //! Owns render coordination on a dedicated thread and publishes bounded UI updates.
 
 use super::{
-    coordinator::{RenderCoordinator, TaskId, TaskPriority, WorkPlan},
-    delivery::ViewState,
-    request::{Refinement, Request},
+    coordinator::{Photos, RenderCoordinator, TaskId, WorkPlan},
+    request::RenderRequest,
+    view_plan::Planned,
     worker::{
-        self, ColorPickRequest, MemoryBudget, Pending, PreparationConfig, ScopeRequest, Update,
+        self, ColorPickRequest, MemoryTarget, Pending, PreparationConfig, ScopeRequest, Update,
     },
 };
+use crate::rendering::request::RequestId;
 use crossbeam_channel::{Receiver, Select, Sender};
 use eframe::egui;
+use foveonic::priority::Priority;
 use foveonic::{decode_cache::Cache, source::SourceOrigin};
 use std::{
     cell::{Cell, RefCell},
-    path::PathBuf,
     sync::{Arc, Condvar, Mutex},
     time::Instant,
 };
@@ -21,22 +22,13 @@ use std::{
 type Slot = Arc<(Mutex<Pending>, Condvar)>;
 
 enum Command {
-    View(Arc<ViewState>),
-    Activate(PathBuf),
-    RetireBefore(PathBuf),
-    RetireDetail(PathBuf),
     Clear(bool),
-    Submit(Box<Request>, Instant),
-    Refine(Box<Refinement>, Option<SourceOrigin>, Instant),
-    CancelRefinement(PathBuf, crate::editor::Rendition),
-    Overviews(Vec<Request>, Vec<PathBuf>, Vec<PathBuf>, Instant),
-    Retain(Vec<PathBuf>, Vec<PathBuf>),
+    Plan(Photos, Vec<Planned>, Instant),
     Scopes(Box<ScopeRequest>),
-    Pick(Box<ColorPickRequest>, u64, Option<SourceOrigin>),
-    Delivered(u64),
-    Memory(MemoryBudget),
+    Pick(Box<ColorPickRequest>, RequestId, Option<SourceOrigin>),
+    WholeDelivered(RequestId),
+    Memory(MemoryTarget),
     Preparation(Arc<PreparationConfig>),
-    BackgroundCompletion(bool),
     #[cfg(test)]
     RenderWidth(Option<usize>),
     Stop,
@@ -46,7 +38,7 @@ enum Command {
 struct Status {
     processed: u64,
     busy: bool,
-    admitted: Vec<(TaskId, u64)>,
+    admitted: Vec<(TaskId, RequestId)>,
 }
 
 pub(super) struct Handle {
@@ -55,10 +47,9 @@ pub(super) struct Handle {
     pending: Cell<u64>,
     status: Arc<Mutex<Arc<Status>>>,
     observed: RefCell<Arc<Status>>,
-    view: RefCell<Option<Arc<ViewState>>>,
-    refinements: RefCell<Vec<(Refinement, Option<SourceOrigin>)>>,
+    /// The last published planned photos and images in use, to skip unchanged publication.
+    planned: RefCell<(Photos, Vec<Planned>)>,
     preparation: RefCell<Option<Arc<PreparationConfig>>>,
-    background_completion: Cell<bool>,
     #[cfg(test)]
     render_width: Cell<Option<usize>>,
 }
@@ -89,9 +80,7 @@ impl Handle {
                     context,
                     status: published,
                     processed: 0,
-                    view: None,
                     loader,
-                    exporting: None,
                 };
                 runtime.run(input, results, output);
             })
@@ -103,10 +92,8 @@ impl Handle {
                 pending: Cell::new(0),
                 status,
                 observed: Default::default(),
-                view: Default::default(),
-                refinements: Default::default(),
+                planned: Default::default(),
                 preparation: Default::default(),
-                background_completion: Cell::new(true),
                 #[cfg(test)]
                 render_width: Cell::new(render_width),
             },
@@ -136,12 +123,6 @@ impl Handle {
         self.pending.get() > status.processed || status.busy
     }
 
-    pub fn set_background_completion(&self, enabled: bool) {
-        if self.background_completion.replace(enabled) != enabled {
-            self.send(Command::BackgroundCompletion(enabled), false);
-        }
-    }
-
     #[cfg(test)]
     pub fn set_render_width(&self, width: Option<usize>) {
         let width = width.map(|value| value.clamp(1, 8));
@@ -150,156 +131,93 @@ impl Handle {
         }
     }
 
-    pub fn is_settled_and_admitted(&self, frame: &worker::Frame) -> bool {
+    pub fn is_settled_and_admitted(&self, frame: &worker::RenderResult) -> bool {
         let status = self.status();
         self.pending.get() <= status.processed
-            && status.admitted.contains(&(
-                TaskId(frame.diagnostic_task.id),
-                frame.diagnostic_task.revision,
-            ))
+            && status
+                .admitted
+                .contains(&(TaskId(frame.diagnostic_task.id), frame.request.id))
     }
 
-    pub fn set_view(&self, view: ViewState) {
-        let mut previous = self.view.borrow_mut();
-        if previous.as_deref() != Some(&view) {
-            self.refinements.borrow_mut().retain(|(request, _)| {
-                request.first.rendition == crate::editor::Rendition::Current
-                    || (view.active.as_ref() == Some(&request.first.path)
-                        && view.rendition == request.first.rendition)
-                    || view.overviews.iter().any(|photo| {
-                        photo.path == request.first.path
-                            && photo.rendition == request.first.rendition
-                    })
-            });
-            let view = Arc::new(view);
-            *previous = Some(view.clone());
-            self.send(Command::View(view), false);
-        }
-    }
-
-    pub fn activate(&self, path: PathBuf) {
-        self.refinements.borrow_mut().retain(|(request, _)| {
-            request.first.rendition == crate::editor::Rendition::Current
-                || request.first.path == path
-                || self.view.borrow().as_ref().is_some_and(|view| {
-                    view.overviews.iter().any(|photo| {
-                        photo.path == request.first.path
-                            && photo.rendition == request.first.rendition
-                    })
-                })
-        });
-        self.send(Command::Activate(path), true);
-    }
-    pub fn retire_before(&self, path: PathBuf) {
-        self.refinements.borrow_mut().retain(|(request, _)| {
-            request.first.path != path
-                || request.first.rendition == crate::editor::Rendition::Current
-        });
-        self.send(Command::RetireBefore(path), true);
-    }
     pub fn clear(&self, all: bool) {
-        self.refinements.borrow_mut().clear();
+        *self.planned.borrow_mut() = Default::default();
         self.send(Command::Clear(all), true);
     }
-    pub fn retire_detail(&self, path: PathBuf) {
-        self.refinements.borrow_mut().retain(|(old, _)| {
-            old.first.path != path || old.first.rendition != crate::editor::Rendition::Current
-        });
-        self.send(Command::RetireDetail(path), true);
-    }
-    pub fn submit(&self, request: Request, queued_at: Instant) {
-        self.refinements.borrow_mut().retain(|(old, _)| {
-            old.first.path != request.path || old.first.rendition != request.rendition
-        });
-        self.send(Command::Submit(Box::new(request), queued_at), true);
-    }
-    /// Suppress identical intent publication, as with immutable view snapshots.
-    /// Sequencing and completion remain exclusively with the coordinator.
-    pub fn refine(
-        &self,
-        request: Refinement,
-        origin: Option<SourceOrigin>,
-        queued_at: Instant,
-    ) -> bool {
-        let mut previous = self.refinements.borrow_mut();
-        if let Some((old, old_origin)) = previous.iter_mut().find(|(old, old_origin)| {
-            old.same_sequence(&request)
-                && old.covers(&request)
-                && (old_origin.is_none() || origin.is_none() || *old_origin == origin)
-        }) {
-            let visible = request
-                .visible_region
-                .or(request.first.settings.preview_region);
-            let coverage_changed =
-                old.visible_region.or(old.first.settings.preview_region) != visible;
-            let origin_bound = old_origin.is_none() && origin.is_some();
-            if origin_bound {
-                *old_origin = origin.clone();
-            }
-            if coverage_changed || origin_bound {
-                // A pan back into an in-flight patch can withdraw pending work.
-                // Keep the reserved region and revision while updating visibility.
-                old.visible_region = visible;
-                self.send(
-                    Command::Refine(Box::new(old.clone()), origin, queued_at),
-                    false,
-                );
-            }
+    /// Publish the images in use for the planned photos, in priority order.
+    /// A photo planned before that is neither planned nor `deferred` now uses no
+    /// images, so its work stops. Unchanged publications are skipped; only `clear`
+    /// drops the coordinator's planned work, and it forgets the last publication too.
+    pub fn plan(&self, photos: Photos, planned: Vec<Planned>, queued_at: Instant) -> bool {
+        let mut previous = self.planned.borrow_mut();
+        let unchanged = previous.0 == photos
+            && previous.1.len() == planned.len()
+            && previous.1.iter().zip(&planned).all(|(old, new)| {
+                old.speculative == new.speculative
+                    && old.render == new.render
+                    && super::matching::same_delivery_request(&old.request, &new.request)
+            });
+        if unchanged {
             return false;
         }
-        previous.retain(|(old, _)| {
-            old.first.path != request.first.path || old.first.rendition != request.first.rendition
-        });
-        previous.push((request.clone(), origin.clone()));
-        self.send(Command::Refine(Box::new(request), origin, queued_at), true);
+        foveonic::diagnostics::event(
+            foveonic::diagnostics::Category::Coordinator,
+            "view.plan",
+            |fields| {
+                let images: Vec<_> = planned
+                    .iter()
+                    .map(|planned| {
+                        serde_json::json!({"source":planned.request.path,
+                        "region":planned.request.settings.preview_region,
+                        "scale":planned.request.preview_scale.divisor(),
+                        "detail":planned.request.detail,
+                        "speculative":planned.speculative,"render":planned.render})
+                    })
+                    .collect();
+                fields
+                    .str(
+                        "photos",
+                        &serde_json::to_string(&photos.displayed).expect("plan diagnostics"),
+                    )
+                    .str(
+                        "images",
+                        &serde_json::to_string(&images).expect("plan diagnostics"),
+                    );
+            },
+        );
+        *previous = (photos.clone(), planned.clone());
+        self.send(Command::Plan(photos, planned, queued_at), true);
         true
     }
-    pub fn cancel_refinement(&self, path: PathBuf, rendition: crate::editor::Rendition) {
-        let mut previous = self.refinements.borrow_mut();
-        let count = previous.len();
-        previous.retain(|(request, _)| {
-            request.first.path != path || request.first.rendition != rendition
-        });
-        if previous.len() != count {
-            self.send(Command::CancelRefinement(path, rendition), true);
-        }
-    }
-    pub fn overviews(
-        &self,
-        requests: Vec<Request>,
-        paths: Vec<PathBuf>,
-        retained: Vec<PathBuf>,
-        queued_at: Instant,
-    ) {
-        self.refinements.borrow_mut().retain(|(old, _)| {
-            !requests.iter().any(|request| {
-                request.path == old.first.path
-                    && old.first.rendition == crate::editor::Rendition::Current
+    /// The region of the patch last published for a photo, for scenario checks.
+    pub fn planned_patch(&self, path: &std::path::Path) -> Option<[u32; 4]> {
+        self.planned
+            .borrow()
+            .1
+            .iter()
+            .find(|planned| {
+                planned.render && planned.request.detail && planned.request.path == path
             })
-        });
-        self.send(
-            Command::Overviews(requests, paths, retained, queued_at),
-            true,
-        );
-    }
-    pub fn retain(&self, paths: Vec<PathBuf>, retained: Vec<PathBuf>) {
-        self.refinements.borrow_mut().retain(|(request, _)| {
-            request.first.rendition != crate::editor::Rendition::Current
-                || paths.contains(&request.first.path)
-        });
-        self.send(Command::Retain(paths, retained), true);
+            .and_then(|planned| planned.request.settings.preview_region)
     }
     pub fn scopes(&self, request: ScopeRequest) {
         self.send(Command::Scopes(Box::new(request)), true);
     }
-    pub fn pick(&self, request: ColorPickRequest, revision: u64, origin: Option<SourceOrigin>) {
-        self.send(Command::Pick(Box::new(request), revision, origin), true);
+    pub fn pick(
+        &self,
+        request: ColorPickRequest,
+        image_request_id: RequestId,
+        origin: Option<SourceOrigin>,
+    ) {
+        self.send(
+            Command::Pick(Box::new(request), image_request_id, origin),
+            true,
+        );
     }
-    pub fn delivered(&self, revision: u64) {
-        self.send(Command::Delivered(revision), false);
+    pub fn whole_delivered(&self, request_id: RequestId) {
+        self.send(Command::WholeDelivered(request_id), false);
     }
-    pub fn memory(&self, limit: u64, frontend: crate::memory::Inventory) {
-        self.send(Command::Memory(MemoryBudget { limit, frontend }), false);
+    pub fn memory(&self, bytes: u64, frontend: crate::memory::Inventory) {
+        self.send(Command::Memory(MemoryTarget { bytes, frontend }), false);
     }
     pub fn preparation(&self, config: PreparationConfig) {
         let mut previous = self.preparation.borrow_mut();
@@ -329,9 +247,7 @@ struct Runtime {
     context: egui::Context,
     status: Arc<Mutex<Arc<Status>>>,
     processed: u64,
-    view: Option<Arc<ViewState>>,
     loader: super::source_loader::Service,
-    exporting: Option<PathBuf>,
 }
 
 impl Runtime {
@@ -359,7 +275,7 @@ impl Runtime {
                 self.publish();
                 self.context.request_repaint();
             }
-            if self.view.is_some() && !handled {
+            if !handled {
                 if let Some(update) = waiting.take() {
                     waiting = self.handle(update);
                     handled = waiting.is_some();
@@ -370,7 +286,7 @@ impl Runtime {
             let source_request = select.recv(&source_signals);
             let source_result = select.recv(&loaded_sources);
             let receive = waiting.is_none().then(|| select.recv(&results));
-            let send = (waiting.is_some() && self.view.is_some()).then(|| select.send(&output));
+            let send = waiting.is_some().then(|| select.send(&output));
             let operation = select.select();
             let index = operation.index();
             if index == command {
@@ -439,13 +355,6 @@ impl Runtime {
         );
         self.processed = sequence;
         match command {
-            Command::View(view) => {
-                self.coordinator.set_view(&view);
-                self.view = Some(view);
-            }
-            Command::Activate(path) => self.coordinator.activate(&path),
-            Command::RetireBefore(path) => self.coordinator.retire_before(&path),
-            Command::RetireDetail(path) => self.coordinator.retire_detail(&path),
             Command::Clear(all) => {
                 self.coordinator.clear();
                 self.progress.clear();
@@ -453,49 +362,26 @@ impl Runtime {
                 pending.clear = true;
                 pending.clear_all |= all;
             }
-            Command::Submit(request, queued_at) => {
-                let origin = self.cache.source_origin(&request.path);
-                if request.export.is_some() {
-                    self.exporting = Some(request.path.clone());
-                    self.progress.begin(request.revision, queued_at);
-                    let task =
-                        self.coordinator
-                            .frozen_export(Arc::new(*request), origin, queued_at);
-                    self.slot.0.lock().unwrap().export = Some(task);
-                } else {
-                    self.desire(*request, origin, queued_at);
+            Command::Plan(photos, planned, queued_at) => {
+                for planned in planned.iter().filter(|planned| planned.render) {
+                    let origin = self.cache.source_origin(&planned.request.path);
+                    self.desire(
+                        planned.request.clone(),
+                        origin,
+                        queued_at,
+                        planned.speculative,
+                        planned.tracked,
+                    );
                 }
-            }
-            Command::Refine(request, origin, queued_at) => {
-                let origin = self.cache.source_origin(&request.first.path).or(origin);
-                if let Some(started) = self
-                    .coordinator
-                    .refine(*request, origin, queued_at)
-                    .filter(|task| task.viewport())
-                {
-                    self.progress
-                        .begin(started.stamp.revision, started.queued_at);
-                }
-            }
-            Command::CancelRefinement(path, rendition) => {
-                self.coordinator.cancel_refinement(&path, rendition)
-            }
-            Command::Overviews(requests, paths, retained, queued_at) => {
-                self.coordinator.retain_overviews(&paths, &retained);
-                for request in requests {
-                    let origin = self.cache.source_origin(&request.path);
-                    self.desire(request, origin, queued_at);
-                }
-            }
-            Command::Retain(paths, retained) => {
-                self.coordinator.retain_overviews(&paths, &retained)
+                let in_use: Vec<_> = planned.into_iter().map(|planned| planned.request).collect();
+                self.coordinator.reconcile(&photos, &in_use);
             }
             Command::Scopes(request) => self.coordinator.scopes(*request),
-            Command::Pick(request, revision, origin) => {
-                self.coordinator.pick(*request, revision, origin)
+            Command::Pick(request, image_request_id, origin) => {
+                self.coordinator.pick(*request, image_request_id, origin)
             }
-            Command::Delivered(revision) => self.coordinator.delivered(revision),
-            Command::Memory(budget) => self.slot.0.lock().unwrap().memory = Some(budget),
+            Command::WholeDelivered(request_id) => self.coordinator.whole_delivered(request_id),
+            Command::Memory(target) => self.slot.0.lock().unwrap().memory = Some(target),
             #[cfg(test)]
             Command::RenderWidth(width) => self.slot.0.lock().unwrap().render_width = width,
             Command::Preparation(config) => {
@@ -504,29 +390,34 @@ impl Runtime {
                     pending.preparation = Some(config);
                 }
             }
-            Command::BackgroundCompletion(enabled) => {
-                self.coordinator.set_background_completion(enabled)
-            }
             Command::Stop => return false,
         }
         true
     }
 
-    fn desire(&mut self, request: Request, origin: Option<SourceOrigin>, queued_at: Instant) {
+    fn desire(
+        &mut self,
+        request: RenderRequest,
+        origin: Option<SourceOrigin>,
+        queued_at: Instant,
+        speculative: bool,
+        tracked: bool,
+    ) {
         let target = super::coordinator::Target::of(&request);
         let previous = self
             .coordinator
             .desired(&target)
             .map(|task| task.stamp.clone());
-        let revision = request.revision;
+        let request_id = request.id;
         self.coordinator
-            .desire(Arc::new(request), origin, queued_at);
-        if self
-            .coordinator
-            .desired(&target)
-            .is_some_and(|task| task.viewport() && Some(&task.stamp) != previous.as_ref())
+            .desire(Arc::new(request), origin, queued_at, speculative);
+        if tracked
+            && self
+                .coordinator
+                .desired(&target)
+                .is_some_and(|task| Some(&task.stamp) != previous.as_ref())
         {
-            self.progress.begin(revision, queued_at);
+            self.progress.begin(request_id.0, queued_at);
         }
     }
 
@@ -537,16 +428,7 @@ impl Runtime {
         );
         match &mut update {
             Update::Image(reply) if reply.handling.is_none() => {
-                if reply.exported.is_some() {
-                    self.exporting = None;
-                }
-                let view = self.view.as_ref().unwrap().context(&reply.path);
-                let (handling, started) = self.coordinator.handle_result(reply, &view);
-                reply.handling = Some(handling);
-                if let Some(started) = started.filter(|task| task.viewport()) {
-                    self.progress
-                        .begin(started.stamp.revision, started.queued_at);
-                }
+                reply.handling = Some(self.coordinator.handle_result(reply));
             }
             Update::Scopes { id, .. } => {
                 if !self.coordinator.finish_scope(*id) {
@@ -567,18 +449,7 @@ impl Runtime {
     }
 
     fn work_plan(&self) -> Arc<WorkPlan> {
-        let mut plan = self.coordinator.plan();
-        Arc::make_mut(&mut plan).preview_active = self
-            .view
-            .as_ref()
-            .filter(|view| {
-                view.rendition == crate::editor::Rendition::Current
-                    && view.output == "final"
-                    && !view.comparison
-                    && !view.framing_preview
-            })
-            .and_then(|view| view.active.clone());
-        plan
+        self.coordinator.plan()
     }
 
     fn publish(&mut self) {
@@ -589,7 +460,6 @@ impl Runtime {
             .map(|task| task.request.path.clone())
             .collect::<Vec<_>>();
         wanted.extend(plan.pick.iter().map(|task| task.request.path.clone()));
-        wanted.extend(self.exporting.iter().cloned());
         self.loader.retain(wanted);
         self.prioritize_sources();
         self.loader.admit();
@@ -611,20 +481,19 @@ impl Runtime {
         {
             let mut pending = self.slot.0.lock().unwrap();
             pending.activity = (plan.tasks.iter().any(|task| task.viewport())
-                || plan.pick.is_some()
-                || pending.export.is_some())
-            .then(|| self.cache.foreground());
+                || plan.pick.is_some())
+            .then(|| self.cache.priority().demand(Priority::Viewport));
             pending.auxiliary_activity = (plan.scopes.is_some()
                 || plan
                     .tasks
                     .iter()
-                    .any(|task| plan.priority(task) == TaskPriority::Auxiliary))
-            .then(|| self.cache.auxiliary_demand());
+                    .any(|task| plan.priority(task) == Priority::Auxiliary))
+            .then(|| self.cache.priority().demand(Priority::Auxiliary));
             pending.thumbnail_activity = plan
                 .tasks
                 .iter()
-                .any(|task| plan.priority(task) == TaskPriority::Thumbnail)
-                .then(|| self.cache.thumbnail_demand());
+                .any(|task| plan.priority(task) == Priority::Thumbnail)
+                .then(|| self.cache.priority().demand(Priority::Thumbnail));
             pending.plan = plan;
             pending.retained = retained.into();
         }
@@ -646,13 +515,7 @@ impl Runtime {
         priorities.extend(
             plan.pick
                 .iter()
-                .map(|task| (task.request.path.clone(), TaskPriority::Viewport)),
-        );
-        priorities.extend(
-            self.exporting
-                .iter()
-                .cloned()
-                .map(|path| (path, TaskPriority::Viewport)),
+                .map(|task| (task.request.path.clone(), Priority::Viewport)),
         );
         self.loader.prioritize(&priorities);
     }

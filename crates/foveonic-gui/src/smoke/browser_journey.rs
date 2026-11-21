@@ -75,7 +75,7 @@ impl BrowserJourney {
                 self.phase = Phase::Marked;
             }
             Phase::Marked => {
-                if app.worker.busy()
+                if app.view_busy()
                     || paths.iter().any(|p| {
                         app.browser.rating(p).stars() != 3 || app.browser.mark(p) != Mark::Pick
                     })
@@ -171,7 +171,7 @@ impl BrowserJourney {
                 self.phase = Phase::RestoredSelection;
             }
             Phase::RestoredSelection => {
-                if app.edit_selection.paths() != paths || app.worker.busy() {
+                if app.edit_selection.paths() != paths || app.view_busy() {
                     return Ok(false);
                 }
                 let mut actual = Vec::new();

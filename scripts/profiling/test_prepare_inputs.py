@@ -28,6 +28,8 @@ class PrepareInputTests(unittest.TestCase):
                        'checkpoint_cases': [{'source': 'camera.x3f', 'edits': [{'label': 'exposure', 'a': {'exposure': 0.1}, 'b': {'exposure': 0.2}}]}],
                        'regional_cases': [{'source': 'camera.x3f', 'settings': {'rotation': {'degrees': 17.}}}],
                        'choice_cases': [{'source': 'second.x3f', 'settings': {'white_balance': 'Sunlight'}}],
+                       'native_zoom_cases': [{'source': 'camera.x3f', 'settings': {'exposure': 0.}},
+                                             {'source': 'second.x3f', 'settings': {'exposure': 0.}}],
                        'fixtures': [{'name': 'tiger', 'family': 'tiger', 'sources': ['camera.x3f', 'second.x3f']}]}
         return source, definitions
 

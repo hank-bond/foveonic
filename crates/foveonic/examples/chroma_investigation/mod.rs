@@ -4,7 +4,7 @@ mod controls;
 mod neutralization;
 mod trials;
 
-use super::RenderSession;
+use super::NativePhoto;
 use crate::{
     color_space::{ColorSpace, TiffColorSpace},
     gpu::{Gpu, ReadGuard},
@@ -151,12 +151,12 @@ fn inspect_green_outliers() -> Result<()> {
         let matrix: [[f32; 3]; 3] = std::array::from_fn(|r| {
             std::array::from_fn(|c| (0..3).map(|k| display[r][k] * camera[k][c]).sum())
         });
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         let mut upstream: Option<(Vec<f32>, Vec<f32>, Vec<f32>)> = None;
         for chroma in [2, 3, 4] {
             settings.reconstruction.as_mut().unwrap().chroma = chroma;
             engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["color.rgb", "linear.base"],
@@ -195,7 +195,7 @@ fn inspect_green_outliers() -> Result<()> {
             )?;
             trials::seed(&mut session, baseline)?;
             let artifacts = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["color.rgb", "linear.base"],

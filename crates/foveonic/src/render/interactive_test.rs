@@ -201,7 +201,7 @@ fn recovery_threshold_changes_have_a_distinct_parameter_identity() {
 fn recovery_threshold_edits_match_fresh_outputs_and_keep_retained_images() {
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(Source::open(dir.join("sunlit-red-flower.x3f")).unwrap());
+    let mut session = NativePhoto::new(Source::open(dir.join("sunlit-red-flower.x3f")).unwrap());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.output_size = Some([313, 470]);
     for reconstruction in [false, true] {
@@ -258,22 +258,18 @@ fn recovery_threshold_edits_match_fresh_outputs_and_keep_retained_images() {
     }
 }
 
-fn session_image(
-    engine: &Engine,
-    session: &mut RenderSession,
-    settings: &Settings,
-) -> RenderedImage {
+fn session_image(engine: &Engine, session: &mut NativePhoto, settings: &Settings) -> RenderedImage {
     session_image_profiled(engine, session, settings, &mut Profile::default())
 }
 
 fn session_image_profiled(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     settings: &Settings,
     profile: &mut Profile,
 ) -> RenderedImage {
     let mut artifacts = engine
-        .render_session(session, settings, &["final"], || false, profile)
+        .render_native_photo(session, settings, &["final"], || false, profile)
         .unwrap()
         .unwrap();
     match artifacts.pop().unwrap().content {
@@ -287,7 +283,7 @@ fn session_image_profiled(
 fn merrill_auto_zero_sharpen_session_matches_fresh_and_explicit_off() {
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(Source::open(dir.join("blue-parking-sign.x3f")).unwrap());
+    let mut session = NativePhoto::new(Source::open(dir.join("blue-parking-sign.x3f")).unwrap());
     let mut settings = Settings::new("Sunlight", "Standard");
     let fresh = engine
         .render(&session.source, &settings, &mut Profile::default())
@@ -323,8 +319,7 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
         "turquoise-still-life",
         "yellow-flowers-and-stroller",
     ] {
-        let mut session =
-            RenderSession::new(Source::open(dir.join(format!("{name}.x3f"))).unwrap());
+        let mut session = NativePhoto::new(Source::open(dir.join(format!("{name}.x3f"))).unwrap());
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.reconstruction = Some(Default::default());
         settings.exposure = 0.5;
@@ -468,7 +463,6 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
             assert_eq!(cached.view(), fresh.view(), "{name} step {step}");
             assert_eq!(cached.settings(), fresh.settings(), "{name} step {step}");
             assert_same_pixels(&format!("{name} step {step}"), &actual, &expected);
-            assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
         }
         assert_same_pixels(
             &format!("retained {name}"),
@@ -478,7 +472,7 @@ fn active_inputs_match_fresh_outputs_and_keep_retained_images_immutable() {
         // Cancel after some stage/preparation checks, then safely resume using any valid checkpoints.
         let checks = Cell::new(0);
         let cancelled = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 &["final"],
@@ -511,7 +505,7 @@ fn noise_and_texture_inputs_match_fresh_outputs() {
     let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(Source::open(path).unwrap());
+    let mut session = NativePhoto::new(Source::open(path).unwrap());
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
     settings.sharpen_amount = Some(0.75);
@@ -550,7 +544,6 @@ fn noise_and_texture_inputs_match_fresh_outputs() {
                 &bytes,
                 &engine.gpu.readback(&fresh.buffer).unwrap(),
             );
-            assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
         }
     }
     assert_same_pixels(
@@ -565,7 +558,7 @@ fn noise_and_texture_inputs_match_fresh_outputs() {
 fn sessions_bind_inputs_to_engine_and_selective_roots() {
     let path = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
         .join("blue-parking-sign.x3f");
-    let mut session = RenderSession::new(Source::open(path).unwrap());
+    let mut session = NativePhoto::new(Source::open(path).unwrap());
     let settings = Settings::new("Sunlight", "Standard");
     let first = Engine::test_executor();
     let retained = session_image(&first, &mut session, &settings);
@@ -581,7 +574,7 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
         .view_texture(&retained, None, &mut Profile::default())
         .is_err());
     let cancelled = second
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["sensor.layers"],
@@ -592,7 +585,7 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
     assert!(cancelled.is_none());
     let before = second.gpu_activity();
     let artifacts = second
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["sensor.layers"],
@@ -607,7 +600,7 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
     changed.reconstruction = Some(Default::default());
     let before = second.gpu_activity();
     let cancelled = second
-        .render_session(
+        .render_native_photo(
             &mut session,
             &changed,
             &["final"],
@@ -633,13 +626,11 @@ fn sessions_bind_inputs_to_engine_and_selective_roots() {
 fn exposure_edits_reuse_both_smart_grids_and_match_fresh() {
     let source = Source::open(std::env::var_os("FOVEONIC_CACHE_X3F").unwrap()).unwrap();
     let engine = Engine::new().unwrap();
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.reconstruction = Some(Default::default());
     let retained = session_image(&engine, &mut session, &settings);
     let retained_pixels = engine.readback_image(&retained).unwrap();
-    let initial_bytes = session.cached_bytes();
-    assert!(initial_bytes <= 1024 * 1024 * 1024);
     let [width, height] = retained.description().extent;
     let region = Some([width / 4, height / 4, width / 2, height / 2]);
     // Smart initializes Fast, a native detail tile, and then whole Full. Each
@@ -656,7 +647,7 @@ fn exposure_edits_reuse_both_smart_grids_and_match_fresh() {
         settings.preview_region = rect;
         let mut profile = Profile::new(crate::profile::Mode::Gpu);
         let results = engine
-            .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+            .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
             .unwrap()
             .unwrap();
         let crate::inspection::Content::Image(cached) = &results[0].content else {
@@ -682,7 +673,6 @@ fn exposure_edits_reuse_both_smart_grids_and_match_fresh() {
             &engine.readback_image(&fresh).unwrap(),
         );
         assert_eq!(engine.readback_image(&retained).unwrap(), retained_pixels);
-        assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
     }
     // A cancelled reconstruction edit in one grid must not poison either
     // grid's generations. Resuming both must use the new noise settings.
@@ -690,7 +680,7 @@ fn exposure_edits_reuse_both_smart_grids_and_match_fresh() {
     settings.preview_region = region;
     let before = engine.gpu_activity();
     assert!(engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["final"],
@@ -710,7 +700,6 @@ fn exposure_edits_reuse_both_smart_grids_and_match_fresh() {
             &engine.readback_image(&cached).unwrap(),
             &engine.readback_image(&fresh).unwrap(),
         );
-        assert!(session.cached_bytes() <= 1024 * 1024 * 1024);
     }
     assert_eq!(engine.readback_image(&retained).unwrap(), retained_pixels);
 }
@@ -722,7 +711,7 @@ fn texture_edits_reuse_filtering_and_match_fresh_images() {
         .join("blue-parking-sign.x3f");
     let source = std::sync::Arc::new(Source::open(path).unwrap());
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     let c = crate::noise::Controls::default();
     settings.reconstruction = Some(c);
@@ -763,7 +752,7 @@ fn texture_edits_reuse_filtering_and_match_fresh_images() {
         c.luminance = luma;
         let mut profile = Profile::new(crate::profile::Mode::Wall);
         let mut result = engine
-            .render_session(&mut session, &settings, &["final"], || false, &mut profile)
+            .render_native_photo(&mut session, &settings, &["final"], || false, &mut profile)
             .unwrap()
             .unwrap();
         let crate::inspection::Content::Image(cached) = result.pop().unwrap().content else {
@@ -796,7 +785,7 @@ fn texture_edits_reuse_filtering_and_match_fresh_images() {
     let names = ["texture.change"];
     let mut mask_profile = Profile::new(crate::profile::Mode::Wall);
     let artifacts = engine
-        .render_session(&mut session, &settings, &names, || false, &mut mask_profile)
+        .render_native_photo(&mut session, &settings, &names, || false, &mut mask_profile)
         .unwrap()
         .unwrap();
     assert_eq!(artifacts.len(), names.len());
@@ -844,10 +833,10 @@ fn repair_preparation_session_matches_fresh_and_preserves_ownership() {
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = Arc::new(Source::open(dir.join("blue-parking-sign.x3f")).unwrap());
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let mut settings = Settings::new("Sunlight", "Standard");
     let early = engine
-        .render_session(
+        .render_native_photo(
             &mut session,
             &settings,
             &["sensor.layers"],
@@ -890,7 +879,7 @@ fn repair_preparation_session_matches_fresh_and_preserves_ownership() {
     );
 
     let other = Arc::new(Source::open(dir.join("turquoise-still-life.x3f")).unwrap());
-    let mut other_session = RenderSession::new(other.clone());
+    let mut other_session = NativePhoto::new(other.clone());
     assert_eq!(other_session.cached_preparation_bytes(), 0);
     let cached = session_image(&engine, &mut other_session, &settings);
     let fresh = engine
@@ -903,7 +892,7 @@ fn repair_preparation_session_matches_fresh_and_preserves_ownership() {
     );
     drop((cached, fresh, other_session));
 
-    let mut cancelled_session = RenderSession::new(source.clone());
+    let mut cancelled_session = NativePhoto::new(source.clone());
     let checks = Cell::new(0);
     let cancel = || {
         checks.set(checks.get() + 1);

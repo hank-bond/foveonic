@@ -9,11 +9,11 @@ fn retained_graph_accounts_spare_capacity_and_cached_node_containers() {
     let mut graph = Graph::default();
     let source = graph.add_scoped(Operation::Source, &[], "camera").unwrap();
     graph.retain_for_session(source);
-    graph.retain_for_seal(source);
+    graph.retain_as_sensor_data(source);
     graph.nodes.reserve(11);
     graph.outputs.reserve(13);
     graph.session_outputs.reserve(17);
-    graph.sealed_outputs.reserve(19);
+    graph.sensor_data_outputs.reserve(19);
     graph.nodes[0].inputs.reserve(23);
     graph.nodes[0].outputs.reserve(29);
     graph.outputs[0].cache_scope.reserve(31);
@@ -24,7 +24,7 @@ fn retained_graph_accounts_spare_capacity_and_cached_node_containers() {
     let expected = graph.nodes.capacity() * std::mem::size_of::<Node>()
         + graph.outputs.capacity() * std::mem::size_of::<Output>()
         + (graph.session_outputs.capacity()
-            + graph.sealed_outputs.capacity()
+            + graph.sensor_data_outputs.capacity()
             + graph.nodes[0].inputs.capacity()
             + graph.nodes[0].outputs.capacity()
             + graph.outputs[0].dependencies.capacity())

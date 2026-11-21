@@ -4,27 +4,26 @@ mod diagnostics;
 mod preparation;
 pub(crate) use super::source_loader::LoadHold;
 pub(crate) use diagnostics::DeliveryHold;
+mod host;
 pub(crate) mod presentation;
 mod processing;
-#[cfg(feature = "wide-experiment")]
-mod wide;
 pub(crate) use preparation::Config as PreparationConfig;
 
 use super::{
     matching::{presentation_changed, same_pixel_settings, same_request_context},
-    request::Request,
+    request::RenderRequest,
 };
-use crate::export::{self, resolve_camera_settings};
-#[cfg(test)]
-use crate::export::{Export, ExportFormat};
+use crate::export::resolve_camera_settings;
+use crate::rendering::request::RequestId;
 use eframe::egui;
-#[cfg(test)]
-use foveonic::source::Source;
 use foveonic::{
     image::{ImageTexture, RenderedImage},
     inspection::{Artifact, Content},
     profile::Profile,
-    render::{Engine, ProcessingQuality, RenderSession, Scale, SessionUse, Settings},
+    render::{
+        Engine, Interruption, NativePhoto, ProcessingQuality, Scale, Scheduler, Settings,
+        WorkingSet,
+    },
     source::Metadata,
 };
 use std::{
@@ -34,32 +33,15 @@ use std::{
     thread,
 };
 
+/// How long an idle worker waits before rechecking for work without a notification.
+const IDLE_RECHECK: std::time::Duration = std::time::Duration::from_millis(100);
+
 #[cfg(test)]
 #[derive(Default)]
 struct Checks {
     source_loads: std::sync::atomic::AtomicU64,
     deferred: (Mutex<Vec<super::coordinator::Stamp>>, Condvar),
     recipes: Mutex<Vec<(u64, u64)>>,
-    #[cfg(feature = "wide-experiment")]
-    gpu_activity: Mutex<foveonic::profile::GpuActivity>,
-    #[cfg(feature = "wide-experiment")]
-    wide_windows: std::sync::atomic::AtomicU64,
-    #[cfg(feature = "wide-experiment")]
-    wide_admitted: std::sync::atomic::AtomicU64,
-    #[cfg(feature = "wide-experiment")]
-    wide_max_live: std::sync::atomic::AtomicU64,
-    #[cfg(feature = "wide-experiment")]
-    wide_max_submitted: std::sync::atomic::AtomicU64,
-    #[cfg(feature = "wide-experiment")]
-    wide_submissions: Mutex<Vec<Vec<super::coordinator::Stamp>>>,
-    #[cfg(feature = "wide-experiment")]
-    wide_window_hold: Mutex<
-        Option<(
-            crossbeam_channel::Sender<()>,
-            crossbeam_channel::Receiver<()>,
-        )>,
-    >,
-
     speculative_hold: Mutex<
         Option<(
             crossbeam_channel::Sender<()>,
@@ -67,83 +49,88 @@ struct Checks {
         )>,
     >,
     yielded: (Mutex<Vec<super::coordinator::Stamp>>, Condvar),
+    /// The most jobs admitted together.
+    widest: std::sync::atomic::AtomicU64,
 }
 #[cfg(test)]
 thread_local! { static CHECKS: std::cell::RefCell<Option<Arc<Checks>>> = const { std::cell::RefCell::new(None) }; }
 
-pub struct Frame {
-    pub auxiliary_preview: bool,
-    pub processing_quality: ProcessingQuality,
-    pub detail: bool,
+/// How a render task ended.
+pub enum RenderOutcome {
+    Rendered(Box<RenderResult>),
+    /// Superseded or stopped before it finished. It still settles its task.
+    Cancelled,
+    Failed(String),
+}
+impl RenderOutcome {
+    pub fn rendered(&self) -> Option<&RenderResult> {
+        match self {
+            Self::Rendered(image) => Some(image),
+            _ => None,
+        }
+    }
+    pub fn failed(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
+    /// The rendered image, panicking with the failure otherwise.
+    #[cfg(test)]
+    pub fn unwrap_rendered(self) -> RenderResult {
+        match self {
+            Self::Rendered(image) => *image,
+            Self::Cancelled => panic!("render was cancelled"),
+            Self::Failed(error) => panic!("render failed: {error}"),
+        }
+    }
+    /// The failure, panicking if the render did not fail.
+    #[cfg(test)]
+    pub fn unwrap_failed(self) -> String {
+        match self {
+            Self::Failed(error) => error,
+            _ => panic!("render did not fail"),
+        }
+    }
+}
+
+/// A delivered render ready to draw. What it shows (photo, look, output,
+/// framing) and its request id come from the request it answers.
+pub struct RenderResult {
+    pub request: Arc<RenderRequest>,
     pub diagnostic_task: crate::timing::DeliveredTask,
     pub origin: foveonic::source::SourceOrigin,
-    pub framing_preview: bool,
     native_extent: [u32; 2],
-    pub calibration_signature: Option<String>,
-    pub rendition: crate::editor::Rendition,
-    pub requested: Settings,
-    pub path: PathBuf,
-    pub output: String,
     pub artifact: Artifact,
     pub texture: Arc<ImageTexture>,
     pub comparison: Option<Comparison>,
     pub milliseconds: f64,
-    pub revision: u64,
     pub queued_at: std::time::Instant,
 }
-impl Frame {
-    /// Coverage can overlap only partly. Source, framing and feedback order
-    /// determine whether the two existing textures can share a presentation.
-    pub fn can_overlay(&self, base: &Self) -> bool {
-        self.path == base.path
-            && self.origin == base.origin
-            && self.processing_quality == base.processing_quality
-            && self.output == base.output
-            && self.rendition == base.rendition
-            && self.calibration_signature == base.calibration_signature
-            && !self.framing_preview
-            && !base.framing_preview
-            && self.comparison.is_none()
-            && base.comparison.is_none()
-            && super::matching::same_image_geometry(&self.requested, &base.requested)
-            && super::matching::can_overlay_edits(
-                &base.requested,
-                base.content_revision(),
-                &self.requested,
-                self.content_revision(),
-            )
+impl RenderResult {
+    /// The processing quality the render actually used.
+    pub fn processing_quality(&self) -> ProcessingQuality {
+        self.artifact.settings.processing_quality
     }
-
-    /// Same-edit reduced refreshes leave the section useful. New edits or a
-    /// complete native overview replace it under the existing content order.
-    pub fn supersedes_detail(&self, detail: &Self) -> bool {
-        self.content_revision() >= detail.content_revision()
-            && (!detail.can_overlay(self)
-                || (self.artifact.settings.working_scale == Scale::NATIVE
-                    && self.artifact.settings.preview_region.is_none()
-                    && self.artifact.settings.output_size.is_none()))
+    pub fn calibration_signature(&self) -> Option<&str> {
+        self.request
+            .calibration
+            .as_ref()
+            .map(|profile| profile.signature())
     }
-
     /// Whole edited photographs can outlive their viewport and seed browser previews.
     pub fn is_photographic(&self) -> bool {
-        self.rendition == crate::editor::Rendition::Current
-            && self.output == "final"
-            && !self.framing_preview
+        self.request.rendition == crate::editor::Rendition::Current
+            && self.request.output == "final"
+            && !self.request.framing_preview
             && self.artifact.settings.color_range_preview.is_none()
             && self.artifact.settings.preview_region.is_none()
-            && !self.detail
-    }
-    /// Request order stays stable when selection rebases presentation revisions.
-    pub fn content_revision(&self) -> u64 {
-        self.diagnostic_task.revision
+            && !self.request.detail
     }
     pub fn is_current_detail(&self) -> bool {
-        self.rendition == crate::editor::Rendition::Current
-            && self.output == "final"
-            && !self.framing_preview
+        self.request.rendition == crate::editor::Rendition::Current
+            && self.request.output == "final"
+            && !self.request.framing_preview
             && self.comparison.is_none()
             && self.artifact.settings.color_range_preview.is_none()
-            && self.detail
+            && self.request.detail
     }
     pub fn detail_region(&self) -> [u32; 4] {
         self.artifact
@@ -154,8 +141,8 @@ impl Frame {
     pub fn diagnostic_identity(&self, input: bool) -> Option<crate::timing::ImageIdentity> {
         crate::timing::enabled().then(|| {
             self.diagnostic_task.image(
-                self.revision,
-                &self.path,
+                self.request.id.0,
+                &self.request.path,
                 if input {
                     self.comparison
                         .as_ref()
@@ -177,26 +164,29 @@ impl Frame {
     }
     /// Native sampling extent before any requested final output resize.
     pub fn native_display_extent(&self) -> [u32; 2] {
-        if self.framing_preview {
+        if self.request.framing_preview {
             self.editing_extent()
         } else {
-            let [l, t, r, b] = self.requested.crop.pixels(self.uncropped_extent());
+            let [l, t, r, b] = self.request.settings.crop.pixels(self.uncropped_extent());
             [r - l, b - t]
         }
     }
     pub fn uncropped_extent(&self) -> [u32; 2] {
-        self.requested.rotation.extent(self.native_extent)
+        self.request.settings.rotation.extent(self.native_extent)
     }
     pub fn editing_extent(&self) -> [u32; 2] {
-        self.requested.rotation.oriented_extent(self.native_extent)
+        self.request
+            .settings
+            .rotation
+            .oriented_extent(self.native_extent)
     }
     /// Native oriented bounds represented by the main texture, including crop offsets.
     pub fn display_window(&self, input: bool) -> [u32; 4] {
-        if self.framing_preview {
+        if self.request.framing_preview {
             let extent = self.editing_extent();
             return [0, 0, extent[0], extent[1]];
         }
-        if self.output == "final"
+        if self.request.output == "final"
             && !input
             && self.artifact.settings.output_size.is_none()
             && self.artifact.settings.preview_region.is_none()
@@ -215,7 +205,7 @@ impl Frame {
         }
     }
     pub fn quality_label(&self) -> String {
-        match self.processing_quality {
+        match self.processing_quality() {
             ProcessingQuality::Quality => "Quality".into(),
             ProcessingQuality::Speed => "Speed".into(),
         }
@@ -236,23 +226,21 @@ pub struct Comparison {
     pub texture: Arc<ImageTexture>,
 }
 pub struct Reply {
-    pub request: Arc<Request>,
     pub handling: Option<super::coordinator::ResultUpdate>,
     pub stamp: crate::rendering::coordinator::Stamp,
-    pub path: PathBuf,
-    pub rendition: crate::editor::Rendition,
-    pub revision: u64,
+    /// The request the result answers, which a failure is recorded against.
+    pub request: Arc<RenderRequest>,
     pub metadata: Option<Arc<Metadata>>,
     pub settings: Settings,
-    pub result: Result<Option<Frame>, String>,
+    pub result: RenderOutcome,
     pub numeric_settings: Option<Settings>,
     pub reset_settings: Option<Settings>,
-    pub exported: Option<crate::export::Export>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScopeKey {
-    pub revision: u64,
+    /// The request id of the image the scopes describe.
+    pub request_id: RequestId,
     pub region: Option<foveonic::scopes::Region>,
 }
 pub struct ScopeRequest {
@@ -307,28 +295,27 @@ pub(super) struct Pending {
     pub(super) source: Option<super::source_loader::Loaded>,
     // Paths queued, loading or awaiting consumption of their source handoff.
     pub(super) source_requests: std::collections::HashSet<PathBuf>,
-    pub(super) memory: Option<MemoryBudget>,
-    #[cfg(any(feature = "wide-experiment", test))]
+    pub(super) memory: Option<MemoryTarget>,
+    /// Performance tests cap how many jobs run together. None leaves width to memory.
     pub(super) render_width: Option<usize>,
     pub(super) preparation: Option<Arc<PreparationConfig>>,
     pub(super) plan: Arc<crate::rendering::coordinator::WorkPlan>,
-    pub(super) export: Option<Arc<crate::rendering::coordinator::Task>>,
-    pub(super) activity: Option<foveonic::decode_cache::Activity>,
-    pub(super) auxiliary_activity: Option<foveonic::decode_cache::Activity>,
-    pub(super) thumbnail_activity: Option<foveonic::decode_cache::Activity>,
+    pub(super) activity: Option<foveonic::priority::Demand>,
+    pub(super) auxiliary_activity: Option<foveonic::priority::Demand>,
+    pub(super) thumbnail_activity: Option<foveonic::priority::Demand>,
     pub(super) stop: bool,
     pub(super) clear: bool,
     pub(super) clear_all: bool,
     pub(super) retained: Arc<[Arc<presentation::Snapshot>]>,
 }
-pub(super) struct MemoryBudget {
-    pub(super) limit: u64,
+pub(super) struct MemoryTarget {
+    pub(super) bytes: u64,
     pub(super) frontend: crate::memory::Inventory,
 }
-impl Default for MemoryBudget {
+impl Default for MemoryTarget {
     fn default() -> Self {
         Self {
-            limit: crate::preferences::DEFAULT_MEMORY_CACHE_BYTES,
+            bytes: crate::preferences::DEFAULT_MEMORY_CACHE_BYTES,
             frontend: Default::default(),
         }
     }
@@ -336,7 +323,7 @@ impl Default for MemoryBudget {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MemoryStatus {
     pub resources: foveonic::render::MemoryResources,
-    pub over_budget_bytes: u64,
+    pub over_target_bytes: u64,
     pub reduced_sources: Vec<(PathBuf, foveonic::source::SourceOrigin)>,
 }
 
@@ -354,41 +341,15 @@ pub struct Worker {
     diagnostics: diagnostics::Handle,
     source_control: super::source_loader::Control,
 }
-/// Photographic output and its resolved context, before common view preparation.
-struct Ready {
-    task: Arc<super::coordinator::Task>,
-    metadata: Arc<Metadata>,
-    origin: foveonic::source::SourceOrigin,
-    settings: Settings,
-    defaults_errors: Vec<String>,
-    edit: Vec<&'static str>,
-    started: std::time::Instant,
-    input: Option<&'static str>,
-    display: Option<presentation::Display>,
-    #[cfg(test)]
-    dispatches: u64,
-    artifacts: foveonic::source::Result<Option<Vec<Artifact>>>,
-}
-
-enum Execution {
-    Complete(Option<Box<Frame>>),
-    NeedsSource,
-    Yield,
-}
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Interruption {
-    Continue,
-    Cancel,
-    Yield,
-}
-
 /// Resolve camera controls and sampling once, preserving a reused photographic plane's grid.
 fn resolve_settings(
-    request: &Request,
+    request: &RenderRequest,
     metadata: &Metadata,
     existing_scale: Option<Scale>,
 ) -> foveonic::source::Result<(Settings, Vec<String>)> {
     let mut settings = request.settings.clone();
+    // The request's quality is the authority; `quality::for_view` decides it.
+    settings.processing_quality = request.processing_quality;
     let errors = resolve_camera_settings(&mut settings, metadata);
     if let Some(scale) = existing_scale {
         settings.working_scale = scale;
@@ -396,30 +357,15 @@ fn resolve_settings(
     } else {
         request.apply_preview(&mut settings, metadata)?;
     }
-    if request.export.is_none() {
-        settings.dehaze_estimate = request.output == "final"
-            && request.rendition == crate::editor::Rendition::Current
-            && settings.dehaze_auto();
-    }
+    settings.dehaze_estimate = request.output == "final"
+        && request.rendition == crate::editor::Rendition::Current
+        && settings.dehaze_auto();
     Ok((settings, errors))
 }
 
-fn priority_ready(
-    cache: &foveonic::decode_cache::Cache,
-    priority: super::coordinator::TaskPriority,
-) -> bool {
-    use super::coordinator::TaskPriority;
-    match priority {
-        TaskPriority::Viewport => true,
-        TaskPriority::Auxiliary => cache.auxiliary_ready(),
-        TaskPriority::Thumbnail => cache.thumbnail_ready(),
-        TaskPriority::Idle => cache.idle_ready(),
-    }
-}
-
-/// Keep the ordinary compatible-feedback rule shared by serial and experimental jobs.
+/// A running job continues when the newer request can still use its result:
+/// only the view changed, or only parameters it already recomputes.
 fn interruption(
-    cursor: &crate::rendering::coordinator::Cursor,
     state: &Pending,
     task: &crate::rendering::coordinator::Task,
     settings: &Settings,
@@ -434,9 +380,6 @@ fn interruption(
     };
     if task.origin.is_some() && desired.origin.is_some() && task.origin != desired.origin {
         return Interruption::Cancel;
-    }
-    if cursor.should_yield(&state.plan, task, state.export.is_some()) {
-        return Interruption::Yield;
     }
     if desired.stamp.id == task.stamp.id {
         return Interruption::Continue;
@@ -473,20 +416,9 @@ impl Worker {
                 source: None,
                 source_requests: Default::default(),
                 memory: None,
-                #[cfg(any(feature = "wide-experiment", test))]
-                render_width: {
-                    #[cfg(feature = "wide-experiment")]
-                    {
-                        wide::initial_width()
-                    }
-                    #[cfg(not(feature = "wide-experiment"))]
-                    {
-                        None
-                    }
-                },
+                render_width: None,
                 preparation: None,
                 plan: Arc::default(),
-                export: None,
                 activity: None,
                 auxiliary_activity: None,
                 thumbnail_activity: None,
@@ -501,14 +433,16 @@ impl Worker {
         let progress_updates = progress.clone();
         let cache = Arc::new(foveonic::decode_cache::Cache::new());
         let decoded_cache = cache.clone();
-        let (mut sources, loader, source_control) =
+        let (sources, loader, source_control) =
             super::source_loader::start(cache.clone(), progress.clone(), pending.clone());
         let repaint = context.clone();
         let (tx, results) = crossbeam_channel::bounded(2);
-        let (diagnostics, mut diagnostic_work) = diagnostics::channel(pending.clone());
+        let (diagnostics, diagnostic_work) = diagnostics::channel(pending.clone());
         let slot = pending.clone();
         let memory = Arc::new(Mutex::new(MemoryStatus::default()));
         let memory_updates = memory.clone();
+        let image_cache = foveonic::render::ImageCache::default();
+        let worker_cache = image_cache.clone();
         #[cfg(test)]
         let checks = Arc::new(Checks::default());
         #[cfg(test)]
@@ -517,662 +451,85 @@ impl Worker {
         let spawned = builder.spawn(move || {
             #[cfg(test)]
             CHECKS.with(|slot| *slot.borrow_mut() = Some(observations.clone()));
-            let mut engine = engine;
-            let mut photos = processing::Photos::default();
-            let mut presented = presentation::Presentation::default();
-            let mut budget = MemoryBudget::default();
-            let mut pending_images = Vec::<crate::memory::PendingImage>::new();
-            let mut cursor = crate::rendering::coordinator::Cursor::default();
-            #[cfg(feature = "wide-experiment")]
-            let mut wide = wide::Wide::new();
-            let mut previous: Option<crate::rendering::coordinator::Stamp> = None;
-            let mut preparation = preparation::Preparation::default();
-            'worker: loop {
-                let memory_update = slot.0.lock().unwrap().memory.take();
-                let memory_changed = memory_update.is_some();
-                if let Some(next) = memory_update {
-                    budget = next;
-                }
-                let mut completed: Option<Box<Ready>> = None;
-                #[cfg(feature = "wide-experiment")]
-                let (preselected, serial_fallback) = match wide.next(
-                    &mut engine, &mut photos, &mut cursor, &slot, &decoded_cache, &presented, &progress_updates, &sources, &mut budget, &mut pending_images,
-                ) {
-                    Some(wide::Next::Ready(ready)) => {
-                        let task = ready.task.clone();
-                        completed = Some(ready);
-                        (Some(task), false)
-                    }
-                    Some(wide::Next::Serial(task)) => (Some(task), true),
-                    None => (None, false),
-                };
-                #[cfg(not(feature = "wide-experiment"))]
-                let preselected: Option<Arc<crate::rendering::coordinator::Task>> = None;
-                // Wide execution must reconsider peers under the new inventory
-                // before ordinary trimming. A ready result is inventoried and
-                // trimmed through the normal delivery path below.
-                #[cfg(feature = "wide-experiment")]
-                let executions_idle = wide.is_idle();
-                #[cfg(not(feature = "wide-experiment"))]
-                let executions_idle = true;
-                if memory_changed && preselected.is_none() && executions_idle {
-                    trim_memory(&engine, &mut photos, &presented, &budget,
-                        &mut pending_images, &memory_updates, &context, &slot);
-                }
-                let task = if let Some(task) = preselected { task } else {
-                    let (lock, wake) = &*slot;
-                    let mut state = lock.lock().unwrap();
-                    loop {
-                        if state.stop {
-                            break 'worker;
-                        }
-                        if state.clear {
-                            state.clear = false;
-                            let all = std::mem::take(&mut state.clear_all);
-                            drop(state);
-                            photos.park_active();
-                            presented.clear();
-                            previous = None;
-                            cursor = Default::default();
-                            if all {
-                                photos.clear(&engine).expect("render executions retire before clear");
-                                preparation = Default::default();
-                            }
-                            trim_memory(
-                                &engine,
-                                                                &mut photos,
-                                &presented,
-                                &budget,
-                                &mut pending_images,
-                                &memory_updates,
-                                &context,
-                                &slot,
-                            );
-                            continue 'worker;
-                        }
-                        cursor.retain_waiting(&state.plan, state.export.as_ref().map(|task| &task.stamp));
-                        let pick_can_retry = state.plan.pick.as_ref().is_some_and(|task| sources.can_retry(&task.request.path, &state));
-                        if let Some(pick_task) = cursor.pick_ready(&state.plan, pick_can_retry) {
-                            let pick = &pick_task.request;
-                            let _diagnostic_context = crate::timing::enabled().then(|| {
-                                foveonic::diagnostics::enter(crate::timing::context_for(
-                                    pick_task.id.0,
-                                    pick_task.image_revision,
-                                    &pick.path,
-                                    "color_pick",
-                                ))
-                            });
-                            let _pick_scope = foveonic::diagnostics::scope(
-                                foveonic::diagnostics::Category::Cpu,
-                                "color_pick_task",
-                            );
-                            let _activity = decoded_cache.foreground();
-                            drop(state);
-                            let cancel = || {
-                                let state = slot.0.lock().unwrap();
-                                state.stop
-                                    || state.clear
-                                    || state
-                                        .plan
-                                        .pick
-                                        .as_ref()
-                                        .is_none_or(|current| current.id != pick_task.id)
-                            };
-                            let sample = (|| {
-                                if cancel() {
-                                    return Err("color selection canceled".into());
-                                }
-                                if !photos.load_native(&pick.path, 0, &decoded_cache, &engine,
-                                    SessionUse::Foreground, &mut |path, revision| sources.open(path, revision))? {
-                                    return Ok(None);
-                                }
-                                if pick_task.origin.as_ref().is_some_and(|origin| {
-                                    origin != photos.native(&pick.path).unwrap().source().origin()
-                                }) {
-                                    return Err("photo changed while selecting a color".into());
-                                }
-                                photos.with_native(&pick.path, |session| pick_color(&engine, session, pick, cancel)).map(Some)
-                            })()
-                            .map_err(
-                                |error: Box<dyn std::error::Error + Send + Sync>| {
-                                    if !cancel() {
-                                        foveonic::support::report_error("render.color_pick",error.as_ref(),foveonic::support::OperationContext {
-                                            component:Some("color selection".into()), source:Some(pick.path.to_string_lossy().into_owned()),
-                                            settings:Some(serde_json::json!({"tool":format!("{:?}",pick.tool),"uv":pick.uv,"settings":foveonic::support::settings_snapshot(&pick.settings)})),
-                                            ..Default::default()
-                                        });
-                                    }
-                                    error.to_string()
-                                },
-                            );
-                            let sample = match sample {
-                                Ok(Some(sample)) => Ok(sample),
-                                Ok(None) => { cursor.retry_pick(); continue 'worker; }
-                                Err(error) => Err(error),
-                            };
-                            trim_memory(
-                                &engine,
-                                                                &mut photos,
-                                &presented,
-                                &budget,
-                                &mut pending_images,
-                                &memory_updates,
-                                &context,
-                                &slot,
-                            );
-                            if tx
-                                .send(Update::ColorPick {
-                                    id: pick_task.id,
-                                    reply: ColorPickReply {
-                                        tool: pick.tool,
-                                        token: pick.token,
-                                        path: pick.path.clone(),
-                                        sample,
-                                    },
-                                })
-                                .is_err()
-                            {
-                                break 'worker;
-                            }
-                            continue 'worker;
-                        }
-                        let export_ready = state.export.as_ref().is_some_and(|task| cursor.ready(&task.stamp, sources.can_retry(&task.request.path, &state)));
-                        let mut next = export_ready.then(|| state.export.take()).flatten()
-                            .or_else(|| {
-                                previous
-                                    .as_ref()
-                                    .filter(|prior| cursor.ready(prior, sources.can_retry(&prior.target.path, &state)))
-                                    .and_then(|prior| cursor.followup(&state.plan, prior))
-                            })
-                            .or_else(|| cursor.next_ready_matching(&state.plan,
-                                |task| sources.can_retry(&task.request.path, &state),
-                                |task| priority_ready(&decoded_cache, state.plan.priority(task)) && (!task.speculative || photos.native(&task.request.path).is_some())));
-                        if next.as_ref().is_some_and(|task| (state.export.is_some() && !task.viewport()) || !priority_ready(&decoded_cache, state.plan.priority(task)) || (task.speculative && photos.native(&task.request.path).is_none())) {
-                            cursor.yield_task(&next.as_ref().unwrap().stamp);
-                            next = None;
-                        }
-                        if let Some(task) = next {
-                            break task;
-                        }
-                        if let Some(scopes) = decoded_cache.auxiliary_ready().then(|| cursor.scope(&state.plan)).flatten() {
-                            let _activity = decoded_cache.auxiliary_demand();
-                            drop(state);
-                            if !analyze_scopes(&engine, &slot, &tx, scopes) {
-                                break 'worker;
-                            }
-                            trim_memory(
-                                &engine,
-                                                                &mut photos,
-                                &presented,
-                                &budget,
-                                &mut pending_images,
-                                &memory_updates,
-                                &context,
-                                &slot,
-                            );
-                            continue 'worker;
-                        }
-                        if diagnostic_work.pending_capture() {
-                            drop(state);
-                            diagnostic_work.capture_one(&engine);
-                            context.request_repaint();
-                            continue 'worker;
-                        }
-                        if state.memory.is_some() {
-                            continue 'worker;
-                        }
-                        state.activity = None;
-                        let config = state.preparation.clone();
-                        let observed_plan = state.plan.clone();
-                        let observed_source = state.source.as_ref().map(|source| source.path.clone());
-                        drop(state);
-                        if let Some(config) = config {
-                            let inventory = memory_inventory(&presented, &budget, &mut pending_images, &slot);
-                            let pending = || {
-                                let state = slot.0.lock().unwrap();
-                                state.stop || state.clear || state.memory.is_some()
-                                    || state.preparation.as_ref().is_none_or(|current| !Arc::ptr_eq(current, &config))
-                            };
-                            if preparation.run_one(&config, &decoded_cache, &mut engine, &mut photos,
-                                inventory.reservation(), budget.limit, &pending) {
-                                trim_memory(&engine, &mut photos, &presented, &budget,
-                                    &mut pending_images, &memory_updates, &context, &slot);
-                                continue 'worker;
-                            }
-                        }
-                        state = lock.lock().unwrap();
-                        // Publication can arrive while optional work checks the cache.
-                        // Recheck foreground demand before waiting for a notification.
-                        if state.stop || state.clear || state.memory.is_some()
-                            || !Arc::ptr_eq(&state.plan, &observed_plan)
-                            || state.source.as_ref().map(|source| &source.path) != observed_source.as_ref()
-                            || diagnostic_work.pending_capture() {
-                            continue 'worker;
-                        }
-                        let (next, timeout) = wake.wait_timeout(state, std::time::Duration::from_millis(100)).unwrap();
-                        state = next;
-                        if timeout.timed_out() { continue 'worker; }
-                    }
-                };
-                #[cfg(feature = "wide-experiment")]
-                if completed.is_none() && !serial_fallback && matches!(wide.start(
-                    task.clone(), &mut engine, &mut photos, &mut cursor, &slot, &decoded_cache, &presented, &progress_updates, &budget, &mut pending_images,
-                ), wide::Start::Admitted | wide::Start::Deferred) {
-                    continue 'worker;
-                }
-                let priority = slot.0.lock().unwrap().plan.priority(&task);
-                let _activity = match priority {
-                    super::coordinator::TaskPriority::Viewport => Some(decoded_cache.foreground()),
-                    super::coordinator::TaskPriority::Auxiliary => Some(decoded_cache.auxiliary_demand()),
-                    super::coordinator::TaskPriority::Thumbnail => Some(decoded_cache.thumbnail_demand()),
-                    super::coordinator::TaskPriority::Idle => None,
-                };
-                let request = &task.request;
-                let queued_at = task.queued_at;
-                if let Some(seed) = &task.seed {
-                    presented.seed(seed);
-                }
-                let prepare_defaults = matches!(
-                    task.stamp.target.purpose,
-                    crate::rendering::request::Purpose::Current
-                );
-                previous = Some(task.stamp.clone());
-                let reporter =
-                    crate::progress::Reporter::new(progress_updates.clone(), request.revision);
-                let started = completed.as_ref().map_or_else(std::time::Instant::now, |ready| ready.started);
-                let _diagnostic_context = crate::timing::enabled()
-                    .then(|| foveonic::diagnostics::enter(crate::timing::context(&task.stamp)));
-                let already_started = completed.is_some();
-                if !already_started { crate::timing::task(
-                    &task.stamp,
-                    "execution_started",
-                    || serde_json::json!({"has_pixel_seed":task.seed.is_some(), "speculative":task.speculative}),
-                ); }
-                let _execution_scope = foveonic::diagnostics::scope(
-                    foveonic::diagnostics::Category::Cpu,
-                    if already_started { "render_delivery" } else { "render_task" },
-                );
-                if !already_started { crate::timing::worker_started(request.revision, queued_at, started); }
-                engine.set_noise_calibration(request.calibration.clone());
-                let mut metadata = None;
-                let mut settings = request.settings.clone();
-                let mut defaults_errors = Vec::new();
-                let yielded = std::cell::Cell::new(false);
+            let mut scheduler =
+                Scheduler::new(engine, MemoryTarget::default().bytes, worker_cache.clone());
+            let mut host = host::WorkerHost::new(
+                sources,
+                slot.clone(),
+                tx,
+                decoded_cache,
+                progress_updates,
+                memory_updates,
+                context.clone(),
+                diagnostic_work,
+                worker_cache,
                 #[cfg(test)]
-                let initial_submissions = engine.gpu_activity().submissions;
-                let usage = if task.speculative { SessionUse::Preparation } else { SessionUse::Foreground };
-                let interrupted = |cursor: &crate::rendering::coordinator::Cursor, settings: &Settings, metadata: &Metadata, edit: &[&'static str], idle_cancel: &dyn Fn() -> bool| {
-                    #[cfg(test)]
-                    if task.speculative && engine.gpu_activity().submissions > initial_submissions {
-                        let hold = observations.speculative_hold.lock().unwrap().take();
-                        if let Some((reached, release)) = hold {
-                            let _ = reached.send(());
-                            let _ = release.recv();
-                        }
-                    }
-                    if idle_cancel() { yielded.set(true); return true; }
-                    let state = slot.0.lock().unwrap();
-                    match interruption(cursor, &state, &task, settings, metadata, edit) {
-                        Interruption::Continue => false,
-                        Interruption::Cancel => true,
-                        Interruption::Yield => { yielded.set(true); true }
-                    }
+                observations,
+            );
+            loop {
+                let (stop, clear, memory, width) = {
+                    let mut state = slot.0.lock().unwrap();
+                    let clear = std::mem::take(&mut state.clear)
+                        .then(|| std::mem::take(&mut state.clear_all));
+                    (state.stop, clear, state.memory.take(), state.render_width)
                 };
-                let mut execute = |idle_cancel: &dyn Fn() -> bool| -> foveonic::source::Result<Execution> {
-                    let ready = if let Some(ready) = completed.take() { *ready } else {
-                        let composition_quality = presented.quality_for_view_change(request, &decoded_cache);
-                        let mut composed = presented.prepare(request, &decoded_cache)?;
-                        let reused_display = composed.as_ref().and_then(|composed| composed.display.clone());
-                        let reusing_pixels = composed.is_some();
-                        let mut reduced_loaded = if !reusing_pixels && request.uses_reduced_session()
-                            && composition_quality.is_none_or(|scale| scale.is_reduced()) {
-                            let Some(loaded) = photos.load_reduced(&request.path, request.revision, &decoded_cache, &engine, &mut |path, revision| sources.open_at(path, revision, priority))? else {
-                                return Ok(Execution::NeedsSource);
-                            };
-                            Some(loaded)
-                        } else { None };
-                        if !reusing_pixels && reduced_loaded.is_none()
-                            && !photos.load_native(&request.path, request.revision, &decoded_cache, &engine, usage,
-                                &mut |path, revision| if task.speculative { Ok(None) } else { sources.open_at(path, revision, priority) })? {
-                            return Ok(Execution::NeedsSource);
-                        }
-                        // Cached inputs have already completed both loading sections.
-                        reporter.loaded(foveonic::source::LoadStage::Decoded);
-                        metadata = Some(if let Some(composed) = &composed { composed.metadata.clone() }
-                            else if let Some(loaded) = &reduced_loaded { loaded.metadata.clone() }
-                            else { photos.native(&request.path).unwrap().metadata().clone() });
-                        let origin = if let Some(composed) = &composed { composed.origin.clone() }
-                            else if let Some(loaded) = &reduced_loaded { loaded.origin().clone() }
-                            else { photos.native(&request.path).unwrap().source().origin().clone() };
-                        (settings, defaults_errors) = resolve_settings(request, metadata.as_ref().unwrap(),
-                            composed.as_ref().map(|composed| composed.working_scale))?;
-                        if composed.is_none() {
-                            if let Some(quality) = composition_quality { settings.working_scale = quality; settings.preview_region = None; }
-                        }
-                        // Reuse and first source deferral can coexist with useful peers.
-                        // Cold or unsupported numerical work needs exclusive preparation.
-                        #[cfg(feature = "wide-experiment")]
-                        if !reusing_pixels {
-                            wide.retire(&engine, &mut photos, &mut cursor);
-                        }
-                        if let Some(export) = request.export.as_ref() {
-                            let mut profile=Profile::new(crate::timing::mode());
-                            let before=crate::timing::enabled().then(||engine.gpu_activity());
-                            photos.with_native(&request.path, |session| export::write(&engine, session, &settings, &request.path, export, &mut profile, |stage| reporter.rendered(stage)))?;
-                            if let Some(before)=before {crate::timing::emit("export",|| serde_json::json!({"revision":request.revision,"source":request.path,"destination":export.path,"format":export.format.extension(),"settings":settings,"activity":engine.gpu_activity().since(before)}));}
-                            reporter.rendered(foveonic::render::RenderProgress::Stage { completed: 1, total: 1 });
-                            return Ok(Execution::Complete(None));
-                        }
-                        let native_history = photos.native(&request.path);
-                        let edit = if reusing_pixels { Vec::new() } else if let Some(loaded) = &reduced_loaded {
-                            photos.reduced_changes(loaded, &settings)
-                                .or_else(|| native_history.map(|session| session.changed_parameters(&settings)))
-                                .unwrap_or_default()
-                        } else { photos.native(&request.path).unwrap().changed_parameters(&settings) };
-                        let cancel = || interrupted(&cursor, &settings, metadata.as_ref().unwrap(), &edit, idle_cancel);
-                        let mut profile = Profile::new(crate::timing::mode());
-                        let before = crate::timing::enabled().then(||engine.gpu_activity());
-                        let cache_before = before.map(|_|if reusing_pixels { 0 } else if let Some(loaded) = &reduced_loaded { photos.reduced_bytes(loaded) }
-                            else { photos.native(&request.path).map_or(0, RenderSession::cached_bytes) });
-                        let mut used_reduced = false;
-                        let root=request.output.as_str();
-                        let input = if request.comparison {
-                            Some(foveonic::inspection::comparison_input(&settings, root, metadata.as_deref())
-                                .ok_or("selected output has no operation-input comparison")?)
-                        } else {
-                            None
-                        };
-                        let mut roots = vec![root];
-                        if let Some(input) = input { roots.push(input); }
-                        #[cfg(test)]
-                        let recipe_before = engine.gpu_activity();
-                        let rendered = {
-                            // Timing a host span must not add a GPU wait and change the
-                            // responsiveness we are trying to measure.
-                            let _span = crate::timing::Span::new(request.revision, "processing");
-                            if let Some(composed) = composed.take() {
-                                reporter.rendered(foveonic::render::RenderProgress::Prepared);
-                                reporter.rendered(foveonic::render::RenderProgress::Stage { completed: 1, total: 1 });
-                                Some(composed.artifacts)
-                            } else if let Some(loaded) = reduced_loaded.take() {
-                                used_reduced = true;
-                                let inventory = memory_inventory(&presented, &budget, &mut pending_images, &slot);
-                                match photos.render_reduced(&engine, loaded, &settings, usage, &cancel, &mut profile,
-                                    &mut |path, revision| sources.open(path, revision), &|stage| reporter.rendered(stage),
-                                    Some(foveonic::render::ExecutionBudget { limit_bytes: budget.limit, retained: inventory.reservation() }))? {
-                                    processing::RenderOutcome::Rendered(artifacts) => Some(artifacts),
-                                    processing::RenderOutcome::Superseded => None,
-                                    processing::RenderOutcome::NeedsSource => return Ok(Execution::NeedsSource),
-                                }
-                            } else if metadata.as_ref().unwrap().processing_family()? == foveonic::source::ProcessingFamily::Merrill {
-                                let inventory = memory_inventory(&presented, &budget, &mut pending_images, &slot);
-                                photos.render_native(&engine, &request.path, &settings, &roots, usage, &cancel, &mut profile,
-                                    &|stage| reporter.rendered(stage), Some(foveonic::render::ExecutionBudget {
-                                        limit_bytes: budget.limit, retained: inventory.reservation(),
-                                    }))?
-                            } else {
-                                photos.with_native(&request.path, |session| engine.render_session_with_progress(session, &settings, &roots, cancel, &mut profile, |stage| reporter.rendered(stage)))?
-                            }
-                        };
-                        if let Some(before) = before {
-                            foveonic::diagnostics::event(foveonic::diagnostics::Category::Graph,"processing",|fields| {
-                                fields.u64("revision",request.revision).str("source",&request.path.to_string_lossy()).str("output",root)
-                                    .str("execution",if reusing_pixels {"presentation"} else if used_reduced {"reduced-session"} else {"session"})
-                                    .str("status",if rendered.is_some(){"complete"}else if yielded.get(){"yielded"}else{"superseded"})
-                                    .u64("scale",u64::from(settings.working_scale.divisor())).u64("cache_before_bytes",cache_before.unwrap_or(0))
-                                    .u64("cache_after_bytes",if reusing_pixels {0} else if used_reduced {photos.reduced_bytes_for_path(&request.path)} else {photos.native(&request.path).map_or(0, RenderSession::cached_bytes)});
-                                crate::timing::activity(fields,engine.gpu_activity().since(before));
-                            });
-                        }
-                        Ready {
-                            task: task.clone(),
-                            metadata: metadata.take().unwrap(),
-                            origin,
-                            settings: std::mem::take(&mut settings),
-                            defaults_errors: std::mem::take(&mut defaults_errors),
-                            edit,
-                            started,
-                            input,
-                            display: reused_display,
-                            #[cfg(test)]
-                            dispatches: engine.gpu_activity().since(recipe_before).dispatches,
-                            artifacts: Ok(rendered),
-                        }
-                    };
-                    metadata = Some(ready.metadata);
-                    settings = ready.settings;
-                    defaults_errors = ready.defaults_errors;
-                    #[cfg(test)]
-                    observations.recipes.lock().unwrap().push((request.revision, ready.dispatches));
-                    let origin = ready.origin;
-                    let input = ready.input;
-                    let reused_display = ready.display;
-                    let cancel = || interrupted(&cursor, &settings, metadata.as_ref().unwrap(), &ready.edit, idle_cancel);
-                    let mut profile = Profile::new(crate::timing::mode());
-                    let rendered = ready.artifacts?;
-                    let root = request.output.as_str();
-                    let Some(mut artifacts) = rendered else { return Ok(if yielded.get() { Execution::Yield } else { Execution::Complete(None) }); };
-                    if cancel(){return Ok(if yielded.get() { Execution::Yield } else { Execution::Complete(None) });}
-                    let retain_whole = presented.retain(request, &settings, &artifacts, &origin);
-                    let view_before = crate::timing::enabled().then(||engine.gpu_activity());
-                    let comparison = if let Some(input) = input {
-                        let baseline = artifacts.pop().ok_or("missing comparison input")?;
-                        let Content::Image(image) = baseline.content else {
-                            return Err("comparison input must be an image".into());
-                        };
-                        let _span = crate::timing::Span::new(request.revision, "comparison_view_prepare_host");
-                        Some(Comparison {
-                            input,
-                            texture: if let Some(display) = &reused_display { display.comparison.as_ref().unwrap().texture.clone() }
-                                else { Arc::new(engine.view_texture(&image, None, &mut profile)?) },
-                        })
-                    } else { None };
-                    let artifact = artifacts.pop().ok_or("missing requested artifact")?;
-                    let Content::Image(image) = &artifact.content else {
-                        return Err(
-                            "GUI inspection requires a visual image buffer; node-data diagnostics are deferred"
-                                .into(),
-                        );
-                    };
-                    if cancel(){return Ok(if yielded.get() { Execution::Yield } else { Execution::Complete(None) });}
-                    let native_extent=if root=="final" {foveonic::render::native_extent(&artifact.metadata)?} else {image.uncropped_view().extent};
-                    let texture = {
-                        let _span = crate::timing::Span::new(request.revision, "view_prepare_host");
-                        if let Some(display) = &reused_display { display.texture.clone() } else {
-                            let uncropped=request.framing_preview.then(||image.without_composition());
-                            Arc::new(engine.view_texture(uncropped.as_ref().unwrap_or(image.as_ref()), None, &mut profile)?)
-                        }
-                    };
-                    if comparison.as_ref().is_some_and(|c| c.texture.description().extent != texture.description().extent) {
-                        return Err("comparison views have different geometry".into());
-                    }
-                    if reused_display.is_none() {
-                        let _span = crate::timing::Span::new(request.revision, "view_completion_wait");
-                        engine.wait_for_submitted_work()?;
-                    }
-                    if let Some(before)=view_before{foveonic::diagnostics::event(foveonic::diagnostics::Category::Presentation,"view",|fields| {
-                        fields.u64("revision",request.revision).str("source",&request.path.to_string_lossy()).str("output",root);
-                        crate::timing::activity(fields,engine.gpu_activity().since(before));
-                    });}
-                    if retain_whole { presented.display(texture.clone(), comparison.clone(), request.framing_preview); }
-                    Ok(Execution::Complete(Some(Box::new(Frame {
-auxiliary_preview: request.auxiliary_preview,
-
-                        diagnostic_task: crate::timing::DeliveredTask::from(&ready.task.stamp),
-                        origin: origin.clone(),
-                        detail: request.detail,
-                        framing_preview: request.framing_preview,
-                        native_extent,
-                        calibration_signature: request.calibration.as_ref().map(|p| p.signature().to_owned()),
-                        rendition: request.rendition,
-                        processing_quality: artifact.settings.processing_quality,
-                        requested: { let mut requested = request.settings.clone(); requested.processing_quality = artifact.settings.processing_quality; requested },
-                        path: request.path.clone(),
-                        output: request.output.clone(),
-                        artifact,
-                        texture,
-                        comparison,
-                        milliseconds: ready.started.elapsed().as_secs_f64() * 1000.,
-                        revision:request.revision,
-                        queued_at,
-                    }))))
-                };
-                let mut attempt = |cancel: &dyn Fn() -> bool| {
-                    let result = execute(cancel);
-                    if cancel() { Ok(Execution::Yield) } else { result }
-                };
-                let result = match priority {
-                    super::coordinator::TaskPriority::Viewport => attempt(&|| false),
-                    super::coordinator::TaskPriority::Auxiliary => decoded_cache.auxiliary_execution(attempt).unwrap_or(Ok(Execution::Yield)),
-                    super::coordinator::TaskPriority::Thumbnail => decoded_cache.thumbnail_execution(attempt).unwrap_or(Ok(Execution::Yield)),
-                    super::coordinator::TaskPriority::Idle => decoded_cache.idle_execution(attempt).unwrap_or(Ok(Execution::Yield)),
-                };
-                let result = match result {
-                    Ok(Execution::Yield) => {
-                        crate::timing::task(&task.stamp, "execution_yielded", || serde_json::json!({"reason":"foreground"}));
-                        cursor.yield_task(&task.stamp);
-                        #[cfg(test)] {
-                            observations.yielded.0.lock().unwrap().push(task.stamp.clone());
-                            observations.yielded.1.notify_all();
-                        }
-                        #[cfg(feature = "wide-experiment")]
-                        let executions_idle = wide.is_idle();
-                        #[cfg(not(feature = "wide-experiment"))]
-                        let executions_idle = true;
-                        if executions_idle {
-                            trim_memory(&engine, &mut photos, &presented, &budget,
-                                &mut pending_images, &memory_updates, &context, &slot);
-                        }
-                        previous = None;
-                        continue 'worker;
-                    }
-                    Ok(Execution::NeedsSource) => {
-                        crate::timing::task(&task.stamp, "execution_deferred", || serde_json::json!({"reason":"source-loading"}));
-                        cursor.defer(&task.stamp);
-                        #[cfg(test)] {
-                            observations.deferred.0.lock().unwrap().push(task.stamp.clone());
-                            observations.deferred.1.notify_all();
-                        }
-                        previous = None;
-                        if request.export.is_some() { slot.0.lock().unwrap().export = Some(task.clone()); }
-                        continue 'worker;
-                    }
-                    Ok(Execution::Complete(frame)) => Ok(frame.map(|frame| *frame)),
-                    Err(error) => Err(error),
-                }
-                .map_err(|e| {
-                    foveonic::support::report_error("render.execute",e.as_ref(),foveonic::support::OperationContext {
-                        operation_id:Some(format!("render-{}",task.stamp.id.0)), component:Some("render worker".into()),
-                        source:Some(request.path.to_string_lossy().into_owned()), revision:Some(request.revision.to_string()),
-                        purpose:Some(format!("{:?}",request.purpose())),
-                        settings:Some(serde_json::json!({"requested":foveonic::support::settings_snapshot(&request.settings),"effective":foveonic::support::settings_snapshot(&settings),"output":request.output,"quality":request.processing_quality})),
-                        ..Default::default()
-                    });
-                    if defaults_errors.is_empty() {
-                        e.to_string()
-                    } else {
-                        format!(
-                            "{e}; {}. Choose a preset in Processing.",
-                            defaults_errors.join("; ")
-                        )
-                    }
-                });
-                // Reply settings populate photo edits. Preview policy stays in UI preferences.
-                settings.working_scale = Scale::NATIVE;
-                settings.preview_region = None;
-                settings.dehaze_estimate = false;
-                let resolved_numeric = if prepare_defaults {
-                    metadata.as_deref().and_then(|metadata| {
-                        foveonic::render::numeric_settings(&settings, metadata).ok()
-                    })
-                } else {
-                    None
-                };
-                let (mut numeric_settings, mut reset_settings) = resolved_numeric
-                    .map_or((None, None), |(numeric, reset)| {
-                        (Some(numeric), Some(reset))
-                    });
-                if let Some(numeric) = &mut numeric_settings {
-                    if numeric.dehaze.shadow.is_none() {
-                        numeric.dehaze.shadow = result
-                            .as_ref()
-                            .ok()
-                            .and_then(Option::as_ref)
-                            .and_then(|frame| frame.artifact.dehaze_estimate);
-                    }
-                }
-                if let Some(defaults) = &mut reset_settings {
-                    defaults.dehaze.shadow = result
-                        .as_ref()
-                        .ok()
-                        .and_then(Option::as_ref)
-                        .and_then(|frame| frame.artifact.dehaze_estimate);
-                }
-                let publication = crate::timing::Span::new(request.revision, "reply_publication");
-                crate::timing::task(&task.stamp, "execution_finished", || {
-                    serde_json::json!({
-                    "outcome":match &result {Ok(Some(_))=>"rendered",Ok(None) if request.export.is_some()=>"exported",Ok(None)=>"cancelled",Err(_)=>"failed"},
-                    "error":result.as_ref().err()})
-                });
-                if let Ok(Some(frame)) = &result {
-                    pending_images.push(crate::memory::PendingImage::new(frame));
-                }
-                #[cfg(feature = "wide-experiment")]
-                let executions_idle = wide.is_idle();
-                #[cfg(not(feature = "wide-experiment"))]
-                let executions_idle = true;
-                if executions_idle {
-                trim_memory(
-                    &engine,
-                                        &mut photos,
-                    &presented,
-                    &budget,
-                    &mut pending_images,
-                    &memory_updates,
-                    &context,
-                    &slot,
-                );
-                }
-                crate::timing::task(
-                    &task.stamp,
-                    "reply_ready",
-                    || serde_json::json!({"mailbox":"image_replies","capacity":2}),
-                );
-                if matches!(&result, Ok(Some(_))) {
-                    diagnostic_work.before_delivery(&request.path, request.revision);
-                }
-                #[cfg(all(test, feature = "wide-experiment"))]
-                { *observations.gpu_activity.lock().unwrap() = engine.gpu_activity(); }
-                if tx
-                    .send(Update::Image(Box::new(Reply {
-                        request: task.request.clone(),
-                        handling: None,
-                        stamp: task.stamp.clone(),
-                        path: request.path.clone(),
-                        rendition: request.rendition,
-                        revision: request.revision,
-                        metadata,
-                        settings,
-                        numeric_settings,
-                        reset_settings,
-                        result,
-                        exported: request.export.clone(),
-                    })))
-                    .is_err()
-                {
+                if stop {
                     break;
                 }
-                #[cfg(feature = "wide-experiment")]
-                cursor.release(&task.stamp);
-                drop(publication);
-                crate::timing::task(
-                    &task.stamp,
-                    "reply_send_returned",
-                    || serde_json::json!({"mailbox":"image_replies"}),
+                if let Some(all) = clear {
+                    scheduler.drop_jobs();
+                    host.reset();
+                    if all {
+                        let (engine, working) = scheduler.engine_and_working();
+                        host.photos
+                            .clear(working, engine)
+                            .expect("jobs retire before clear");
+                        host.reset_preparation();
+                    }
+                    host.trim(&mut scheduler);
+                    continue;
+                }
+                if let Some(target) = memory {
+                    scheduler.set_target(target.bytes);
+                    host.target = target;
+                    host.trim(&mut scheduler);
+                }
+                scheduler.set_width_cap(width);
+                host.sync(&mut scheduler);
+                let worked = scheduler.tick(&mut host);
+                #[cfg(test)]
+                host.observations.widest.fetch_max(
+                    scheduler.widest() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
                 );
+                if host.disconnected {
+                    break;
+                }
+                if worked {
+                    host.trim(&mut scheduler);
+                    continue;
+                }
+                if host.diagnostic_work.pending_capture() {
+                    host.diagnostic_work.capture_one(scheduler.engine());
+                    context.request_repaint();
+                    continue;
+                }
+                let (lock, wake) = &*slot;
+                let mut state = lock.lock().unwrap();
+                // Nothing can run now, so release viewport demand that other
+                // threads would otherwise wait behind.
+                state.activity = None;
+                if state.stop
+                    || state.clear
+                    || state.memory.is_some()
+                    || host.plan_changed(&state)
+                    || host.diagnostic_work.pending_capture()
+                {
+                    continue;
+                }
+                drop(wake.wait_timeout(state, IDLE_RECHECK).unwrap());
             }
-            #[cfg(feature = "wide-experiment")]
-            wide.retire(&engine, &mut photos, &mut cursor);
+            scheduler.drop_jobs();
         });
         spawned.expect("start render-worker thread");
         let (runtime, replies) = super::runtime::Handle::start(
@@ -1213,34 +570,23 @@ auxiliary_preview: request.auxiliary_preview,
     pub fn hold_source(&self, path: PathBuf) -> LoadHold {
         self.source_control.hold(path)
     }
-    pub fn set_view(&self, view: super::delivery::ViewState) {
-        self.runtime.set_view(view);
-    }
-    pub fn activate(&self, path: &std::path::Path) {
-        self.runtime.activate(path.to_owned());
-    }
     pub fn configure_preparation(&self, config: PreparationConfig) {
         self.runtime.preparation(config);
-    }
-    pub fn set_background_completion(&self, enabled: bool) {
-        self.runtime.set_background_completion(enabled);
     }
     pub fn pick_color(
         &self,
         request: ColorPickRequest,
-        image_revision: u64,
+        image_request_id: RequestId,
         origin: Option<foveonic::source::SourceOrigin>,
     ) {
-        self.runtime.pick(request, image_revision, origin);
+        self.runtime.pick(request, image_request_id, origin);
     }
-    pub fn set_memory_budget(&self, limit: u64, frontend: crate::memory::Inventory) {
-        self.runtime.memory(limit, frontend);
+    pub fn set_memory_target(&self, target: u64, frontend: crate::memory::Inventory) {
+        self.runtime.memory(target, frontend);
     }
-    #[cfg(all(test, feature = "wide-experiment"))]
+    #[cfg(test)]
     pub fn set_render_width(&self, maximum: usize) {
-        let maximum = maximum.clamp(1, 8);
-        self.runtime
-            .set_render_width((maximum > 1).then_some(maximum));
+        self.runtime.set_render_width(Some(maximum));
     }
     pub fn memory_status(&self) -> MemoryStatus {
         if let Ok(status) = self.memory.try_lock() {
@@ -1248,107 +594,44 @@ auxiliary_preview: request.auxiliary_preview,
         }
         self.observed_memory.borrow().clone()
     }
-    pub fn retire_before(&self, path: &std::path::Path) {
-        self.runtime.retire_before(path.to_owned());
-    }
-    pub fn clear(&self) {
-        self.runtime.clear(false);
-    }
     pub fn clear_all(&self) {
         self.runtime.clear(true);
     }
     pub fn submit_scopes(&self, request: ScopeRequest) {
         self.runtime.scopes(request);
     }
-    pub fn submit(&self, request: Request) {
-        self.submit_at(request, std::time::Instant::now());
-    }
-    pub fn submit_at(&self, request: Request, queued_at: std::time::Instant) {
-        self.runtime.submit(request, queued_at);
-    }
-    pub fn refine(
+    pub fn plan(
         &self,
-        request: super::request::Refinement,
+        photos: super::coordinator::Photos,
+        planned: Vec<super::view_plan::Planned>,
         queued_at: std::time::Instant,
     ) -> bool {
-        let origin = self.cache.source_origin(&request.first.path);
-        self.runtime.refine(request, origin, queued_at)
+        self.runtime.plan(photos, planned, queued_at)
     }
-    pub fn cancel_refinement(&self, path: &std::path::Path, rendition: crate::editor::Rendition) {
-        self.runtime.cancel_refinement(path.to_owned(), rendition);
+    pub fn planned_patch(&self, path: &std::path::Path) -> Option<[u32; 4]> {
+        self.runtime.planned_patch(path)
     }
-    pub fn retire_detail(&self, path: &std::path::Path) {
-        self.runtime.retire_detail(path.to_owned());
-    }
-    pub fn set_overviews(
-        &self,
-        requests: Vec<Request>,
-        paths: &[PathBuf],
-        retained: &[PathBuf],
-        queued_at: std::time::Instant,
-    ) {
-        self.runtime
-            .overviews(requests, paths.to_vec(), retained.to_vec(), queued_at);
-    }
-    pub fn retain_overviews(&self, paths: &[PathBuf], retained: &[PathBuf]) {
-        self.runtime.retain(paths.to_vec(), retained.to_vec());
+    #[cfg(test)]
+    pub fn clear(&self) {
+        self.runtime.clear(false);
     }
     pub fn busy(&self) -> bool {
         self.runtime.busy()
     }
-    pub fn is_settled_and_admitted(&self, frame: &Frame) -> bool {
+    pub fn is_settled_and_admitted(&self, frame: &RenderResult) -> bool {
         self.runtime.is_settled_and_admitted(frame)
     }
-    pub fn delivered(&self, revision: u64) {
-        self.runtime.delivered(revision);
+    pub fn whole_delivered(&self, request_id: RequestId) {
+        self.runtime.whole_delivered(request_id);
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn trim_memory(
-    engine: &Engine,
-    photos: &mut processing::Photos,
-    presented: &presentation::Presentation,
-    budget: &MemoryBudget,
-    pending_images: &mut Vec<crate::memory::PendingImage>,
-    updates: &Arc<Mutex<MemoryStatus>>,
-    context: &egui::Context,
-    slot: &Arc<(Mutex<Pending>, Condvar)>,
-) {
-    let inventory = memory_inventory(presented, budget, pending_images, slot);
-    if foveonic::diagnostics::enabled() {
-        let resources = photos.memory_resources(engine, inventory.reservation());
-        memory_snapshot("before_trim", resources, budget.limit, photos);
-    }
-    let trim = photos.trim_memory(engine, budget.limit, inventory.reservation());
-    memory_snapshot("after_trim", trim.resources, budget.limit, photos);
-    let status = MemoryStatus {
-        resources: trim.resources,
-        over_budget_bytes: trim.over_budget_bytes,
-        reduced_sources: photos.reduced_sources(),
-    };
-    let changed = {
-        let mut previous = updates.lock().unwrap();
-        let changed = *previous != status;
-        *previous = status;
-        changed
-    };
-    if changed {
-        if crate::timing::enabled() {
-            crate::timing::emit(
-                "memory",
-                || serde_json::json!({"limit_bytes": budget.limit, "resources": trim.resources, "over_budget_bytes": trim.over_budget_bytes, "evicted_sessions": trim.evicted_sessions}),
-            );
-        }
-        context.request_repaint();
-    }
-}
-
-fn memory_snapshot(
+pub(super) fn memory_snapshot(
     phase: &'static str,
     resources: foveonic::render::MemoryResources,
-    budget: u64,
-    photos: &processing::Photos,
+    target: u64,
+    working: &WorkingSet,
 ) {
     foveonic::diagnostics::event(
         foveonic::diagnostics::Category::Memory,
@@ -1360,23 +643,23 @@ fn memory_snapshot(
                 .u64("gpu_bytes", resources.gpu_bytes)
                 .u64("reserved_bytes", resources.reserved_bytes)
                 .u64("retained_bytes", resources.total_bytes)
-                .u64("budget_bytes", budget)
+                .u64("target_bytes", target)
                 .u64(
-                    "over_budget_bytes",
-                    resources.total_bytes.saturating_sub(budget),
+                    "over_target_bytes",
+                    resources.total_bytes.saturating_sub(target),
                 );
-            fields.u64("native_sessions", photos.native_sources().count() as u64);
+            fields.u64("native_sessions", working.native_count() as u64);
         },
     );
 }
 
 fn memory_inventory(
     presented: &presentation::Presentation,
-    budget: &MemoryBudget,
+    target: &MemoryTarget,
     pending_images: &mut Vec<crate::memory::PendingImage>,
     slot: &Arc<(Mutex<Pending>, Condvar)>,
 ) -> crate::memory::Inventory {
-    let mut inventory = budget.frontend.clone();
+    let mut inventory = target.frontend.clone();
     let (retained, scopes, loaded) = {
         let pending = slot.0.lock().unwrap();
         (
@@ -1399,7 +682,7 @@ fn memory_inventory(
         inventory.image(&scopes.request.image);
     }
     presented.memory_resources(&mut inventory);
-    pending_images.retain(|image| image.reserve(&budget.frontend, &mut inventory));
+    pending_images.retain(|image| image.reserve(&target.frontend, &mut inventory));
     inventory
 }
 
@@ -1422,7 +705,7 @@ fn record_source_load(revision: u64, path: &std::path::Path, loaded: &foveonic::
 
 fn pick_color(
     engine: &Engine,
-    session: &mut RenderSession,
+    session: &mut NativePhoto,
     request: &ColorPickRequest,
     cancel: impl Fn() -> bool,
 ) -> foveonic::source::Result<foveonic::render::ColorRangeSample> {
@@ -1439,7 +722,7 @@ fn pick_color(
         return Err(errors.join("; ").into());
     }
     let artifacts = engine
-        .render_session(
+        .render_native_photo(
             session,
             &settings,
             &[match request.tool {
@@ -1489,7 +772,7 @@ fn analyze_scopes(
     let _diagnostic_context = crate::timing::enabled().then(|| {
         foveonic::diagnostics::enter(foveonic::diagnostics::Context {
             task: task.id.0,
-            revision: request.key.revision,
+            revision: request.key.request_id.0,
             photo: request.photo,
             purpose: "scopes",
             node: None,
@@ -1519,12 +802,12 @@ fn analyze_scopes(
     }
     let before = crate::timing::enabled().then(|| engine.gpu_activity());
     let mut profile = Profile::new(crate::timing::mode());
-    let span = crate::timing::Span::new(request.key.revision, "scopes");
+    let span = crate::timing::Span::new(request.key.request_id.0, "scopes");
     let result = engine
         .scopes(&request.image, request.key.region, &mut profile)
         .map_err(|error| {
             foveonic::support::report_error("render.scopes",error.as_ref(),foveonic::support::OperationContext {
-                component:Some("scopes".into()),revision:Some(request.key.revision.to_string()),
+                component:Some("scopes".into()),revision:Some(request.key.request_id.to_string()),
                 settings:Some(serde_json::json!({"region":request.key.region,"parent_render_revision":request.parent_render_revision})),
                 ..Default::default()
             });
@@ -1533,7 +816,7 @@ fn analyze_scopes(
     if let Some(before) = before {
         crate::timing::emit(
             "scopes",
-            || serde_json::json!({"revision":request.key.revision,"region":request.key.region,"activity":engine.gpu_activity().since(before),"status":if result.is_ok(){"complete"}else{"error"}}),
+            || serde_json::json!({"revision":request.key.request_id,"region":request.key.region,"activity":engine.gpu_activity().since(before),"status":if result.is_ok(){"complete"}else{"error"}}),
         );
     }
     drop(span);
@@ -1554,11 +837,20 @@ fn analyze_scopes(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use crate::rendering::request::RequestId;
     use foveonic::render::{ProcessingQuality, Scale};
-    pub(super) struct TestWorker {
+    /// A worker driven like the app: every image a test wants is published
+    /// together as one plan, so tests and the app share the planning path.
+    /// Unlike the app, every wanted image is rendered (`render: true`), so
+    /// held whole images and patch-first ordering are not exercised here, and
+    /// `submit` keeps earlier photos wanted instead of retiring them. Publish
+    /// only through these methods: the worker's own `plan` bypasses `wanted`.
+    pub(crate) struct TestWorker {
         worker: super::Worker,
-        requests: std::cell::RefCell<Vec<super::Request>>,
+        /// `(request, speculative)` for each wanted image, in priority order.
+        wanted: std::cell::RefCell<Vec<(super::RenderRequest, bool)>>,
+        history: std::cell::RefCell<Vec<std::path::PathBuf>>,
     }
     impl std::ops::Deref for TestWorker {
         type Target = super::Worker;
@@ -1570,75 +862,71 @@ mod tests {
         pub fn new(engine: foveonic::render::Engine, context: eframe::egui::Context) -> Self {
             Self {
                 worker: super::Worker::new(engine, context),
-                requests: Default::default(),
+                wanted: Default::default(),
+                history: Default::default(),
             }
         }
-        fn publish_view(&self, active: &super::Request) {
-            self.worker.set_view(crate::rendering::delivery::ViewState {
-                processing_quality: if active.output == "final"
-                    && !active.comparison
-                    && active.export.is_none()
-                {
-                    active.processing_quality
-                } else {
-                    ProcessingQuality::Quality
-                },
-                active: Some(active.path.clone()),
-                rendition: active.rendition,
-                output: active.output.clone(),
-                comparison: active.comparison,
-                framing_preview: active.framing_preview,
-                exporting: active.export.is_some(),
-                calibration: active
-                    .calibration
-                    .as_ref()
-                    .map(|p| p.signature().to_owned()),
-                settings: active.settings.clone(),
-                overviews: self
-                    .requests
-                    .borrow()
-                    .iter()
-                    .map(|request| crate::rendering::delivery::PhotoView {
-                        rendition: request.rendition,
-                        path: request.path.clone(),
-                        settings: request.settings.clone(),
-                        displayed_revision: None,
-                        detail_revision: None,
-                    })
-                    .collect(),
-                displayed_revision: None,
-                detail_revision: None,
-            });
+        /// Want this image too, replacing the image wanted for the same target.
+        pub fn submit(&self, request: super::RenderRequest) {
+            self.plan_images(vec![(request, false)]);
         }
-        pub fn submit(&self, request: super::Request) {
-            let mut requests = self.requests.borrow_mut();
-            requests.retain(|old| old.path != request.path);
-            requests.push(request.clone());
-            drop(requests);
-            self.publish_view(&request);
-            self.worker.submit(request);
-        }
-        pub fn set_overviews(
-            &self,
-            requests: Vec<super::Request>,
-            retained: &[std::path::PathBuf],
-        ) {
-            *self.requests.borrow_mut() = requests.clone();
-            if let Some(active) = requests.first() {
-                self.publish_view(active);
+        /// Want these images, each `(request, speculative)`, replacing those
+        /// wanted for the same targets.
+        pub fn plan_images(&self, images: Vec<(super::RenderRequest, bool)>) {
+            let mut wanted = self.wanted.borrow_mut();
+            for (request, speculative) in images {
+                let target = crate::rendering::coordinator::Target::of(&request);
+                wanted.retain(|(old, _)| crate::rendering::coordinator::Target::of(old) != target);
+                wanted.push((request, speculative));
             }
-            let paths = requests
+            drop(wanted);
+            self.publish();
+        }
+        /// Want only these images, as the app does when it shows them, keeping
+        /// `retained` photos' finished images as history.
+        pub fn show(&self, requests: Vec<super::RenderRequest>, retained: &[std::path::PathBuf]) {
+            *self.wanted.borrow_mut() = requests
+                .into_iter()
+                .map(|request| (request, false))
+                .collect();
+            *self.history.borrow_mut() = retained.to_vec();
+            self.publish();
+        }
+        /// Forget every wanted image and history photo, and clear the worker.
+        pub fn clear(&self) {
+            self.wanted.borrow_mut().clear();
+            self.history.borrow_mut().clear();
+            self.worker.clear();
+        }
+        fn publish(&self) {
+            let wanted = self.wanted.borrow();
+            let mut displayed = Vec::new();
+            for (request, _) in wanted.iter() {
+                if !displayed.contains(&request.path) {
+                    displayed.push(request.path.clone());
+                }
+            }
+            let planned = wanted
                 .iter()
-                .map(|request| request.path.clone())
-                .collect::<Vec<_>>();
-            self.worker
-                .set_overviews(requests, &paths, retained, std::time::Instant::now());
+                .map(
+                    |(request, speculative)| crate::rendering::view_plan::Planned {
+                        request: request.clone(),
+                        speculative: *speculative,
+                        render: true,
+                        tracked: !speculative,
+                    },
+                )
+                .collect();
+            let photos = crate::rendering::coordinator::Photos {
+                displayed,
+                history: self.history.borrow().clone(),
+                ..Default::default()
+            };
+            self.worker.plan(photos, planned, std::time::Instant::now());
         }
     }
-    pub(super) fn handle_result(
-        _worker: &super::Worker,
-        reply: &super::Reply,
-    ) -> super::super::coordinator::ResultUpdate {
+    /// What the coordinator decided about a reply before sending it on.
+    pub(super) fn handling(reply: &super::Reply) -> super::super::coordinator::ResultUpdate {
         reply.handling.expect("coordinator handled the result")
     }
     pub(super) fn receive(worker: &super::Worker) -> super::Reply {
@@ -1648,115 +936,11 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_secs(20))
                 .unwrap()
             {
-                handle_result(worker, &reply);
+                handling(&reply);
                 return *reply;
             }
         }
     }
-    #[test]
-    #[ignore = "requires a GPU and QUATTRO_X3F ordinary full-resolution sample"]
-    fn quattro_dng_export_uses_original_source_from_any_inspection_view() {
-        use foveonic::{
-            render::{ControlCapabilities, Rendering, Settings},
-            source::Source,
-        };
-        let path = std::path::PathBuf::from(std::env::var_os("QUATTRO_X3F").unwrap());
-        let source = Source::open(&path).unwrap();
-        let capabilities = ControlCapabilities::from_metadata(&source.metadata).unwrap();
-        assert_eq!(
-            capabilities.family,
-            foveonic::source::ProcessingFamily::Quattro
-        );
-        let expected_model = source.metadata.properties["CAMMODEL"].clone();
-        let mut selections = Vec::new();
-        for rendering in [Rendering::Color, Rendering::Monochrome] {
-            let mut settings = Settings::new("", "");
-            settings.rendering = rendering;
-            capabilities
-                .apply_capture_defaults(&mut settings, &source.metadata)
-                .unwrap();
-            // Exercise a non-default presentation without baking it into a GUI frame.
-            if rendering == Rendering::Color {
-                settings.color_mode = "Vivid".into();
-            }
-            settings.exposure = 0.4;
-            settings.tone.shadows = 0.2;
-            selections.push(settings);
-        }
-        drop(source);
-        let directory = std::env::temp_dir().join(format!(
-            "foveonic-quattro-gui-dng-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&directory).unwrap();
-        let worker = TestWorker::new(
-            foveonic::render::Engine::new().unwrap(),
-            eframe::egui::Context::default(),
-        );
-        for (index, settings) in selections.into_iter().enumerate() {
-            let destination = directory.join(format!("{index}.dng"));
-            worker.submit(super::Request {
-                auxiliary_preview: false,
-
-                detail: false,
-                framing_preview: false,
-                calibration: None,
-                rendition: Default::default(),
-                preview_scale: Scale::NATIVE,
-                processing_quality: ProcessingQuality::Quality,
-                revision: index as u64 + 1,
-                path: path.clone(),
-                settings: settings.clone(),
-                output: "sensor.blue".into(),
-                comparison: true,
-                export: Some(super::Export {
-                    path: destination.clone(),
-                    format: super::ExportFormat::Dng,
-                    tiff_color_space: settings.tiff_color_space,
-                    encoding: Default::default(),
-                    sections: Default::default(),
-                    conflict: foveonic::importing::ConflictPolicy::Rename,
-                }),
-            });
-            let reply = loop {
-                if let super::Update::Image(reply) = worker
-                    .replies
-                    .recv_timeout(std::time::Duration::from_secs(60))
-                    .unwrap()
-                {
-                    break *reply;
-                }
-            };
-            assert_eq!(reply.revision, index as u64 + 1);
-            assert_eq!(
-                reply.exported.map(|e| e.format),
-                Some(super::ExportFormat::Dng)
-            );
-            assert!(reply.result.expect("Quattro DNG export").is_none());
-            assert_eq!(reply.settings.rendering, settings.rendering);
-            assert_eq!(reply.settings.exposure, settings.exposure);
-            assert_eq!(reply.settings.tone, settings.tone);
-            assert_eq!(reply.settings.monochrome, settings.monochrome);
-            if !settings.is_monochrome() {
-                assert_eq!(reply.settings.color_mode, settings.color_mode);
-            }
-            assert_eq!(
-                reply.metadata.unwrap().properties["CAMMODEL"],
-                expected_model
-            );
-            let bytes = std::fs::read(&destination).unwrap();
-            assert!(bytes.len() > 1024);
-            assert_eq!(&bytes[..4], b"II\x2a\0");
-            std::fs::remove_file(destination).unwrap();
-        }
-        drop(worker);
-        std::fs::remove_dir(directory).unwrap();
-    }
-
     #[test]
     #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
     fn worker_coalesces_identical_requests_and_rejects_table_inspection() {
@@ -1767,26 +951,23 @@ mod tests {
             eframe::egui::Context::default(),
         );
         for revision in 1..=20 {
-            worker.submit(super::Request {
-                auxiliary_preview: false,
-
+            worker.submit(super::RenderRequest {
                 detail: false,
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
                 preview_scale: Scale::NATIVE,
                 processing_quality: ProcessingQuality::Quality,
-                revision,
+                id: RequestId(revision),
                 path: path.clone(),
                 settings: foveonic::render::Settings::new("", ""),
                 output: "sensor.layers".into(),
                 comparison: false,
-                export: None,
             });
         }
         {
             let reply = receive(&worker);
-            let frame = reply.result.unwrap().unwrap();
+            let frame = reply.result.unwrap_rendered();
             assert!(worker.is_settled_and_admitted(&frame));
             assert_eq!(frame.artifact.name, "sensor.layers");
             assert!(std::sync::Arc::ptr_eq(frame.view(true), &frame.texture));
@@ -1799,25 +980,22 @@ mod tests {
             assert_eq!(frame.artifact.settings.white_balance, "Sunlight");
             assert!(reply.metadata.unwrap().properties.contains_key("CAMMODEL"));
         }
-        worker.submit(super::Request {
-            auxiliary_preview: false,
-
+        worker.submit(super::RenderRequest {
             detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
             preview_scale: Scale::NATIVE,
             processing_quality: ProcessingQuality::Quality,
-            revision: 21,
+            id: RequestId(21),
             path: path.clone(),
             settings: foveonic::render::Settings::new("", ""),
             output: "final".into(),
             comparison: false,
-            export: None,
         });
         let reply = receive(&worker);
-        assert_eq!(reply.revision, 21);
-        let frame = reply.result.unwrap().unwrap();
+        assert_eq!(reply.request.id, RequestId(21));
+        let frame = reply.result.unwrap_rendered();
         assert_eq!(frame.artifact.name, "tone.rgb"); // final aliases the last enabled recipe output
         assert!(matches!(
             frame.texture.description().space,
@@ -1825,24 +1003,21 @@ mod tests {
         ));
         assert_eq!(frame.artifact.settings.white_balance, "Sunlight");
         assert_eq!(frame.artifact.settings.color_mode, "Standard");
-        worker.submit(super::Request {
-            auxiliary_preview: false,
-
+        worker.submit(super::RenderRequest {
             detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
             preview_scale: Scale::NATIVE,
             processing_quality: ProcessingQuality::Quality,
-            revision: 22,
+            id: RequestId(22),
             path,
             settings: foveonic::render::Settings::new("", ""),
             output: "black.histogram".into(),
             comparison: false,
-            export: None,
         });
         let reply = receive(&worker);
-        assert_eq!(reply.revision, 22);
+        assert_eq!(reply.request.id, RequestId(22));
         assert_eq!(reply.settings.white_balance, "Sunlight");
         assert_eq!(reply.settings.color_mode, "Standard");
         assert_eq!(reply.settings.working_scale, Scale::NATIVE);
@@ -1856,8 +1031,7 @@ mod tests {
             .contains_key("CAMMODEL"));
         assert!(reply
             .result
-            .err()
-            .unwrap()
+            .unwrap_failed()
             .contains("GUI inspection requires a visual image buffer"));
         worker.clear();
     }
@@ -1888,26 +1062,26 @@ mod tests {
         .enumerate()
         {
             let revision = index as u64 + 1;
-            worker.submit(super::Request {
-                auxiliary_preview: false,
-
-                detail: false,
-                framing_preview: false,
-                calibration: None,
-                rendition: Default::default(),
-                preview_scale: Scale::NATIVE,
-                processing_quality: ProcessingQuality::Quality,
-                revision,
-                path: path.clone(),
-                settings: settings.clone(),
-                output: output.into(),
-                comparison: true,
-                export: None,
-            });
+            worker.show(
+                vec![super::RenderRequest {
+                    detail: false,
+                    framing_preview: false,
+                    calibration: None,
+                    rendition: Default::default(),
+                    preview_scale: Scale::NATIVE,
+                    processing_quality: ProcessingQuality::Quality,
+                    id: RequestId(revision),
+                    path: path.clone(),
+                    settings: settings.clone(),
+                    output: output.into(),
+                    comparison: true,
+                }],
+                &[],
+            );
             let reply = receive(&worker);
-            assert_eq!(reply.revision, revision);
-            let frame = reply.result.unwrap().unwrap();
-            assert_eq!(frame.output, output);
+            assert_eq!(reply.request.id, RequestId(revision));
+            let frame = reply.result.unwrap_rendered();
+            assert_eq!(frame.request.output, output);
             assert_eq!(frame.artifact.settings, settings);
             let comparison = frame.comparison.as_ref().unwrap();
             assert_eq!(comparison.input, input);
@@ -1927,23 +1101,23 @@ mod tests {
                 frame.texture.description().space
             );
         }
-        worker.submit(super::Request {
-            auxiliary_preview: false,
-
-            detail: false,
-            framing_preview: false,
-            calibration: None,
-            rendition: Default::default(),
-            preview_scale: Scale::NATIVE,
-            processing_quality: ProcessingQuality::Quality,
-            revision: 9,
-            path: path.clone(),
-            settings: settings.clone(),
-            output: "repair.layers".into(),
-            comparison: true,
-            export: None,
-        });
-        let frame = receive(&worker).result.unwrap().unwrap();
+        worker.show(
+            vec![super::RenderRequest {
+                detail: false,
+                framing_preview: false,
+                calibration: None,
+                rendition: Default::default(),
+                preview_scale: Scale::NATIVE,
+                processing_quality: ProcessingQuality::Quality,
+                id: RequestId(9),
+                path: path.clone(),
+                settings: settings.clone(),
+                output: "repair.layers".into(),
+                comparison: true,
+            }],
+            &[],
+        );
+        let frame = receive(&worker).result.unwrap_rendered();
         assert_eq!(
             frame.comparison.as_ref().unwrap().input,
             "calibration.layers"
@@ -1951,26 +1125,25 @@ mod tests {
         assert_eq!(frame.texture.description().space, Space::CalibratedLayers);
         drop(frame);
         for (revision, output) in [(10, "reconstruction.rgb"), (11, "final")] {
-            worker.submit(super::Request {
-                auxiliary_preview: false,
-
-                detail: false,
-                framing_preview: false,
-                calibration: None,
-                rendition: Default::default(),
-                preview_scale: Scale::NATIVE,
-                processing_quality: ProcessingQuality::Quality,
-                revision,
-                path: path.clone(),
-                settings: settings.clone(),
-                output: output.into(),
-                comparison: true,
-                export: None,
-            });
+            worker.show(
+                vec![super::RenderRequest {
+                    detail: false,
+                    framing_preview: false,
+                    calibration: None,
+                    rendition: Default::default(),
+                    preview_scale: Scale::NATIVE,
+                    processing_quality: ProcessingQuality::Quality,
+                    id: RequestId(revision),
+                    path: path.clone(),
+                    settings: settings.clone(),
+                    output: output.into(),
+                    comparison: true,
+                }],
+                &[],
+            );
             assert!(receive(&worker)
                 .result
-                .err()
-                .unwrap()
+                .unwrap_failed()
                 .contains("no operation-input comparison"));
         }
     }
@@ -2081,25 +1254,22 @@ mod tests {
                 "sharpen"
             };
             let start = std::time::Instant::now();
-            worker.submit(super::Request {
-                auxiliary_preview: false,
-
+            worker.submit(super::RenderRequest {
                 detail: false,
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
                 preview_scale: Scale::NATIVE,
                 processing_quality: ProcessingQuality::Quality,
-                revision,
+                id: RequestId(revision),
                 path: path.clone(),
                 settings: settings.clone(),
                 output: "final".into(),
                 comparison: false,
-                export: None,
             });
             let reply = receive(&worker);
-            assert_eq!(reply.revision, revision);
-            let frame = reply.result.unwrap().unwrap();
+            assert_eq!(reply.request.id, RequestId(revision));
+            let frame = reply.result.unwrap_rendered();
             eprintln!(
                 "SLIDER revision={revision} control={control} completed_ms={:.3} worker_ms={:.3}",
                 start.elapsed().as_secs_f64() * 1000.,
@@ -2180,26 +1350,23 @@ mod tests {
             settings.reconstruction = Some(Default::default());
             settings.sharpen_amount = Some(0.75);
             let submit = |revision, settings: foveonic::render::Settings| {
-                worker.submit(super::Request {
-                    auxiliary_preview: false,
-
+                worker.submit(super::RenderRequest {
                     detail: false,
                     framing_preview: false,
                     calibration: None,
                     rendition: Default::default(),
                     preview_scale: Scale::NATIVE,
                     processing_quality: ProcessingQuality::Quality,
-                    revision,
+                    id: RequestId(revision),
                     path: path.clone(),
                     settings,
                     output: "final".into(),
                     comparison: false,
-                    export: None,
                 })
             };
             submit(1, settings.clone());
-            assert!(receive(&worker).result.unwrap().is_some());
-            // Prime this control's input boundary. The shared memory budget may
+            assert!(receive(&worker).result.rendered().is_some());
+            // Prime this control's input boundary. The shared memory target may
             // have evicted its optional initial frontier while retaining Exposure.
             let warmup = std::time::Instant::now();
             let initial = settings.clone();
@@ -2208,7 +1375,7 @@ mod tests {
                 edit(&mut settings, control, 3);
             }
             submit(2, settings.clone());
-            assert!(receive(&worker).result.unwrap().is_some());
+            assert!(receive(&worker).result.rendered().is_some());
             eprintln!(
                 "DRAG control={control} boundary_warmup_ms={:.3}",
                 warmup.elapsed().as_secs_f64() * 1000.
@@ -2223,22 +1390,22 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(8));
                 while let Ok(update) = worker.replies.try_recv() {
                     if let super::Update::Image(reply) = update {
-                        handle_result(&worker, &reply);
-                        if let Some(frame) = reply.result.unwrap() {
+                        handling(&reply);
+                        if let super::RenderOutcome::Rendered(frame) = reply.result {
                             let mut expected =
                                 foveonic::render::Settings::new("Sunlight", "Standard");
                             expected.reconstruction = Some(Default::default());
                             expected.sharpen_amount = Some(0.75);
-                            edit(&mut expected, control, reply.revision);
+                            edit(&mut expected, control, reply.request.id.0);
                             assert_eq!(frame.artifact.settings, expected);
-                            progress.push(reply.revision);
-                            settled |= reply.revision == last;
-                            if reply.revision == last {
+                            progress.push(reply.request.id);
+                            settled |= reply.request.id == RequestId(last);
+                            if reply.request.id == RequestId(last) {
                                 request_scopes(&worker, &frame, None);
                             }
                         }
                     } else if let super::Update::Scopes { key, result, .. } = update {
-                        if key.revision == last {
+                        if key.request_id == RequestId(last) {
                             assert!(result.is_ok());
                             scopes = true;
                         }
@@ -2259,10 +1426,10 @@ mod tests {
                     .recv_timeout(std::time::Duration::from_secs(20))
                     .unwrap()
                 {
-                    super::Update::Image(reply) if reply.revision == last => {
-                        handle_result(&worker, &reply);
+                    super::Update::Image(reply) if reply.request.id == RequestId(last) => {
+                        handling(&reply);
                         assert!(!settled, "unexpected extra final image");
-                        let frame = reply.result.unwrap().unwrap();
+                        let frame = reply.result.unwrap_rendered();
                         assert_eq!(frame.artifact.settings.exposure, settings.exposure);
                         assert_eq!(
                             frame.artifact.settings.reconstruction,
@@ -2277,7 +1444,9 @@ mod tests {
                             stopped.elapsed().as_secs_f64() * 1000.
                         );
                     }
-                    super::Update::Scopes { key, result, .. } if key.revision == last => {
+                    super::Update::Scopes { key, result, .. }
+                        if key.request_id == RequestId(last) =>
+                    {
                         assert!(result.is_ok());
                         scopes = true;
                     }
@@ -2289,7 +1458,7 @@ mod tests {
 
     fn request_scopes(
         worker: &super::Worker,
-        frame: &super::Frame,
+        frame: &super::RenderResult,
         region: Option<foveonic::scopes::Region>,
     ) {
         let foveonic::inspection::Content::Image(image) = &frame.artifact.content else {
@@ -2297,11 +1466,11 @@ mod tests {
         };
         worker.submit_scopes(super::ScopeRequest {
             key: super::ScopeKey {
-                revision: frame.revision,
+                request_id: frame.request.id,
                 region,
             },
             image: (**image).clone(),
-            photo: foveonic::diagnostics::photo_id(&frame.path),
+            photo: foveonic::diagnostics::photo_id(&frame.request.path),
             parent_render_task: frame.diagnostic_task.id,
             parent_render_revision: frame.diagnostic_task.revision,
         });
@@ -2314,24 +1483,24 @@ mod tests {
         let worker = TestWorker::new(engine, eframe::egui::Context::default());
         let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
             .join("blue-parking-sign.x3f");
-        worker.submit(super::Request {
-            auxiliary_preview: false,
-
+        worker.submit(super::RenderRequest {
             detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
             preview_scale: Scale::NATIVE,
             processing_quality: ProcessingQuality::Quality,
-            revision: 1,
+            id: RequestId(1),
             path,
             settings: foveonic::render::Settings::new("Sunlight", "Standard"),
             output: "final".into(),
             comparison: false,
-            export: None,
         });
-        let frame = receive(&worker).result.unwrap().unwrap();
-        let foreground = worker.cache.foreground();
+        let frame = receive(&worker).result.unwrap_rendered();
+        let foreground = worker
+            .cache
+            .priority()
+            .demand(foveonic::priority::Priority::Viewport);
         request_scopes(&worker, &frame, Some([0, 0, 64, 32]));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while worker.test_pending.0.lock().unwrap().plan.scopes.is_none() {
@@ -2369,7 +1538,7 @@ mod tests {
                 .unwrap()
             {
                 super::Update::Scopes { key, result, .. } => {
-                    assert_eq!(key.revision, frame.revision);
+                    assert_eq!(key.request_id, frame.request.id);
                     let data = result.unwrap();
                     if key.region == latest {
                         assert_eq!(data.samples, [64, 32]);
@@ -2396,86 +1565,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with blue-parking-sign.x3f"]
-    fn detail_layers_keep_only_the_latest_section_and_preserve_compatible_overviews() {
-        use crate::{editor::Rendition, memory::Inventory};
-        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-        let path = root.join("blue-parking-sign.x3f");
-        let context = eframe::egui::Context::default();
-        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), context.clone());
-        let mut sidecars = crate::sidecars::Session::new(context, false, worker.cache.clone());
-        sidecars.set_memory_only(true);
-        let mut photos = crate::multi_edit_runtime::Runtime::default();
-        photos.sync(std::slice::from_ref(&path), 1, &mut sidecars);
-        let render = |revision, quality, region, exposure| {
-            let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
-            settings.preview_region = region;
-            settings.exposure = exposure;
-            worker.submit(super::Request {
-                auxiliary_preview: false,
-
-                revision,
-                settings,
-                preview_scale: quality,
-                processing_quality: ProcessingQuality::Quality,
-                detail: region.is_some(),
-                framing_preview: false,
-                calibration: None,
-                rendition: Rendition::Current,
-                path: path.clone(),
-                output: "final".into(),
-                comparison: false,
-                export: None,
-            });
-            receive(&worker).result.unwrap().unwrap()
-        };
-        photos.retain(render(1, Scale::new(8).unwrap(), None, 0.));
-        let first = render(2, Scale::NATIVE, Some([100, 100, 512, 512]), 0.);
-        let old_texture = first.texture.clone();
-        photos.retain(first);
-        // Change quality to produce a real later overview. An identical settled
-        // request is correctly coalesced without another delivery.
-        photos.retain(render(3, Scale::new(4).unwrap(), None, 0.));
-        let mut refresh = render(4, Scale::new(8).unwrap(), None, 0.);
-        let detail = photos.detail(&path).unwrap();
-        assert!(detail.can_overlay(&refresh));
-        assert!(!refresh.supersedes_detail(detail));
-        let origin = refresh.origin.clone();
-        refresh.origin = Default::default();
-        assert!(!detail.can_overlay(&refresh));
-        refresh.origin = origin;
-        refresh.calibration_signature = Some("another calibration".into());
-        assert!(!detail.can_overlay(&refresh));
-        refresh.calibration_signature = None;
-        refresh.requested.rotation.turns = 1;
-        assert!(!detail.can_overlay(&refresh));
-        refresh.requested.rotation.turns = 0;
-        refresh.requested.exposure = 0.5;
-        assert!(!detail.can_overlay(&refresh));
-        assert!(refresh.supersedes_detail(detail));
-        refresh.requested.exposure = 0.;
-        photos.retain(refresh);
-        assert_eq!(photos.detail(&path).unwrap().content_revision(), 2);
-
-        photos.retain(render(5, Scale::NATIVE, Some([400, 400, 812, 812]), 0.));
-        assert_eq!(photos.detail(&path).unwrap().content_revision(), 5);
-        let mut inventory = Inventory::default();
-        photos.memory_resources(&mut inventory);
-        assert!(!inventory.contains_image_texture(&old_texture));
-        photos.retain(render(6, Scale::NATIVE, None, 0.));
-        assert!(
-            photos.detail(&path).is_none(),
-            "complete native overview replaces the section"
-        );
-        photos.retain(render(7, Scale::NATIVE, Some([100, 100, 512, 512]), 0.));
-        photos.retain(render(8, Scale::new(8).unwrap(), None, 0.5));
-        assert!(
-            photos.detail(&path).is_none(),
-            "newer edits must replace old detail"
-        );
-    }
-
-    #[test]
     #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
     fn mixed_native_and_reduced_edits_preserve_warm_native_work() {
         use foveonic::{inspection::Content, render::Settings};
@@ -2488,17 +1577,15 @@ mod tests {
         let engine = foveonic::render::Engine::new().unwrap();
         let verifier = engine.executor();
         let worker = TestWorker::new(engine, eframe::egui::Context::default());
-        worker.set_memory_budget(4 * 1024 * 1024 * 1024, Default::default());
+        worker.set_memory_target(4 * 1024 * 1024 * 1024, Default::default());
         let mut full = Settings::new("Sunlight", "Standard");
         let mut thumb = full.clone();
         thumb.reconstruction = Some(Default::default());
         let render = |revision, index: usize, quality: Scale, settings: &Settings| {
-            worker.submit(super::Request {
-                auxiliary_preview: false,
-
+            worker.submit(super::RenderRequest {
                 detail: false,
                 path: paths[index].clone(),
-                revision,
+                id: RequestId(revision),
                 settings: settings.clone(),
                 framing_preview: false,
                 calibration: None,
@@ -2507,12 +1594,11 @@ mod tests {
                 processing_quality: ProcessingQuality::Quality,
                 output: "final".into(),
                 comparison: false,
-                export: None,
             });
             let reply = receive(&worker);
-            assert_eq!(reply.revision, revision);
-            let frame = reply.result.unwrap().expect("completed photograph");
-            assert_eq!(frame.path, paths[index]);
+            assert_eq!(reply.request.id, RequestId(revision));
+            let frame = reply.result.unwrap_rendered();
+            assert_eq!(frame.request.path, paths[index]);
             assert_eq!(
                 frame.artifact.settings.working_scale.divisor(),
                 quality.divisor()
@@ -2557,7 +1643,7 @@ mod tests {
         for frame in [native_frame, reduced_frame] {
             let fresh = verifier
                 .render_artifacts(
-                    &foveonic::source::Source::open(&frame.path).unwrap(),
+                    &foveonic::source::Source::open(&frame.request.path).unwrap(),
                     &frame.artifact.settings,
                     &["final"],
                     &mut Default::default(),
@@ -2571,7 +1657,7 @@ mod tests {
             let Content::Image(actual) = &frame.artifact.content else {
                 panic!("retained photograph")
             };
-            let captured = captures.path().join(format!("{}.f32", frame.revision));
+            let captured = captures.path().join(format!("{}.f32", frame.request.id));
             worker
                 .capture_image(actual.as_ref().clone(), captured.clone())
                 .recv_timeout(std::time::Duration::from_secs(20))
@@ -2598,32 +1684,29 @@ mod tests {
                 foveonic::render::Engine::new().unwrap(),
                 eframe::egui::Context::default(),
             );
-            worker.set_memory_budget(4 * 1024 * 1024 * 1024, Default::default());
+            worker.set_memory_target(4 * 1024 * 1024 * 1024, Default::default());
             let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
             settings.reconstruction = Some(Default::default());
-            let request = |revision: u64, index: usize| super::Request {
-                auxiliary_preview: false,
-
+            let request = |revision: u64, index: usize| super::RenderRequest {
                 detail: false,
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
-                revision,
+                id: RequestId(revision),
                 path: paths[index].clone(),
                 settings: settings.clone(),
                 preview_scale: quality,
                 processing_quality: ProcessingQuality::Quality,
                 output: "final".into(),
                 comparison: false,
-                export: None,
             };
             for (round, index) in [0, 1, 0].into_iter().enumerate() {
                 worker.clear();
                 worker.submit(request(round as u64 + 1, index));
                 let reply = receive(&worker);
-                assert_eq!(reply.revision, round as u64 + 1);
-                let frame = reply.result.unwrap().unwrap();
-                assert_eq!(frame.path, paths[index]);
+                assert_eq!(reply.request.id, RequestId(round as u64 + 1));
+                let frame = reply.result.unwrap_rendered();
+                assert_eq!(frame.request.path, paths[index]);
                 assert_eq!(frame.artifact.settings.working_scale, quality);
                 assert_eq!(
                     worker.checks.source_loads.load(Ordering::Relaxed),
@@ -2638,7 +1721,7 @@ mod tests {
             worker.clear_all();
             worker.clear(); // A later source reset must not weaken an already pending full clear.
             worker.submit(request(4, 0));
-            assert!(receive(&worker).result.unwrap().is_some());
+            assert!(receive(&worker).result.rendered().is_some());
             assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), 3);
         }
     }
@@ -2655,12 +1738,10 @@ mod tests {
             eframe::egui::Context::default(),
         );
         let settings = foveonic::render::Settings::new("Sunlight", "Standard");
-        let request = |revision, rendition, quality| super::Request {
-            auxiliary_preview: false,
-
+        let request = |revision, rendition, quality| super::RenderRequest {
             detail: false,
             path: path.clone(),
-            revision,
+            id: RequestId(revision),
             rendition,
             settings: settings.clone(),
             framing_preview: false,
@@ -2669,10 +1750,9 @@ mod tests {
             processing_quality: ProcessingQuality::Quality,
             output: "final".into(),
             comparison: false,
-            export: None,
         };
         worker.submit(request(1, Rendition::Current, Scale::new(8).unwrap()));
-        assert!(receive(&worker).result.unwrap().is_some());
+        assert!(receive(&worker).result.rendered().is_some());
         worker.checks.deferred.0.lock().unwrap().clear();
         let hold = worker.hold_source(path.clone());
         worker.submit(request(2, Rendition::Current, Scale::NATIVE));
@@ -2701,7 +1781,7 @@ mod tests {
                 settings,
                 uv: [0.5, 0.5],
             },
-            3,
+            RequestId(3),
             None,
         );
         drop(hold);
@@ -2714,16 +1794,13 @@ mod tests {
                 .unwrap()
             {
                 super::Update::Image(reply) => {
-                    let frame = reply
-                        .result
-                        .unwrap()
-                        .expect("requested rendition must complete");
+                    let frame = reply.result.unwrap_rendered();
                     assert_eq!(
                         frame.artifact.settings.working_scale,
                         foveonic::render::Scale::NATIVE
                     );
-                    assert!(!rendered.contains(&reply.rendition));
-                    rendered.push(reply.rendition);
+                    assert!(!rendered.contains(&reply.request.rendition));
+                    rendered.push(reply.request.rendition);
                 }
                 super::Update::ColorPick { reply, .. } => {
                     assert!(reply.sample.is_ok());
@@ -2744,124 +1821,8 @@ mod tests {
 
     #[test]
     #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
-    fn refinement_continues_without_ui_receipt_and_keeps_regional_admission() {
-        use crate::{
-            editor::Rendition,
-            rendering::{delivery, request::Refinement},
-        };
-        use std::time::{Duration, Instant};
-        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-        let path = root.join("blue-parking-sign.x3f");
-        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
-        worker.cache.configure(foveonic::decode_cache::Settings {
-            enabled: false,
-            ..Default::default()
-        });
-        for (index, (rendition, continuation)) in [
-            (Rendition::Current, true),
-            (Rendition::Camera, true),
-            (Rendition::Defaults, true),
-            (Rendition::Current, false),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            worker.clear_all();
-            let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
-            settings.reconstruction = Some(Default::default());
-            settings.preview_region = Some([100, 100, 512, 512]);
-            let first = super::Request {
-                auxiliary_preview: false,
-
-                detail: true,
-                path: path.clone(),
-                revision: index as u64 * 10 + 1,
-                settings,
-                rendition,
-                output: "final".into(),
-                comparison: false,
-                framing_preview: false,
-                calibration: None,
-                export: None,
-                preview_scale: Scale::NATIVE,
-                processing_quality: ProcessingQuality::Quality,
-            };
-            let whole = continuation.then(|| {
-                let mut whole = first.clone();
-                whole.revision += 1;
-                whole.detail = false;
-                whole.settings.preview_region = None;
-                whole
-            });
-            worker.publish_view(&first);
-            assert!(worker.refine(
-                Refinement {
-                    visible_region: None,
-                    preview: None,
-
-                    first: first.clone(),
-                    whole: whole.clone()
-                },
-                Instant::now()
-            ));
-            let deadline = Instant::now() + Duration::from_secs(30);
-            while worker.busy() && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            assert!(!worker.busy(), "refinement waited for UI receipt");
-            // Neither reply has been received or acknowledged by the UI.
-            let regional = receive(&worker);
-            let frame = regional.result.as_ref().unwrap().as_ref().unwrap();
-            assert!(frame.artifact.settings.preview_region.is_some());
-            assert_eq!(frame.revision, first.revision);
-            assert_eq!(
-                regional.handling.unwrap().destination,
-                Some(delivery::Destination::Active)
-            );
-            let view = delivery::ViewState {
-                processing_quality: first.processing_quality,
-                active: Some(path.clone()),
-                rendition,
-                output: "final".into(),
-                comparison: false,
-                framing_preview: false,
-                exporting: false,
-                calibration: None,
-                settings: first.settings.clone(),
-                overviews: vec![],
-                displayed_revision: None,
-                detail_revision: None,
-            };
-            assert_eq!(
-                delivery::recheck(&regional, &view.context(&path), Some(&first.settings))
-                    .destination,
-                Some(delivery::Destination::Active),
-                "Full promotion must preserve regional delivery"
-            );
-            if let Some(whole) = whole {
-                let reply = receive(&worker);
-                let frame = reply.result.unwrap().unwrap();
-                assert_eq!(frame.revision, whole.revision);
-                assert!(frame.artifact.settings.preview_region.is_none());
-                assert_eq!(worker.progress.snapshot().unwrap().revision, first.revision);
-                worker.progress.settle(false, Some(whole.revision));
-                assert!(
-                    !worker.progress.snapshot().unwrap().failed,
-                    "optional completion must not replace or fail foreground progress"
-                );
-            } else {
-                assert!(
-                    worker.replies.try_recv().is_err(),
-                    "region-only request queued more work"
-                );
-            }
-        }
-    }
-
-    #[test]
-    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
     fn speculative_whole_yields_to_new_foreground_then_completes() {
-        use crate::{editor::Rendition, rendering::request::Refinement};
+        use crate::editor::Rendition;
         use std::time::{Duration, Instant};
         let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
         let paths = [
@@ -2874,44 +1835,29 @@ mod tests {
         *worker.checks.speculative_hold.lock().unwrap() = Some((reached, resume));
         let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
         settings.preview_region = Some([100, 100, 512, 512]);
-        let first = super::Request {
-            auxiliary_preview: false,
-
+        let first = super::RenderRequest {
             detail: true,
             framing_preview: false,
             calibration: None,
             rendition: Rendition::Current,
-            revision: 1,
+            id: RequestId(1),
             path: paths[0].clone(),
             settings,
             preview_scale: Scale::NATIVE,
             processing_quality: ProcessingQuality::Quality,
             output: "final".into(),
             comparison: false,
-            export: None,
         };
         let mut whole = first.clone();
-        whole.revision = 2;
+        whole.id = RequestId(2);
         whole.detail = false;
         whole.settings.preview_region = None;
-        *worker.requests.borrow_mut() = vec![first.clone()];
-        worker.publish_view(&first);
-        assert!(worker.refine(
-            Refinement {
-                visible_region: None,
-                preview: None,
-
-                first: first.clone(),
-                whole: Some(whole.clone())
-            },
-            Instant::now()
-        ));
+        worker.plan_images(vec![(first.clone(), false), (whole.clone(), true)]);
         let regional = receive(&worker);
-        assert_eq!(regional.revision, 1);
+        assert_eq!(regional.request.id, RequestId(1));
         assert!(regional
             .result
-            .unwrap()
-            .unwrap()
+            .unwrap_rendered()
             .artifact
             .settings
             .preview_region
@@ -2919,11 +1865,9 @@ mod tests {
         waiting.recv_timeout(Duration::from_secs(30)).unwrap();
         let mut foreground = whole.clone();
         foreground.path = paths[1].clone();
-        foreground.revision = 3;
+        foreground.id = RequestId(3);
         foreground.preview_scale = Scale::new(8).unwrap();
-        *worker.requests.borrow_mut() = vec![first.clone(), foreground.clone()];
-        worker.publish_view(&foreground);
-        worker.worker.submit(foreground);
+        worker.submit(foreground);
         let deadline = Instant::now() + Duration::from_secs(30);
         while !worker
             .test_pending
@@ -2933,7 +1877,7 @@ mod tests {
             .plan
             .tasks
             .iter()
-            .any(|task| task.stamp.revision == 3)
+            .any(|task| task.stamp.request_id == RequestId(3))
         {
             assert!(Instant::now() < deadline, "foreground was not published");
             std::thread::yield_now();
@@ -2941,435 +1885,20 @@ mod tests {
         release.send(()).unwrap();
         let ready = receive(&worker);
         assert_eq!(
-            ready.revision, 3,
+            ready.request.id,
+            RequestId(3),
             "foreground must arrive before the continuation"
         );
-        assert!(ready.result.unwrap().is_some());
+        assert!(ready.result.rendered().is_some());
         let completed = receive(&worker);
         assert_eq!(
-            completed.revision, 2,
+            completed.request.id,
+            RequestId(2),
             "yield must preserve the continuation"
         );
-        let image = completed.result.unwrap().unwrap();
+        let image = completed.result.unwrap_rendered();
         assert!(image.artifact.settings.preview_region.is_none());
         assert_eq!(worker.checks.yielded.0.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
-    fn idle_continuation_yields_to_thumbnails_and_disables_without_losing_detail() {
-        use crate::{editor::Rendition, rendering::request::Refinement};
-        use std::{
-            sync::atomic::Ordering,
-            time::{Duration, Instant},
-        };
-        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
-        worker.cache.configure(foveonic::decode_cache::Settings {
-            enabled: false,
-            ..Default::default()
-        });
-        worker.set_memory_budget(4 * 1024 * 1024 * 1024, Default::default());
-        let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
-        settings.preview_region = Some([100, 100, 512, 512]);
-        let first = super::Request {
-            auxiliary_preview: false,
-
-            detail: true,
-            framing_preview: false,
-            calibration: None,
-            rendition: Rendition::Current,
-            revision: 1,
-            path: root.join("blue-parking-sign.x3f"),
-            settings,
-            preview_scale: Scale::NATIVE,
-            processing_quality: ProcessingQuality::Speed,
-            output: "final".into(),
-            comparison: false,
-            export: None,
-        };
-        let mut whole = first.clone();
-        whole.revision = 2;
-        whole.detail = false;
-        whole.settings.preview_region = None;
-        let (reached, waiting) = crossbeam_channel::bounded(1);
-        let (release, resume) = crossbeam_channel::bounded(1);
-        *worker.checks.speculative_hold.lock().unwrap() = Some((reached, resume));
-        worker.publish_view(&first);
-        assert!(worker.refine(
-            Refinement {
-                visible_region: None,
-                preview: None,
-
-                first: first.clone(),
-                whole: Some(whole)
-            },
-            Instant::now()
-        ));
-        let regional = receive(&worker).result.unwrap().unwrap();
-        waiting.recv_timeout(Duration::from_secs(30)).unwrap();
-        assert!(!worker.busy());
-        assert!(worker.is_settled_and_admitted(&regional));
-        assert_eq!(worker.progress.snapshot().unwrap().revision, first.revision);
-        let loads = worker.checks.source_loads.load(Ordering::Relaxed);
-
-        let thumbnails = worker.cache.thumbnail_demand();
-        release.send(()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let mut yielded = worker.checks.yielded.0.lock().unwrap();
-        while yielded.is_empty() {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .expect("continuation did not yield");
-            yielded = worker
-                .checks
-                .yielded
-                .1
-                .wait_timeout(yielded, remaining)
-                .unwrap()
-                .0;
-        }
-        drop(yielded);
-        assert!(worker.replies.try_recv().is_err());
-        let (reached, waiting) = crossbeam_channel::bounded(1);
-        let (release, resume) = crossbeam_channel::bounded(1);
-        *worker.checks.speculative_hold.lock().unwrap() = Some((reached, resume));
-        drop(thumbnails);
-        waiting.recv_timeout(Duration::from_secs(30)).unwrap();
-        worker.set_background_completion(false);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while worker
-            .test_pending
-            .0
-            .lock()
-            .unwrap()
-            .plan
-            .tasks
-            .iter()
-            .any(|task| task.speculative)
-        {
-            assert!(Instant::now() < deadline, "disable was not published");
-            std::thread::yield_now();
-        }
-        release.send(()).unwrap();
-        let retired = receive(&worker);
-        assert!(retired.result.unwrap().is_none());
-        assert!(!retired.handling.unwrap().current);
-        assert!(worker.is_settled_and_admitted(&regional));
-        assert!(!worker.busy());
-        worker.set_background_completion(true);
-        let completed = receive(&worker).result.unwrap().unwrap();
-        assert!(completed.artifact.settings.preview_region.is_none());
-        assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), loads);
-        assert_eq!(worker.progress.snapshot().unwrap().revision, first.revision);
-    }
-
-    #[test]
-    #[ignore = "requires GPU and pinned Merrill FOVEONIC_FIXTURE_DIR originals"]
-    fn shared_preview_with_idle_completion_off_matches_fresh_render_and_reuses_native_source() {
-        use crate::{
-            editor::Rendition,
-            rendering::{delivery::Destination, request::Refinement},
-        };
-        use foveonic::{inspection::Content, profile::Profile, source::Source};
-        use sha2::{Digest, Sha256};
-        use std::{
-            sync::atomic::Ordering,
-            time::{Duration, Instant},
-        };
-        let manifest: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../scripts/profiling/wide_inputs.json"
-        ))
-        .unwrap();
-        let entry = &manifest["files"][0];
-        let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
-            .join(entry["file"].as_str().unwrap());
-        assert_eq!(
-            format!("{:x}", Sha256::digest(std::fs::read(&path).unwrap())),
-            entry["sha256"].as_str().unwrap()
-        );
-        for policy in [ProcessingQuality::Quality, ProcessingQuality::Speed] {
-            let worker =
-                TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
-            worker.cache.configure(foveonic::decode_cache::Settings {
-                enabled: false,
-                ..Default::default()
-            });
-            worker.set_memory_budget(4 * 1024 * 1024 * 1024, Default::default());
-            worker.set_background_completion(false);
-            let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
-            settings.exposure = 0.5;
-            settings.output_size = Some([6000, 4000]);
-            settings.preview_region = Some([100, 100, 512, 512]);
-            let first = super::Request {
-                auxiliary_preview: false,
-                detail: true,
-                framing_preview: false,
-                calibration: None,
-                rendition: Rendition::Current,
-                revision: 1,
-                path: path.clone(),
-                settings,
-                preview_scale: Scale::NATIVE,
-                processing_quality: policy,
-                output: "final".into(),
-                comparison: false,
-                export: None,
-            };
-            let mut preview = first.clone();
-            preview.auxiliary_preview = true;
-            preview.detail = false;
-            preview.revision = 2;
-            preview.preview_scale = Scale::new(8).unwrap();
-            preview.settings.preview_region = None;
-            let mut whole = first.clone();
-            whole.detail = false;
-            whole.revision = 3;
-            whole.settings.preview_region = None;
-            worker.publish_view(&first);
-            assert!(worker.refine(
-                Refinement {
-                    visible_region: None,
-                    first: first.clone(),
-                    preview: Some(preview.clone()),
-                    whole: Some(whole)
-                },
-                Instant::now()
-            ));
-            let region = receive(&worker).result.unwrap().unwrap();
-            assert!(region.artifact.settings.preview_region.is_some());
-            let loads = worker.checks.source_loads.load(Ordering::Relaxed);
-            let reply = receive(&worker);
-            assert_eq!(
-                reply.handling.unwrap().destination,
-                Some(Destination::Preview)
-            );
-            assert!(!reply.handling.unwrap().update_photo);
-            let frame = reply.result.unwrap().unwrap();
-            assert!(frame.auxiliary_preview);
-            assert!(!frame.detail);
-            assert_eq!(frame.requested.output_size, Some([6000, 4000]));
-            assert_eq!(frame.artifact.settings.output_size, None);
-            assert_eq!(
-                frame.artifact.settings.working_scale,
-                Scale::new(8).unwrap()
-            );
-            assert_eq!(frame.processing_quality, policy);
-            assert!(region.can_overlay(&frame));
-            assert!(!frame.supersedes_detail(&region));
-            assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), loads);
-            assert!(!worker.busy());
-            assert!(worker.is_settled_and_admitted(&region));
-            assert_eq!(worker.progress.snapshot().unwrap().revision, first.revision);
-            assert!(
-                worker.replies.try_recv().is_err(),
-                "native continuation ran while disabled"
-            );
-
-            let Content::Image(actual) = &frame.artifact.content else {
-                panic!("photographic preview");
-            };
-            let captures = tempfile::tempdir().unwrap();
-            let captured = captures.path().join("preview.f32");
-            worker
-                .capture_image(actual.as_ref().clone(), captured.clone())
-                .recv_timeout(Duration::from_secs(30))
-                .unwrap()
-                .unwrap();
-            let verifier = foveonic::render::Engine::new().unwrap();
-            let source = Source::open(&path).unwrap();
-            let mut effective = preview.settings.clone();
-            assert!(
-                crate::export::resolve_camera_settings(&mut effective, &source.metadata).is_empty()
-            );
-            preview
-                .apply_preview(&mut effective, &source.metadata)
-                .unwrap();
-            let expected = verifier
-                .render(&source, &effective, &mut Profile::default())
-                .unwrap();
-            assert_eq!(actual.description(), expected.description());
-            assert_eq!(actual.view(), expected.view());
-            assert_eq!(actual.settings(), expected.settings());
-            assert_eq!(
-                std::fs::read(captured).unwrap(),
-                verifier.readback_image(&expected).unwrap()
-            );
-        }
-    }
-
-    #[test]
-    #[ignore = "requires GPU and pinned Merrill FOVEONIC_FIXTURE_DIR originals"]
-    fn native_pan_keeps_overlay_and_settles_latest_coverage_without_idle_completion() {
-        use crate::rendering::{delivery::Destination, request::Refinement};
-        use foveonic::{inspection::Content, source::Source};
-        use sha2::{Digest, Sha256};
-        use std::{
-            sync::atomic::Ordering,
-            time::{Duration, Instant},
-        };
-        let manifest: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../scripts/profiling/wide_inputs.json"
-        ))
-        .unwrap();
-        let entry = &manifest["files"][0];
-        let path = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap())
-            .join(entry["file"].as_str().unwrap());
-        assert_eq!(
-            format!("{:x}", Sha256::digest(std::fs::read(&path).unwrap())),
-            entry["sha256"].as_str().unwrap()
-        );
-        for policy in [ProcessingQuality::Quality, ProcessingQuality::Speed] {
-            let context = eframe::egui::Context::default();
-            let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), context.clone());
-            worker.cache.configure(foveonic::decode_cache::Settings {
-                enabled: false,
-                ..Default::default()
-            });
-            worker.set_memory_budget(4 * 1024 * 1024 * 1024, Default::default());
-            worker.set_background_completion(false);
-            let mut photos = crate::multi_edit_runtime::Runtime::default();
-            let mut sidecars = crate::sidecars::Session::new(context, false, worker.cache.clone());
-            sidecars.set_memory_only(true);
-            photos.sync(std::slice::from_ref(&path), 1, &mut sidecars);
-            let base = super::Request {
-                auxiliary_preview: false,
-                detail: false,
-                framing_preview: false,
-                calibration: None,
-                rendition: Default::default(),
-                revision: 1,
-                path: path.clone(),
-                settings: foveonic::render::Settings::new("Sunlight", "Standard"),
-                preview_scale: Scale::new(8).unwrap(),
-                processing_quality: policy,
-                output: "final".into(),
-                comparison: false,
-                export: None,
-            };
-            photos.observe_active(&path, &base.settings, None);
-            worker.submit(base.clone());
-            photos.retain(receive(&worker).result.unwrap().unwrap());
-            let intent = |revision, offset| {
-                let mut first = base.clone();
-                first.revision = revision;
-                first.preview_scale = Scale::NATIVE;
-                first.detail = true;
-                first.settings.preview_region = Some([offset, offset, offset + 384, offset + 384]);
-                let mut preview = first.clone();
-                preview.revision += 1;
-                preview.auxiliary_preview = true;
-                preview.detail = false;
-                preview.preview_scale = Scale::new(8).unwrap();
-                preview.settings.preview_region = None;
-                let mut whole = first.clone();
-                whole.revision += 2;
-                whole.detail = false;
-                whole.settings.preview_region = None;
-                Refinement {
-                    first,
-                    visible_region: Some([offset + 64, offset + 64, offset + 320, offset + 320]),
-                    preview: Some(preview),
-                    whole: Some(whole),
-                }
-            };
-            let initial = intent(2, 100);
-            worker.publish_view(&initial.first);
-            assert!(worker.refine(initial.clone(), Instant::now()));
-            let first = receive(&worker);
-            assert_eq!(first.revision, 2);
-            assert_eq!(
-                first.handling.unwrap().destination,
-                Some(Destination::Active)
-            );
-            photos.retain(first.result.unwrap().unwrap());
-            let preview = receive(&worker);
-            assert_eq!(
-                preview.handling.unwrap().destination,
-                Some(Destination::Preview)
-            );
-            photos
-                .retain_preview(preview.result.unwrap().unwrap())
-                .unwrap();
-            let original_texture = photos.detail(&path).unwrap().texture.clone();
-            let loads = worker.checks.source_loads.load(Ordering::Relaxed);
-            // Overscan changes, but all visible pixels still have native samples.
-            let covered = intent(5, 116);
-            assert!(!worker.refine(covered, Instant::now()));
-            assert!(worker.replies.try_recv().is_err());
-            assert!(photos
-                .detail(&path)
-                .unwrap()
-                .can_overlay(photos.frame(&path).unwrap()));
-
-            let moving = intent(8, 600);
-            let hold = worker.hold_delivery(path.clone(), 8);
-            assert!(worker.refine(moving, Instant::now()));
-            hold.reached.recv_timeout(Duration::from_secs(30)).unwrap();
-            for (revision, offset) in [(11, 900), (14, 1200)] {
-                let latest = intent(revision, offset);
-                worker.publish_view(&latest.first);
-                assert!(worker.refine(latest, Instant::now()));
-            }
-            // Queued intent is drained before the coordinator handles the held result.
-            assert_eq!(photos.detail(&path).unwrap().content_revision(), 2);
-            assert!(std::sync::Arc::ptr_eq(
-                &photos.detail(&path).unwrap().texture,
-                &original_texture
-            ));
-            let plan = worker.test_pending.0.lock().unwrap().plan.clone();
-            assert!(plan.tasks.iter().any(|task| task.stamp.revision == 8));
-            assert!(!plan
-                .tasks
-                .iter()
-                .any(|task| matches!(task.stamp.revision, 11 | 14)));
-            drop(hold);
-            for revision in [8, 14] {
-                let reply = receive(&worker);
-                assert_eq!(reply.revision, revision, "intermediate pan must coalesce");
-                assert_eq!(
-                    reply.handling.unwrap().destination,
-                    Some(Destination::Active)
-                );
-                let frame = reply.result.unwrap().unwrap();
-                assert!(frame.can_overlay(photos.frame(&path).unwrap()));
-                photos.retain(frame);
-                assert_eq!(photos.detail(&path).unwrap().content_revision(), revision);
-            }
-            assert!(!worker.busy());
-            assert!(
-                worker.replies.try_recv().is_err(),
-                "pan must reuse settled preview and keep idle completion disabled"
-            );
-            assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), loads);
-            let frame = photos.detail(&path).unwrap();
-            assert!(worker.is_settled_and_admitted(frame));
-            assert!(crate::rendering::smart::contains(
-                frame.detail_region(),
-                intent(14, 1200).visible_region.unwrap()
-            ));
-            let Content::Image(actual) = &frame.artifact.content else {
-                panic!("native image");
-            };
-            let capture = tempfile::tempdir().unwrap();
-            let captured = capture.path().join("pan.f32");
-            worker
-                .capture_image(actual.as_ref().clone(), captured.clone())
-                .recv_timeout(Duration::from_secs(30))
-                .unwrap()
-                .unwrap();
-            let verifier = foveonic::render::Engine::new().unwrap();
-            let source = Source::open(&path).unwrap();
-            let expected = verifier
-                .render(&source, &frame.artifact.settings, &mut Default::default())
-                .unwrap();
-            assert_eq!(actual.description(), expected.description());
-            assert_eq!(actual.view(), expected.view());
-            assert_eq!(
-                std::fs::read(captured).unwrap(),
-                verifier.readback_image(&expected).unwrap()
-            );
-        }
     }
 
     #[test]
@@ -3403,37 +1932,34 @@ mod tests {
                     if revision == 2 {
                         settings.exposure = 0.1;
                     }
-                    super::Request {
-                        auxiliary_preview: false,
-
+                    super::RenderRequest {
                         detail: false,
                         framing_preview: false,
                         calibration: None,
                         rendition: Default::default(),
-                        revision,
+                        id: RequestId(revision),
                         path: path.clone(),
                         settings,
                         preview_scale: Scale::new(8).unwrap(),
                         processing_quality: ProcessingQuality::Quality,
                         output: "final".into(),
                         comparison: false,
-                        export: None,
                     }
                 })
                 .collect();
             let began = std::time::Instant::now();
-            worker.set_overviews(requests, &[]);
+            worker.show(requests, &[]);
             for _ in &paths {
                 let reply = receive(&worker);
-                let frame = reply.result.unwrap().unwrap();
+                let frame = reply.result.unwrap_rendered();
                 assert_eq!(frame.artifact.settings.working_scale.divisor(), 8);
                 eprintln!(
                     "CACHED_SELECTION revision={revision} photo={} worker_ms={:.3} group_elapsed_ms={:.3}",
-                    reply.path.display(),
+                    reply.request.path.display(),
                     frame.milliseconds,
                     began.elapsed().as_secs_f64() * 1000.
                 );
-                frames.insert(reply.path, frame);
+                frames.insert(reply.request.path.clone(), frame);
             }
             let status = worker.cache.status();
             assert_eq!(status.misses, 0, "selection must use local decoded entries");
@@ -3446,190 +1972,6 @@ mod tests {
                 status.misses
             );
         }
-    }
-
-    #[test]
-    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
-    fn multi_photo_details_keep_own_delivery_storage_order_and_bounded_retention() {
-        use crate::{
-            editor::{Before, Rendition},
-            memory::Inventory,
-            rendering::{delivery::Destination, request::Refinement},
-        };
-        use std::time::{Duration, Instant};
-        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
-        let paths = [
-            root.join("blue-parking-sign.x3f"),
-            root.join("merrill-hazy-coast.x3f"),
-        ];
-        let context = eframe::egui::Context::default();
-        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), context.clone());
-        let mut photos = crate::multi_edit_runtime::Runtime::default();
-        let mut sidecars = crate::sidecars::Session::new(context, false, worker.cache.clone());
-        sidecars.set_memory_only(true);
-        photos.sync(&paths, 2, &mut sidecars);
-        let requests = paths
-            .iter()
-            .enumerate()
-            .map(|(index, path)| {
-                let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
-                settings.reconstruction = Some(Default::default());
-                settings.exposure = index as f32 * 0.25;
-                photos.observe_active(path, &settings, None);
-                super::Request {
-                    auxiliary_preview: false,
-
-                    detail: false,
-                    path: path.clone(),
-                    revision: index as u64 + 1,
-                    settings,
-                    framing_preview: false,
-                    calibration: None,
-                    rendition: Rendition::Current,
-                    preview_scale: Scale::new(8).unwrap(),
-                    processing_quality: ProcessingQuality::Quality,
-                    output: "final".into(),
-                    comparison: false,
-                    export: None,
-                }
-            })
-            .collect::<Vec<_>>();
-        worker.set_overviews(requests.clone(), &paths);
-        for _ in &paths {
-            photos.retain(receive(&worker).result.unwrap().unwrap());
-        }
-        let intents = requests
-            .iter()
-            .enumerate()
-            .map(|(index, request)| {
-                let mut first = request.clone();
-                first.revision = 10 + index as u64 * 10;
-                first.preview_scale = Scale::NATIVE;
-                first.settings.exposure += 0.125;
-                first.detail = true;
-                first.settings.preview_region = Some([100, 100, 512, 512]);
-                photos.observe_requested(&first.path, &first.settings);
-                let mut whole = first.clone();
-                whole.revision += 1;
-                whole.detail = false;
-                whole.settings.preview_region = None;
-                Refinement {
-                    visible_region: None,
-                    preview: None,
-
-                    first,
-                    whole: Some(whole),
-                }
-            })
-            .collect::<Vec<_>>();
-        *worker.requests.borrow_mut() = intents.iter().map(|intent| intent.first.clone()).collect();
-        worker.publish_view(&intents[0].first);
-        let hold = worker.hold_delivery(paths[0].clone(), 10);
-        assert!(worker.refine(intents[0].clone(), Instant::now()));
-        hold.reached.recv_timeout(Duration::from_secs(30)).unwrap();
-        // Change the active photo after regional work finishes but before admission.
-        worker.activate(&paths[1]);
-        worker.publish_view(&intents[1].first);
-        worker
-            .runtime
-            .overviews(vec![], paths.to_vec(), paths.to_vec(), Instant::now());
-        assert!(worker.refine(intents[1].clone(), Instant::now()));
-        drop(hold);
-        let mut details = [false; 2];
-        let mut wholes = [false; 2];
-        for _ in 0..4 {
-            let reply = receive(&worker);
-            let index = paths.iter().position(|path| *path == reply.path).unwrap();
-            assert!(reply.handling.unwrap().current);
-            assert_eq!(
-                reply.handling.unwrap().destination,
-                Some(if index == 0 {
-                    Destination::Overview
-                } else {
-                    Destination::Active
-                })
-            );
-            let frame = reply.result.unwrap().unwrap();
-            if frame.is_current_detail() {
-                assert!(frame.artifact.settings.preview_region.is_some());
-                assert!(!frame.is_photographic());
-                let texture = frame.texture.clone();
-                photos.retain(frame);
-                details[index] = true;
-                let mut inventory = Inventory::default();
-                photos.memory_resources(&mut inventory);
-                assert!(inventory.contains_image_texture(&texture));
-                // Before owns only its transient view. Current detail remains in
-                // the bounded photo owner while the base is saved and restored.
-                let mut before = Before::default();
-                before.active = Rendition::Camera;
-                let mut base = photos.take_frame(&paths[index]);
-                before.retain_current(&mut base);
-                assert!(base.is_none());
-                let mut restored = before.take_current().unwrap().unwrap();
-                restored.revision = 1000;
-                photos.retain(restored);
-                assert_eq!(
-                    photos.detail(&paths[index]).unwrap().content_revision(),
-                    intents[index].first.revision
-                );
-                // Another authored edit may already be pending when Whole arrives.
-                let mut pending = intents[index].first.settings.clone();
-                pending.exposure += 0.125;
-                photos.observe_requested(&paths[index], &pending);
-            } else {
-                assert!(details[index]);
-                assert_eq!(
-                    frame.content_revision(),
-                    intents[index].whole.as_ref().unwrap().revision
-                );
-                photos.retain(frame);
-                assert!(
-                    photos.detail(&paths[index]).is_none(),
-                    "newer Whole must supersede detail despite a pending edit"
-                );
-                wholes[index] = true;
-            }
-        }
-        assert_eq!(details, [true; 2]);
-        assert_eq!(wholes, [true; 2]);
-        // One region-only result also exercises retained removal, re-add and eviction.
-        let mut retained = intents[1].clone();
-        retained.first.revision = 30;
-        retained.first.settings.exposure += 0.25;
-        retained.whole = None;
-        *worker.requests.borrow_mut() = vec![intents[0].first.clone(), retained.first.clone()];
-        worker.publish_view(&retained.first);
-        assert!(worker.refine(retained, Instant::now()));
-        photos.retain(receive(&worker).result.unwrap().unwrap());
-        assert!(photos.detail(&paths[1]).is_some());
-        let base_order = photos.frame(&paths[1]).unwrap().content_revision();
-        let mut adaptive = intents[1].first.clone();
-        adaptive.revision = 40;
-        adaptive.processing_quality = ProcessingQuality::Quality;
-        adaptive.settings.photographic.tone_method =
-            foveonic::render::PhotographicMethod::Universal;
-        adaptive.settings.photographic.base_response = foveonic::render::BaseResponse::Natural;
-        worker.submit(adaptive);
-        let frame = receive(&worker).result.unwrap().unwrap();
-        assert!(frame.artifact.settings.preview_region.is_some());
-        assert!(frame.is_current_detail());
-        assert!(!frame.is_photographic());
-        photos.retain(frame);
-        assert_eq!(
-            photos.frame(&paths[1]).unwrap().content_revision(),
-            base_order
-        );
-        assert_eq!(photos.detail(&paths[1]).unwrap().content_revision(), 40);
-        photos.sync(&paths[..1], 2, &mut sidecars);
-        photos.sync(&paths, 2, &mut sidecars);
-        assert!(photos.detail(&paths[1]).is_some());
-        photos.sync(&paths[..1], 1, &mut sidecars);
-        assert!(photos.detail(&paths[1]).is_none());
-        photos.clear();
-        let mut inventory = Inventory::default();
-        photos.memory_resources(&mut inventory);
-        assert_eq!(inventory.reservation().exclusive_bytes, 0);
     }
 
     #[test]
@@ -3655,208 +1997,370 @@ mod tests {
                         settings.dehaze.shadow = None;
                         settings.dehaze.amount = 0.;
                     }
-                    super::Request {
-                        auxiliary_preview: false,
-
+                    super::RenderRequest {
                         detail: false,
                         framing_preview: false,
                         calibration: None,
                         rendition: Default::default(),
-                        revision,
+                        id: RequestId(revision),
                         path: path.clone(),
                         settings,
                         preview_scale: Scale::new(8).unwrap(),
                         processing_quality: ProcessingQuality::Quality,
                         output: "final".into(),
                         comparison: false,
-                        export: None,
                     }
                 })
                 .collect()
         };
-        worker.set_overviews(requests(1), &[]);
+        worker.show(requests(1), &[]);
         for _ in 0..paths.len() {
-            assert!(receive(&worker).result.unwrap().is_some());
+            assert!(receive(&worker).result.rendered().is_some());
         }
         for revision in 2..=12 {
-            worker.set_overviews(requests(revision), &[]);
+            worker.show(requests(revision), &[]);
         }
         let mut delivered = std::collections::BTreeSet::new();
         while delivered.len() < paths.len() {
             let reply = receive(&worker);
-            if reply.revision != 12 {
+            if reply.request.id != RequestId(12) {
                 continue;
             }
-            let index = paths.iter().position(|path| *path == reply.path).unwrap();
+            let index = paths
+                .iter()
+                .position(|path| *path == reply.request.path)
+                .unwrap();
             let numeric = reply
                 .numeric_settings
                 .as_ref()
                 .expect("worker resolves each target's numeric defaults");
             assert!(numeric.sharpen_amount.is_some());
-            let frame = reply
-                .result
-                .unwrap()
-                .expect("latest batch must finish every target");
+            let frame = reply.result.unwrap_rendered();
             assert!(worker.is_settled_and_admitted(&frame));
             if index == 0 {
                 assert_eq!(numeric.dehaze.shadow, frame.artifact.dehaze_estimate);
                 assert!(numeric.dehaze.shadow.is_some());
             }
             assert_eq!(frame.artifact.settings.working_scale.divisor(), 8);
-            assert!((frame.requested.exposure - (12. * 0.03 + index as f32 * 0.2)).abs() < 1e-6);
-            assert!(delivered.insert(reply.path));
+            assert!(
+                (frame.request.settings.exposure - (12. * 0.03 + index as f32 * 0.2)).abs() < 1e-6
+            );
+            assert!(delivered.insert(reply.request.path.clone()));
         }
     }
-}
 
-#[cfg(test)]
-mod preview_tests {
-    use super::tests::TestWorker as Worker;
-    use super::*;
-    #[test]
-    #[ignore = "requires GPU and QUATTRO_X3F"]
-    fn fast_preference_exports_full_files_and_returns_to_fast_preview() {
-        let path = PathBuf::from(std::env::var_os("QUATTRO_X3F").unwrap());
-        preview_exports_full_files_and_returns_to_fast(path);
-    }
+    /// Two photographs from each camera family.
+    const FAMILY_FIXTURES: [&str; 8] = [
+        "sd9",
+        "sd14",
+        "blue-parking-sign",
+        "merrill-hazy-coast",
+        "dp0-quattro",
+        "sd-quattro",
+        "sd-quattro-h",
+        "dp2-quattro",
+    ];
 
-    #[test]
-    #[ignore = "requires GPU and MERRILL_X3F"]
-    fn merrill_smart_exports_full_files_and_returns_to_fast_preview() {
-        let path = PathBuf::from(std::env::var_os("MERRILL_X3F").unwrap());
-        preview_exports_full_files_and_returns_to_fast(path);
-    }
-
-    fn preview_exports_full_files_and_returns_to_fast(path: PathBuf) {
-        let source = Source::open(&path).unwrap();
-        let engine = Engine::new().unwrap();
-        let temporary = tempfile::tempdir().unwrap();
-        let directory = temporary.path();
-        let mut settings = Settings::new("Sunlight", "Standard");
-        settings.reconstruction = Some(Default::default());
-        settings.exposure = 0.5;
-        settings.tiff_color_space = Some(foveonic::render::TiffColorSpace::Srgb);
-        let expected = engine
-            .render(&source, &settings, &mut Profile::default())
-            .unwrap();
-        let native = expected.view().extent;
-        engine
-            .write_tiff(
-                &expected,
-                &directory.join("expected.tiff"),
-                &mut Profile::default(),
-            )
-            .unwrap();
-        drop(expected);
-        foveonic::dng::write_source(
-            &engine,
-            &source,
-            &settings,
-            &directory.join("expected.dng"),
-            &mut Profile::default(),
-        )
-        .unwrap();
-        drop(source);
-        let worker = Worker::new(engine, egui::Context::default());
-        let receive = || loop {
-            if let Update::Image(reply) = worker
-                .replies
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .unwrap()
-            {
-                break *reply;
-            }
+    fn captured_pixels(worker: &TestWorker, frame: &super::RenderResult) -> Vec<u8> {
+        let foveonic::inspection::Content::Image(image) = &frame.artifact.content else {
+            panic!("image frame")
         };
-        for (index, (mode, format)) in [
-            (ProcessingQuality::Quality, ExportFormat::Tiff),
-            (ProcessingQuality::Quality, ExportFormat::Dng),
-            (ProcessingQuality::Speed, ExportFormat::Tiff),
-            (ProcessingQuality::Speed, ExportFormat::Dng),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let extension = format.extension();
-            let destination = directory.join(format!("export-{index}.{extension}"));
-            let mut export_settings = settings.clone();
-            export_settings.preview_region = Some([100, 100, 400, 300]);
-            export_settings.tiff_color_space = Some(foveonic::render::TiffColorSpace::ProPhotoRgb);
-            worker.submit(Request {
-                auxiliary_preview: false,
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pixels.f32");
+        worker
+            .capture_image(image.as_ref().clone(), path.clone())
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .unwrap()
+            .unwrap();
+        std::fs::read(path).unwrap()
+    }
 
-                detail: false,
+    /// Render warm reduced edits and native regions for every family at one width cap.
+    fn family_renders(width: usize) -> (std::collections::BTreeMap<(String, bool), Vec<u8>>, u64) {
+        use std::sync::atomic::Ordering;
+        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
+        worker.set_memory_target(8 * 1024 * 1024 * 1024, Default::default());
+        worker.set_render_width(width);
+        let request = |name: &str, revision: u64, detail: bool| {
+            let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+            settings.exposure = revision as f32 * 0.1;
+            if detail {
+                settings.preview_region = Some([256, 256, 768, 768]);
+            }
+            super::RenderRequest {
+                detail,
                 framing_preview: false,
                 calibration: None,
                 rendition: Default::default(),
-                revision: index as u64 + 1,
-                path: path.clone(),
-                settings: export_settings,
-                preview_scale: Scale::new(2).unwrap(),
-                processing_quality: mode,
-                output: "sensor.rgb".into(),
+                id: RequestId(revision),
+                path: root.join(format!("{name}.x3f")),
+                settings,
+                preview_scale: if detail {
+                    Scale::NATIVE
+                } else {
+                    Scale::new(8).unwrap()
+                },
+                processing_quality: ProcessingQuality::Quality,
+                output: "final".into(),
                 comparison: false,
-                export: Some(Export {
-                    path: destination.clone(),
-                    format,
-                    tiff_color_space: settings.tiff_color_space,
-                    encoding: Default::default(),
-                    sections: Default::default(),
-                    conflict: foveonic::importing::ConflictPolicy::Rename,
-                }),
-            });
-            let exported = receive();
-            assert!(exported.result.unwrap().is_none());
-            assert_eq!(exported.exported.map(|e| e.format), Some(format));
-            assert_eq!(
-                exported.settings.processing_quality,
-                ProcessingQuality::Quality
-            );
-            assert_eq!(exported.settings.working_scale, Scale::NATIVE);
-            assert_eq!(
-                exported.settings.tiff_color_space,
-                Some(foveonic::render::TiffColorSpace::ProPhotoRgb)
-            );
-            assert!(
-                std::fs::read(directory.join(format!("expected.{extension}"))).unwrap()
-                    == std::fs::read(destination).unwrap(),
-                "{extension} export differs from independent Full output"
-            );
+            }
+        };
+        let mut pixels = std::collections::BTreeMap::new();
+        for detail in [false, true] {
+            for revision in [1, 2] {
+                let requests: Vec<_> = FAMILY_FIXTURES
+                    .iter()
+                    .map(|name| request(name, revision + u64::from(detail) * 10, detail))
+                    .collect();
+                worker.show(requests.clone(), &[]);
+                let mut frames = Vec::new();
+                while frames.len() < requests.len() {
+                    let reply = receive(&worker);
+                    if requests
+                        .iter()
+                        .any(|request| request.id == reply.request.id)
+                    {
+                        frames.push(reply.result.unwrap_rendered());
+                    }
+                }
+                // Captures run while the worker is idle, after every reply is received.
+                if revision == 2 {
+                    for frame in frames {
+                        let name = frame
+                            .request
+                            .path
+                            .file_stem()
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned();
+                        pixels.insert((name, detail), captured_pixels(&worker, &frame));
+                    }
+                }
+            }
         }
-        worker.submit(Request {
-            auxiliary_preview: false,
+        (pixels, worker.checks.widest.load(Ordering::Relaxed))
+    }
 
+    /// Median milliseconds to deliver a warm exposure edit to every photograph in
+    /// the group, and the widest admitted set, at one width cap.
+    fn warm_group_latency(width: usize, detail: bool) -> (f64, u64) {
+        use std::sync::atomic::Ordering;
+        const TRIALS: u64 = 7;
+        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
+        worker.set_memory_target(8 * 1024 * 1024 * 1024, Default::default());
+        worker.set_render_width(width);
+        let requests = |revision: u64| -> Vec<super::RenderRequest> {
+            FAMILY_FIXTURES
+                .iter()
+                .map(|name| {
+                    let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+                    settings.exposure = revision as f32 * 0.05;
+                    if detail {
+                        settings.preview_region = Some([256, 256, 768, 768]);
+                    }
+                    super::RenderRequest {
+                        detail,
+                        framing_preview: false,
+                        calibration: None,
+                        rendition: Default::default(),
+                        id: RequestId(revision),
+                        path: root.join(format!("{name}.x3f")),
+                        settings,
+                        preview_scale: if detail {
+                            Scale::NATIVE
+                        } else {
+                            Scale::new(8).unwrap()
+                        },
+                        processing_quality: ProcessingQuality::Speed,
+                        output: "final".into(),
+                        comparison: false,
+                    }
+                })
+                .collect()
+        };
+        let deliver = |revision: u64| {
+            let started = std::time::Instant::now();
+            worker.show(requests(revision), &[]);
+            let mut delivered = 0;
+            while delivered < FAMILY_FIXTURES.len() {
+                let reply = receive(&worker);
+                if reply.request.id == RequestId(revision) {
+                    reply.result.unwrap_rendered();
+                    delivered += 1;
+                }
+            }
+            started.elapsed().as_secs_f64() * 1000.
+        };
+        deliver(1);
+        deliver(2);
+        let mut trials: Vec<f64> = (0..TRIALS).map(|trial| deliver(3 + trial)).collect();
+        trials.sort_by(f64::total_cmp);
+        (
+            trials[trials.len() / 2],
+            worker.checks.widest.load(Ordering::Relaxed),
+        )
+    }
+
+    #[test]
+    #[ignore = "timing experiment: requires GPU, an uncontended host and FOVEONIC_FIXTURE_DIR with every camera family"]
+    fn warm_group_latency_by_width() {
+        for detail in [false, true] {
+            for width in [1, 2, 4, 8] {
+                let (median, widest) = warm_group_latency(width, detail);
+                println!(
+                    "{}",
+                    serde_json::json!({"view": if detail {"native_region"} else {"reduced"},
+                        "width_cap": width, "widest": widest, "median_ms": median})
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Classic, Merrill, Quattro and Quattro H originals"]
+    fn every_family_renders_identically_at_every_width() {
+        let (serial, widest) = family_renders(1);
+        assert_eq!(widest, 1);
+        for width in [2, 4, 8] {
+            let (wide, widest) = family_renders(width);
+            assert!(widest > 1, "width {width} never ran jobs together");
+            assert!(widest <= width as u64);
+            assert_eq!(wide.len(), serial.len());
+            for (key, pixels) in &serial {
+                assert!(wide[key] == *pixels, "{key:?} differs at width {width}");
+            }
+        }
+    }
+
+    fn merrill_request(
+        revision: u64,
+        settings: foveonic::render::Settings,
+    ) -> super::RenderRequest {
+        let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+        super::RenderRequest {
             detail: false,
             framing_preview: false,
             calibration: None,
-            rendition: Default::default(),
-            revision: 5,
-            path,
+            rendition: crate::editor::Rendition::Current,
+            id: RequestId(revision),
+            path: root.join("blue-parking-sign.x3f"),
             settings,
-            preview_scale: Scale::new(2).unwrap(),
+            preview_scale: Scale::new(8).unwrap(),
             processing_quality: ProcessingQuality::Quality,
             output: "final".into(),
             comparison: false,
-            export: None,
-        });
-        let reply = receive();
-        assert_eq!(reply.settings.working_scale, Scale::NATIVE);
-        let frame = reply.result.unwrap().unwrap();
+        }
+    }
+
+    fn last_recipe_dispatches(worker: &TestWorker) -> u64 {
+        worker.checks.recipes.lock().unwrap().last().unwrap().1
+    }
+
+    /// Fit the target to what is retained now, so any further work is under pressure.
+    fn tighten_target(worker: &TestWorker) {
+        let retained = worker.memory_status().resources.total_bytes;
+        worker.set_memory_target(retained, Default::default());
+    }
+
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
+    fn speculative_whole_image_waits_for_free_memory_and_keeps_the_edited_region_warm() {
+        use std::sync::atomic::Ordering;
+        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
+        worker.set_memory_target(4 * 1024 * 1024 * 1024, Default::default());
+        let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
+        settings.preview_region = Some([100, 100, 612, 612]);
+        let refine = |revision: u64, settings: &foveonic::render::Settings| {
+            let mut first = merrill_request(revision, settings.clone());
+            first.detail = true;
+            first.preview_scale = Scale::NATIVE;
+            // Without background completion only the patch is in use.
+            worker.plan_images(vec![(first, false)]);
+            let reply = receive(&worker);
+            assert_eq!(reply.request.id, RequestId(revision));
+            reply.result.unwrap_rendered();
+        };
+        refine(1, &settings);
+        settings.exposure = 0.25;
+        refine(3, &settings);
+        let warm = last_recipe_dispatches(&worker);
+        let loads = worker.checks.source_loads.load(Ordering::Relaxed);
+
+        // The whole image needs more than the free memory, so it must not run.
+        tighten_target(&worker);
+        settings.exposure = 0.5;
+        let mut first = merrill_request(5, settings.clone());
+        first.detail = true;
+        first.preview_scale = Scale::NATIVE;
+        let mut whole = first.clone();
+        whole.id = RequestId(4);
+        whole.detail = false;
+        whole.settings.preview_region = None;
+        worker.plan_images(vec![(first, false), (whole, true)]);
+        loop {
+            let reply = receive(&worker);
+            assert_ne!(
+                reply.request.id.0, 4,
+                "speculative work ran without free memory"
+            );
+            if reply.request.id == RequestId(5) {
+                reply.result.unwrap_rendered();
+                break;
+            }
+        }
+        assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), loads);
         assert_eq!(
-            frame.artifact.settings.working_scale,
-            Scale::new(2).unwrap()
+            last_recipe_dispatches(&worker),
+            warm,
+            "speculative work must not cost the edited region its restart inputs"
         );
-        assert_eq!(frame.texture.description().extent, native.map(|v| v / 2));
-        assert_eq!(frame.display_extent(false), native);
-        assert!(frame.artifact.settings.reconstruction.is_some());
-        assert!(reply.settings.reconstruction.is_some());
-        drop(worker);
+    }
+
+    #[test]
+    #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
+    fn before_render_keeps_the_current_edit_warm() {
+        use std::sync::atomic::Ordering;
+        let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
+        worker.set_memory_target(4 * 1024 * 1024 * 1024, Default::default());
+        let camera = foveonic::render::Settings::new("Sunlight", "Standard");
+        let mut current = camera.clone();
+        current.reconstruction = Some(Default::default());
+        let render = |request: super::RenderRequest| {
+            let revision = request.id;
+            worker.submit(request);
+            let reply = receive(&worker);
+            assert_eq!(reply.request.id, revision);
+            reply.result.unwrap_rendered();
+        };
+        render(merrill_request(1, current.clone()));
+        current.exposure = 0.25;
+        render(merrill_request(2, current.clone()));
+        let warm = last_recipe_dispatches(&worker);
+        let loads = worker.checks.source_loads.load(Ordering::Relaxed);
+
+        tighten_target(&worker);
+        let mut before = merrill_request(3, camera);
+        before.rendition = crate::editor::Rendition::Camera;
+        render(before);
+
+        current.exposure = 0.5;
+        render(merrill_request(4, current));
+        assert_eq!(worker.checks.source_loads.load(Ordering::Relaxed), loads);
+        assert_eq!(
+            last_recipe_dispatches(&worker),
+            warm,
+            "a Before render must not cost the current edit its restart inputs"
+        );
     }
 }
 
 #[cfg(test)]
 mod color_pick_tests {
-    use super::tests::TestWorker as Worker;
+    use super::tests::TestWorker;
     use super::*;
+    use crate::rendering::request::RequestId;
     #[test]
     #[ignore = "requires GPU and FOVEONIC_FINISH_SOURCE"]
     fn original_color_pick_reuses_loaded_photo_and_keeps_creative_hsl_out_of_the_guide() {
@@ -3868,22 +2372,19 @@ mod color_pick_tests {
             .unwrap();
         settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
         settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
-        let worker = Worker::new(Engine::new().unwrap(), egui::Context::default());
-        worker.submit(Request {
-            auxiliary_preview: false,
-
+        let worker = TestWorker::new(Engine::new().unwrap(), egui::Context::default());
+        worker.submit(RenderRequest {
             detail: false,
             framing_preview: false,
             calibration: None,
             rendition: Default::default(),
-            revision: 1,
+            id: RequestId(1),
             path: path.clone(),
             settings: settings.clone(),
             preview_scale: Scale::NATIVE,
             processing_quality: ProcessingQuality::Quality,
             output: "final".into(),
             comparison: false,
-            export: None,
         });
         loop {
             if let Update::Image(reply) = worker
@@ -3891,7 +2392,7 @@ mod color_pick_tests {
                 .recv_timeout(std::time::Duration::from_secs(30))
                 .unwrap()
             {
-                assert!(reply.result.unwrap().is_some());
+                assert!(reply.result.rendered().is_some());
                 break;
             }
         }
@@ -3920,7 +2421,7 @@ mod color_pick_tests {
                     settings: settings.clone(),
                     uv: [0.5, 0.5],
                 },
-                1,
+                RequestId(1),
                 None,
             );
             let reply = loop {
@@ -3954,7 +2455,3 @@ mod color_pick_tests {
         }
     }
 }
-
-#[cfg(all(test, feature = "wide-experiment"))]
-#[path = "wide_test.rs"]
-mod wide_tests;

@@ -61,7 +61,7 @@ impl WorkingRows {
     ) -> Result<usize> {
         let original = grid.append(graph, self.original)?;
         let shield = grid.append(graph, self.shield)?;
-        graph.retain_for_seal(self.black);
+        graph.retain_as_sensor_data(self.black);
         graph.add(
             Operation::RowGuard(self.prepared),
             &[input, original, shield, self.black],
@@ -107,7 +107,7 @@ impl Highlights {
             } => {
                 // Recovery still needs the measured scalar table after native
                 // sensor buffers have been released.
-                graph.retain_for_seal(black);
+                graph.retain_as_sensor_data(black);
                 let (original, unrepaired, repaired) = if let Some(grid) = grid {
                     (
                         grid.append(graph, original)?,

@@ -39,7 +39,6 @@ impl App {
             ctx,
             input,
             shortcuts::Availability {
-                enabled: !self.exporting,
                 browser: !self.browser.files.is_empty(),
                 import: self.browser.import_mode,
                 settings: self.selected.is_some() && self.sidecars.ready(),
@@ -111,8 +110,8 @@ impl App {
         if self.actions.is_empty() {
             return false;
         }
-        // A folder picker or export button can change readiness after capture.
-        if self.exporting || !self.sidecars.ready() || self.selected.is_none() {
+        // A folder picker can change readiness after capture.
+        if !self.sidecars.ready() || self.selected.is_none() {
             self.actions.clear();
             return false;
         }

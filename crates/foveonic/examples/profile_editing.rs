@@ -10,8 +10,8 @@ use foveonic::{
     inspection::Content,
     profile::{report, Mode, Profile},
     render::{
-        ControlCapabilities, Engine, ProcessingWorkingSet, ReducedPreparation, RenderSession,
-        Scale, SessionKey, SessionKind, SessionRender, SessionUse, Settings,
+        ControlCapabilities, Engine, NativePhoto, PhotoKey, PhotoRender, Purpose,
+        ReducedPreparation, Resolution, Scale, Settings, WorkingSet,
     },
     source::{Result, Source},
 };
@@ -166,15 +166,15 @@ struct Photo {
     image: Option<RenderedImage>,
 }
 enum Session {
-    Native(Box<RenderSession>),
+    Native(Box<NativePhoto>),
     Reduced {
         id: u64,
-        working: Arc<Mutex<ProcessingWorkingSet>>,
+        working: Arc<Mutex<WorkingSet>>,
         budget: u64,
     },
 }
 impl Session {
-    fn resources(&self) -> Option<foveonic::render::SessionResources> {
+    fn resources(&self) -> Option<foveonic::render::PhotoResources> {
         match self {
             Self::Native(session) => Some(session.resources()),
             Self::Reduced { id, working, .. } => working.lock().unwrap().reduced_resources(*id),
@@ -274,7 +274,7 @@ fn render(
     let mut artifacts = match &mut photo.session {
         Session::Native(session) => photo
             .engine
-            .render_session(session, settings, &["final"], || false, &mut profile)?
+            .render_native_photo(session, settings, &["final"], || false, &mut profile)?
             .ok_or("render superseded")?,
         Session::Reduced {
             id,
@@ -286,17 +286,17 @@ fn render(
                 &photo.engine,
                 *id,
                 settings,
-                SessionUse::Foreground,
+                Purpose::Edit,
                 || false,
                 &mut profile,
             )?;
             let outcome = match outcome {
-                None | Some(SessionRender::NeedsOriginal(_)) => {
+                None | Some(PhotoRender::NeedsOriginal(_)) => {
                     reduced_reloaded = true;
                     let original = Source::open(&photo.source)?;
-                    if working.contains(SessionKey {
+                    if working.contains(PhotoKey {
                         photo: *id,
-                        kind: SessionKind::Reduced,
+                        resolution: Resolution::Reduced,
                     }) {
                         working
                             .refresh_reduced(
@@ -304,7 +304,7 @@ fn render(
                                 *id,
                                 &original,
                                 settings,
-                                SessionUse::Foreground,
+                                Purpose::Edit,
                                 || false,
                                 &mut profile,
                             )?
@@ -312,27 +312,22 @@ fn render(
                     } else {
                         let ReducedPreparation::Prepared(session) = photo
                             .engine
-                            .prepare_reduced_session(original, settings, || false, &mut profile)?
+                            .prepare_reduced_photo(original, settings, || false, &mut profile)?
                         else {
                             return Err("preparation superseded".into());
                         };
-                        working.insert_reduced(
-                            *id,
-                            session,
-                            &photo.engine,
-                            SessionUse::Foreground,
-                        )?;
+                        working.insert_reduced(*id, session, &photo.engine, Purpose::Edit)?;
                     }
                     working
                         .render_reduced(
                             &photo.engine,
                             *id,
                             settings,
-                            SessionUse::Foreground,
+                            Purpose::Edit,
                             || false,
                             &mut profile,
                         )?
-                        .ok_or("session does not fit working-set budget")?
+                        .ok_or("reduced working photo is not retained")?
                 }
                 Some(outcome) => outcome,
             };
@@ -343,22 +338,27 @@ fn render(
             if let Some(texture) = &photo.texture {
                 reservation.exclusive_bytes += texture.description().byte_len();
             }
-            if let SessionRender::Rendered(artifacts) = &outcome {
+            if let PhotoRender::Rendered(artifacts) = &outcome {
                 for artifact in artifacts {
                     if let Content::Image(image) = &artifact.content {
                         reservation.add_image(image);
                     }
                 }
             }
+            // The edited photo is the one a viewport shows, as in the application.
+            working.set_visible([PhotoKey {
+                photo: *id,
+                resolution: Resolution::Reduced,
+            }]);
             photo
                 .engine
                 .trim_memory(&mut working, *budget, &reservation);
             match outcome {
-                SessionRender::Rendered(artifacts) => artifacts,
-                SessionRender::NeedsOriginal(reason) => {
+                PhotoRender::Rendered(artifacts) => artifacts,
+                PhotoRender::NeedsOriginal(reason) => {
                     return Err(format!("reduced edit requires original: {reason:?}").into())
                 }
-                SessionRender::Superseded => return Err("render superseded".into()),
+                PhotoRender::Superseded => return Err("render superseded".into()),
             }
         }
     };
@@ -446,7 +446,7 @@ fn main() -> Result<()> {
         if recorder.is_some() {
             capture_adapter = Some(engine.adapter_name().to_owned());
         }
-        let reduced_working = Arc::new(Mutex::new(ProcessingWorkingSet::new()));
+        let reduced_working = Arc::new(Mutex::new(WorkingSet::new()));
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(run.workers)
             .thread_name(|index| format!("editing-worker-{index}"))
@@ -521,7 +521,7 @@ fn main() -> Result<()> {
                 Arc::new(engine.executor())
             };
             let session = if run.reduced {
-                match photo_engine.prepare_reduced_session(
+                match photo_engine.prepare_reduced_photo(
                     source,
                     &base,
                     || false,
@@ -530,12 +530,11 @@ fn main() -> Result<()> {
                     ReducedPreparation::Prepared(session) => {
                         let id = photos.len() as u64;
                         let mut working = reduced_working.lock().unwrap();
-                        working.insert_reduced(
-                            id,
-                            session,
-                            &photo_engine,
-                            SessionUse::Foreground,
-                        )?;
+                        working.insert_reduced(id, session, &photo_engine, Purpose::View)?;
+                        working.set_visible([PhotoKey {
+                            photo: id,
+                            resolution: Resolution::Reduced,
+                        }]);
                         photo_engine.trim_memory(
                             &mut working,
                             run.cache_budget,
@@ -551,7 +550,7 @@ fn main() -> Result<()> {
                     ReducedPreparation::Superseded => return Err("preparation superseded".into()),
                 }
             } else {
-                Session::Native(Box::new(RenderSession::new(Arc::new(source))))
+                Session::Native(Box::new(NativePhoto::new(Arc::new(source))))
             };
             photos.push(Photo {
                 source: path.clone(),
@@ -666,8 +665,8 @@ fn main() -> Result<()> {
                     (
                         working.retained_bytes(&engine),
                         working.len(),
-                        working.active_bytes(),
-                        working.historical_bytes(),
+                        working.most_recent_bytes(),
+                        working.older_bytes(),
                     )
                 } else {
                     (0, photos.len(), 0, 0)

@@ -20,7 +20,7 @@ from interaction_latency import matched_workload, summarize_ui_ticks
 from inputs import stage_inputs
 from scenario_checks import checked_scenario_images, pointer_value, same_numeric, validate_choice_recipes, check_cache_workflow
 from image_replay import replay_images
-from cache_workflow import associate_trace
+from cache_workflow import associate_trace, retention_assertion
 from process_memory import MemoryGuardExceeded, wait_guarded
 from correctness_cohort import CohortStopped
 
@@ -38,8 +38,8 @@ def selected_cases(cases, count, quality, scenario):
         raise ValueError('a mixed-value slider drag needs at least two photographs')
     if scenario in ('selection-journey', 'selection-pressure', 'background-edit', 'transition-journey', 'lifecycle-journey', 'browser-journey', 'choice-journey') and count < 2:
         raise ValueError('a selection journey needs at least two photographs')
-    if scenario == 'cache-workflow' and count != 2:
-        raise ValueError('cache-workflow needs exactly two photographs')
+    if scenario == 'cache-workflow' and count < 2:
+        raise ValueError('cache-workflow needs at least two photographs')
     if scenario == 'collection-journey' and count != 8:
         raise ValueError('collection-journey needs eight originals for its 100-photo folder')
     selected = cases[:count]
@@ -420,7 +420,8 @@ def collect_trial(args, prepared, contention, timing_valid, session=None, *, coh
                 result['cache_workflow']['trace'] = associate_trace(native_result['cache_workflow'], analysis)
                 include_assertions(test_result, [{'name':'cache_workflow_trace',
                     'outcome':'passed' if result['cache_workflow']['trace']['available'] else 'unverified',
-                    'actual':result['cache_workflow']['trace']}])
+                    'actual':result['cache_workflow']['trace']},
+                    retention_assertion(result['cache_workflow']['trace'])])
             assertion = {'name':'cache_workflow_actions', 'outcome':'passed', 'actual':result['cache_workflow']}
         except (ValueError, KeyError, TypeError) as error:
             assertion = {'name':'cache_workflow_actions', 'outcome':'failed', 'failure':str(error)}
@@ -509,8 +510,8 @@ def validated_inputs(args):
         raise ValueError('--native-photo-count is only available for cache-workflow')
     if args.scenario == 'cache-workflow' and getattr(args, 'native_photo_count', None) is None:
         args.native_photo_count = 1
-    if args.scenario == 'cache-workflow' and args.native_photo_count not in (1, 2):
-        raise ValueError('cache-workflow native photo count must be 1 or 2')
+    if args.scenario == 'cache-workflow' and not 1 <= args.native_photo_count <= args.count:
+        raise ValueError('cache-workflow zooms between one and all of its photos')
     selected = selected_cases(cases, args.count, args.quality, args.scenario)
     validate_shutdown(args, selected)
     if getattr(args, 'save_on_exit', False) and (args.mode == 'off' or getattr(args, 'compare_images', None)):
@@ -632,7 +633,7 @@ def argument_parser():
     parser.add_argument('--directory',type=Path,required=True)
     parser.add_argument('--scenario',choices=NAMES,required=True)
     parser.add_argument('--count',type=int)
-    parser.add_argument('--native-photo-count',type=int,choices=[1,2],help='cache-workflow photos zoomed to native detail (default: 1)')
+    parser.add_argument('--native-photo-count',type=int,help='cache-workflow photos zoomed to native detail (default: 1)')
     parser.add_argument('--quality',choices=PROCESSING_QUALITIES,default='quality')
     parser.add_argument('--disk-cache-bytes',type=int,default=10_000_000_000,
                         help='owned disk cache budget; zero measures retained processing after original loading')

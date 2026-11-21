@@ -143,11 +143,11 @@ fn read_original_bytes(file: &mut impl std::io::Read, length: u64) -> Result<Vec
         let _scope = diagnostics::scope(Category::Io, "source.original.payload");
         let mut limited = file.take(length - header_bytes as u64 + 1);
         loop {
-            crate::background::checkpoint_or_cancel()?;
+            crate::priority::checkpoint_or_cancel()?;
             let before = data.len();
             limited
                 .by_ref()
-                .take(crate::background::IO_CHUNK_BYTES as u64)
+                .take(crate::priority::IO_CHUNK_BYTES as u64)
                 .read_to_end(&mut data)?;
             if data.len() == before {
                 break;
@@ -164,7 +164,7 @@ fn decode_owned(data: Vec<u8>, read: Timing) -> Result<(Source, Vec<u8>)> {
     let _scope = crate::diagnostics::scope(crate::diagnostics::Category::Cpu, "decode.source");
     let start = Instant::now();
     let mut source = decode(&data)?;
-    crate::background::checkpoint_or_cancel()?;
+    crate::priority::checkpoint_or_cancel()?;
     // Parallel-plane timings overlap this total, so adding them would count
     // part of the same decode twice. Metadata parsing is included here too.
     let decode = Timing::elapsed("X3F decode wall", start);

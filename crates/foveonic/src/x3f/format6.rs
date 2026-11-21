@@ -167,7 +167,7 @@ fn decode_rows(
     output: &mut [f32],
 ) -> Result<()> {
     for (bounds, row) in rows.windows(2).zip(output.chunks_exact_mut(row_samples)) {
-        crate::background::checkpoint_or_cancel()?;
+        crate::priority::checkpoint_or_cancel()?;
         table.row(&data[bounds[0]..bounds[1]], row)?;
     }
     Ok(())

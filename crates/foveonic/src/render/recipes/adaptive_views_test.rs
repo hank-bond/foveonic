@@ -275,7 +275,6 @@ fn capture_views(adaptive_variants: bool) {
                     &plan.roots,
                     &mut profile,
                     &mut execution,
-                    crate::render::execute::Completion::Queued,
                 )
                 .unwrap();
             engine.package_artifacts(input, &settings, &built.graph, plan, values)

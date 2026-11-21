@@ -27,14 +27,10 @@ fn image(artifact: Artifact) -> RenderedImage {
     };
     *image
 }
-fn session_image(
-    engine: &Engine,
-    session: &mut RenderSession,
-    settings: &Settings,
-) -> RenderedImage {
+fn session_image(engine: &Engine, session: &mut NativePhoto, settings: &Settings) -> RenderedImage {
     image(
         engine
-            .render_session(
+            .render_native_photo(
                 session,
                 settings,
                 &["final"],
@@ -83,7 +79,7 @@ fn mixed_resolution_regional_matches_full(path: &Path) {
     for rotation in [0, 90, 180, 270] {
         let mut source = Source::open(path).unwrap();
         Arc::make_mut(&mut source.metadata).rotation = rotation;
-        let mut session = RenderSession::new(source);
+        let mut session = NativePhoto::new(source);
         for noise in [0, 2] {
             let mut settings = Settings::new("Sunlight", "Standard");
             settings.rendering = Rendering::Monochrome;
@@ -208,7 +204,7 @@ fn mono_inspection_stops_before_unrelated_processing_and_keeps_original_layers()
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn mono_mix_noise_sharpen_and_mode_switches_match_fresh_and_retain_snapshots() {
     let engine = Engine::test_executor();
-    let mut session = RenderSession::new(source());
+    let mut session = NativePhoto::new(source());
     let mut s = settings();
     s.rendering = Rendering::Color;
     s.reconstruction = Some(Default::default());
@@ -487,7 +483,7 @@ fn mono_sensitivity_and_detail_preserve_mix_cache_and_dng_boundaries() {
         .unwrap();
     s.white_balance = caps.default_white_balance(&source.metadata).unwrap();
     s.monochrome.mix = [0., 0., 1.];
-    let mut session = RenderSession::new(source.clone());
+    let mut session = NativePhoto::new(source.clone());
     let mut last = None;
     for (sensitivity, fine, mix) in [
         (0., 1., [0., 0., 1.]),

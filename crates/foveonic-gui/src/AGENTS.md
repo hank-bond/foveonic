@@ -39,7 +39,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[activity.rs](./activity.rs)** Presents retained launch logs and copy controls while keeping one acknowledged toolbar status.
 - **[application_settings.rs](./application_settings.rs)** Configures display, editing targets, retained memory and background disk reuse independently of photographic edits.
 - **[automation.rs](./automation.rs)** Observes real controls for opt-in scripted application checks.
-- **[batch.rs](./batch.rs)** Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering.
+- **[batch.rs](./batch.rs)** Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering; import-history matching never waits for rendering.
 - **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
 - **[chromaticity.rs](./chromaticity.rs)** Draws a CIE 1931 xy guide with fixed visual anchors for the layer mixer.
 - **[comparison_view.rs](./comparison_view.rs)** Fits browser-selected photographs into bounded comparison tiles with explicit viewport editing targets.
@@ -58,9 +58,9 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[information.rs](./information.rs)** Shows selectable capture metadata, the displayed filename, and inclusive visible-image pixel bounds below the viewport.
 - **[inspect.rs](./inspect.rs)** Groups viewport background, processing quality, pipeline views, and display-only comparisons.
 - **[loupe_tool.rs](./loupe_tool.rs)** Owns transient source-anchored loupe gestures, persisted options and independent lens geometry.
-- **[loupe_view.rs](./loupe_view.rs)** Presents transient native-detail inspection through the existing photo owner and render coordinator.
+- **[loupe_view.rs](./loupe_view.rs)** Presents transient native-detail inspection; its patch is planned by the view planner like a zoomed view.
 - **[main.rs](./main.rs)** Runs a three-pane photographic workspace with current-buffer inspection, separate UI preferences and per-X3F editing recipes.
-- **[memory.rs](./memory.rs)** Counts shared photographic samples and distinct frontend display pools for the worker budget.
+- **[memory.rs](./memory.rs)** Counts shared photographic samples and distinct frontend display pools for the worker memory target.
 - **[metadata.rs](./metadata.rs)** Formats available X3F metadata as photographic readouts.
 - **[mixer.rs](./mixer.rs)** Edits layer proportions inside a fixed dashed triangle on a CIE xy guide.
 - **[multi_edit_controls.rs](./multi_edit_controls.rs)** Applies explicit property edits and draws mixed-value controls for viewport-selected photographs.

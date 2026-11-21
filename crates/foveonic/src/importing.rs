@@ -240,7 +240,7 @@ pub fn copy_original(
         let mut chunk = vec![0; COPY_CHUNK_BYTES];
         let mut length = 0;
         loop {
-            crate::background::checkpoint();
+            crate::priority::checkpoint();
             let read = input.read(&mut chunk)?;
             if read == 0 {
                 break;

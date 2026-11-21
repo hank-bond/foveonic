@@ -3,7 +3,7 @@
 use crate::{
     inspection::Content,
     profile::Profile,
-    render::{ControlCapabilities, Engine, RenderSession, Rendering, Scale, Settings},
+    render::{ControlCapabilities, Engine, NativePhoto, Rendering, Scale, Settings},
     source::Source,
 };
 
@@ -52,7 +52,7 @@ fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
     );
     settings.reconstruction = Some(crate::noise::Controls::default());
     settings.rendering = Rendering::Color;
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let engine = Engine::test_executor();
     let output = std::env::var_os("SMALL_PREVIEW_OUT").map(std::path::PathBuf::from);
     if let Some(path) = &output {
@@ -69,7 +69,7 @@ fn small_overview_keeps_framing_through_exposure_and_reconstruction_edits() {
             settings.exposure = exposure;
             settings.reconstruction.as_mut().unwrap().chroma = chroma;
             let artifact = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &settings,
                     &["final"],
@@ -117,7 +117,7 @@ fn working_scale_survives_output_views_monochrome_and_inspection() {
         cap.default_white_balance(&source.metadata).unwrap(),
         cap.default_color_mode(&source.metadata).unwrap(),
     );
-    let mut session = RenderSession::new(source);
+    let mut session = NativePhoto::new(source);
     let engine = Engine::test_executor();
     for case in 0..4 {
         let mut settings = base.clone();
@@ -138,7 +138,7 @@ fn working_scale_survives_output_views_monochrome_and_inspection() {
             _ => &["linear.base"][..],
         };
         let artifacts = engine
-            .render_session(
+            .render_native_photo(
                 &mut session,
                 &settings,
                 names,
@@ -180,11 +180,11 @@ fn scaled_color_guides_match_fresh_edits_and_native_inspection_remains_explicit(
             .unwrap();
         base.white_balance = cap.default_white_balance(&source.metadata).unwrap();
         base.color_mode = cap.default_color_mode(&source.metadata).unwrap();
-        let mut session = RenderSession::new(source.clone());
+        let mut session = NativePhoto::new(source.clone());
         for quality in [Scale::new(4).unwrap(), Scale::new(8).unwrap()] {
             base.working_scale = quality;
             let neutral = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &base,
                     &["final"],
@@ -219,7 +219,7 @@ fn scaled_color_guides_match_fresh_edits_and_native_inspection_remains_explicit(
                         settings.photographic.color_editor.master.saturation = saturation;
                     }
                     let artifact = engine
-                        .render_session(
+                        .render_native_photo(
                             &mut session,
                             &settings,
                             &["final"],
@@ -252,7 +252,7 @@ fn scaled_color_guides_match_fresh_edits_and_native_inspection_remains_explicit(
                 }
             }
             let inspection = engine
-                .render_session(
+                .render_native_photo(
                     &mut session,
                     &base,
                     &["linear.base"],

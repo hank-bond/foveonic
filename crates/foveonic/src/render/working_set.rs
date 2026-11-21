@@ -1,45 +1,94 @@
-//! Retains native and reduced sessions with separate foreground recency and execution protection.
+//! Retains native and reduced working photos in recency order and protects each one while a render holds its guard.
 
-use super::{Engine, ReducedSession, RenderSession, SessionRender, Settings};
+use super::{Engine, NativePhoto, PhotoRender, ReducedPhoto, Settings};
 use crate::{
+    priority::Priority,
     profile::Profile,
     recipe::RetainedBytes,
     source::{Metadata, Result, Source, SourceOrigin},
 };
 use std::sync::{Arc, Weak};
 
-/// The source representation retained for a photograph's processing session.
+/// The resolution of a working photo: the native sensor grid or a reduced one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
-pub enum SessionKind {
+pub enum Resolution {
     Native,
     Reduced,
 }
 
-/// A photograph may own one session of each kind.
+/// A photograph may have one working photo at each resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
-pub struct SessionKey {
+pub struct PhotoKey {
     pub photo: u64,
-    pub kind: SessionKind,
+    pub resolution: Resolution,
 }
 
-/// Foreground use promotes a session and protects its retained restart inputs.
-/// Execution claims protect running sessions independently of this recency policy.
+/// What a job is for. It sets the job's priority and how its use of a working
+/// photo counts toward keeping it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionUse {
-    Foreground,
-    Preparation,
+pub enum Purpose {
+    /// The edit shown in a viewport.
+    Edit,
+    /// Other viewport work, such as Before images and color picks.
+    View,
+    /// Navigator images and scopes.
+    Auxiliary,
+    Thumbnail,
+    Export,
+    Speculative,
 }
 
-#[allow(clippy::large_enum_variant)] // Native sessions avoid a separate allocation.
-pub(super) enum Session {
-    Native(RenderSession),
-    Reduced(Box<ReducedSession>),
+impl Purpose {
+    pub fn priority(self) -> Priority {
+        match self {
+            Self::Edit | Self::View => Priority::Viewport,
+            Self::Auxiliary => Priority::Auxiliary,
+            Self::Thumbnail => Priority::Thumbnail,
+            Self::Export => Priority::Export,
+            Self::Speculative => Priority::Speculative,
+        }
+    }
+}
+
+/// One order of uses shared by every photo, so trimming can compare a photo's
+/// last use with any edit's restart inputs.
+fn next_use() -> u64 {
+    static USES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    USES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// How far one use counts toward keeping a working photo.
+#[derive(PartialEq)]
+enum Counts {
+    /// The photo and the inputs its edit restarts from.
+    Edit,
+    Photo,
+    Nothing,
+}
+
+/// The eviction policy for every use. Export and speculative work never keep a
+/// photo warm, and only the edit decides which restart inputs are newest, so a
+/// Before image cannot displace the current edit's inputs.
+fn counts(purpose: Purpose) -> Counts {
+    match purpose {
+        Purpose::Edit => Counts::Edit,
+        Purpose::View | Purpose::Auxiliary | Purpose::Thumbnail => Counts::Photo,
+        Purpose::Export | Purpose::Speculative => Counts::Nothing,
+    }
+}
+
+#[allow(clippy::large_enum_variant)] // Native working photos avoid a separate allocation.
+pub(super) enum WorkingPhoto {
+    Native(NativePhoto),
+    Reduced(Box<ReducedPhoto>),
 }
 struct Entry {
-    key: SessionKey,
-    session: Session,
+    key: PhotoKey,
+    session: WorkingPhoto,
     execution: Option<Weak<()>>,
-    park_pending: bool,
+    /// Latest use that counts (see `counts`), on the same scale as restart-input
+    /// recency. Zero when no counting use happened.
+    last_use: u64,
 }
 
 impl Entry {
@@ -48,46 +97,44 @@ impl Entry {
             .as_ref()
             .is_some_and(|execution| execution.strong_count() != 0)
     }
-
-    fn park(&mut self) {
-        if self.executing() {
-            self.park_pending = true;
-        } else {
-            self.session.cache_mut().park();
-            self.park_pending = false;
-        }
-    }
 }
 
-/// An executing session must retire before its owner is replaced or cleared.
+/// A guarded working photo must retire before it is replaced or cleared.
 #[derive(Debug)]
-pub struct SessionInUse {
-    pub key: SessionKey,
+pub struct PhotoInUse {
+    pub key: PhotoKey,
 }
 
-impl std::fmt::Display for SessionInUse {
+impl std::fmt::Display for PhotoInUse {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "processing session {:?} is executing", self.key)
+        write!(formatter, "working photo {:?} is executing", self.key)
     }
 }
 
-impl std::error::Error for SessionInUse {}
+impl std::error::Error for PhotoInUse {}
 
 /// The entry keeps only a weak identity so errors release protection naturally.
-/// The execution owner must drain submitted work before dropping this claim.
+/// The execution owner must drain submitted work before dropping this guard.
 #[derive(Debug)]
-pub(super) struct ExecutionClaim {
-    key: SessionKey,
+pub(super) struct Guard {
+    key: PhotoKey,
     identity: Arc<()>,
 }
 
-/// One foreground session and independently protected executions share the same history and budget.
+/// Working photos share one memory target.
 #[derive(Default)]
-pub struct ProcessingWorkingSet {
+pub struct WorkingSet {
     entries: Vec<Entry>,
-    active: Option<SessionKey>,
+    /// Working photos that viewports render from. Trimming never evicts them.
+    visible: std::collections::HashSet<PhotoKey>,
 }
-impl ProcessingWorkingSet {
+
+/// What one trimming step dropped.
+pub(super) enum Trimmed {
+    RestartInput,
+    Photo(PhotoKey),
+}
+impl WorkingSet {
     pub fn new() -> Self {
         Self::default()
     }
@@ -97,19 +144,25 @@ impl ProcessingWorkingSet {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-    pub fn active_key(&self) -> Option<SessionKey> {
-        self.active
+    pub fn native_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.key.resolution == Resolution::Native)
+            .count()
     }
-    pub fn contains(&self, key: SessionKey) -> bool {
+    pub fn set_visible(&mut self, keys: impl IntoIterator<Item = PhotoKey>) {
+        self.visible = keys.into_iter().collect();
+    }
+    pub fn contains(&self, key: PhotoKey) -> bool {
         self.entries.iter().any(|entry| entry.key == key)
     }
-    fn key(photo: u64, kind: SessionKind) -> SessionKey {
-        SessionKey { photo, kind }
+    fn key(photo: u64, resolution: Resolution) -> PhotoKey {
+        PhotoKey { photo, resolution }
     }
-    fn get(&self, key: SessionKey) -> Option<&Entry> {
+    fn get(&self, key: PhotoKey) -> Option<&Entry> {
         self.entries.iter().find(|entry| entry.key == key)
     }
-    fn get_mut(&mut self, key: SessionKey) -> Option<&mut Entry> {
+    fn get_mut(&mut self, key: PhotoKey) -> Option<&mut Entry> {
         self.entries.iter_mut().find(|entry| entry.key == key)
     }
     fn require_idle(&self, photo: u64) -> Result<()> {
@@ -118,187 +171,147 @@ impl ProcessingWorkingSet {
             .iter()
             .find(|entry| entry.key.photo == photo && entry.executing())
         {
-            return Err(Box::new(SessionInUse { key: entry.key }));
+            return Err(Box::new(PhotoInUse { key: entry.key }));
         }
         Ok(())
     }
-    pub(super) fn retire_executions(&mut self) {
-        for entry in &mut self.entries {
-            if entry.execution.is_some() && !entry.executing() {
-                entry.execution = None;
-                if entry.park_pending && Some(entry.key) != self.active {
-                    entry.park();
-                }
-                entry.park_pending = false;
-            }
-        }
-    }
-    pub(super) fn claim_execution(&mut self, key: SessionKey) -> Result<ExecutionClaim> {
+    pub(super) fn guard(&mut self, key: PhotoKey) -> Result<Guard> {
         self.require_idle(key.photo)?;
-        self.retire_executions();
-        let entry = self
-            .get_mut(key)
-            .ok_or("processing session is not retained")?;
+        let entry = self.get_mut(key).ok_or("working photo is not retained")?;
         let identity = Arc::new(());
         entry.execution = Some(Arc::downgrade(&identity));
-        Ok(ExecutionClaim { key, identity })
+        Ok(Guard { key, identity })
     }
-    pub(super) fn execution(&self, claim: &ExecutionClaim) -> &Session {
-        let entry = self.get(claim.key).expect("claimed session is retained");
+    pub(super) fn execution(&self, guard: &Guard) -> &WorkingPhoto {
+        let entry = self
+            .get(guard.key)
+            .expect("guarded working photo is retained");
         assert!(entry
             .execution
             .as_ref()
-            .is_some_and(|identity| identity.ptr_eq(&Arc::downgrade(&claim.identity))));
+            .is_some_and(|identity| identity.ptr_eq(&Arc::downgrade(&guard.identity))));
         &entry.session
     }
-    pub(super) fn execution_mut(&mut self, claim: &ExecutionClaim) -> &mut Session {
+    pub(super) fn execution_mut(&mut self, guard: &Guard) -> &mut WorkingPhoto {
         let entry = self
-            .get_mut(claim.key)
-            .expect("claimed session is retained");
+            .get_mut(guard.key)
+            .expect("guarded working photo is retained");
         assert!(entry
             .execution
             .as_ref()
-            .is_some_and(|identity| identity.ptr_eq(&Arc::downgrade(&claim.identity))));
+            .is_some_and(|identity| identity.ptr_eq(&Arc::downgrade(&guard.identity))));
         &mut entry.session
     }
-    pub fn native(&self, photo: u64) -> Option<&RenderSession> {
-        match &self.get(Self::key(photo, SessionKind::Native))?.session {
-            Session::Native(session) => Some(session),
+    pub fn native(&self, photo: u64) -> Option<&NativePhoto> {
+        match &self.get(Self::key(photo, Resolution::Native))?.session {
+            WorkingPhoto::Native(session) => Some(session),
             _ => None,
         }
     }
-    pub fn reduced(&self, photo: u64) -> Option<&ReducedSession> {
-        match &self.get(Self::key(photo, SessionKind::Reduced))?.session {
-            Session::Reduced(session) => Some(session),
+    pub fn reduced(&self, photo: u64) -> Option<&ReducedPhoto> {
+        match &self.get(Self::key(photo, Resolution::Reduced))?.session {
+            WorkingPhoto::Reduced(session) => Some(session),
             _ => None,
         }
     }
-    /// A preparation may use an existing session without changing foreground ownership or recency.
-    pub fn activate(&mut self, key: SessionKey, usage: SessionUse) -> bool {
-        self.retire_executions();
-        let Some(index) = self.entries.iter().position(|entry| entry.key == key) else {
-            return false;
-        };
-        if usage == SessionUse::Preparation {
-            return true;
+    /// Record that a job used a working photo. Returns the stamp for the edit's
+    /// restart inputs when the use counts as an edit.
+    pub fn record_use(&mut self, key: PhotoKey, purpose: Purpose) -> Option<u64> {
+        let entry = self.get_mut(key)?;
+        let counts = counts(purpose);
+        if counts == Counts::Nothing {
+            return None;
         }
-        if self.active != Some(key) {
-            self.park_active();
-        }
-        let entry = self.entries.remove(index);
-        self.entries.push(entry);
-        self.active = Some(key);
-        self.entries.last_mut().unwrap().park_pending = false;
-        true
+        entry.last_use = next_use();
+        (counts == Counts::Edit).then_some(entry.last_use)
     }
-    pub fn park_active(&mut self) {
-        self.retire_executions();
-        if let Some(key) = self.active.take() {
-            if let Some(entry) = self.get_mut(key) {
-                entry.park();
-            }
-        }
-    }
-    fn insert(&mut self, key: SessionKey, session: Session, usage: SessionUse) -> Result<()> {
+    /// A use that counts for nothing keeps an existing working photo and drops
+    /// `session`. Callers check `contains` first when that matters.
+    fn insert(&mut self, key: PhotoKey, session: WorkingPhoto, purpose: Purpose) -> Result<()> {
         self.require_idle(key.photo)?;
-        if usage == SessionUse::Preparation && self.contains(key) {
+        // A use that does not count must not replace a photo that does.
+        if counts(purpose) == Counts::Nothing && self.contains(key) {
             return Ok(());
         }
         self.remove(key)?;
-        let entry = Entry {
+        self.entries.push(Entry {
             key,
             session,
             execution: None,
-            park_pending: false,
-        };
-        if usage == SessionUse::Foreground {
-            self.park_active();
-            self.entries.push(entry);
-            self.active = Some(key);
-        } else {
-            self.entries.insert(0, entry);
-        }
+            last_use: 0,
+        });
+        self.record_use(key, purpose);
         Ok(())
     }
     pub fn insert_native(
         &mut self,
         photo: u64,
-        mut session: RenderSession,
+        mut session: NativePhoto,
         engine: &Engine,
-        usage: SessionUse,
+        purpose: Purpose,
     ) -> Result<()> {
         session.cache.bind(&engine.owner);
         self.insert(
-            Self::key(photo, SessionKind::Native),
-            Session::Native(session),
-            usage,
+            Self::key(photo, Resolution::Native),
+            WorkingPhoto::Native(session),
+            purpose,
         )
     }
     pub fn insert_reduced(
         &mut self,
         photo: u64,
-        session: Box<ReducedSession>,
+        session: Box<ReducedPhoto>,
         engine: &Engine,
-        usage: SessionUse,
+        purpose: Purpose,
     ) -> Result<()> {
         if !Arc::ptr_eq(&session.owner, &engine.owner) {
             return Err("reduced inputs belong to another engine".into());
         }
         self.insert(
-            Self::key(photo, SessionKind::Reduced),
-            Session::Reduced(session),
-            usage,
+            Self::key(photo, Resolution::Reduced),
+            WorkingPhoto::Reduced(session),
+            purpose,
         )
     }
     /// Removal is rejected while either representation of this photo executes.
-    pub fn remove(&mut self, key: SessionKey) -> Result<bool> {
+    pub fn remove(&mut self, key: PhotoKey) -> Result<bool> {
         self.require_idle(key.photo)?;
-        self.retire_executions();
         let before = self.entries.len();
         self.entries.retain(|entry| entry.key != key);
-        if self.active == Some(key) {
-            self.active = None;
-        }
         Ok(self.entries.len() != before)
     }
     /// Check both representations before removing either one.
     pub fn remove_photo(&mut self, photo: u64) -> Result<bool> {
         self.require_idle(photo)?;
-        self.retire_executions();
         let before = self.entries.len();
         self.entries.retain(|entry| entry.key.photo != photo);
-        if self.active.is_some_and(|key| key.photo == photo) {
-            self.active = None;
-        }
         Ok(self.entries.len() != before)
     }
-    /// The execution owner must drain and retire all claims before clearing.
+    /// The execution owner must drain and retire all guards before clearing.
     pub fn clear(&mut self) -> Result<()> {
         if let Some(entry) = self.entries.iter().find(|entry| entry.executing()) {
-            return Err(Box::new(SessionInUse { key: entry.key }));
+            return Err(Box::new(PhotoInUse { key: entry.key }));
         }
         self.entries.clear();
-        self.active = None;
         Ok(())
     }
-    /// Execute one synchronous native operation under session protection.
+    /// Execute one synchronous native operation while holding its guard.
     /// The operation must finish its submitted work before returning.
     pub fn with_native<T>(
         &mut self,
         photo: u64,
-        operation: impl FnOnce(&mut RenderSession) -> Result<T>,
+        operation: impl FnOnce(&mut NativePhoto) -> Result<T>,
     ) -> Result<Option<T>> {
-        let key = Self::key(photo, SessionKind::Native);
+        let key = Self::key(photo, Resolution::Native);
         if !self.contains(key) {
             return Ok(None);
         }
-        let claim = self.claim_execution(key)?;
-        let Session::Native(session) = self.execution_mut(&claim) else {
+        let guard = self.guard(key)?;
+        let WorkingPhoto::Native(session) = self.execution_mut(&guard) else {
             unreachable!()
         };
         let result = operation(session);
-        drop(claim);
-        self.retire_executions();
+        drop(guard);
         result.map(Some)
     }
     pub fn reduced_settings(&self, photo: u64) -> Option<&Settings> {
@@ -309,21 +322,23 @@ impl ProcessingWorkingSet {
         self.reduced(photo)
             .map(|session| (session.cached_bytes(), session.retained_cpu_bytes()))
     }
-    pub fn reduced_resources(&self, photo: u64) -> Option<super::SessionResources> {
-        self.reduced(photo).map(ReducedSession::resources)
+    pub fn reduced_resources(&self, photo: u64) -> Option<super::PhotoResources> {
+        self.reduced(photo).map(ReducedPhoto::resources)
     }
-    pub fn active_bytes(&self) -> u64 {
-        self.active
-            .and_then(|key| self.get(key))
-            .map_or(0, |entry| {
-                entry.session.retained_cpu_bytes() + entry.session.cached_bytes()
-            })
+    fn most_recent(&self) -> Option<usize> {
+        (0..self.entries.len()).max_by_key(|index| self.entries[*index].last_use)
     }
-    pub fn historical_bytes(&self) -> u64 {
-        let entries = self
-            .entries
-            .iter()
-            .filter(|entry| Some(entry.key) != self.active);
+    pub fn most_recent_bytes(&self) -> u64 {
+        self.most_recent().map_or(0, |index| {
+            let session = &self.entries[index].session;
+            session.retained_cpu_bytes() + session.cached_bytes()
+        })
+    }
+    pub fn older_bytes(&self) -> u64 {
+        let recent = self.most_recent();
+        let entries = (0..self.entries.len())
+            .filter(move |index| Some(*index) != recent)
+            .map(|index| &self.entries[index]);
         let mut retained = RetainedBytes::default();
         let containers: u64 = entries
             .clone()
@@ -346,8 +361,8 @@ impl ProcessingWorkingSet {
                 .iter()
                 .map(|entry| {
                     let inline = match &entry.session {
-                        Session::Native(_) => size_of::<RenderSession>() as u64,
-                        Session::Reduced(_) => 0,
+                        WorkingPhoto::Native(_) => size_of::<NativePhoto>() as u64,
+                        WorkingPhoto::Reduced(_) => 0,
                     };
                     entry.session.account_memory(retained) - inline
                 })
@@ -358,38 +373,63 @@ impl ProcessingWorkingSet {
             .iter()
             .flat_map(|entry| entry.session.buffers())
     }
-    pub(super) fn protected_inputs(&self) -> impl Iterator<Item = (&Arc<Metadata>, &SourceOrigin)> {
+    /// Shared preparation belongs to retained working photos and is released with them.
+    pub(super) fn retained_inputs(&self) -> impl Iterator<Item = (&Arc<Metadata>, &SourceOrigin)> {
         self.entries
             .iter()
-            .filter(|entry| Some(entry.key) == self.active || entry.executing())
             .map(|entry| (entry.session.metadata(), entry.session.origin()))
     }
     pub(super) fn trim_optional(&mut self, obsolete_only: bool) -> bool {
-        self.retire_executions();
-        let active_key = self.active;
         self.entries.iter_mut().any(|entry| {
-            if entry.executing() {
-                return false;
-            }
-            let active = Some(entry.key) == active_key;
-            let cache = entry.session.cache_mut();
-            let trimmed = if active {
-                cache.trim_active_optional(obsolete_only)
-            } else {
-                cache.trim_optional(obsolete_only)
-            };
-            if trimmed && !active {
-                cache.park();
-            }
-            trimmed
+            !entry.executing() && entry.session.cache_mut().trim_optional(obsolete_only)
         })
     }
-    pub(super) fn evict_oldest(&mut self) -> Option<SessionKey> {
-        self.retire_executions();
-        let index = self
-            .entries
-            .iter()
-            .position(|entry| Some(entry.key) != self.active && !entry.executing())?;
+    /// Drop whatever was used longest ago: one edit's restart input or a whole
+    /// working photo. Visible photos are never evicted and keep their latest
+    /// edit's inputs.
+    pub(super) fn trim_least_recent(&mut self) -> Option<Trimmed> {
+        let idle = || {
+            self.entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| !entry.executing())
+        };
+        let input = idle()
+            .filter_map(|(index, entry)| {
+                let visible = self.visible.contains(&entry.key);
+                Some((entry.session.cache().oldest_restart_use(visible)?, index))
+            })
+            .min();
+        let photo = idle()
+            .filter(|(_, entry)| !self.visible.contains(&entry.key))
+            .map(|(index, entry)| (entry.last_use, index))
+            .min();
+        if let Some((edit_use, index)) = input {
+            // A photo is never older than its own inputs, so on a tie its inputs
+            // go first and its sensor data, which needs a decode to rebuild, last.
+            if photo.is_none_or(|(last_use, _)| edit_use <= last_use) {
+                let visible = self.visible.contains(&self.entries[index].key);
+                self.entries[index]
+                    .session
+                    .cache_mut()
+                    .drop_oldest_restart_input(visible);
+                return Some(Trimmed::RestartInput);
+            }
+        }
+        let (_, index) = photo?;
+        Some(Trimmed::Photo(self.evict(index)))
+    }
+    /// Trim until a whole working photo leaves, for tests about photo order.
+    #[cfg(test)]
+    pub(super) fn evict_least_recent(&mut self) -> Option<PhotoKey> {
+        loop {
+            match self.trim_least_recent()? {
+                Trimmed::RestartInput => {}
+                Trimmed::Photo(key) => return Some(key),
+            }
+        }
+    }
+    fn evict(&mut self, index: usize) -> PhotoKey {
         let entry = self.entries.remove(index);
         crate::diagnostics::event(
             crate::diagnostics::Category::Cache,
@@ -399,17 +439,17 @@ impl ProcessingWorkingSet {
                     .u64("session", entry.key.photo)
                     .str(
                         "kind",
-                        match entry.key.kind {
-                            SessionKind::Native => "native",
-                            SessionKind::Reduced => "reduced",
+                        match entry.key.resolution {
+                            Resolution::Native => "native",
+                            Resolution::Reduced => "reduced",
                         },
                     )
                     .u64("gpu_bytes", entry.session.cached_bytes());
             },
         );
-        Some(entry.key)
+        entry.key
     }
-    /// Refresh only a verified original, without changing use order for preparation.
+    /// Refresh only a verified original.
     #[allow(clippy::too_many_arguments)]
     pub fn refresh_reduced(
         &mut self,
@@ -417,7 +457,7 @@ impl ProcessingWorkingSet {
         photo: u64,
         source: &Source,
         settings: &Settings,
-        usage: SessionUse,
+        purpose: Purpose,
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
     ) -> Result<Option<()>> {
@@ -430,14 +470,13 @@ impl ProcessingWorkingSet {
         if !Arc::ptr_eq(&session.owner, &engine.owner) {
             return Err("camera dependencies belong to another engine".into());
         }
-        let claim = self.claim_execution(Self::key(photo, SessionKind::Reduced))?;
-        self.activate(claim.key, usage);
-        let Session::Reduced(session) = self.execution_mut(&claim) else {
+        let guard = self.guard(Self::key(photo, Resolution::Reduced))?;
+        self.record_use(guard.key, purpose);
+        let WorkingPhoto::Reduced(session) = self.execution_mut(&guard) else {
             unreachable!()
         };
-        let result = engine.refresh_reduced_session(session, source, settings, cancel, profile);
-        drop(claim);
-        self.retire_executions();
+        let result = engine.refresh_reduced_photo(session, source, settings, cancel, profile);
+        drop(guard);
         result
     }
     pub fn render_reduced(
@@ -445,11 +484,11 @@ impl ProcessingWorkingSet {
         engine: &Engine,
         photo: u64,
         settings: &Settings,
-        usage: SessionUse,
+        purpose: Purpose,
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
-    ) -> Result<Option<SessionRender>> {
-        self.render_observed(engine, photo, settings, usage, cancel, profile, None, None)
+    ) -> Result<Option<PhotoRender>> {
+        self.render_observed(engine, photo, settings, purpose, cancel, profile, None)
     }
     #[allow(clippy::too_many_arguments)]
     pub fn render_reduced_with_progress(
@@ -457,21 +496,19 @@ impl ProcessingWorkingSet {
         engine: &Engine,
         photo: u64,
         settings: &Settings,
-        usage: SessionUse,
+        purpose: Purpose,
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
         progress: impl Fn(super::RenderProgress),
-        budget: Option<super::ExecutionBudget<'_>>,
-    ) -> Result<Option<SessionRender>> {
+    ) -> Result<Option<PhotoRender>> {
         self.render_observed(
             engine,
             photo,
             settings,
-            usage,
+            purpose,
             cancel,
             profile,
             Some(&progress),
-            budget,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -480,27 +517,25 @@ impl ProcessingWorkingSet {
         engine: &Engine,
         photo: u64,
         settings: &Settings,
-        usage: SessionUse,
+        purpose: Purpose,
         cancel: impl Fn() -> bool,
         profile: &mut Profile,
         progress: Option<&dyn Fn(super::RenderProgress)>,
-        budget: Option<super::ExecutionBudget<'_>>,
-    ) -> Result<Option<SessionRender>> {
-        super::driver::render_session(
+    ) -> Result<Option<PhotoRender>> {
+        super::driver::render_working_photo(
             engine,
             self,
-            Self::key(photo, SessionKind::Reduced),
+            Self::key(photo, Resolution::Reduced),
             settings,
             &["final"],
-            usage,
+            purpose,
             &cancel,
             profile,
             progress,
-            budget,
         )
     }
 }
-impl Session {
+impl WorkingPhoto {
     fn metadata(&self) -> &Arc<Metadata> {
         match self {
             Self::Native(s) => s.metadata(),
@@ -575,139 +610,175 @@ mod tests {
         })
     }
 
-    fn native(photo: u64) -> SessionKey {
-        SessionKey {
+    fn native(photo: u64) -> PhotoKey {
+        PhotoKey {
             photo,
-            kind: SessionKind::Native,
+            resolution: Resolution::Native,
         }
     }
 
-    fn retained_photos() -> ProcessingWorkingSet {
-        let mut working = ProcessingWorkingSet::new();
+    fn retained_photos() -> WorkingSet {
+        let mut working = WorkingSet::new();
         for photo in [1, 2, 3] {
             working
                 .insert(
                     native(photo),
-                    Session::Native(RenderSession::new(source())),
-                    SessionUse::Preparation,
+                    WorkingPhoto::Native(NativePhoto::new(source())),
+                    Purpose::Speculative,
                 )
                 .unwrap();
         }
         working
     }
 
+    /// Two photos whose last uses and restart inputs carry explicit stamps.
+    fn stamped_photos(gpu: &crate::gpu::Gpu, visible: bool) -> WorkingSet {
+        let mut working = WorkingSet::new();
+        for (photo, last_use, inputs) in [(1, 4, &[("old", 1), ("newer", 4)][..]), (2, 2, &[][..])]
+        {
+            let mut session = NativePhoto::new(source());
+            session.cache = crate::interactive::cache_tests::restart_inputs(gpu, inputs);
+            working
+                .insert(
+                    native(photo),
+                    WorkingPhoto::Native(session),
+                    Purpose::Speculative,
+                )
+                .unwrap();
+            working.get_mut(native(photo)).unwrap().last_use = last_use;
+        }
+        if visible {
+            working.set_visible([native(1)]);
+        }
+        working
+    }
+
     #[test]
-    fn execution_claims_protect_several_photos_without_changing_foreground() {
+    #[ignore = "requires a GPU"]
+    fn one_recency_pass_orders_restart_inputs_and_photos() {
+        let gpu = crate::gpu::Gpu::test_executor();
+        let mut working = stamped_photos(&gpu, false);
+        assert!(
+            matches!(working.trim_least_recent(), Some(Trimmed::RestartInput)),
+            "photo 1's old edit predates photo 2"
+        );
+        assert!(
+            matches!(working.trim_least_recent(), Some(Trimmed::Photo(key)) if key == native(2)),
+            "photo 2 predates photo 1's newer edit"
+        );
+        assert!(
+            matches!(working.trim_least_recent(), Some(Trimmed::RestartInput)),
+            "a photo's inputs leave before its sensor data"
+        );
+        assert!(
+            matches!(working.trim_least_recent(), Some(Trimmed::Photo(key)) if key == native(1))
+        );
+        assert!(working.trim_least_recent().is_none());
+
+        let mut working = stamped_photos(&gpu, true);
+        assert!(matches!(
+            working.trim_least_recent(),
+            Some(Trimmed::RestartInput)
+        ));
+        assert!(
+            matches!(working.trim_least_recent(), Some(Trimmed::Photo(key)) if key == native(2))
+        );
+        assert!(
+            working.trim_least_recent().is_none(),
+            "a visible photo keeps its latest edit's inputs"
+        );
+        assert_eq!(
+            working.native(1).unwrap().cache.oldest_restart_use(false),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn purposes_decide_what_a_use_keeps() {
         let mut working = retained_photos();
-        working.activate(native(3), SessionUse::Foreground);
-        let first = working.claim_execution(native(1)).unwrap();
-        let second = working.claim_execution(native(2)).unwrap();
-        assert_eq!(working.active_key(), Some(native(3)));
-        assert_eq!(working.protected_inputs().count(), 3);
-        working.park_active();
-        assert_eq!(working.protected_inputs().count(), 2);
-        assert_eq!(working.evict_oldest(), Some(native(3)));
-        assert_eq!(working.evict_oldest(), None);
+        let last_use = |working: &WorkingSet, photo| working.get(native(photo)).unwrap().last_use;
+        for purpose in [Purpose::Export, Purpose::Speculative] {
+            assert_eq!(working.record_use(native(1), purpose), None);
+            assert_eq!(
+                last_use(&working, 1),
+                0,
+                "{purpose:?} does not count as use"
+            );
+        }
+        for purpose in [Purpose::View, Purpose::Auxiliary, Purpose::Thumbnail] {
+            let before = last_use(&working, 2);
+            assert_eq!(working.record_use(native(2), purpose), None);
+            assert!(
+                last_use(&working, 2) > before,
+                "{purpose:?} keeps its photo"
+            );
+        }
+        let stamp = working.record_use(native(3), Purpose::Edit).unwrap();
+        assert_eq!(last_use(&working, 3), stamp);
+        let next = working.record_use(native(1), Purpose::Edit).unwrap();
+        assert!(next > stamp, "one order of uses across photos");
+    }
+
+    #[test]
+    fn guards_protect_several_photos_and_recency_orders_eviction() {
+        let mut working = retained_photos();
+        working.record_use(native(3), Purpose::Edit);
+        working.set_visible([native(3)]);
+        let first = working.guard(native(1)).unwrap();
+        let second = working.guard(native(2)).unwrap();
+        assert_eq!(working.retained_inputs().count(), 3);
+        assert_eq!(
+            working.evict_least_recent(),
+            None,
+            "the visible photo stays and the others are guarded"
+        );
         drop(first);
-        assert_eq!(working.evict_oldest(), Some(native(1)));
+        assert_eq!(working.evict_least_recent(), Some(native(1)));
         drop(second);
-        assert_eq!(working.evict_oldest(), Some(native(2)));
+        assert_eq!(working.evict_least_recent(), Some(native(2)));
+        assert_eq!(working.evict_least_recent(), None);
     }
 
     #[test]
     fn busy_mutations_leave_source_identity_and_other_entries_unchanged() {
         let mut working = retained_photos();
-        working.activate(native(2), SessionUse::Foreground);
+        working.record_use(native(2), Purpose::Edit);
         let original = working.native(1).unwrap().shared_source();
-        let claim = working.claim_execution(native(1)).unwrap();
-        assert!(working
-            .claim_execution(native(1))
-            .unwrap_err()
-            .is::<SessionInUse>());
+        let guard = working.guard(native(1)).unwrap();
+        assert!(working.guard(native(1)).unwrap_err().is::<PhotoInUse>());
         assert!(working
             .with_native(1, |_| Ok(()))
             .unwrap_err()
-            .is::<SessionInUse>());
-        assert!(working.remove(native(1)).unwrap_err().is::<SessionInUse>());
-        assert!(working.remove_photo(1).unwrap_err().is::<SessionInUse>());
-        assert!(working.clear().unwrap_err().is::<SessionInUse>());
+            .is::<PhotoInUse>());
+        assert!(working.remove(native(1)).unwrap_err().is::<PhotoInUse>());
+        assert!(working.remove_photo(1).unwrap_err().is::<PhotoInUse>());
+        assert!(working.clear().unwrap_err().is::<PhotoInUse>());
         assert!(working
             .insert(
                 native(1),
-                Session::Native(RenderSession::new(source())),
-                SessionUse::Foreground,
+                WorkingPhoto::Native(NativePhoto::new(source())),
+                Purpose::Edit,
             )
             .unwrap_err()
-            .is::<SessionInUse>());
+            .is::<PhotoInUse>());
         assert!(Arc::ptr_eq(
             &original,
             &working.native(1).unwrap().shared_source()
         ));
-        assert_eq!(working.active_key(), Some(native(2)));
         assert_eq!(working.len(), 3);
         assert!(working.native(2).is_some());
         assert!(working.native(3).is_some());
-        drop(claim);
+        drop(guard);
         assert!(working.remove_photo(1).unwrap());
         working.clear().unwrap();
         assert!(working.is_empty());
     }
 
     #[test]
-    fn parking_waits_for_execution_retirement() {
-        use crate::{
-            graph::{DataType, Graph, Operation},
-            interactive::Execution,
-        };
-        let mut working = retained_photos();
-        let mut graph = Graph::default();
-        let output = graph
-            .add(
-                Operation::RenderedInput {
-                    data: DataType::SensorLayers,
-                },
-                &[],
-            )
-            .unwrap();
-        let name = graph.outputs[output].cache_name();
-        working
-            .with_native(1, |session| {
-                Execution {
-                    cache: Some(&mut session.cache),
-                    ..Default::default()
-                }
-                .plan(&graph, &[output])
-            })
-            .unwrap()
-            .unwrap();
-        assert!(working
-            .native(1)
-            .unwrap()
-            .cache
-            .diagnostic_version(&name)
-            .is_some());
-        working.activate(native(1), SessionUse::Foreground);
-        let claim = working.claim_execution(native(1)).unwrap();
-        working.activate(native(2), SessionUse::Foreground);
-        assert!(working
-            .native(1)
-            .unwrap()
-            .cache
-            .diagnostic_version(&name)
-            .is_some());
-        drop(claim);
-        assert!(working
-            .with_native(1, |session| Ok(session.cache.diagnostic_version(&name)))
-            .unwrap()
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
     fn native_operation_releases_protection_after_each_outcome() {
         let mut working = retained_photos();
         assert_eq!(working.with_native(1, |_| Ok(42)).unwrap(), Some(42));
-        assert!(working.claim_execution(native(1)).is_ok());
+        assert!(working.guard(native(1)).is_ok());
         assert_eq!(
             working.with_native(1, |_| Ok(None::<()>)).unwrap(),
             Some(None)
@@ -721,39 +792,34 @@ mod tests {
 
     #[test]
     #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Merrill originals"]
-    fn claimed_sessions_keep_checkpoints_and_accounting_under_pressure() {
+    fn guarded_photos_keep_checkpoints_and_accounting_under_pressure() {
         use crate::{
             inspection::Content,
             render::{ReducedPreparation, Scale},
         };
         let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
         let engine = Engine::new().unwrap();
-        let mut working = ProcessingWorkingSet::new();
+        let mut working = WorkingSet::new();
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.working_scale = Scale::new(8).unwrap();
         let mut images = Vec::new();
         for (photo, name) in [(1, "blue-parking-sign.x3f"), (2, "merrill-hazy-coast.x3f")] {
             let source = Arc::new(Source::open(root.join(name)).unwrap());
             let ReducedPreparation::Prepared(session) = engine
-                .prepare_reduced_session(
-                    source.clone(),
-                    &settings,
-                    || false,
-                    &mut Profile::default(),
-                )
+                .prepare_reduced_photo(source.clone(), &settings, || false, &mut Profile::default())
                 .unwrap()
             else {
                 panic!("prepared inputs");
             };
             working
-                .insert_reduced(photo, session, &engine, SessionUse::Foreground)
+                .insert_reduced(photo, session, &engine, Purpose::Edit)
                 .unwrap();
-            let Some(SessionRender::Rendered(artifacts)) = working
+            let Some(PhotoRender::Rendered(artifacts)) = working
                 .render_reduced(
                     &engine,
                     photo,
                     &settings,
-                    SessionUse::Foreground,
+                    Purpose::Edit,
                     || false,
                     &mut Profile::default(),
                 )
@@ -767,20 +833,15 @@ mod tests {
             images.push(engine.readback_image(&image).unwrap());
             if photo == 1 {
                 working
-                    .insert_native(
-                        3,
-                        RenderSession::new(source),
-                        &engine,
-                        SessionUse::Preparation,
-                    )
+                    .insert_native(3, NativePhoto::new(source), &engine, Purpose::Speculative)
                     .unwrap();
             }
         }
-        let key = |photo| SessionKey {
+        let key = |photo| PhotoKey {
             photo,
-            kind: SessionKind::Reduced,
+            resolution: Resolution::Reduced,
         };
-        let buffers = |working: &ProcessingWorkingSet, photo| {
+        let buffers = |working: &WorkingSet, photo| {
             working
                 .reduced(photo)
                 .unwrap()
@@ -791,24 +852,23 @@ mod tests {
         };
         let before = engine.memory_resources(&working, &Default::default());
         let expected = [buffers(&working, 1), buffers(&working, 2)];
-        let first = working.claim_execution(key(1)).unwrap();
-        let second = working.claim_execution(key(2)).unwrap();
+        let first = working.guard(key(1)).unwrap();
+        let second = working.guard(key(2)).unwrap();
         assert_eq!(
             engine.memory_resources(&working, &Default::default()),
             before
         );
-        working.park_active();
         let trim = engine.trim_memory(&mut working, 0, &Default::default());
-        assert_eq!(trim.evicted_sessions, vec![native(3)]);
-        assert!(trim.over_budget_bytes > 0);
+        assert_eq!(trim.evicted_photos, vec![native(3)]);
+        assert!(trim.over_target_bytes > 0);
         assert_eq!(buffers(&working, 1), expected[0]);
         assert_eq!(buffers(&working, 2), expected[1]);
-        for (index, claim) in [&first, &second].into_iter().enumerate() {
-            let Session::Reduced(session) = working.execution_mut(claim) else {
+        for (index, guard) in [&first, &second].into_iter().enumerate() {
+            let WorkingPhoto::Reduced(session) = working.execution_mut(guard) else {
                 unreachable!()
             };
-            let SessionRender::Rendered(artifacts) = engine
-                .render_reduced_session(
+            let PhotoRender::Rendered(artifacts) = engine
+                .render_reduced_photo(
                     session,
                     &settings,
                     &["final"],
@@ -832,14 +892,14 @@ mod tests {
                     &engine,
                     1,
                     &settings,
-                    SessionUse::Preparation,
+                    Purpose::Speculative,
                     || true,
                     &mut Profile::default(),
                 )
                 .unwrap(),
-            Some(SessionRender::Superseded)
+            Some(PhotoRender::Superseded)
         ));
-        assert!(working.claim_execution(key(1)).is_ok());
+        assert!(working.guard(key(1)).is_ok());
         let mut unavailable = settings.clone();
         unavailable.color_mode = "unavailable-test-color-mode".into();
         assert!(working
@@ -847,19 +907,19 @@ mod tests {
                 &engine,
                 1,
                 &unavailable,
-                SessionUse::Preparation,
+                Purpose::Speculative,
                 || false,
                 &mut Profile::default(),
             )
             .is_err());
-        assert!(working.claim_execution(key(1)).is_ok());
+        assert!(working.guard(key(1)).is_ok());
         assert_eq!(buffers(&working, 1), expected[0]);
-        let Some(SessionRender::Rendered(artifacts)) = working
+        let Some(PhotoRender::Rendered(artifacts)) = working
             .render_reduced(
                 &engine,
                 1,
                 &settings,
-                SessionUse::Preparation,
+                Purpose::Speculative,
                 || false,
                 &mut Profile::default(),
             )
@@ -871,9 +931,12 @@ mod tests {
             panic!("image");
         };
         assert_eq!(engine.readback_image(&image).unwrap(), images[0]);
+        // A visible photo stays even when nothing fits.
+        working.set_visible([key(1)]);
         let trim = engine.trim_memory(&mut working, 0, &Default::default());
-        assert_eq!(trim.evicted_sessions.len(), 2);
-        assert!(working.is_empty());
+        assert_eq!(trim.evicted_photos, vec![key(2)]);
+        assert!(working.reduced(1).is_some());
+        assert!(trim.over_target_bytes > 0);
     }
 
     #[test]
@@ -884,118 +947,105 @@ mod tests {
             .join("blue-parking-sign.x3f");
         let source = Arc::new(Source::open(path).unwrap());
         let engine = Engine::new().unwrap();
-        let mut working = ProcessingWorkingSet::new();
+        let mut working = WorkingSet::new();
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.working_scale = Scale::new(8).unwrap();
         working
-            .insert_native(
-                1,
-                RenderSession::new(source.clone()),
-                &engine,
-                SessionUse::Foreground,
-            )
+            .insert_native(1, NativePhoto::new(source.clone()), &engine, Purpose::Edit)
             .unwrap();
         let ReducedPreparation::Prepared(session) = engine
-            .prepare_reduced_session(source, &settings, || false, &mut Profile::default())
+            .prepare_reduced_photo(source, &settings, || false, &mut Profile::default())
             .unwrap()
         else {
             panic!("prepared inputs");
         };
         working
-            .insert_reduced(1, session, &engine, SessionUse::Preparation)
+            .insert_reduced(1, session, &engine, Purpose::Speculative)
             .unwrap();
-        let claim = working.claim_execution(native(1)).unwrap();
-        let reduced = SessionKey {
+        let guard = working.guard(native(1)).unwrap();
+        let reduced = PhotoKey {
             photo: 1,
-            kind: SessionKind::Reduced,
+            resolution: Resolution::Reduced,
         };
-        assert!(working
-            .claim_execution(reduced)
-            .unwrap_err()
-            .is::<SessionInUse>());
+        assert!(working.guard(reduced).unwrap_err().is::<PhotoInUse>());
         assert!(working
             .render_reduced(
                 &engine,
                 1,
                 &settings,
-                SessionUse::Foreground,
+                Purpose::Edit,
                 || false,
                 &mut Profile::default()
             )
             .err()
             .unwrap()
-            .is::<SessionInUse>());
-        assert_eq!(working.active_key(), Some(native(1)));
-        assert!(working.remove_photo(1).unwrap_err().is::<SessionInUse>());
-        assert!(working.clear().unwrap_err().is::<SessionInUse>());
+            .is::<PhotoInUse>());
+        assert!(working.remove_photo(1).unwrap_err().is::<PhotoInUse>());
+        assert!(working.clear().unwrap_err().is::<PhotoInUse>());
         assert!(working.native(1).is_some());
         assert!(working.reduced(1).is_some());
-        drop(claim);
+        drop(guard);
         assert!(working.remove_photo(1).unwrap());
         assert!(working.is_empty());
     }
 
     #[test]
-    fn preparation_does_not_promote_foreground_or_pin_cold_history() {
+    fn preparation_does_not_count_as_use() {
         let source = source();
-        let native = |photo| SessionKey {
+        let native = |photo| PhotoKey {
             photo,
-            kind: SessionKind::Native,
+            resolution: Resolution::Native,
         };
-        let mut working = ProcessingWorkingSet::new();
+        let mut working = WorkingSet::new();
         working
             .insert(
                 native(1),
-                Session::Native(RenderSession::new(source.clone())),
-                SessionUse::Foreground,
+                WorkingPhoto::Native(NativePhoto::new(source.clone())),
+                Purpose::Edit,
             )
             .unwrap();
         working
             .insert(
                 native(2),
-                Session::Native(RenderSession::new(source.clone())),
-                SessionUse::Foreground,
+                WorkingPhoto::Native(NativePhoto::new(source.clone())),
+                Purpose::Edit,
             )
             .unwrap();
         working
             .insert(
                 native(3),
-                Session::Native(RenderSession::new(source.clone())),
-                SessionUse::Preparation,
+                WorkingPhoto::Native(NativePhoto::new(source.clone())),
+                Purpose::Speculative,
             )
             .unwrap();
-        assert!(working.activate(native(1), SessionUse::Preparation));
-        assert_eq!(working.active_key(), Some(native(2)));
-        assert_eq!(working.evict_oldest(), Some(native(3)));
-        assert_eq!(working.evict_oldest(), Some(native(1)));
-        assert!(working.contains(native(2)));
-        assert_eq!(working.evict_oldest(), None);
-        working.park_active();
-        assert_eq!(working.evict_oldest(), Some(native(2)));
+        assert!(working.contains(native(1)));
+        assert_eq!(working.evict_least_recent(), Some(native(3)));
+        assert_eq!(working.evict_least_recent(), Some(native(1)));
+        assert_eq!(working.evict_least_recent(), Some(native(2)));
+        assert_eq!(working.evict_least_recent(), None);
     }
 
     #[test]
     fn foreground_reactivation_changes_eviction_order() {
         let source = source();
-        let native = |photo| SessionKey {
+        let native = |photo| PhotoKey {
             photo,
-            kind: SessionKind::Native,
+            resolution: Resolution::Native,
         };
-        let mut working = ProcessingWorkingSet::new();
+        let mut working = WorkingSet::new();
         for photo in [1, 2, 3] {
             working
                 .insert(
                     native(photo),
-                    Session::Native(RenderSession::new(source.clone())),
-                    SessionUse::Foreground,
+                    WorkingPhoto::Native(NativePhoto::new(source.clone())),
+                    Purpose::Edit,
                 )
                 .unwrap();
         }
-        assert!(working.activate(native(1), SessionUse::Foreground));
-        assert_eq!(working.evict_oldest(), Some(native(2)));
-        assert_eq!(working.evict_oldest(), Some(native(3)));
-        assert_eq!(working.evict_oldest(), None);
-        working.park_active();
-        assert_eq!(working.evict_oldest(), Some(native(1)));
+        assert!(working.record_use(native(1), Purpose::Edit).is_some());
+        assert_eq!(working.evict_least_recent(), Some(native(2)));
+        assert_eq!(working.evict_least_recent(), Some(native(3)));
+        assert_eq!(working.evict_least_recent(), Some(native(1)));
+        assert_eq!(working.evict_least_recent(), None);
     }
 }

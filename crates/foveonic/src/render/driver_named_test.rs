@@ -4,7 +4,7 @@ use super::tests::{fixture, settings};
 use crate::{
     inspection::{Artifact, Content},
     profile::{Mode, Profile, Timing},
-    render::{Engine, ProcessingWorkingSet, RenderSession, Scale, SessionRender, SessionUse},
+    render::{Engine, NativePhoto, PhotoRender, Purpose, Scale, WorkingSet},
 };
 use std::{cell::Cell, sync::Arc};
 
@@ -45,15 +45,10 @@ fn native_named_outputs_match_ordinary_order_samples_and_warm_root_changes() {
     let mut settings = settings();
     settings.working_scale = Scale::NATIVE;
     settings.reconstruction.as_mut().unwrap().chroma = 1;
-    let mut ordinary = RenderSession::new(source.clone());
-    let mut working = ProcessingWorkingSet::new();
+    let mut ordinary = NativePhoto::new(source.clone());
+    let mut working = WorkingSet::new();
     working
-        .insert_native(
-            1,
-            RenderSession::new(source.clone()),
-            &engine,
-            SessionUse::Foreground,
-        )
+        .insert_native(1, NativePhoto::new(source.clone()), &engine, Purpose::Edit)
         .unwrap();
     // Return to earlier roots in the opposite order after using another branch.
     let requests: [&[&str]; 3] = [
@@ -63,7 +58,7 @@ fn native_named_outputs_match_ordinary_order_samples_and_warm_root_changes() {
     ];
     for names in requests {
         let expected = engine
-            .render_session(
+            .render_native_photo(
                 &mut ordinary,
                 &settings,
                 names,
@@ -72,17 +67,16 @@ fn native_named_outputs_match_ordinary_order_samples_and_warm_root_changes() {
             )
             .unwrap()
             .unwrap();
-        let Some(SessionRender::Rendered(observed)) = engine
+        let Some(PhotoRender::Rendered(observed)) = engine
             .render_native(
                 &mut working,
                 1,
                 &settings,
                 names,
-                SessionUse::Foreground,
+                Purpose::Edit,
                 || false,
                 &mut Profile::default(),
                 |_| {},
-                None,
             )
             .unwrap()
         else {
@@ -130,14 +124,9 @@ fn native_named_failure_and_submitted_cancel_preserve_attempts_profile_and_exact
     settings.working_scale = Scale::NATIVE;
     settings.reconstruction.as_mut().unwrap().chroma = 1;
     let names = ["color-dq.rgb", "color.rgb"];
-    let mut working = ProcessingWorkingSet::new();
+    let mut working = WorkingSet::new();
     working
-        .insert_native(
-            1,
-            RenderSession::new(source.clone()),
-            &engine,
-            SessionUse::Foreground,
-        )
+        .insert_native(1, NativePhoto::new(source.clone()), &engine, Purpose::Edit)
         .unwrap();
     let mut profile = Profile::new(Mode::Wall);
     profile.host.push(Timing {
@@ -150,14 +139,13 @@ fn native_named_failure_and_submitted_cancel_preserve_attempts_profile_and_exact
             1,
             &settings,
             &names,
-            SessionUse::Foreground,
+            Purpose::Edit,
             || false,
             &mut profile,
             |_| {},
-            None,
         )
         .unwrap();
-    assert!(matches!(warm, Some(SessionRender::Rendered(_))));
+    assert!(matches!(warm, Some(PhotoRender::Rendered(_))));
     drop(warm);
     assert_restored_profile(&profile, 0);
     for submitted_cancel in [false, true] {
@@ -176,7 +164,7 @@ fn native_named_failure_and_submitted_cancel_preserve_attempts_profile_and_exact
             1,
             &requested,
             &names,
-            SessionUse::Foreground,
+            Purpose::Edit,
             || {
                 let cancel = submitted_cancel && engine.gpu_activity().submissions > before;
                 cancelled_after_submission.set(cancel);
@@ -184,14 +172,13 @@ fn native_named_failure_and_submitted_cancel_preserve_attempts_profile_and_exact
             },
             &mut profile,
             |_| {},
-            None,
         );
         let submissions = engine.gpu_activity().submissions - before;
         println!("native named interruption: submitted_cancel={submitted_cancel}, submissions={submissions}");
         if submitted_cancel {
             assert!(cancelled_after_submission.get());
             assert!(engine.gpu_activity().submissions > before);
-            assert!(matches!(outcome.unwrap(), Some(SessionRender::Superseded)));
+            assert!(matches!(outcome.unwrap(), Some(PhotoRender::Superseded)));
             assert!(working
                 .native(1)
                 .unwrap()
@@ -217,17 +204,16 @@ fn native_named_failure_and_submitted_cancel_preserve_attempts_profile_and_exact
             settings.clone()
         };
         let stages_before = cache_stages(&profile).len();
-        let Some(SessionRender::Rendered(observed)) = engine
+        let Some(PhotoRender::Rendered(observed)) = engine
             .render_native(
                 &mut working,
                 1,
                 &retry,
                 &names,
-                SessionUse::Foreground,
+                Purpose::Edit,
                 || false,
                 &mut profile,
                 |_| {},
-                None,
             )
             .unwrap()
         else {
@@ -239,8 +225,8 @@ fn native_named_failure_and_submitted_cancel_preserve_attempts_profile_and_exact
             &source
         ));
         let expected = engine
-            .render_session(
-                &mut RenderSession::new(source.clone()),
+            .render_native_photo(
+                &mut NativePhoto::new(source.clone()),
                 &retry,
                 &names,
                 || false,

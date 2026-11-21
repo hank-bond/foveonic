@@ -57,7 +57,7 @@ impl Grid {
             &[input],
             &format!("sensor-grid/{scope}/{}", self.divisor),
         )?;
-        graph.retain_for_seal(input);
+        graph.retain_as_sensor_data(input);
         Ok(input)
     }
 

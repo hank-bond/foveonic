@@ -1,5 +1,5 @@
 ---
-summary: "Clarify render ownership and responsibilities through one owner-reviewed concept at a time while preserving serial engine execution."
+summary: "Clarify render ownership and responsibilities through one owner-reviewed concept at a time. Execution now belongs to the render scheduler plan."
 ---
 
 # Render runtime migration
@@ -8,12 +8,13 @@ Requirements: [render orchestration](../docs/specs/render-orchestration.md), [in
 
 ## Resume here
 
+- **Execution:** the earlier constraint to preserve serial engine execution is superseded. The [render scheduler plan](./render-scheduler.md) owns execution, priority and memory admission.
 - **Current phase:** requested source loading is separated from rendering and committed. The owner requested an architecture review of the next Smart, layout, persistent zoom and loupe workflows.
 - **Checkpoint:** `33453b3` separates requested source loading, `ab317e5` corrects shared-source retry readiness, and `02104b4` groups browser sources. `075bbcc` contains the earlier behavioral coverage and focused delivery fixes. See the [behavioral plan](./behavioral-testing.md) for checks and remaining coverage limits.
 - **Completed unit:** source acquisition is independent of the serial renderer. Reuse remains before loading, and an already-ready photo can render while another load is held.
-- **Decided:** protect UI responsiveness, use one runtime for individual and multi-photo editing, isolate responsibilities and support subordinate speculative work. Keep engine execution serial throughout this migration.
-- **Separate future effort:** [wide rendering](archived/wide-rendering.md). Clear application/engine ownership should make that experiment easier, without building its execution machinery here.
-- **Not decided:** later state ownership, shared foreground/background admission policy and backlog limits.
+- **Decided:** protect UI responsiveness, use one runtime for individual and multi-photo editing, isolate responsibilities and support subordinate speculative work.
+- **Execution effort:** the [render scheduler plan](./render-scheduler.md) replaces the earlier [wide rendering](archived/wide-rendering.md) investigation.
+- **Not decided:** later state ownership and backlog limits. The [render scheduler plan](./render-scheduler.md) decides admission.
 - **Communication direction:** ordinary typed messages, fixed consumers and directly called handlers. Keep existing library queues across threads. Add a broadcast/watch dependency only when an actual consumer needs the full primitive.
 - **Next action:** finish the [portable test-input setup](./behavioral-testing.md#reproducibility-follow-up), then discuss the [viewport architecture review](./viewport-workflows.md), starting with one preview-quality policy. Implementation requires agreement on the next small slice. The earlier cached-switch failure and its subsequent fix remain recorded in the behavioral plan.
 
@@ -70,7 +71,7 @@ Preserve these observed distinctions:
 - Active-image acknowledgement differs from Overview delivery. Do not silently turn admission into a UI acknowledgement.
 - Foreground progress also includes opening/export state. Return coordination facts without moving unrelated interaction state into the transaction.
 
-Read [worker methods](../crates/foveonic-gui/src/rendering/worker/mod.rs), [UI receipt](../crates/foveonic-gui/src/main.rs), [delivery classification](../crates/foveonic-gui/src/rendering/delivery.rs) and [coordinator](../crates/foveonic-gui/src/rendering/coordinator.rs). This unit preserves serial engine execution, thread placement, numeric cache policy and pixels. The next review can move the consolidated coordination off the UI without also redesigning completion semantics.
+Read [worker methods](../crates/foveonic-gui/src/rendering/worker/mod.rs), [UI receipt](../crates/foveonic-gui/src/main.rs), [delivery classification](../crates/foveonic-gui/src/rendering/views.rs) and [coordinator](../crates/foveonic-gui/src/rendering/coordinator.rs). This unit preserves serial engine execution, thread placement, numeric cache policy and pixels. The next review can move the consolidated coordination off the UI without also redesigning completion semantics.
 
 ### Validation
 
@@ -91,7 +92,7 @@ The unchanged-build cached-switch native scenario timed out at step two, while o
 
 Use **render coordinator** for the existing owner of render requests and results. Move that owner outside the UI thread, with the current serial worker consuming its work plans. Continue to use **request**, **job**, **result** and **handler** at this boundary. A **view context** describes what the viewport can show now. A **view update** is an image or status change for the UI to apply.
 
-Before this unit, the worker handle let the UI mutate the coordinator and read state immediately. The result handler borrowed view facts from the UI. Progress and retained-photo switching read settlement synchronously, and the UI inventoried the coordinator's retained images. See the current [worker handle](../crates/foveonic-gui/src/rendering/worker/mod.rs), [view context](../crates/foveonic-gui/src/rendering/delivery.rs) and [memory accounting](../crates/foveonic-gui/src/memory.rs).
+Before this unit, the worker handle let the UI mutate the coordinator and read state immediately. The result handler borrowed view facts from the UI. Progress and retained-photo switching read settlement synchronously, and the UI inventoried the coordinator's retained images. See the current [worker handle](../crates/foveonic-gui/src/rendering/worker/mod.rs), [view context](../crates/foveonic-gui/src/rendering/views.rs) and [memory accounting](../crates/foveonic-gui/src/memory.rs).
 
 | Handoff | Proposed contract |
 | --- | --- |
