@@ -3,6 +3,7 @@
 use super::*;
 use crate::rendering::coordinator::Task;
 use crate::rendering::request::RequestId;
+use crate::rendering::view_plan::ImageState;
 use foveonic::render::ProcessingQuality;
 use foveonic::render::Settings;
 use std::{path::PathBuf, time::Duration};
@@ -40,22 +41,22 @@ impl Rig {
             progress,
         }
     }
-    /// Publish these displayed photos' whole images, all to be rendered.
+    /// Publish these viewport photos' whole images, all to be rendered.
     fn requests(&self, requests: Vec<RenderRequest>) {
         let photos = requests
             .iter()
             .map(|request| request.path.clone())
             .collect();
-        let planned = requests
+        let images = requests
             .into_iter()
             .map(|request| Planned {
                 request,
                 speculative: false,
-                render: true,
-                tracked: true,
+                state: ImageState::Render,
+                tracked: Some(0),
             })
             .collect();
-        self.handle.plan(displayed(photos), planned, Instant::now());
+        self.handle.plan(planned(photos), images, Instant::now());
         self.applied();
     }
     fn applied(&self) {
@@ -102,9 +103,9 @@ fn request(path: &str, revision: u64, exposure: f32) -> RenderRequest {
         comparison: false,
     }
 }
-fn displayed(displayed: Vec<PathBuf>) -> Photos {
+fn planned(planned: Vec<PathBuf>) -> Photos {
     Photos {
-        displayed,
+        planned,
         ..Default::default()
     }
 }
@@ -136,11 +137,11 @@ fn coordinator_replaces_each_photo_and_keeps_siblings_without_ui_receipt() {
     assert!(tasks
         .iter()
         .all(|task| task.request.settings.exposure == 12.));
-    let waiting = Photos {
-        waiting: vec!["0.x3f".into()],
+    let loading = Photos {
+        loading: vec!["0.x3f".into()],
         ..Default::default()
     };
-    rig.handle.plan(waiting, vec![], Instant::now());
+    rig.handle.plan(loading, vec![], Instant::now());
     rig.applied();
     assert_eq!(rig.tasks().len(), 1);
     rig.handle.clear(false);
@@ -292,8 +293,8 @@ fn planned_patch(path: &str) -> Planned {
     Planned {
         request: patch,
         speculative: false,
-        render: true,
-        tracked: true,
+        state: ImageState::Render,
+        tracked: Some(0),
     }
 }
 
@@ -308,17 +309,17 @@ fn an_image_no_longer_in_use_stops() {
     let photos = vec![PathBuf::from("a.x3f")];
     assert!(rig
         .handle
-        .plan(displayed(photos.clone()), vec![patch], Instant::now()));
+        .plan(planned(photos.clone()), vec![patch], Instant::now()));
     rig.applied();
     assert!(has_patch(&rig));
     let whole = Planned {
         request: request("a.x3f", 3, 0.),
         speculative: false,
-        render: false,
-        tracked: false,
+        state: ImageState::Ready,
+        tracked: None,
     };
     rig.handle
-        .plan(displayed(photos), vec![whole], Instant::now());
+        .plan(planned(photos), vec![whole], Instant::now());
     rig.applied();
     assert!(
         !has_patch(&rig),
@@ -332,12 +333,12 @@ fn a_photo_that_leaves_the_view_stops_its_work_unless_it_waits_to_be_drawn() {
     let patch = planned_patch("a.x3f");
     let photos = vec![PathBuf::from("a.x3f")];
     rig.handle
-        .plan(displayed(photos.clone()), vec![patch], Instant::now());
-    let waiting = Photos {
-        waiting: photos,
+        .plan(planned(photos.clone()), vec![patch], Instant::now());
+    let loading = Photos {
+        loading: photos,
         ..Default::default()
     };
-    rig.handle.plan(waiting, vec![], Instant::now());
+    rig.handle.plan(loading, vec![], Instant::now());
     rig.applied();
     assert!(has_patch(&rig), "a deferred photo keeps its work");
     rig.handle.plan(Photos::default(), vec![], Instant::now());

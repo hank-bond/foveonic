@@ -988,7 +988,7 @@ impl TransitionJourney {
                     || app.multi_edit.settings(path).is_some()
                     || app.current_image(path).is_some()
                     || app.images.images().any(|frame| frame.request.path == *path)
-                    || app.multi_edit.rendering(path)
+                    || app.multi_edit.loaded(path)
                 {
                     return Err("retention did not evict the cold target's application metadata/pixels/demand".into());
                 }
@@ -997,7 +997,7 @@ impl TransitionJourney {
             // The common readiness gate has waited for that plan to be processed.
             let event = serde_json::json!({"group_before_cold":step,
                 "evicted":&paths[2..4],"retained":app.multi_edit.retained_paths(),
-                "render_paths":app.multi_edit.render_paths(),"worker_busy":app.view_busy(),
+                "worker_busy":app.view_busy(),
                 "current_demand_retirement":"processed plan history excludes C/D"});
             crate::timing::emit("scenario.group_before_cold", || event.clone());
             self.events.push(event);
@@ -1345,7 +1345,7 @@ impl TransitionJourney {
                     return Ok(false);
                 }
                 if app.multi_photo_overview() {
-                    for path in app.multi_edit.render_paths() {
+                    for path in &app.planned_photos() {
                         if app.selected.as_ref() == Some(path) {
                             continue;
                         }
@@ -1572,10 +1572,10 @@ impl TransitionJourney {
                 {
                     return Err("overview refresh replaced the active Before view".into());
                 }
-                if app.multi_edit.render_paths().len() != paths.len() {
+                if app.planned_photos().len() != paths.len() {
                     return Err("overview refresh lost displayed retained photos".into());
                 }
-                self.events.push(serde_json::json!({"background_overviews":app.multi_edit.render_paths(),"editing_targets":app.edit_selection.paths(),"active_rendition":"Camera"}));
+                self.events.push(serde_json::json!({"background_overviews":app.planned_photos(),"editing_targets":app.edit_selection.paths(),"active_rendition":"Camera"}));
             }
             if matches!(step, Step::Inspection | Step::RefreshInspection) {
                 let Some(frame) = app.active_image() else {
@@ -1590,7 +1590,7 @@ impl TransitionJourney {
                     return Err("pipeline inspection did not use native Quality".into());
                 }
                 if step == Step::RefreshInspection {
-                    for path in app.multi_edit.render_paths() {
+                    for path in &app.planned_photos() {
                         let Some(overview) = app.current_image(path) else {
                             return Ok(false);
                         };
@@ -1834,21 +1834,18 @@ impl TransitionJourney {
                 app.toggle_before(crate::editor::Rendition::Camera);
             }
             Step::GroupColdEvict => {
+                // Viewport photos keep their settings, so C and D leave the viewport
+                // before history beyond the limit can evict them.
+                app.browser.highlight_paths(&paths[..2]);
                 app.preferences.multi_edit_limit = 2;
+                app.sync_browser_selection();
                 app.sync_multi_edit();
-                app.sync_render_demand();
             }
             Step::GroupColdAddFocus => {
                 app.preferences.multi_edit_limit = 4;
-                for path in &paths[2..4] {
-                    app.edit_selection.apply(
-                        crate::viewport_selection::Request {
-                            path: path.clone(),
-                            gesture: crate::viewport_selection::Gesture::Toggle,
-                        },
-                        4,
-                    );
-                }
+                // Highlighting all four again makes them the editing selection.
+                app.browser.highlight_paths(&paths[..4]);
+                app.sync_browser_selection();
                 self.model.select(vec![0, 1, 2, 3]);
                 app.sync_multi_edit();
                 // Sidecars resolve asynchronously through ordinary target admission.

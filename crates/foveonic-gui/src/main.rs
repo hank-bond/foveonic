@@ -90,12 +90,12 @@ struct App {
     multi_edit: multi_edit_runtime::Runtime,
     loupe: loupe_view::Loupe,
     comparison_layout: comparison_view::State,
-    viewport_paths: Arc<[PathBuf]>,
-    displayed_paths: Vec<PathBuf>,
-    /// Each displayed photo's view as last planned.
+    browser_selection: Arc<[PathBuf]>,
+    viewport_selection: Vec<PathBuf>,
+    /// Each viewport photo's view as last planned.
     views: std::collections::HashMap<PathBuf, rendering::views::PhotoView>,
-    viewport_paths_key: Option<(u64, Option<PathBuf>)>,
-    viewport_paths_limit: usize,
+    browser_selection_key: Option<(u64, Option<PathBuf>)>,
+    browser_selection_limit: usize,
     editor_ui: editor::State,
     before: editor::Before,
     actions: Vec<actions::Edit>,
@@ -213,27 +213,27 @@ impl App {
     }
 
     fn multi_photo_overview(&self) -> bool {
-        multi_photo_overview(&self.viewport_paths, self.selected.as_deref())
+        multi_photo_overview(&self.browser_selection, self.selected.as_deref())
     }
 
-    fn sync_viewport_paths(&mut self) {
+    fn sync_browser_selection(&mut self) {
         let key = (self.browser.selection_generation(), self.selected.clone());
-        let changed = self.viewport_paths_key.as_ref() != Some(&key);
+        let changed = self.browser_selection_key.as_ref() != Some(&key);
         if changed {
-            self.viewport_paths = self
+            self.browser_selection = self
                 .browser
                 .processing_selection(self.selected.as_deref())
                 .into();
-            self.viewport_paths_key = Some(key);
+            self.browser_selection_key = Some(key);
             self.preview_densities
-                .retain(|path, _| self.viewport_paths.contains(path));
+                .retain(|path, _| self.browser_selection.contains(path));
             self.fit_densities
-                .retain(|path, _| self.viewport_paths.contains(path));
+                .retain(|path, _| self.browser_selection.contains(path));
         }
-        if changed || self.viewport_paths_limit != self.preferences.multi_edit_limit {
+        if changed || self.browser_selection_limit != self.preferences.multi_edit_limit {
             self.edit_selection
-                .sync_browser(&self.viewport_paths, self.preferences.multi_edit_limit);
-            self.viewport_paths_limit = self.preferences.multi_edit_limit;
+                .sync_browser(&self.browser_selection, self.preferences.multi_edit_limit);
+            self.browser_selection_limit = self.preferences.multi_edit_limit;
         }
     }
     fn prepare(
@@ -324,11 +324,11 @@ impl App {
             multi_edit: Default::default(),
             loupe: Default::default(),
             comparison_layout: Default::default(),
-            viewport_paths: Arc::default(),
-            displayed_paths: Vec::new(),
+            browser_selection: Arc::default(),
+            viewport_selection: Vec::new(),
             views: Default::default(),
-            viewport_paths_key: None,
-            viewport_paths_limit: 0,
+            browser_selection_key: None,
+            browser_selection_limit: 0,
             editor_ui: Default::default(),
             before: Default::default(),
             actions: Vec::new(),
@@ -519,7 +519,6 @@ impl App {
             .unwrap_or_else(|| Settings::new("", ""));
         self.selected = Some(path);
         self.last_request_id = self.last_request_id.next();
-        self.worker.progress.begin(self.last_request_id.0, began);
         self.output = "final".into();
         self.channel = -1;
         self.scope_key = None;
@@ -613,6 +612,12 @@ impl App {
                 current: false,
                 accepted: false,
             });
+        // Each image of the progress pass reaches its checkpoint when it arrives.
+        if handling.current && !matches!(reply.result, worker::RenderOutcome::Cancelled) {
+            self.worker
+                .progress
+                .finish(reply.request.id.0, reply.result.failed());
+        }
         self.sync_render_progress(
             (handling.current && reply.result.failed()).then_some(reply.request.id.0),
         );
@@ -903,6 +908,39 @@ impl App {
         self.activity.status(ui);
     }
 
+    /// Apply a tile click from the last frame before anything reads the
+    /// selection, so the photo it selects is laid out before it is planned.
+    fn apply_tile_selection(&mut self) -> bool {
+        let Some(request) = self.comparison_selection.take() else {
+            return false;
+        };
+        let clicked = request.path.clone();
+        let selection_changed = self.edit_selection.apply_viewport(
+            request,
+            self.preferences.multi_edit_limit,
+            &self.viewport_selection,
+        );
+        timing::emit("viewport.selection.applied", || {
+            serde_json::json!({"source":clicked,"photo":foveonic::diagnostics::photo_id(&clicked),
+                "changed":selection_changed,"targets":self.edit_selection.paths()})
+        });
+        self.sync_multi_edit();
+        let active = if self.edit_selection.contains(&clicked) {
+            Some(clicked)
+        } else if self
+            .selected
+            .as_deref()
+            .is_some_and(|path| self.edit_selection.contains(path))
+        {
+            self.selected.clone()
+        } else {
+            self.edit_selection.paths().first().cloned()
+        };
+        if let Some(path) = active.filter(|path| self.selected.as_ref() != Some(path)) {
+            self.select(path, false);
+        }
+        true
+    }
     fn framing_preview_active(&self) -> bool {
         photo_tools::framing(&self.context)
             && self
@@ -1070,32 +1108,22 @@ impl App {
         changed |= self.apply_editor_actions(ui.ctx());
         changed
     }
-    fn displayed_channel(&self) -> i32 {
-        if self.before.active != editor::Rendition::Current {
-            return -1;
-        }
-        // The displayed image may belong to an older request. Using the new
-        // component choice now could show its samples with the wrong meaning.
-        if self
-            .active_image()
-            .is_some_and(|f| f.request.output == self.output)
-        {
-            self.channel
-        } else {
-            -1
-        }
-    }
     fn displayed_mapping(&self) -> viewport::Mapping {
+        self.mapping_for(self.active_image())
+    }
+    /// How a photo's image is mapped for display. The chosen channel and
+    /// comparison apply only once the image shows the chosen output: an image
+    /// of an older request would show its samples with the wrong meaning.
+    fn mapping_for(&self, image: Option<&worker::RenderResult>) -> viewport::Mapping {
         if self.before.active != editor::Rendition::Current {
             return viewport::Mapping::normal(-1);
         }
-        let channel = self.displayed_channel();
-        let has_pair = self
-            .active_image()
-            .is_some_and(|frame| frame.request.output == self.output && frame.comparison.is_some());
+        let shows_output = image.is_some_and(|image| image.request.output == self.output);
+        let channel = if shows_output { self.channel } else { -1 };
+        let has_pair = shows_output && image.is_some_and(|image| image.comparison.is_some());
         let mut mapping = self.comparison.mapping(channel, has_pair);
-        if let Some(frame) = self.active_image() {
-            let description = frame.texture.description();
+        if let Some(image) = image {
+            let description = image.texture.description();
             if matches!(description.space, foveonic::image::Space::LinearRgb(_)) {
                 mapping.signal_scale = 4095. / description.linear_white as f32;
             }
@@ -1248,12 +1276,13 @@ impl App {
                         egui::Color32::BLACK
                     },
                 );
-                let paths = self.viewport_paths.clone();
-                self.displayed_paths.clear();
+                let paths = self.browser_selection.clone();
+                self.viewport_selection.clear();
                 if self.multi_photo_overview() {
                     changed |= self.comparison_view(ui, &paths);
                 } else {
-                    self.displayed_paths.extend(self.selected.iter().cloned());
+                    self.viewport_selection
+                        .extend(self.selected.iter().cloned());
                     changed |= self.show_photo(ui, mapping);
                     self.before_badge(ui, canvas);
                 }
@@ -1528,6 +1557,7 @@ impl eframe::App for App {
             self.browser.invalidate_previews();
             self.previews.invalidate();
         }
+        let tile_selected = self.apply_tile_selection();
         self.smoke_tick(ctx);
         automation::begin_frame(ctx);
         let normalized = controls::normalize_with_capture(
@@ -1631,7 +1661,7 @@ impl eframe::App for App {
             self.previews.invalidate();
         }
         let mut changed = normalized || actions_changed || tuning_changed || toolbar_changed;
-        self.sync_viewport_paths();
+        self.sync_browser_selection();
         if self
             .selected
             .as_deref()
@@ -1641,6 +1671,26 @@ impl eframe::App for App {
                 self.select(path, false);
             }
         }
+        // Apply selection before the viewport draws, so a newly selected photo
+        // is laid out, and its visible region known, before it is planned.
+        let selection_applied = if std::mem::take(&mut self.browser.clear_selection) {
+            self.clear_selection();
+            true
+        } else if let Some(selection) = select {
+            let path = if self.edit_selection.contains(&selection.path) {
+                selection.path
+            } else {
+                self.edit_selection
+                    .paths()
+                    .first()
+                    .cloned()
+                    .unwrap_or(selection.path)
+            };
+            self.select(path, selection.preserve_viewport);
+            true
+        } else {
+            false
+        };
         self.sync_multi_edit();
         let editor_before = self.settings.clone();
         multi_edit_controls::begin_with_numeric(
@@ -1721,46 +1771,9 @@ impl eframe::App for App {
             self.sidecars.edited(&self.settings);
         }
         self.preferences.direct_color = editor::direct_color::configuration(ctx);
-        if std::mem::take(&mut self.browser.clear_selection) {
-            self.clear_selection();
-        } else if let Some(request) = self.comparison_selection.take() {
-            let clicked = request.path.clone();
-            let selection_changed = self.edit_selection.apply_displayed(
-                request,
-                self.preferences.multi_edit_limit,
-                &self.displayed_paths,
-            );
-            timing::emit("viewport.selection.applied", || {
-                serde_json::json!({"source":clicked,"photo":foveonic::diagnostics::photo_id(&clicked),
-                    "changed":selection_changed,"targets":self.edit_selection.paths()})
-            });
-            self.sync_multi_edit();
-            let active = if self.edit_selection.contains(&clicked) {
-                Some(clicked)
-            } else if self
-                .selected
-                .as_deref()
-                .is_some_and(|path| self.edit_selection.contains(path))
-            {
-                self.selected.clone()
-            } else {
-                self.edit_selection.paths().first().cloned()
-            };
-            if let Some(path) = active.filter(|path| self.selected.as_ref() != Some(path)) {
-                self.select(path, false);
-            }
-        } else if let Some(selection) = select {
-            let path = if self.edit_selection.contains(&selection.path) {
-                selection.path
-            } else {
-                self.edit_selection
-                    .paths()
-                    .first()
-                    .cloned()
-                    .unwrap_or(selection.path)
-            };
-            self.select(path, selection.preserve_viewport);
-        } else if changed {
+        // A tile click this frame selects next frame; it must not leave Before now.
+        let tile_clicked = self.comparison_selection.is_some();
+        if changed && !selection_applied && !tile_selected && !tile_clicked {
             self.exit_before();
         }
         self.submit_photos();

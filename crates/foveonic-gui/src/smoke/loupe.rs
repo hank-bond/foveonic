@@ -1,4 +1,4 @@
-//! Exercises held native-detail gestures, cancellation and transient photo ownership in the real app.
+//! Exercises held native-detail gestures, cancellation and the loupe on unedited viewport photos in the real app.
 
 use crate::rendering::request::RequestId;
 use crate::{
@@ -589,12 +589,15 @@ impl Driver {
                     return Ok(false);
                 }
                 app.browser.excluded.insert(self.target().to_owned());
-                app.viewport_paths_key = None;
+                app.browser_selection_key = None;
                 self.events.push(json!({"action":"remove inspected source from browser demand","photo":self.target(),"coverage":"direct-command"}));
                 self.phase = Phase::Removed;
             }
             Phase::Removed => {
-                if app.displayed_paths.iter().any(|path| path == self.target())
+                if app
+                    .viewport_selection
+                    .iter()
+                    .any(|path| path == self.target())
                     || loupe_tool::gesture(ctx).is_some()
                 {
                     return Ok(false);
@@ -605,8 +608,8 @@ impl Driver {
                 }
                 self.release_pointer(smoke);
                 app.browser.excluded.remove(self.target());
-                app.viewport_paths_key = None;
-                app.sync_viewport_paths();
+                app.browser_selection_key = None;
+                app.sync_browser_selection();
                 let mut settings = self
                     .saved
                     .as_ref()
@@ -640,29 +643,27 @@ impl Driver {
                     return Ok(false);
                 };
                 self.transient_extent = Some(frame.camera_extent());
-                self.events.push(json!({"observed":"composed overview prepared before transient eviction", "photo":self.target(),"source_extent":frame.camera_extent(),"display_extent":frame.native_display_extent()}));
+                self.events.push(json!({"observed":"composed overview prepared before narrowing the editing selection", "photo":self.target(),"source_extent":frame.camera_extent(),"display_extent":frame.native_display_extent()}));
                 let saved = self.saved.as_ref().unwrap();
                 app.preferences.multi_edit_limit = 1;
-                app.sync_viewport_paths();
+                app.sync_browser_selection();
                 select_targets(app, std::slice::from_ref(&saved.active));
                 app.select(saved.active.clone(), false);
                 app.sync_multi_edit();
                 self.phase = Phase::TransientReady;
             }
             Phase::TransientReady => {
-                if app.view_busy() || !app.displayed_paths.iter().any(|path| path == self.target())
+                if app.view_busy()
+                    || !app
+                        .viewport_selection
+                        .iter()
+                        .any(|path| path == self.target())
                 {
                     return Ok(false);
                 }
-                if app
-                    .multi_edit
-                    .retained_paths()
-                    .iter()
-                    .any(|path| path == self.target())
-                {
-                    return Err(
-                        "lowering the editing limit did not evict the inactive loupe target".into(),
-                    );
+                // A viewport photo keeps its settings outside the editing selection.
+                if !app.multi_edit.loaded(self.target()) {
+                    return Err("the loupe target on screen lost its settings".into());
                 }
                 self.snapshot_main(app, paths);
                 loupe_tool::activate(ctx);
@@ -702,13 +703,9 @@ impl Driver {
                 if loupe_tool::gesture(ctx).is_some() || app.view_busy() {
                     return Ok(false);
                 }
-                if app
-                    .multi_edit
-                    .retained_paths()
-                    .iter()
-                    .any(|path| path == self.target())
-                {
-                    return Err("released loupe retained its newly admitted transient photo".into());
+                // Still on screen, so releasing the loupe keeps its settings.
+                if !app.multi_edit.loaded(self.target()) {
+                    return Err("released loupe dropped a viewport photo's settings".into());
                 }
                 let saved = self.saved.as_ref().unwrap();
                 let settings = &saved
@@ -1023,7 +1020,7 @@ impl Driver {
                 self.restore_browser(app);
             }
             Phase::RestoreBrowser => {
-                if app.viewport_paths.len() != paths.len() || app.view_busy() {
+                if app.browser_selection.len() != paths.len() || app.view_busy() {
                     return Ok(false);
                 }
                 self.restore(app, ctx);

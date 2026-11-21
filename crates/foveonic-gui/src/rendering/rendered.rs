@@ -19,7 +19,7 @@ pub(crate) struct ImageKey {
     pub framing: bool,
 }
 impl ImageKey {
-    /// The photo's Current final image: kept while the photo is displayed or in
+    /// The photo's Current final image: kept while the photo is in the viewport or in
     /// history, and drawn while another look or output renders.
     pub fn current(path: &Path) -> Self {
         Self {

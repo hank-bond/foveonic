@@ -3,7 +3,7 @@
 use super::{
     coordinator::{Photos, RenderCoordinator, TaskId, WorkPlan},
     request::RenderRequest,
-    view_plan::Planned,
+    view_plan::{ImageState, Planned},
     worker::{
         self, ColorPickRequest, MemoryTarget, Pending, PreparationConfig, ScopeRequest, Update,
     },
@@ -153,7 +153,7 @@ impl Handle {
             && previous.1.len() == planned.len()
             && previous.1.iter().zip(&planned).all(|(old, new)| {
                 old.speculative == new.speculative
-                    && old.render == new.render
+                    && old.state == new.state
                     && super::matching::same_delivery_request(&old.request, &new.request)
             });
         if unchanged {
@@ -170,13 +170,13 @@ impl Handle {
                         "region":planned.request.settings.preview_region,
                         "scale":planned.request.preview_scale.divisor(),
                         "detail":planned.request.detail,
-                        "speculative":planned.speculative,"render":planned.render})
+                        "speculative":planned.speculative,"state":format!("{:?}",planned.state)})
                     })
                     .collect();
                 fields
                     .str(
                         "photos",
-                        &serde_json::to_string(&photos.displayed).expect("plan diagnostics"),
+                        &serde_json::to_string(&photos.planned).expect("plan diagnostics"),
                     )
                     .str(
                         "images",
@@ -195,7 +195,9 @@ impl Handle {
             .1
             .iter()
             .find(|planned| {
-                planned.render && planned.request.detail && planned.request.path == path
+                planned.state == ImageState::Render
+                    && planned.request.detail
+                    && planned.request.path == path
             })
             .and_then(|planned| planned.request.settings.preview_region)
     }
@@ -363,15 +365,48 @@ impl Runtime {
                 pending.clear_all |= all;
             }
             Command::Plan(photos, planned, queued_at) => {
-                for planned in planned.iter().filter(|planned| planned.render) {
-                    let origin = self.cache.source_origin(&planned.request.path);
-                    self.desire(
-                        planned.request.clone(),
-                        origin,
-                        queued_at,
-                        planned.speculative,
-                        planned.tracked,
-                    );
+                // One progress pass follows the update's tracked images: current
+                // ones as complete, those rendering under their task's request id,
+                // and whole images waiting for patches.
+                let mut sections = Vec::new();
+                let mut new_work = false;
+                for planned in &planned {
+                    let target = super::coordinator::Target::of(&planned.request);
+                    let request_id = match planned.state {
+                        ImageState::Render => {
+                            let origin = self.cache.source_origin(&planned.request.path);
+                            new_work |= self.desire(
+                                planned.request.clone(),
+                                origin,
+                                queued_at,
+                                planned.speculative,
+                            );
+                            let Some(task) = self.coordinator.desired(&target) else {
+                                continue;
+                            };
+                            task.stamp.request_id
+                        }
+                        ImageState::Waiting => {
+                            new_work = true;
+                            planned.request.id
+                        }
+                        ImageState::Ready => planned.request.id,
+                    };
+                    if let Some(place) = planned.tracked {
+                        sections.push((
+                            place,
+                            crate::progress::Section {
+                                target,
+                                request_id: request_id.0,
+                                state: planned.state,
+                            },
+                        ));
+                    }
+                }
+                if new_work && !sections.is_empty() {
+                    sections.sort_by_key(|(place, _)| *place);
+                    let sections = sections.into_iter().map(|(_, section)| section).collect();
+                    self.progress.begin(sections, queued_at);
                 }
                 let in_use: Vec<_> = planned.into_iter().map(|planned| planned.request).collect();
                 self.coordinator.reconcile(&photos, &in_use);
@@ -395,30 +430,28 @@ impl Runtime {
         true
     }
 
+    /// Want this request; whether it starts new work rather than joining work
+    /// already wanted for its target.
     fn desire(
         &mut self,
         request: RenderRequest,
         origin: Option<SourceOrigin>,
         queued_at: Instant,
         speculative: bool,
-        tracked: bool,
-    ) {
+    ) -> bool {
         let target = super::coordinator::Target::of(&request);
         let previous = self
             .coordinator
             .desired(&target)
             .map(|task| task.stamp.clone());
-        let request_id = request.id;
         self.coordinator
             .desire(Arc::new(request), origin, queued_at, speculative);
-        if tracked
-            && self
-                .coordinator
-                .desired(&target)
-                .is_some_and(|task| Some(&task.stamp) != previous.as_ref())
-        {
-            self.progress.begin(request_id.0, queued_at);
-        }
+        // New work, rather than a request joining work already wanted.
+        let started = self
+            .coordinator
+            .desired(&target)
+            .is_some_and(|task| Some(&task.stamp) != previous.as_ref());
+        started
     }
 
     fn handle(&mut self, mut update: Update) -> Option<Update> {

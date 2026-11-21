@@ -842,7 +842,7 @@ pub(crate) mod tests {
     use foveonic::render::{ProcessingQuality, Scale};
     /// A worker driven like the app: every image a test wants is published
     /// together as one plan, so tests and the app share the planning path.
-    /// Unlike the app, every wanted image is rendered (`render: true`), so
+    /// Unlike the app, every wanted image is rendered (`ImageState::Render`), so
     /// held whole images and patch-first ordering are not exercised here, and
     /// `submit` keeps earlier photos wanted instead of retiring them. Publish
     /// only through these methods: the worker's own `plan` bypasses `wanted`.
@@ -900,10 +900,10 @@ pub(crate) mod tests {
         }
         fn publish(&self) {
             let wanted = self.wanted.borrow();
-            let mut displayed = Vec::new();
+            let mut viewport = Vec::new();
             for (request, _) in wanted.iter() {
-                if !displayed.contains(&request.path) {
-                    displayed.push(request.path.clone());
+                if !viewport.contains(&request.path) {
+                    viewport.push(request.path.clone());
                 }
             }
             let planned = wanted
@@ -912,13 +912,13 @@ pub(crate) mod tests {
                     |(request, speculative)| crate::rendering::view_plan::Planned {
                         request: request.clone(),
                         speculative: *speculative,
-                        render: true,
-                        tracked: !speculative,
+                        state: crate::rendering::view_plan::ImageState::Render,
+                        tracked: (!speculative).then_some(0),
                     },
                 )
                 .collect();
             let photos = crate::rendering::coordinator::Photos {
-                displayed,
+                planned: viewport,
                 history: self.history.borrow().clone(),
                 ..Default::default()
             };

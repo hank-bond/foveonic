@@ -13,11 +13,11 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 /// The photos the app holds work for, by how their work is kept.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Photos {
-    /// Shown and planned: work must match an image in use.
-    pub displayed: Vec<PathBuf>,
-    /// Shown but not planned yet, such as waiting for settings or a lens.
-    pub waiting: Vec<PathBuf>,
-    /// Kept in editing history but not shown.
+    /// Planned photos: work must match an image in use.
+    pub planned: Vec<PathBuf>,
+    /// Loading photos: viewport photos whose settings have not been read yet.
+    pub loading: Vec<PathBuf>,
+    /// History photos: they left the viewport and keep finished images.
     pub history: Vec<PathBuf>,
 }
 
@@ -154,15 +154,15 @@ impl RenderCoordinator {
         self.place(request, origin, queued_at, speculative)
     }
 
-    /// The only rule for work: a displayed photo keeps the work that matches an
-    /// image in use, a waiting photo keeps its work, a history photo keeps only
+    /// The only rule for work: a viewport photo keeps the work that matches an
+    /// image in use, a loading photo keeps its work, a history photo keeps only
     /// finished images, and all other work stops.
     pub fn reconcile(&mut self, photos: &Photos, in_use: &[RenderRequest]) {
         self.desired.retain(|entry| {
             let target = &entry.task.stamp.target;
-            let (keep, reason) = if photos.waiting.contains(&target.path) {
+            let (keep, reason) = if photos.loading.contains(&target.path) {
                 (true, "")
-            } else if photos.displayed.contains(&target.path) {
+            } else if photos.planned.contains(&target.path) {
                 let used = in_use.iter().any(|request| {
                     &Target::of(request) == target
                         && crate::rendering::matching::same_delivery_request(

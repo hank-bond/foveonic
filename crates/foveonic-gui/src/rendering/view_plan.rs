@@ -1,4 +1,4 @@
-//! Derives each displayed photo's render requests and drawn layers from its view, current request and rendered images.
+//! Derives each viewport photo's render requests and drawn layers from its view, current request and rendered images.
 
 use super::request::RenderRequest;
 use crate::rendering::request::RequestId;
@@ -19,30 +19,37 @@ pub(crate) trait Rendered {
     fn requested_region(&self) -> Option<[u32; 4]>;
 }
 
-/// How a displayed photo is shown.
-pub(crate) enum View {
+/// The part of a photo on screen and the part a patch renders for it, in
+/// native pixels. The patch region adds the recipe's margins to the visible region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Regions {
+    pub visible: [u32; 4],
+    pub patch: [u32; 4],
+}
+
+/// How a viewport photo is shown.
+pub(crate) enum ViewMode {
     Fit,
     /// The crop and rotation plane, which shows the uncropped editing extent.
     Framing,
-    /// `visible` must be covered; `region` adds the recipe's margins and is what a patch renders.
-    Zoomed {
-        visible: [u32; 4],
-        region: [u32; 4],
-    },
-    /// A transient magnifier over a tile. `lens` is the settled visible and patch
-    /// region, or `None` before the photo has any image to place it on. `whole` is
-    /// false when the tile shows no rendered image of its own.
+    /// Zoomed to native detail at the settled regions.
+    Zoomed(Regions),
+    /// A transient magnifier over the photo at the settled loupe regions, or
+    /// `None` before the photo's metadata places the lens.
     Loupe {
-        lens: Option<([u32; 4], [u32; 4])>,
-        whole: bool,
+        regions: Option<Regions>,
     },
 }
-impl View {
+impl ViewMode {
     /// Shows a region at native resolution, so a patch can be drawn over the whole image.
     pub fn magnified(&self) -> bool {
         matches!(
             self,
-            View::Zoomed { .. } | View::Loupe { lens: Some(_), .. }
+            ViewMode::Zoomed(_)
+                | ViewMode::Loupe {
+                    regions: Some(_),
+                    ..
+                }
         )
     }
 }
@@ -62,15 +69,26 @@ pub(crate) struct Use {
     pub ready: bool,
 }
 
-/// An image in use as published to the coordinator. `render` is false for an
-/// image that already exists or waits its turn behind other photos' patches.
+/// Where an image in use stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ImageState {
+    /// A stored image is current; the coordinator keeps the work that made it.
+    Ready,
+    /// Rendered now.
+    Render,
+    /// A whole image waiting its turn behind other photos' patches.
+    Waiting,
+}
+
+/// An image in use as published to the coordinator.
 #[derive(Clone)]
 pub(crate) struct Planned {
     pub request: RenderRequest,
     pub speculative: bool,
-    pub render: bool,
-    /// The progress bar follows this image: the selected photo's first image.
-    pub tracked: bool,
+    pub state: ImageState,
+    /// The progress pass follows this image, at this place in the pass: each
+    /// edited photo's first image, the selected photo's first.
+    pub tracked: Option<usize>,
 }
 
 /// The images a photo's view uses.
@@ -85,7 +103,7 @@ pub(crate) struct Plan {
 /// photo's tile resolves when not zoomed. `background_completion` is the user's
 /// preference for speculative full-size images.
 pub(crate) fn plan<T: Rendered>(
-    view: &View,
+    view: &ViewMode,
     request: &RenderRequest,
     images: &PhotoImages<T>,
     background_completion: bool,
@@ -109,35 +127,38 @@ pub(crate) fn plan<T: Rendered>(
     });
     // A patch for `region` is current when an existing patch with the current
     // edits covers `visible`.
-    let patch_for = |visible: [u32; 4], region: [u32; 4]| match images.patch.filter(|patch| {
+    let patch_for = |regions: Regions| match images.patch.filter(|patch| {
         patch.matches(request)
             && patch
                 .region()
-                .is_some_and(|covered| super::smart::contains(covered, visible))
+                .is_some_and(|covered| super::smart::contains(covered, regions.visible))
     }) {
         Some(patch) => Use {
             request: derive(request, Scale::NATIVE, patch.requested_region()),
             ready: true,
         },
         None => Use {
-            request: derive(request, Scale::NATIVE, Some(region)),
+            request: derive(request, Scale::NATIVE, Some(regions.patch)),
             ready: false,
         },
     };
     match view {
-        View::Fit | View::Framing => Plan {
+        ViewMode::Fit | ViewMode::Framing => Plan {
             patch: None,
             whole,
             full: None,
         },
         // A current full-size image covers every region.
-        View::Zoomed { .. } | View::Loupe { lens: Some(_), .. } if native_current => Plan {
+        ViewMode::Zoomed(_)
+        | ViewMode::Loupe {
+            regions: Some(_), ..
+        } if native_current => Plan {
             patch: None,
             whole,
             full: None,
         },
-        View::Zoomed { visible, region } => {
-            let patch = patch_for(*visible, *region);
+        ViewMode::Zoomed(regions) => {
+            let patch = patch_for(*regions);
             let full =
                 (background_completion && patch.ready && whole_current.is_some()).then(|| Use {
                     request: derive(request, Scale::NATIVE, None),
@@ -149,9 +170,9 @@ pub(crate) fn plan<T: Rendered>(
                 full,
             }
         }
-        View::Loupe { lens, whole: shown } => {
-            let patch = match lens {
-                Some((visible, region)) => patch_for(*visible, *region),
+        ViewMode::Loupe { regions } => {
+            let patch = match regions {
+                Some(regions) => patch_for(*regions),
                 // A whole-photo patch at the tile's scale places the lens.
                 None => {
                     let mut placement = derive(request, tile, None);
@@ -164,7 +185,7 @@ pub(crate) fn plan<T: Rendered>(
             };
             Plan {
                 patch: Some(patch),
-                whole: whole.filter(|_| *shown),
+                whole,
                 full: None,
             }
         }
@@ -211,13 +232,13 @@ pub(crate) const SETTLE: std::time::Duration = std::time::Duration::from_millis(
 /// A zoomed photo's view while it moves: its visible region and the region a
 /// patch would render for it.
 pub(crate) struct Motion {
-    latest: ([u32; 4], [u32; 4]),
-    settled: ([u32; 4], [u32; 4]),
+    latest: Regions,
+    settled: Regions,
     changed: std::time::Instant,
 }
 impl Motion {
     /// A view that has not moved before settles at once.
-    pub(crate) fn new(view: ([u32; 4], [u32; 4]), now: std::time::Instant) -> Self {
+    pub(crate) fn new(view: Regions, now: std::time::Instant) -> Self {
         Self {
             latest: view,
             settled: view,
@@ -233,9 +254,9 @@ impl Motion {
     /// The settled view, and how long until the latest view settles if it has not yet.
     pub(crate) fn settle(
         &mut self,
-        view: ([u32; 4], [u32; 4]),
+        view: Regions,
         now: std::time::Instant,
-    ) -> (([u32; 4], [u32; 4]), Option<std::time::Duration>) {
+    ) -> (Regions, Option<std::time::Duration>) {
         if view != self.latest {
             self.latest = view;
             self.changed = now;

@@ -350,6 +350,11 @@ impl Browser {
         self.prefetch_dirty = true;
         self.selection_generation = self.selection_generation.wrapping_add(1);
     }
+    /// Highlight exactly these photos, as scenarios do instead of clicking.
+    pub(crate) fn highlight_paths(&mut self, paths: &[PathBuf]) {
+        self.highlighted = paths.iter().cloned().collect();
+        self.selection_generation = self.selection_generation.wrapping_add(1);
+    }
     /// Ordered viewport paths need rebuilding only after a browser input changes.
     pub fn selection_generation(&self) -> u64 {
         self.selection_generation

@@ -65,7 +65,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[tiff-color-and-auto-sharpen](./tiff-color-and-auto-sharpen.md)** Add selectable TIFF destination color spaces and camera-derived Auto sharpening without changing existing defaults.
 - **[tonal-ranges](./tonal-ranges.md)** Implement and evaluate coordinated Merrill HDR controls after researching spatial tone mapping.
 - **[ui-responsiveness](./ui-responsiveness.md)** Measure full-quality slider feedback with active-edit input reuse, image-first replies, deferred navigator presentation, and safe supersession.
-- **[view-planning](./view-planning.md)** Move each displayed photo's request staging and layer choice into one view planner, then add settling and cancellation for moving views.
+- **[view-planning](./view-planning.md)** Move each viewport photo's request staging and layer choice into one view planner, then add settling and cancellation for moving views.
 - **[viewport-overnight](./viewport-overnight.md)** Complete the approved viewport workflow slices in reviewed commits, then investigate wide execution with isolated measurements.
 - **[viewport-workflows](./viewport-workflows.md)** Review small ownership and quality-policy changes supporting Smart comparisons, persistent zoom and a Full-detail loupe.
 - **[windows-release](./windows-release.md)** Build and validate a Windows x64 test archive for the current release branch.

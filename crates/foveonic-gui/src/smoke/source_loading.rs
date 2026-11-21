@@ -71,7 +71,7 @@ impl SourceLoading {
                 if !control.enabled {
                     return Err("ready photo's Exposure control is disabled before loading".into());
                 }
-                if !app.displayed_paths.contains(&paths[0]) || !app.multi_edit.rendering(&paths[0])
+                if !app.viewport_selection.contains(&paths[0]) || !app.multi_edit.loaded(&paths[0])
                 {
                     return Err("loading photo A must remain visible and admitted".into());
                 }

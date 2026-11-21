@@ -85,7 +85,7 @@ fn removing_b_while_a_remains_active_rejects_b_from_the_same_cohort() {
     assert!(coordinator.admit(&a, &SourceOrigin::default()));
     coordinator.reconcile(
         &Photos {
-            waiting: vec!["a.x3f".into()],
+            loading: vec!["a.x3f".into()],
             history: vec![],
             ..Default::default()
         },
@@ -106,7 +106,7 @@ fn retained_photos_keep_only_completed_intents_outside_the_edit_targets() {
     coordinator.finish(&a);
     coordinator.reconcile(
         &Photos {
-            waiting: vec![],
+            loading: vec![],
             history: paths.to_vec(),
             ..Default::default()
         },
@@ -118,7 +118,7 @@ fn retained_photos_keep_only_completed_intents_outside_the_edit_targets() {
 
     coordinator.reconcile(
         &Photos {
-            waiting: vec![],
+            loading: vec![],
             history: paths[1..].to_vec(),
             ..Default::default()
         },
@@ -284,7 +284,7 @@ fn removed_then_readded_photo_cannot_reuse_the_retired_pixel_task_id() {
     let old = desire(&mut coordinator, request("a.x3f", 1, 0.));
     coordinator.reconcile(
         &Photos {
-            waiting: vec![],
+            loading: vec![],
             history: vec![],
             ..Default::default()
         },
@@ -508,7 +508,7 @@ fn finished_images_in_use_keep_their_work_and_others_stop() {
     let photos = [PathBuf::from("a.x3f")];
     coordinator.reconcile(
         &Photos {
-            displayed: photos.to_vec(),
+            planned: photos.to_vec(),
             ..Default::default()
         },
         std::slice::from_ref(&patch),
@@ -519,7 +519,7 @@ fn finished_images_in_use_keep_their_work_and_others_stop() {
     );
     coordinator.reconcile(
         &Photos {
-            displayed: photos.to_vec(),
+            planned: photos.to_vec(),
             ..Default::default()
         },
         &[],

@@ -17,7 +17,7 @@ pub(crate) struct Loupe {
 
 /// Whether the lens can place this image over the view: same geometry, quality
 /// and calibration as the view's request.
-pub(crate) fn placeable(image: &RenderResult, request: &RenderRequest) -> bool {
+fn placeable(image: &RenderResult, request: &RenderRequest) -> bool {
     image.processing_quality() == request.processing_quality
         && matching::same_image_geometry(&image.request.settings, &request.settings)
         && image.calibration_signature()
@@ -39,10 +39,6 @@ impl App {
     /// The lens geometry drawn this frame.
     pub(crate) fn loupe_geometry(&self) -> Option<Geometry> {
         self.loupe.geometry
-    }
-
-    pub(crate) fn loupe_path(&self) -> Option<PathBuf> {
-        self.loupe.path.clone()
     }
 
     pub(crate) fn loupe_inspecting(&self, path: &Path) -> bool {
@@ -75,7 +71,8 @@ impl App {
             })
     }
 
-    /// Run after every tile has drawn, so neither the lens nor its pointer is owned by selection.
+    /// Run after every tile has drawn and before planning, so neither the lens nor its
+    /// pointer is owned by selection and planning sees this frame's lens.
     pub(crate) fn show_loupe(&mut self, ui: &egui::Ui, mapping: viewport::Mapping) {
         if self.before.active != Rendition::Current
             || self.output != "final"
@@ -84,7 +81,7 @@ impl App {
         {
             loupe_tool::cancel(ui.ctx());
         } else if loupe_tool::active(ui.ctx()) {
-            for path in &self.displayed_paths {
+            for path in &self.viewport_selection {
                 let view = self.viewports.view(Some(path));
                 if let (Some((response, _)), Some((_, image))) = (
                     view.pointer(ui.input(|input| input.pointer.latest_pos())),
@@ -97,7 +94,7 @@ impl App {
         let mut gesture = loupe_tool::gesture(ui.ctx());
         if gesture.as_ref().is_some_and(|gesture| {
             !loupe_tool::active(ui.ctx())
-                || !self.displayed_paths.contains(&gesture.path)
+                || !self.viewport_selection.contains(&gesture.path)
                 || !ui.input(|input| input.pointer.primary_down())
         }) {
             loupe_tool::cancel(ui.ctx());
@@ -105,7 +102,7 @@ impl App {
         }
         let path = gesture.as_ref().map(|gesture| gesture.path.as_path());
         if self.loupe.path.as_deref() != path {
-            self.multi_edit.view_detail(path, &mut self.sidecars);
+            self.multi_edit.view_detail(path);
             self.loupe = Loupe {
                 path: path.map(Path::to_owned),
                 ..Default::default()
@@ -138,16 +135,22 @@ impl App {
                 egui::Stroke::new(1_f32, egui::Color32::GRAY),
             );
         }
-        let Some(view) = self.views.get(&gesture.path) else {
+        // The lens is placed from the photo's settings and metadata, so planning
+        // knows its regions this frame even before any image can be drawn in it.
+        let Some(settings) = self.photo_view_settings(&gesture.path) else {
             return;
         };
-        let settings = &view.request.settings;
         let layers = self.loupe_images(&gesture.path);
-        let Some(extent) = layers
-            .iter()
-            .flatten()
-            .next()
-            .map(|frame| frame.camera_extent())
+        let Some(extent) = self
+            .photo_metadata(&gesture.path)
+            .and_then(|metadata| foveonic::render::native_extent(&metadata).ok())
+            .or_else(|| {
+                layers
+                    .iter()
+                    .flatten()
+                    .next()
+                    .map(|frame| frame.camera_extent())
+            })
         else {
             return;
         };

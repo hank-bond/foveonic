@@ -886,7 +886,7 @@ impl App {
             .as_ref()
             .is_some_and(|smoke| smoke.targets == COMPARISON_TARGETS && smoke.index >= 2);
         let comparison_tiles = comparison_stage.then(|| {
-            let rows = self.displayed_paths.iter().map(|path| {
+            let rows = self.viewport_selection.iter().map(|path| {
                 let frame = self.active_image().filter(|frame| &frame.request.path == path)
                     .or_else(|| self.photo_layers(path)[0]);
                 let expected = if self.selected.as_ref() == Some(path) {
@@ -920,7 +920,7 @@ impl App {
                 }))
             }).collect::<Vec<_>>();
             let complete = rows.len() > 1
-                && self.edit_selection.paths().iter().all(|path|self.displayed_paths.contains(path))
+                && self.edit_selection.paths().iter().all(|path|self.viewport_selection.contains(path))
                 && rows.iter().all(|(ready,_)|*ready);
             (complete, rows.into_iter().map(|(_,row)|row).collect::<Vec<_>>())
         });

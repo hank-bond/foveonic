@@ -47,19 +47,15 @@ impl Selection {
     pub fn apply(&mut self, request: Request, limit: usize) -> bool {
         self.apply_order(request, limit, None)
     }
-    pub fn apply_displayed(
-        &mut self,
-        request: Request,
-        limit: usize,
-        displayed: &[PathBuf],
-    ) -> bool {
-        self.apply_order(request, limit, Some(displayed))
+    /// Apply a tile click, taking ranges in the order the viewport shows tiles.
+    pub fn apply_viewport(&mut self, request: Request, limit: usize, viewport: &[PathBuf]) -> bool {
+        self.apply_order(request, limit, Some(viewport))
     }
     fn apply_order(
         &mut self,
         request: Request,
         limit: usize,
-        displayed: Option<&[PathBuf]>,
+        viewport: Option<&[PathBuf]>,
     ) -> bool {
         let limit = limit.max(1);
         if !self.browser.contains(&request.path) {
@@ -82,7 +78,7 @@ impl Selection {
                 }
             }
             Gesture::Range => {
-                let order = displayed.unwrap_or(&self.browser);
+                let order = viewport.unwrap_or(&self.browser);
                 let Some(clicked) = order.iter().position(|path| path == &request.path) else {
                     return false;
                 };
@@ -210,17 +206,17 @@ mod tests {
         let mut selection = Selection::default();
         selection.sync_browser(&paths, 8);
         selection.apply(request(&paths, 4, Gesture::Replace), 8);
-        selection.apply_displayed(request(&paths, 2, Gesture::Range), 3, &displayed);
+        selection.apply_viewport(request(&paths, 2, Gesture::Range), 3, &displayed);
         assert_eq!(
             selection.paths(),
             &[paths[1].clone(), paths[4].clone(), paths[7].clone()]
         );
-        selection.apply_displayed(request(&paths, 2, Gesture::Replace), 8, &displayed);
-        selection.apply_displayed(request(&paths, 4, Gesture::Range), 2, &displayed);
+        selection.apply_viewport(request(&paths, 2, Gesture::Replace), 8, &displayed);
+        selection.apply_viewport(request(&paths, 4, Gesture::Range), 2, &displayed);
         assert_eq!(selection.paths(), &[paths[2].clone(), paths[7].clone()]);
         // An anchor hidden by overflow has no position in the displayed range.
         selection.apply(request(&paths, 15, Gesture::Replace), 8);
-        selection.apply_displayed(request(&paths, 7, Gesture::Range), 8, &displayed);
+        selection.apply_viewport(request(&paths, 7, Gesture::Range), 8, &displayed);
         assert_eq!(selection.paths(), &paths[7..8]);
     }
 }

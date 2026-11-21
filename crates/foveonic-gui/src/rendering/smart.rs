@@ -4,7 +4,7 @@
 const DETAIL_OVERSCAN_PIXELS: u32 = 64;
 
 /// Expand the visible image region by the existing native-pixel margin.
-pub(crate) fn render_region(visible: [u32; 4], window: [u32; 4]) -> [u32; 4] {
+pub(crate) fn patch_region(visible: [u32; 4], window: [u32; 4]) -> [u32; 4] {
     [
         visible[0]
             .saturating_sub(DETAIL_OVERSCAN_PIXELS)

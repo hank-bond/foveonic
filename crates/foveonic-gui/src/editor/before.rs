@@ -46,24 +46,26 @@ impl App {
             Rendition::Current
         }
     }
+    /// The photo's capture metadata, once a render or the selected photo's load has read it.
+    pub(crate) fn photo_metadata(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<std::sync::Arc<foveonic::source::Metadata>> {
+        self.multi_edit.metadata(path).or_else(|| {
+            (self.selected.as_deref() == Some(path))
+                .then(|| self.metadata.clone())
+                .flatten()
+        })
+    }
     pub(crate) fn photo_view_settings(
         &self,
         path: &std::path::Path,
     ) -> Option<foveonic::render::Settings> {
-        // The selected photo's settings are a placeholder until its sidecar loads.
-        let current = if self.selected.as_deref() == Some(path) {
-            self.sidecars.ready().then_some(&self.settings)
-        } else {
-            self.multi_edit.settings(path)
-        }?;
+        let current = self.authored_settings(path)?;
         let settings = if self.photo_rendition(path) == Rendition::Current {
             current.clone()
         } else {
-            let metadata = self.multi_edit.metadata(path).or_else(|| {
-                (self.selected.as_deref() == Some(path))
-                    .then(|| self.metadata.clone())
-                    .flatten()
-            });
+            let metadata = self.photo_metadata(path);
             self.before
                 .settings(
                     current,

@@ -357,7 +357,7 @@ fn white_range_click_does_not_seed_group_double_click() {
             );
         }
         for request in requests {
-            selection.apply_displayed(request, 8, &displayed);
+            selection.apply_viewport(request, 8, &displayed);
         }
     }
     assert_eq!(selection.paths(), &displayed);

@@ -20,14 +20,15 @@ Authored edits remain with the application, multi-edit runtime and sidecar sessi
 
 - **[coordinator.rs](./coordinator.rs)** Owns desired photo renders, handles their results and publishes immutable execution plans.
 - **[matching.rs](./matching.rs)** Defines shared settings and request comparisons without selecting work or admitting results.
-- **[mod.rs](./mod.rs)** Plans displayed photos' images, reconciles render work against them and stores delivered images.
+- **[mod.rs](./mod.rs)** Plans viewport photos' images, reconciles render work against them and stores delivered images.
 - **[quality.rs](./quality.rs)** Resolves processing scale from the selected policy and physical display sampling.
 - **[rendered.rs](./rendered.rs)** Keeps the app's rendered images in one collection keyed by photo, look and output.
 - **[request.rs](./request.rs)** Describes photo render requests and resolves their purpose and preview geometry independently of execution.
 - **[runtime.rs](./runtime.rs)** Owns render coordination on a dedicated thread and publishes bounded UI updates.
 - **[smart.rs](./smart.rs)** Sizes native patches around the visible region and compares image regions.
 - **[source_loader.rs](./source_loader.rs)** Acquires decoded sources off the renderer and hands bounded results through coordination.
-- **[view_plan.rs](./view_plan.rs)** Derives each displayed photo's render requests and drawn layers from its view, current request and rendered images.
-- **[views.rs](./views.rs)** Decides what each displayed photo shows, plans the images its view uses and selects what is drawn.
+- **[view_plan.rs](./view_plan.rs)** Derives each viewport photo's render requests and drawn layers from its view, current request and rendered images.
+- **[viewport_plan.rs](./viewport_plan.rs)** Plans every viewport photo's images from inputs read off the app, without a GPU.
+- **[views.rs](./views.rs)** Decides what each viewport photo shows, plans the images its view uses and selects what is drawn.
 
 <!-- INDEX:END -->

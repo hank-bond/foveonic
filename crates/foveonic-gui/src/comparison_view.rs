@@ -54,7 +54,7 @@ impl App {
             .comparison_layout
             .get(paths, &aspects, paths.len(), available, freeze)
             .clone();
-        self.displayed_paths.extend(
+        self.viewport_selection.extend(
             layout
                 .tiles
                 .iter()
@@ -94,6 +94,7 @@ impl App {
                 self.before_badge(&child, image_rect);
             } else {
                 let [frame, detail] = self.photo_layers(path);
+                let tile_mapping = self.mapping_for(frame);
                 let detail = detail.map(|detail| viewport::ImageLayer {
                     texture: detail.texture.clone(),
                     coverage: detail.detail_region(),
@@ -101,9 +102,9 @@ impl App {
                 });
                 let content = frame.map(|frame| {
                     (
-                        frame.view(false).clone(),
-                        frame.display_extent(false),
-                        frame.diagnostic_identity(false),
+                        frame.view(tile_mapping.input).clone(),
+                        frame.display_extent(tile_mapping.input),
+                        frame.diagnostic_identity(tile_mapping.input),
                         frame.display_window(false),
                         frame.request.rendition,
                     )
@@ -120,18 +121,12 @@ impl App {
                         texture,
                         extent,
                         None,
-                        crate::viewport::Mapping::normal(-1),
+                        tile_mapping,
                         self.srgb_target,
                         identity,
                     );
                     if let Some(layer) = detail {
-                        view.show_region(
-                            &mut child,
-                            layer,
-                            window,
-                            crate::viewport::Mapping::normal(-1),
-                            self.srgb_target,
-                        );
+                        view.show_region(&mut child, layer, window, tile_mapping, self.srgb_target);
                     }
                     if actual_rendition != crate::editor::Rendition::Current {
                         crate::widgets::overlay_badge(&child, image_rect, "Before");
@@ -204,6 +199,8 @@ impl App {
                     path: path.clone(),
                     gesture,
                 });
+                // Selection applies before the next frame draws.
+                ui.ctx().request_repaint();
             }
             ui.painter().rect_stroke(
                 rect,
@@ -240,7 +237,7 @@ impl App {
                 .edit_selection
                 .paths()
                 .iter()
-                .filter(|path| !self.displayed_paths.contains(path))
+                .filter(|path| !self.viewport_selection.contains(path))
                 .count();
             ui.painter().text(
                 rect.center() - egui::vec2(0., 10.),
@@ -274,12 +271,12 @@ impl App {
         }
         if self.viewports.apply_group_input(
             self.edit_selection.paths(),
-            &self.displayed_paths,
+            &self.viewport_selection,
             ui.ctx().pixels_per_point(),
         ) {
             // Publish the new sampling demand even for peers already drawn this frame.
             for path in self.edit_selection.paths().to_vec() {
-                if self.displayed_paths.contains(&path) {
+                if self.viewport_selection.contains(&path) {
                     self.observe_photo_view_density(&path, ui.ctx().pixels_per_point());
                 }
             }

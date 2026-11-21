@@ -1,5 +1,5 @@
 ---
-summary: "Every displayed photo is one view whose looks, images in use and layers come from one pure planner, with one image store, one reconcile rule and no per-mode request paths."
+summary: "Every viewport photo is one view whose looks, images in use and layers come from one pure planner, with one image store, one reconcile rule and no per-mode request paths."
 kind: reference
 status: accepted
 implementation: incomplete
@@ -22,7 +22,7 @@ The lessons are that each question needs exactly one owner, that every case belo
 |---|---|
 | What is displayed | Editing render paths, the loupe's photo, the excluded active photo, Before's photo rendition, framing state |
 | Requests | View planner (Current zoom, loupe, fit), overview path (`set_overviews`, `multi_edit` dirty flags), Before staging (`refine`, `advance_refinement`), the active photo's `submit_with_quality`, export |
-| Coordinator rules for displayed photos | `keep_in_use`, plus `detail_replaced`, `purpose_replaced`, `cancel_refinement_for`, `retain_overviews`, `retire_before`, `activate`, background-completion retirement |
+| Coordinator rules for viewport photos | `keep_in_use`, plus `detail_replaced`, `purpose_replaced`, `cancel_refinement_for`, `retain_overviews`, `retire_before`, `activate`, background-completion retirement |
 | Stored images | `App::frame` (active photo), `multi_edit` frame, detail and preview per photo, `Before::saved` and `Before::detail`, kept Before images in `ImageCache` |
 | Where a result goes | `delivery.rs` destinations (Active, Overview, Preview) and rejection rules |
 | What is drawn | `drawn_detail`, `loupe_images`, `current_photo_frame`, `rendition_frame`, `navigator_uses_preview` |
@@ -32,15 +32,26 @@ The lessons are that each question needs exactly one owner, that every case belo
 Agreed terms. Code and prose use these names only.
 
 - **Browser selection:** the photos highlighted in the browser.
-- **Viewport selection:** the photos the viewport shows. Edits apply to all of them, so it is also the editing selection; photos beyond its limit stay in the browser selection only.
+- **Viewport photos:** the photos the viewport draws from the browser selection. Every viewport photo has its settings loaded and is planned.
+- **Editing selection:** the viewport photos edits from the shared controls apply to, chosen by clicking tiles and bounded by the editing limit.
 - **History photos:** photos that left the viewport selection and keep their finished images.
-- **Loading:** a viewport photo whose saved edits have not been read yet. It keeps its images and work until they arrive.
+- **Loading:** a viewport photo whose saved settings have not been read yet. It keeps its images and work until they arrive.
 - **View mode:** how a viewport photo is shown: fit, the crop and rotation plane, zoomed, or under the loupe.
 - **Visible region:** the part of a photo's image inside its tile on screen, in native pixels.
 - **Patch:** a native-resolution render of part of a photo. Its **patch region** is the visible region plus the recipe's margins.
 - **Loupe visible region** and **loupe patch region:** the same two regions for the loupe's lens.
 
-There is no active photo. Tools used by pointing act on the photo pointed at, and the crop and rotation plane, inspection outputs and comparison apply to every viewport photo (see below). Scopes, the navigator and the information bar show only when the viewport selection is one photo.
+**Action scope.** One rule decides what an action changes, from where it comes:
+
+| Source | Scope | With Shift |
+|---|---|---|
+| A pointer action on a photo: zoom, pan, double-click fit, crop or rotation drag, color pick, the bar under a photo | That photo | The editing selection, applied or sampled from that photo |
+| Shared controls: panel sliders and buttons, keyboard shortcuts | The editing selection | — |
+| View switches: tool choice, inspection output, comparison, Before | All viewport photos | — |
+
+With the Pointer tool, clicking is itself the selection action: a click selects the photo and Shift-click extends the selection to a range. One function returns an action's scope, and every tool applies its edit to that scope through one path that writes each photo's settings.
+
+There is no active photo. Tools used by pointing act on the photo pointed at, whether or not it is in the editing selection. The crop and rotation plane, inspection outputs and comparison apply to every viewport photo. Scopes, the navigator and the information bar show only when the viewport selection is one photo.
 
 ## Model
 
@@ -48,13 +59,13 @@ Each frame answers three questions, each in one place.
 
 | Question | Owner | Output |
 |---|---|---|
-| What is on screen, and how? | The viewport | One view per displayed photo |
+| What is on screen, and how? | The viewport | One view per viewport photo |
 | Which images do those views use? | The planner | The set of images in use |
 | What is drawn? | The planner's layer rule | Layers per view |
 
 ### Views
 
-A view is one displayed photo and how it is shown:
+A view is one viewport photo and how it is shown:
 
 - **Look:** the settings to render. Current uses the authored edits. Before is a render shortcut: the same view with Camera or Defaults settings in place of the authored ones, keeping the authored crop and rotation. A look is only a settings value, so Before uses no separate path.
 - **Output:** the final photograph, a pipeline inspection output, or a comparison. Inspection and comparison change what the render produces, not how the view is planned.
@@ -82,11 +93,11 @@ Memory accounting is unchanged by this step: shown images are reported through t
 
 Rows apply to every look and output: an inspection output or comparison zoomed in uses a patch, because that is what is viewed. Until regional rendering of inspection outputs and comparisons is verified, they count as without regional support and use full size. It uses the processing quality the view policy selects for it.
 
-Until an image with the current look arrives, the stored image of that kind stays as a placeholder; a look or output with no image yet shows the photo's Current image and places its patch from it. A displayed photo keeps only the images for what it shows, what it shows with Before off, and its Current image, so outputs it no longer shows do not hold memory and turning Before off is immediate. Across views, patches come first with the active photo first, whole images once no view needs a patch, then full size.
+Until an image with the current look arrives, the stored image of that kind stays as a placeholder; a look or output with no image yet shows the photo's Current image and places its patch from it. A viewport photo keeps only the images for what it shows, what it shows with Before off, and its Current image, so outputs it no longer shows do not hold memory and turning Before off is immediate. Across views, patches come first with the selected photo's first, whole images once no view needs a patch, then full size.
 
 ### Reconciling
 
-The coordinator receives the images in use with the photos they belong to and makes work match them in one rule: render what is missing; a displayed photo keeps work matching an image in use; a photo shown but not planned yet keeps its work; a photo kept in history but not shown keeps only finished images; all other work stops. Export is separate. The coordinator has no other rules for photos.
+The coordinator receives the images in use with the photos they belong to and makes work match them in one rule: render what is missing; a planned photo keeps work matching an image in use; a loading photo keeps its work; a history photo keeps only finished images; all other work stops. Export is separate. The coordinator has no other rules for photos.
 
 A render that fails is recorded with its request. The request counts as done until it changes, so one failing photo neither retries forever nor holds back other photos' whole images.
 
@@ -137,7 +148,7 @@ Research to do before choosing a policy: whether a reduced whole image or a down
 - The overview path, `multi_edit` dirty flags and `needs_render`/`request`.
 - Before's staged requests: `Refinement`, `refine`, `advance_refinement`, `start_region`, `whole_admitted`, `cancel_refinement`, `retire_before`, `activate`, `submit_before_photos`.
 - The active photo's separate request path and the `excluded` photo.
-- The coordinator's `detail_replaced`, `purpose_replaced` and background-completion retirement for displayed photos.
+- The coordinator's `detail_replaced`, `purpose_replaced` and background-completion retirement for viewport photos.
 - `delivery.rs` destinations and most rejection rules.
 - `App::frame`, `Before::saved`, `Before::detail`, the per-photo frames in `multi_edit`, and the separate image pickers.
 - `restore_photograph` and `mark_stale`, which only bridge the old stores.

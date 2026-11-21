@@ -21,18 +21,12 @@ struct Photo {
 #[derive(Default)]
 pub struct Runtime {
     editing_paths: Vec<PathBuf>,
-    render_paths: Vec<PathBuf>,
+    /// Photos the viewport draws. Their settings are loaded so they can render.
+    viewport: Vec<PathBuf>,
     // Several settings and frame snapshots make each photo large. Keep map
     // insertion and balancing from moving those records through the stack.
     photos: BTreeMap<PathBuf, Box<Photo>>,
     recent: Vec<PathBuf>,
-    retention_changed: bool,
-    viewed: Option<Viewed>,
-}
-struct Viewed {
-    path: PathBuf,
-    /// A thumbnail-only inspection must not silently become ordinary render demand.
-    transient: bool,
 }
 impl Runtime {
     fn targets(&self) -> impl Iterator<Item = &Photo> {
@@ -49,70 +43,49 @@ impl Runtime {
     pub fn retained_paths(&self) -> Vec<PathBuf> {
         self.photos.keys().cloned().collect()
     }
-    /// Inspect one displayed photograph without changing the editing selection.
-    pub fn view_detail(&mut self, path: Option<&Path>, sidecars: &mut sidecars::Session) {
-        if self.viewed.as_ref().map(|view| view.path.as_path()) == path {
-            return;
-        }
-        if let Some(previous) = self.viewed.take() {
-            if previous.transient && !self.editing_paths.contains(&previous.path) {
-                self.photos.remove(&previous.path);
-                self.recent.retain(|path| path != &previous.path);
-            }
-        }
+    /// The loupe inspects a viewport photo: it counts as recently used.
+    pub fn view_detail(&mut self, path: Option<&Path>) {
         if let Some(path) = path {
-            let transient = !self.photos.contains_key(path);
-            let photo = self.photos.entry(path.to_owned()).or_default();
-            if photo.settings.is_none() {
-                sidecars.resolve_settings(&[path.to_owned()]);
-            }
-            self.viewed = Some(Viewed {
-                path: path.to_owned(),
-                transient,
-            });
             self.selected(path);
         }
-        self.retention_changed = true;
     }
+    /// Load settings for the editing selection and every viewport photo, and keep
+    /// recent photos as history while the total stays within `limit`. Loaded
+    /// photos alone may exceed it; history is then empty.
     pub fn sync(
         &mut self,
         paths: &[PathBuf],
+        viewport: &[PathBuf],
         limit: usize,
         sidecars: &mut sidecars::Session,
     ) -> bool {
-        if let Some(view) = &mut self.viewed {
-            if paths.contains(&view.path) {
-                view.transient = false;
-            }
-        }
-        let limit = limit.max(paths.len())
-            + usize::from(
-                self.viewed
-                    .as_ref()
-                    .is_some_and(|view| !paths.contains(&view.path)),
-            );
-        if self.editing_paths == paths && self.photos.len() <= limit {
+        let mut loaded = paths.to_vec();
+        loaded.extend(
+            viewport
+                .iter()
+                .filter(|path| !paths.contains(path))
+                .cloned(),
+        );
+        let limit = limit.max(loaded.len());
+        if self.editing_paths == paths && self.viewport == viewport && self.photos.len() <= limit {
             return false;
         }
-        self.retention_changed = true;
         self.editing_paths = paths.to_vec();
-        for path in paths {
+        self.viewport = viewport.to_vec();
+        for path in &loaded {
             self.photos.entry(path.clone()).or_default();
             if !self.recent.contains(path) {
                 self.recent.push(path.clone());
             }
         }
         while self.photos.len() > limit {
-            let Some(index) = self.recent.iter().position(|path| {
-                !paths.contains(path) && self.viewed.as_ref().is_none_or(|view| &view.path != path)
-            }) else {
+            let Some(index) = self.recent.iter().position(|path| !loaded.contains(path)) else {
                 break;
             };
             let path = self.recent.remove(index);
             self.photos.remove(&path);
-            self.render_paths.retain(|render| render != &path);
         }
-        let missing = paths
+        let missing = loaded
             .iter()
             .filter(|path| self.photos[*path].settings.is_none())
             .cloned()
@@ -391,36 +364,15 @@ impl Runtime {
         }
         changed
     }
-    /// Editing admits photos into the bounded owner. Display alone may keep
-    /// those photos rendering, but does not admit thumbnail-only photographs.
-    pub fn sync_render_paths(&mut self, displayed: &[PathBuf]) -> bool {
-        let mut paths = self.editing_paths.clone();
-        for path in displayed {
-            if self.photos.contains_key(path)
-                && !self
-                    .viewed
-                    .as_ref()
-                    .is_some_and(|view| view.transient && &view.path == path)
-                && !paths.contains(path)
-            {
-                paths.push(path.clone());
-            }
-        }
-        let changed = std::mem::take(&mut self.retention_changed) || paths != self.render_paths;
-        self.render_paths = paths;
-        changed
-    }
-    pub fn render_paths(&self) -> &[PathBuf] {
-        &self.render_paths
-    }
     /// The photo's settings could not be resolved from its sidecar.
     pub fn failed(&self, path: &Path) -> bool {
         self.photos
             .get(path)
             .is_some_and(|photo| photo.error.is_some())
     }
-    pub fn rendering(&self, path: &Path) -> bool {
-        self.render_paths.iter().any(|candidate| candidate == path)
+    /// The photo's settings are loaded or loading, so it can render.
+    pub fn loaded(&self, path: &Path) -> bool {
+        self.photos.contains_key(path)
     }
     pub fn complete(
         &mut self,
@@ -643,8 +595,10 @@ impl crate::App {
             foveonic::diagnostics::Category::Coordinator,
             "ui.multi_sync",
         );
+        let viewport = self.viewport_photos();
         if self.multi_edit.sync(
             self.edit_selection.paths(),
+            &viewport,
             self.preferences.multi_edit_limit,
             &mut self.sidecars,
         ) {
@@ -676,13 +630,6 @@ impl crate::App {
             self.fail(format!("Cannot load editing target: {error}"));
         }
     }
-
-    pub(crate) fn sync_render_demand(&mut self) {
-        let displayed = self.shown_photos();
-        if self.multi_edit.sync_render_paths(&displayed) {
-            self.sync_render_progress(None);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -706,49 +653,10 @@ mod tests {
             mapping: Mapping::Identity,
         }
     }
-    #[test]
-    fn thumbnail_inspection_is_bounded_detail_demand_without_ordinary_or_edit_admission() {
-        let mut runtime = runtime();
-        let original = runtime.editing_paths.clone();
-        let mut sidecars = session();
-        let inspected = PathBuf::from("thumbnail.x3f");
-        runtime.view_detail(Some(&inspected), &mut sidecars);
-        runtime.sync(&original, 2, &mut sidecars);
-        let mut displayed = original.clone();
-        displayed.push(inspected.clone());
-        runtime.sync_render_paths(&displayed);
-        assert_eq!(runtime.editing_paths, original);
-        assert_eq!(runtime.render_paths(), original);
-        assert_eq!(runtime.retained_paths().len(), 3);
-        runtime.view_detail(None, &mut sidecars);
-        runtime.sync_render_paths(&displayed);
-        assert!(!runtime.retained_paths().contains(&inspected));
-    }
-
-    #[test]
-    fn inspection_retains_existing_history_and_can_become_an_editing_target() {
-        let mut runtime = runtime();
-        let mut sidecars = session();
-        let a = PathBuf::from("a.x3f");
-        let b = PathBuf::from("b.x3f");
-        runtime.view_detail(Some(&b), &mut sidecars);
-        runtime.sync(std::slice::from_ref(&a), 1, &mut sidecars);
-        assert!(runtime.retained_paths().contains(&b));
-        runtime.view_detail(None, &mut sidecars);
-        assert!(runtime.retained_paths().contains(&b));
-        runtime.sync(std::slice::from_ref(&a), 1, &mut sidecars);
-        assert!(!runtime.retained_paths().contains(&b));
-        runtime.view_detail(Some(&b), &mut sidecars);
-        runtime.sync(std::slice::from_ref(&b), 1, &mut sidecars);
-        runtime.view_detail(None, &mut sidecars);
-        assert!(runtime.retained_paths().contains(&b));
-        assert_eq!(runtime.editing_paths, vec![b]);
-    }
     fn runtime() -> Runtime {
         let paths = vec![PathBuf::from("a.x3f"), PathBuf::from("b.x3f")];
         let mut runtime = Runtime {
             editing_paths: paths.clone(),
-            render_paths: paths.clone(),
             recent: paths.clone(),
             ..Default::default()
         };
@@ -866,6 +774,31 @@ mod tests {
     }
 
     #[test]
+    fn every_viewport_photo_is_loaded_and_only_photos_off_screen_are_evicted() {
+        let mut runtime = runtime();
+        let mut sidecars = session();
+        let [a, b, c, d] = ["a.x3f", "b.x3f", "c.x3f", "d.x3f"].map(PathBuf::from);
+        // Editing A while the viewport also shows C and D, with history for one more.
+        runtime.sync(
+            std::slice::from_ref(&a),
+            &[a.clone(), c.clone(), d.clone()],
+            1,
+            &mut sidecars,
+        );
+        for path in [&a, &c, &d] {
+            assert!(
+                runtime.photos.contains_key(path),
+                "{path:?} is on screen, so its settings load"
+            );
+        }
+        assert!(
+            !runtime.photos.contains_key(&b),
+            "B is off screen and beyond the history limit"
+        );
+        assert!(runtime.loaded(&c) && runtime.loaded(&d));
+    }
+
+    #[test]
     fn subset_switches_retain_recent_photos_and_evict_only_inactive_lru() {
         let mut runtime = runtime();
         let mut sidecars = session();
@@ -873,15 +806,15 @@ mod tests {
         let b = PathBuf::from("b.x3f");
         let c = PathBuf::from("c.x3f");
         let original = runtime.settings(&a).unwrap().clone();
-        runtime.sync(std::slice::from_ref(&b), 2, &mut sidecars);
+        runtime.sync(std::slice::from_ref(&b), &[], 2, &mut sidecars);
         runtime.selected(&b);
-        runtime.sync(std::slice::from_ref(&a), 2, &mut sidecars);
+        runtime.sync(std::slice::from_ref(&a), &[], 2, &mut sidecars);
         runtime.selected(&a);
         assert_eq!(runtime.settings(&a), Some(&original));
         assert!(runtime.settings(&b).is_some());
         assert_eq!(runtime.photos.len(), 2);
 
-        runtime.sync(std::slice::from_ref(&c), 2, &mut sidecars);
+        runtime.sync(std::slice::from_ref(&c), &[], 2, &mut sidecars);
         assert!(
             runtime.settings(&a).is_some(),
             "A was selected most recently"
@@ -911,31 +844,6 @@ mod tests {
         assert_eq!(runtime.numeric_snapshots().len(), 2);
         assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
         assert!(runtime.photos[&inactive].settings.is_none());
-    }
-
-    #[test]
-    fn display_does_not_admit_sources_or_promote_retention_and_eviction_removes_demand() {
-        let mut runtime = runtime();
-        let mut sidecars = session();
-        let paths = runtime.editing_paths.clone();
-        let unknown = PathBuf::from("unknown.x3f");
-        let mut displayed = paths.clone();
-        displayed.push(unknown.clone());
-        runtime.sync_render_paths(&displayed);
-        let recency = runtime.recent.clone();
-        assert!(!runtime.sync_render_paths(&displayed));
-        assert_eq!(runtime.recent, recency);
-        assert!(!runtime.rendering(&unknown));
-        assert_eq!(runtime.photos.len(), 2);
-        runtime.sync(std::slice::from_ref(&unknown), 2, &mut sidecars);
-        assert!(
-            !runtime.rendering(&paths[0]),
-            "evicted photos leave demand immediately"
-        );
-        runtime.sync_render_paths(&displayed);
-        assert_eq!(runtime.render_paths().len(), 2);
-        assert!(!runtime.photos.contains_key(&paths[0]));
-        assert!(!runtime.sync_render_paths(&displayed));
     }
 
     #[test]

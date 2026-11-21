@@ -83,13 +83,9 @@ impl SelectionJourney {
         }));
         self.model.check_selection(&selection)?;
         for path in paths {
-            if app.displayed_paths.contains(path)
-                && app.multi_edit.settings(path).is_some()
-                && !app.multi_edit.rendering(path)
-            {
+            if app.viewport_selection.contains(path) && !app.multi_edit.loaded(path) {
                 return Err(
-                    "a displayed retained photo left render demand when editing selection changed"
-                        .into(),
+                    "a viewport photo lost its settings when editing selection changed".into(),
                 );
             }
         }

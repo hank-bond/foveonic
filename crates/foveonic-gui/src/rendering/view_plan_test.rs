@@ -78,13 +78,13 @@ fn request(exposure: f32) -> RenderRequest {
         comparison: false,
     }
 }
-const ZOOMED: View = View::Zoomed {
+const ZOOMED: ViewMode = ViewMode::Zoomed(Regions {
     visible: VISIBLE,
-    region: REGION,
-};
+    patch: REGION,
+});
 
 fn plan_for(
-    view: &View,
+    view: &ViewMode,
     request: &RenderRequest,
     whole: Option<Image>,
     patch: Option<Image>,
@@ -189,7 +189,7 @@ fn a_current_full_size_image_covers_every_region_without_a_patch() {
 
 #[test]
 fn a_finer_whole_image_in_fit_view_is_in_use_only_at_the_tile_s_scale() {
-    let plan = plan_for(&View::Fit, &request(0.), full(0., 3), None);
+    let plan = plan_for(&ViewMode::Fit, &request(0.), full(0., 3), None);
     let whole = plan.whole.expect("whole");
     assert!(whole.ready, "the finer image is shown");
     assert_eq!(whole.request.preview_scale, quarter());
@@ -198,7 +198,7 @@ fn a_finer_whole_image_in_fit_view_is_in_use_only_at_the_tile_s_scale() {
 #[test]
 fn fit_view_uses_only_the_whole_image() {
     let edited = plan_for(
-        &View::Fit,
+        &ViewMode::Fit,
         &request(1.),
         reduced(0., 1),
         patch(0., 2, REGION),
@@ -206,7 +206,7 @@ fn fit_view_uses_only_the_whole_image() {
     assert!(edited.patch.is_none() && edited.full.is_none());
     assert!(needed(&edited.whole).is_some());
     let current = plan_for(
-        &View::Fit,
+        &ViewMode::Fit,
         &request(0.),
         reduced(0., 1),
         patch(0., 2, REGION),
@@ -225,9 +225,11 @@ fn a_native_tile_scale_needs_no_separate_full_size_image() {
 
 #[test]
 fn the_loupe_uses_only_its_patch_and_the_tile_s_own_image() {
-    let lens = View::Loupe {
-        lens: Some((VISIBLE, REGION)),
-        whole: true,
+    let lens = ViewMode::Loupe {
+        regions: Some(Regions {
+            visible: VISIBLE,
+            patch: REGION,
+        }),
     };
     let plan = plan_for(&lens, &request(0.), reduced(0., 1), None);
     assert_eq!(
@@ -236,20 +238,15 @@ fn the_loupe_uses_only_its_patch_and_the_tile_s_own_image() {
     );
     assert!(plan.whole.is_some_and(|whole| whole.ready));
     assert!(plan.full.is_none(), "the loupe never requests full size");
-    let untouched = View::Loupe {
-        lens: Some((VISIBLE, REGION)),
-        whole: false,
-    };
-    assert!(plan_for(&untouched, &request(0.), None, None)
-        .whole
-        .is_none());
 }
 
 #[test]
 fn a_loupe_over_a_current_full_size_image_uses_it_alone() {
-    let lens = View::Loupe {
-        lens: Some((VISIBLE, REGION)),
-        whole: false,
+    let lens = ViewMode::Loupe {
+        regions: Some(Regions {
+            visible: VISIBLE,
+            patch: REGION,
+        }),
     };
     let plan = plan_for(&lens, &request(0.), full(0., 1), None);
     assert!(plan.patch.is_none() && plan.full.is_none());
@@ -260,16 +257,16 @@ fn a_loupe_over_a_current_full_size_image_uses_it_alone() {
 
 #[test]
 fn a_loupe_without_any_image_places_itself_with_a_whole_photo_patch() {
-    let placing = View::Loupe {
-        lens: None,
-        whole: false,
-    };
+    let placing = ViewMode::Loupe { regions: None };
     let plan = plan_for(&placing, &request(0.), None, None);
     let patch = needed(&plan.patch).expect("placement patch");
     assert!(patch.detail);
     assert_eq!(patch.settings.preview_region, None);
     assert_eq!(patch.preview_scale, quarter());
-    assert!(plan.whole.is_none());
+    assert!(
+        plan.whole.is_some(),
+        "every viewport photo renders its own whole image"
+    );
 }
 
 #[test]
@@ -302,18 +299,20 @@ fn the_latest_patch_stays_on_top_until_the_image_behind_has_newer_edits() {
 
 #[test]
 fn a_moving_view_plans_its_previous_region_until_it_rests() {
+    let regions = |visible, patch| Regions { visible, patch };
+    let initial = regions(VISIBLE, REGION);
     let start = std::time::Instant::now();
     let after = |ms| start + std::time::Duration::from_millis(ms);
-    let mut motion = Motion::new((VISIBLE, REGION), start);
-    let moved = ([140, 100, 540, 400], [120, 80, 560, 420]);
+    let mut motion = Motion::new(initial, start);
+    let moved = regions([140, 100, 540, 400], [120, 80, 560, 420]);
     let (settled, wait) = motion.settle(moved, after(10));
-    assert_eq!(settled, (VISIBLE, REGION), "still moving");
+    assert_eq!(settled, initial, "still moving");
     assert_eq!(wait, Some(SETTLE));
-    let further = ([180, 100, 580, 400], [160, 80, 600, 420]);
-    assert_eq!(motion.settle(further, after(100)).0, (VISIBLE, REGION));
+    let further = regions([180, 100, 580, 400], [160, 80, 600, 420]);
+    assert_eq!(motion.settle(further, after(100)).0, initial);
     assert_eq!(
         motion.settle(further, after(219)).0,
-        (VISIBLE, REGION),
+        initial,
         "the rest restarts with each move"
     );
     assert_eq!(motion.settle(further, after(220)), (further, None));
@@ -323,7 +322,7 @@ fn a_moving_view_plans_its_previous_region_until_it_rests() {
 fn the_framing_plane_uses_only_its_whole_image() {
     let mut request = request(0.);
     request.framing_preview = true;
-    let plan = plan_for(&View::Framing, &request, None, None);
+    let plan = plan_for(&ViewMode::Framing, &request, None, None);
     let whole = needed(&plan.whole).expect("whole");
     assert!(whole.framing_preview);
     assert!(plan.patch.is_none() && plan.full.is_none());
