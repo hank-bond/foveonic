@@ -491,6 +491,15 @@ impl Browser {
             )),
         );
     }
+    /// Whether a rendered image at `revision` is newer than what the browser
+    /// shows for a listed photo. A reloaded folder forgets what it showed.
+    pub(crate) fn needs_rendered(&self, path: &Path, revision: u64) -> bool {
+        self.files.iter().any(|file| file.as_path() == path)
+            && self
+                .rendered_revisions
+                .get(path)
+                .is_none_or(|old| *old < revision)
+    }
     fn claim_rendered(&mut self, path: &Path, revision: u64) -> bool {
         if self.files.iter().any(|file| file.as_path() == path)
             && self
@@ -550,12 +559,6 @@ impl Browser {
     }
     pub fn rendered_revision(&self, path: &Path) -> Option<u64> {
         self.rendered_revisions.get(path).copied()
-    }
-    pub fn has_rendered_preview(&self, path: &Path, revision: u64) -> bool {
-        self.rendered_revision(path)
-            .is_some_and(|old| old >= revision)
-            && self.cache.get(path).is_some_and(Option::is_some)
-            && self.previews.contains_key(path)
     }
     pub fn preview(&mut self, path: &Path) -> Option<Thumbnail> {
         self.preview_demand.insert(path.to_owned());
@@ -1219,24 +1222,29 @@ mod tests {
         assert!(browser.cache.contains_key(&paths[0]));
     }
     #[test]
-    fn rendered_preview_presence_checks_both_memory_pools_after_eviction() {
+    fn rendered_images_are_needed_once_per_listing_whatever_the_caches_evict() {
         let context = eframe::egui::Context::default();
         let mut browser = super::Browser::new(context.clone());
         let path = std::path::PathBuf::from("photo.x3f");
+        assert!(!browser.needs_rendered(&path, 4), "an unlisted photo");
         browser.files.push(path.clone());
+        assert!(browser.needs_rendered(&path, 4));
         browser.rendered(&context, path.clone(), 4, prepared([128; 3], [1024, 512]));
-        assert!(browser.has_rendered_preview(&path, 4));
-        assert!(!browser.has_rendered_preview(&path, 5));
+        assert!(!browser.needs_rendered(&path, 4));
+        assert!(browser.needs_rendered(&path, 5));
 
         browser.set_thumbnail_budget(0);
         browser.finish_previews();
-        assert_eq!(browser.rendered_revision(&path), Some(4));
-        assert!(!browser.has_rendered_preview(&path, 4));
+        assert!(
+            !browser.needs_rendered(&path, 4),
+            "an evicted thumbnail is not rebuilt from the same image"
+        );
 
-        browser.rendered(&context, path.clone(), 4, prepared([128; 3], [1024, 512]));
-        assert!(browser.has_rendered_preview(&path, 4));
-        browser.previews.clear();
-        assert!(!browser.has_rendered_preview(&path, 4));
+        browser.invalidate_previews();
+        assert!(
+            browser.needs_rendered(&path, 4),
+            "a reloaded listing shows it again"
+        );
     }
     #[test]
     fn rendered_thumbnails_replace_embedded_images_and_reject_late_replies() {

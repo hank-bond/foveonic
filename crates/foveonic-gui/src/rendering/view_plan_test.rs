@@ -295,6 +295,14 @@ fn the_latest_patch_stays_on_top_until_the_image_behind_has_newer_edits() {
         reduced(1., 5).as_ref(),
         current
     ));
+    assert!(
+        !patch_on_top(
+            &patch(1., 4, REGION).unwrap(),
+            full(1., 5).as_ref(),
+            current
+        ),
+        "a current full-size image covers every region, as the plan uses it"
+    );
 }
 
 #[test]

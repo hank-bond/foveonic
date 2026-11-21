@@ -112,8 +112,8 @@ The viewport owns settling: a moving view settles when its region has rested for
 ### Drawing
 
 1. **Behind:** the whole image, a placeholder until a current one replaces it.
-2. **Top:** the patch when it is current. While the look changes faster than patches arrive, the latest patch stays on top unless the whole image already has a newer look.
-3. The navigator and the browser thumbnail downscale the whole image.
+2. **Top:** the patch when it is current, unless the whole image is a current full-size one, which covers every region. While the look changes faster than patches arrive, the latest patch stays on top unless the whole image already has a newer look.
+3. The navigator and the browser thumbnail downscale the whole image. The browser follows the images held, not their arrival, so a thumbnail returns when the browser reloads its folder.
 
 ### Presentation
 

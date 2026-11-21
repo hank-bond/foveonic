@@ -99,6 +99,12 @@ pub(crate) struct Plan {
     pub full: Option<Use>,
 }
 
+/// A whole image is current for a view when it has the view's edits and is at
+/// least as fine as the tile needs.
+pub(crate) fn whole_current<T: Rendered>(whole: &T, request: &RenderRequest) -> bool {
+    whole.matches(request) && whole.scale().divisor() <= request.preview_scale.divisor()
+}
+
 /// `request` carries the current edits and, in `preview_scale`, the scale the
 /// photo's tile resolves when not zoomed. `background_completion` is the user's
 /// preference for speculative full-size images.
@@ -109,9 +115,7 @@ pub(crate) fn plan<T: Rendered>(
     background_completion: bool,
 ) -> Plan {
     let tile = request.preview_scale;
-    let whole_current = images
-        .whole
-        .filter(|whole| whole.matches(request) && whole.scale().divisor() <= tile.divisor());
+    let whole_current = images.whole.filter(|whole| whole_current(*whole, request));
     let native_current = whole_current.is_some_and(|whole| whole.scale().is_native());
     // A finer image than the view needs is shown, but only a zoomed or loupe view
     // covered by a full-size image keeps the native work that made it, so its
@@ -274,13 +278,16 @@ impl Motion {
 
 /// The latest patch stays on top unless the whole image behind it already has
 /// newer edits, so a slider move never exposes a blurrier image. A patch and a
-/// whole image with the same edits came from one plan; the patch is sharper.
+/// whole image with the same edits came from one plan; the patch is sharper,
+/// unless the whole image is a current full-size one, which the plan uses for
+/// every region instead.
 pub(crate) fn patch_on_top<T: Rendered>(
     patch: &T,
     whole: Option<&T>,
     current: impl Fn(&T) -> bool,
 ) -> bool {
-    current(patch)
+    let full_current = whole.is_some_and(|whole| current(whole) && whole.scale().is_native());
+    (current(patch) && !full_current)
         || whole.is_none_or(|whole| {
             !current(whole) && (patch.same_edits(whole) || patch.request_id() > whole.request_id())
         })

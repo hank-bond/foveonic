@@ -527,8 +527,28 @@ impl App {
     pub(crate) fn navigator_source(&self) -> Option<&worker::RenderResult> {
         self.active_image()
     }
-    fn update_browser_preview(&mut self, frame: &worker::RenderResult) {
-        update_browser_preview(&mut self.browser, &mut self.previews, frame);
+    /// The browser shows each photo's held photographic image. Following what is
+    /// held, not what arrives, restores thumbnails after the browser forgets them,
+    /// as when a folder is reopened while its images stay current.
+    fn sync_browser_thumbnails(&mut self) {
+        for frame in self.images.images().filter(|frame| {
+            let origin = self.worker.cache.source_origin(&frame.request.path);
+            frame.is_photographic()
+                && rendering::views::usable(Some(*frame), origin.as_ref()).is_some()
+        }) {
+            let revision = frame.request.id.0;
+            if !self.browser.needs_rendered(&frame.request.path, revision) {
+                continue;
+            }
+            if let Some((thumbnail, preview)) = self.previews.snapshot(frame) {
+                self.browser.rendered_texture(
+                    frame.request.path.clone(),
+                    revision,
+                    thumbnail,
+                    preview,
+                );
+            }
+        }
     }
     fn sync_busy(&mut self) {
         self.busy = self.view_busy();
@@ -653,9 +673,6 @@ impl App {
                         &self.settings,
                         frame.artifact.dehaze_estimate,
                     );
-                }
-                if frame.is_photographic() {
-                    self.update_browser_preview(&frame);
                 }
                 let active = self.selected.as_ref() == Some(&frame.request.path);
                 let whole = !frame.request.detail;
@@ -1816,6 +1833,7 @@ impl eframe::App for App {
         self.update_scopes();
         self.smoke_check_scope_retention();
         self.sync_busy();
+        self.sync_browser_thumbnails();
         let mapping = self.displayed_mapping();
         let active = self.active_key();
         let frame = active.as_ref().and_then(|(key, origin)| {
@@ -1826,19 +1844,6 @@ impl eframe::App for App {
         self.navigator
             .update(navigator_source, mapping, self.busy, ctx);
         self.update_memory();
-    }
-}
-fn update_browser_preview(
-    browser: &mut browser::Browser,
-    previews: &mut previews::Previews,
-    frame: &worker::RenderResult,
-) {
-    let revision = frame.request.id;
-    if browser.has_rendered_preview(&frame.request.path, revision.0) {
-        return;
-    }
-    if let Some((thumbnail, preview)) = previews.snapshot(frame) {
-        browser.rendered_texture(frame.request.path.clone(), revision.0, thumbnail, preview);
     }
 }
 fn multi_photo_overview(paths: &[PathBuf], active: Option<&std::path::Path>) -> bool {

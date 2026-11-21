@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 /// A stored image is usable for a photo when it was made from the photo's
 /// current source version.
-fn usable<'a>(
+pub(crate) fn usable<'a>(
     image: Option<&'a RenderResult>,
     origin: Option<&SourceOrigin>,
 ) -> Option<&'a RenderResult> {
