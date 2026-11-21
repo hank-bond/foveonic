@@ -9,7 +9,7 @@ implementation: incomplete
 
 ## Agreed scope
 
-The editor must offer Dehaze in Corrections, with automatic haze-color estimation and a manual color selector. Recover the missing estimation and selection behavior through the existing private numerical study before adapting the operation. Keep private research locations, external application identities and generated decompilation outside this repository. Name the tool and processing operations by function.
+The editor must offer Dehaze in Corrections, with automatic haze-color estimation and a manual color selector. Recover the missing estimation and selection behavior through the existing private numerical study before adapting the operation. Refer to the original behavior without decompiling it. Keep private research locations and external application identities outside this repository. Name the tool and processing operations by function.
 
 ## Behavior
 

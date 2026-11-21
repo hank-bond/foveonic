@@ -7,7 +7,7 @@ status: archived
 
 Implement the owner-requested on-image Color Range interaction. Use cursor-interaction research to understand selection, gesture routing and control updates. Record findings separately from the selected behavior.
 
-- [x] Trace and retain bounded cursor-method decompilation with evidence limits.
+- [x] Trace the original cursor method by reference, without decompiling, and retain the evidence with its limits.
 - [x] Add lazy GPU picking from the existing neutral color guide with shared range weights.
 - [x] Add the Color Range tool button and D/Escape shortcuts, fixed selection during dragging, and immediate slider feedback.
 - [x] Use horizontal Hue, upward Lightness, and Option + upward Saturation, preserving ordinary navigation outside the tool.

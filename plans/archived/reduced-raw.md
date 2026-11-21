@@ -5,7 +5,7 @@ status: archived
 
 # Support reduced RAW modes
 
-Requirements: [X3F input](../../docs/specs/x3f-input.md). The owner approved all supported camera families and reference-derived implementation where independent originals cannot be found. Use the existing reference recovery rather than repeating Merrill decompilation.
+Requirements: [X3F input](../../docs/specs/x3f-input.md). The owner approved all supported camera families and reference-derived implementation where independent originals cannot be found. Use the existing reference behavior; the original is referenced, not decompiled.
 
 - [x] Decode and render the provided DP3 Merrill LOW and MED originals through color and monochrome paths.
 - [x] Separate declared photograph dimensions from physical sensor storage and active area.
