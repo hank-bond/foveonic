@@ -153,7 +153,7 @@ impl Runtime {
         self.ready() && self.targets().all(|photo| photo.numeric_settings.is_some())
     }
     pub fn snapshots(&self) -> Vec<Settings> {
-        if !self.multiple() || !self.ready() {
+        if !self.ready() {
             return Vec::new();
         }
         self.editing_paths
@@ -162,7 +162,7 @@ impl Runtime {
             .collect()
     }
     pub fn numeric_snapshots(&self) -> Vec<Settings> {
-        if !self.multiple() || self.targets().any(|photo| photo.numeric_settings.is_none()) {
+        if !self.editable_ready() {
             return Vec::new();
         }
         self.editing_paths
@@ -286,7 +286,7 @@ impl Runtime {
         edits: &[multi_edit_controls::Edit],
         sidecars: &mut sidecars::Session,
     ) -> bool {
-        if !self.multiple() || !self.editable_ready() || edits.is_empty() {
+        if !self.editable_ready() || edits.is_empty() {
             return false;
         }
         let applicable_edits = edits

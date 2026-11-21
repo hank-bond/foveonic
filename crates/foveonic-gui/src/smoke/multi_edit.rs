@@ -245,7 +245,7 @@ impl App {
                 .active_image()
                 .is_some_and(|frame| frame.request.rendition == crate::editor::Rendition::Camera);
         }
-        if count > 1 && !self.multi_edit.editable_ready() {
+        if !self.multi_edit.editable_ready() {
             return false;
         }
         self.edit_selection.paths().iter().all(|path| {

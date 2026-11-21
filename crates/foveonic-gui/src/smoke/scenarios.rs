@@ -2,7 +2,7 @@
 
 use super::Smoke;
 use crate::{
-    multi_edit_controls::{self, Edit, Mapping, NumberChange},
+    multi_edit_controls::{Edit, Mapping, NumberChange},
     preferences::FolderMode,
     App,
 };
@@ -1622,7 +1622,7 @@ impl Scenario {
             // Coordinator idleness can become visible before the UI settles progress.
             && app.worker.progress.snapshot().is_none_or(|progress| !progress.running())
             && app.sidecars.ready()
-            && (self.targets.len() == 1 || app.multi_edit.editable_ready())
+            && app.multi_edit.editable_ready()
             && self.targets.iter().all(|path| {
                 self.frame(app, path)
                     .is_some_and(|frame| self.matches(app, path, frame, minimum))
@@ -2120,25 +2120,14 @@ pub(super) fn apply_exposure(app: &mut App, delta: f64) {
         range: [-4., 4.],
         mapping: Mapping::Identity,
     }];
-    if app.multi_edit.multiple() {
-        if !app.multi_edit.apply_edits(&edits, &mut app.sidecars) {
-            return;
-        }
-        app.settings = app
-            .multi_edit
-            .settings(app.selected.as_ref().unwrap())
-            .unwrap()
-            .clone();
-    } else {
-        if !multi_edit_controls::apply(&mut app.settings, &edits) {
-            return;
-        }
-        app.sidecars.edited(&app.settings);
-        if let Some(path) = &app.selected {
-            app.multi_edit
-                .observe_active(path, &app.settings, app.metadata.as_ref());
-        }
+    if !app.multi_edit.apply_edits(&edits, &mut app.sidecars) {
+        return;
     }
+    app.settings = app
+        .multi_edit
+        .settings(app.selected.as_ref().unwrap())
+        .unwrap()
+        .clone();
     app.submit_photos();
 }
 

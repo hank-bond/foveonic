@@ -244,7 +244,6 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                                     .clicked()
                                 {
                                     changed |= select_highlight(settings, choice);
-                                    changed |= crate::multi_edit_controls::active(ui.ctx());
                                     crate::multi_edit_controls::assign(
                                         ui.ctx(),
                                         "/highlight_mode",

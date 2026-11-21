@@ -297,7 +297,7 @@ fn banding(
                     changed |= reference_row_offsets(ui, settings);
                 }
                 MerrillBandingMethod::Directional => {
-                    let physical = crate::multi_edit_controls::active(ui.ctx());
+                    let physical = crate::multi_edit_controls::several(ui.ctx());
                     let (horizontal, vertical) = if physical || rotation.is_multiple_of(180) {
                         (
                             (&mut settings.merrill_banding.rows, "/merrill_banding/rows"),

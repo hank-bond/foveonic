@@ -224,15 +224,11 @@ fn id() -> egui::Id {
 }
 pub fn begin_with_numeric(ctx: &egui::Context, authored: Vec<Settings>, numeric: Vec<Settings>) {
     let encode = |settings: Vec<Settings>| -> Arc<[Value]> {
-        if settings.len() > 1 {
-            settings
-                .iter()
-                .filter_map(|s| serde_json::to_value(s).ok())
-                .collect::<Vec<_>>()
-                .into()
-        } else {
-            Arc::default()
-        }
+        settings
+            .iter()
+            .filter_map(|s| serde_json::to_value(s).ok())
+            .collect::<Vec<_>>()
+            .into()
     };
     let values = encode(authored);
     let numeric = encode(numeric);
@@ -336,6 +332,12 @@ pub fn finish(ctx: &egui::Context) -> Vec<Edit> {
     })
 }
 pub fn active(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|d| d.get_temp::<State>(id()))
+        .is_some_and(|s| !s.values.is_empty())
+}
+/// More than one photo is being edited, so per-photo display choices such as
+/// orientation cannot apply to the controls.
+pub fn several(ctx: &egui::Context) -> bool {
     ctx.data_mut(|d| d.get_temp::<State>(id()))
         .is_some_and(|s| s.values.len() > 1)
 }
@@ -559,7 +561,7 @@ fn numeric_values(ctx: &egui::Context) -> Option<(Property, Vec<f64>)> {
         .filter_map(|v| v.pointer(&p.pointer).and_then(Value::as_f64))
         .map(|v| p.mapping.control(v))
         .collect::<Vec<_>>();
-    (numbers.len() > 1 && numbers.len() == state.values.len()).then_some((p, numbers))
+    (numbers.len() == state.values.len()).then_some((p, numbers))
 }
 pub fn number_mixed(ctx: &egui::Context) -> bool {
     numeric_values(ctx).is_some_and(|(_, values)| values[1..].iter().any(|v| *v != values[0]))
@@ -579,8 +581,8 @@ pub fn number(ctx: &egui::Context, change: NumberChange, range: [f64; 2]) {
     }
 }
 
-/// The editing slider for one photo or several. Several photos also record
-/// the change as an edit for each of them; saturated photos stay at their bound.
+/// The editing slider for one photo or several. The change is recorded as an
+/// edit for each editing photo; saturated photos stay at their bound.
 pub fn slider<T: egui::emath::Numeric>(
     ui: &mut egui::Ui,
     value: &mut T,

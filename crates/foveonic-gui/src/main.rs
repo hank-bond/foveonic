@@ -1004,7 +1004,7 @@ impl App {
                 ui.add_enabled_ui(
                     self.sidecars.ready()
                         && !self.edit_selection.paths().is_empty()
-                        && (!self.multi_edit.multiple() || self.multi_edit.editable_ready()),
+                        && self.multi_edit.editable_ready(),
                     |ui| {
                         let exposure_auto_compensation = self.settings.exposure_auto_compensation;
                         let prevent_color_clipping = self.settings.prevent_color_clipping;
@@ -1708,18 +1708,11 @@ impl eframe::App for App {
             });
         automation::panel(settings_panel.response.rect);
         let mut edits = multi_edit_controls::finish(ctx);
-        if self.multi_edit.multiple() && self.multi_edit.editable_ready() {
+        if self.multi_edit.editable_ready() {
             let assignments =
                 multi_edit_controls::assignments(&editor_before, &self.settings, &edits);
             edits.extend(assignments);
             if self.multi_edit.apply_edits(&edits, &mut self.sidecars) {
-                if let Some(settings) = self
-                    .selected
-                    .as_deref()
-                    .and_then(|path| self.multi_edit.settings(path))
-                {
-                    self.settings = settings.clone();
-                }
                 for path in self.edit_selection.paths() {
                     self.previews.invalidate_path(path);
                 }
@@ -1731,7 +1724,11 @@ impl eframe::App for App {
                     .as_deref()
                     .and_then(|path| self.multi_edit.settings(path))
                 {
+                    // The range preview is view state, not an edit, so this frame's
+                    // choice in the panel stands.
+                    let preview = self.settings.color_range_preview;
                     self.settings = settings.clone();
+                    self.settings.color_range_preview = preview;
                 }
             }
         }
