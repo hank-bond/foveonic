@@ -282,10 +282,11 @@ pub(super) fn nudged(
     next.clamp(bounds[0], bounds[1])
 }
 
+/// Auto follows the photo's automatic value and stays editable: moving the
+/// value makes it manual, and Auto returns to the automatic value.
 pub(super) struct Automatic<'a> {
     active: &'a mut bool,
     calculated: Option<f64>,
-    editable: bool,
 }
 
 #[derive(Default)]
@@ -321,7 +322,6 @@ pub fn automatic_adjustment<T: egui::emath::Numeric>(
             automatic: Some(Automatic {
                 active: &mut automatic,
                 calculated: calculated.map(|v| v.to_f64()),
-                editable: false,
             }),
             ..controls
         },
@@ -385,30 +385,26 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                     (ui.available_width() - value_width - ui.spacing().item_spacing.x - auto_width)
                         .max(35.);
                 let slider_response = ui
-                    .add_enabled_ui(
-                        !automatic.as_ref().is_some_and(|a| *a.active && !a.editable)
-                            && crate::multi_edit_controls::numeric_ready(ui.ctx()),
-                        |ui| {
-                            // Apply to every editing slider while leaving adjacent
-                            // value fields, buttons and group backgrounds unchanged.
-                            ui.visuals_mut().widgets.inactive.bg_fill =
-                                crate::widgets::slider_track_fill(ui.visuals());
-                            let before_slider = value.to_f64();
-                            let response = crate::multi_edit_controls::slider(
-                                ui,
-                                value,
-                                range.clone(),
-                                default,
-                                step,
-                            );
-                            if response.changed() || before_slider != value.to_f64() {
-                                if let Some(auto) = automatic.as_mut().filter(|a| a.editable) {
-                                    *auto.active = false;
-                                }
+                    .add_enabled_ui(crate::multi_edit_controls::numeric_ready(ui.ctx()), |ui| {
+                        // Apply to every editing slider while leaving adjacent
+                        // value fields, buttons and group backgrounds unchanged.
+                        ui.visuals_mut().widgets.inactive.bg_fill =
+                            crate::widgets::slider_track_fill(ui.visuals());
+                        let before_slider = value.to_f64();
+                        let response = crate::multi_edit_controls::slider(
+                            ui,
+                            value,
+                            range.clone(),
+                            default,
+                            step,
+                        );
+                        if response.changed() || before_slider != value.to_f64() {
+                            if let Some(auto) = automatic.as_mut() {
+                                *auto.active = false;
                             }
-                            help::control(response, label)
-                        },
-                    )
+                        }
+                        help::control(response, label)
+                    })
                     .inner;
                 if let Some(auto) = &mut automatic {
                     let response = ui
@@ -419,96 +415,86 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                         )
                         .inner;
                     if help::attach(response, help::automatic(label).unwrap()).clicked() {
-                        if auto.editable {
-                            if *auto.active {
-                                *auto.active = false;
-                                *value = default;
-                            } else if let Some(calculated) = auto.calculated {
-                                *auto.active = true;
-                                *value = T::from_f64(calculated);
-                            }
-                        } else {
-                            *auto.active = !*auto.active;
+                        // Leaving Auto keeps the shown value as the manual one.
+                        *auto.active = !*auto.active;
+                        if let Some(calculated) = auto.calculated.filter(|_| *auto.active) {
+                            *value = T::from_f64(calculated);
                         }
                     }
                 }
-                let locked = automatic.as_ref().is_some_and(|a| *a.active && !a.editable);
-                let unresolved =
-                    locked && automatic.as_ref().is_some_and(|a| a.calculated.is_none());
+                let unresolved = automatic
+                    .as_ref()
+                    .is_some_and(|a| *a.active && a.calculated.is_none());
                 // DragValue handles keys while drawing. Find its stable ID first so our
                 // focused nudge can run without changing the row's layout.
                 let mixed = crate::multi_edit_controls::number_mixed(ui.ctx());
                 let response = ui
-                    .add_enabled_ui(
-                        !locked && crate::multi_edit_controls::numeric_ready(ui.ctx()),
-                        |ui| {
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(value_width, ROW_HEIGHT),
-                                egui::Layout::centered_and_justified(ui.layout().main_dir()),
-                                |ui| {
-                                    if unresolved {
-                                        return ui.add(egui::Label::new("Auto"));
-                                    }
-                                    let id = ui.next_auto_id();
-                                    let focused = ui.memory(|memory| memory.has_focus(id));
-                                    // Taking the arrows before egui's value box replaces
-                                    // its fixed nudge with one that follows the shown digits.
-                                    let (coarse_nudges, fine_nudges) = if focused {
-                                        ui.input_mut(|input| {
-                                            let mut count = |modifiers| {
-                                                input.count_and_consume_key(
+                    .add_enabled_ui(crate::multi_edit_controls::numeric_ready(ui.ctx()), |ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(value_width, ROW_HEIGHT),
+                            egui::Layout::centered_and_justified(ui.layout().main_dir()),
+                            |ui| {
+                                if unresolved {
+                                    return ui.add(egui::Label::new("Auto"));
+                                }
+                                let id = ui.next_auto_id();
+                                let focused = ui.memory(|memory| memory.has_focus(id));
+                                // Taking the arrows before egui's value box replaces
+                                // its fixed nudge with one that follows the shown digits.
+                                let (coarse_nudges, fine_nudges) = if focused {
+                                    ui.input_mut(|input| {
+                                        let mut count = |modifiers| {
+                                            input.count_and_consume_key(
+                                                modifiers,
+                                                egui::Key::ArrowUp,
+                                            ) as f64
+                                                - input.count_and_consume_key(
                                                     modifiers,
-                                                    egui::Key::ArrowUp,
+                                                    egui::Key::ArrowDown,
                                                 )
                                                     as f64
-                                                    - input.count_and_consume_key(
-                                                        modifiers,
-                                                        egui::Key::ArrowDown,
-                                                    )
-                                                        as f64
-                                            };
-                                            // Unmodified keys match Option too, so count it first.
-                                            let fine = count(egui::Modifiers::ALT);
-                                            (count(egui::Modifiers::NONE), fine)
-                                        })
-                                    } else {
-                                        (0., 0.)
-                                    };
-                                    let before_nudge = value.to_f64();
-                                    if coarse_nudges != 0. || fine_nudges != 0. {
-                                        *value = T::from_f64(nudged(
-                                            before_nudge,
-                                            coarse_nudges,
-                                            fine_nudges,
-                                            step,
-                                            T::INTEGRAL,
-                                            [range.start().to_f64(), range.end().to_f64()],
-                                        ));
-                                    }
-                                    let nudge_changed = value.to_f64() != before_nudge;
-                                    if nudge_changed {
-                                        // Show the new value instead of the text being edited.
-                                        ui.data_mut(|data| data.remove::<String>(id));
-                                    }
-                                    let mut response = ui.add(
-                                        crate::widgets::mixed_drag_value(value, mixed && !focused)
-                                            .range(range.clone())
-                                            .speed(if T::INTEGRAL { 1. } else { 0.01 })
-                                            // Shift-drags add a decimal; keep them to the shown ones.
-                                            .max_decimals(crate::widgets::VALUE_DECIMAL_PLACES),
-                                    );
-                                    if nudge_changed {
-                                        response.mark_changed();
-                                    }
-                                    response
-                                },
-                            )
-                            .inner
-                        },
-                    )
+                                        };
+                                        // Unmodified keys match Option too, so count it first.
+                                        let fine = count(egui::Modifiers::ALT);
+                                        (count(egui::Modifiers::NONE), fine)
+                                    })
+                                } else {
+                                    (0., 0.)
+                                };
+                                let before_nudge = value.to_f64();
+                                if coarse_nudges != 0. || fine_nudges != 0. {
+                                    *value = T::from_f64(nudged(
+                                        before_nudge,
+                                        coarse_nudges,
+                                        fine_nudges,
+                                        step,
+                                        T::INTEGRAL,
+                                        [range.start().to_f64(), range.end().to_f64()],
+                                    ));
+                                }
+                                let nudge_changed = value.to_f64() != before_nudge;
+                                if nudge_changed {
+                                    // Show the new value instead of the text being edited.
+                                    ui.data_mut(|data| data.remove::<String>(id));
+                                }
+                                let mut response = ui.add(
+                                    crate::widgets::mixed_drag_value(value, mixed && !focused)
+                                        .range(range.clone())
+                                        .speed(if T::INTEGRAL { 1. } else { 0.01 })
+                                        // Shift-drags add a decimal; keep them to the shown ones.
+                                        .max_decimals(crate::widgets::VALUE_DECIMAL_PLACES),
+                                );
+                                if nudge_changed {
+                                    response.mark_changed();
+                                }
+                                response
+                            },
+                        )
+                        .inner
+                    })
                     .inner;
                 if response.changed() {
-                    if let Some(auto) = automatic.as_mut().filter(|a| a.editable) {
+                    if let Some(auto) = automatic.as_mut() {
                         *auto.active = false;
                     }
                 }
@@ -520,7 +506,7 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                 }
                 let accepted = accepted.clamp(range.start().to_f64(), range.end().to_f64());
                 let accepted = T::from_f64(accepted);
-                if !locked && value.to_f64() != accepted.to_f64() {
+                if !unresolved && value.to_f64() != accepted.to_f64() {
                     *value = accepted;
                     ui.data_mut(|data| data.remove::<String>(response.id));
                     ui.ctx().request_repaint();
@@ -811,7 +797,6 @@ fn exposure_row(
                 automatic: Some(Automatic {
                     active: &mut settings.exposure_auto,
                     calculated: calculated.map(f64::from),
-                    editable: true,
                 }),
                 ..column.row_controls("Exposure")
             },

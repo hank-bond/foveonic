@@ -1338,7 +1338,7 @@ fn automatic_buttons_replace_checkboxes_and_noise_explanation_is_not_inline() {
 }
 
 #[test]
-fn automatic_row_disables_editing_and_toggles_to_resolved_or_fallback_value() {
+fn automatic_rows_stay_editable_and_auto_returns_to_the_calculated_value() {
     for (label, calculated) in ["ColorDQ gain", "Sharpen"].into_iter().flat_map(|label| {
         [Some(1.4_f32), None]
             .into_iter()
@@ -1392,42 +1392,48 @@ fn automatic_row_disables_editing_and_toggles_to_resolved_or_fallback_value() {
             pressed,
             modifiers: Default::default(),
         };
-        // Neither dragging/double-clicking the slider nor typing/nudging the value edits Auto.
-        for pos in [egui::pos2(220., 18.), egui::pos2(362., 18.)] {
-            for (time, pressed) in [(1., true), (1.05, false), (1.1, true), (1.15, false)] {
-                let (changed, _, manual) = render(
-                    time,
-                    vec![egui::Event::PointerMoved(pos), button(pos, pressed)],
-                );
-                assert!(!changed);
-                assert_eq!(manual, None);
-            }
+        // While Auto is on, the value box shows the calculated value, or "Auto"
+        // when it is not known yet; a value typed into it is manual.
+        let field = egui::pos2(362., 18.);
+        for (time, pressed) in [(1., true), (1.05, false)] {
+            render(
+                time,
+                vec![egui::Event::PointerMoved(field), button(field, pressed)],
+            );
         }
-        assert!(
-            !render(
-                1.2,
-                vec![
-                    egui::Event::Text("2".into()),
-                    arrow(egui::Key::ArrowUp, false)
-                ]
-            )
-            .0
-        );
+        if calculated.is_some() {
+            let (changed, _, manual) = render(1.2, vec![arrow(egui::Key::ArrowUp, false)]);
+            assert!(changed, "{label}: a nudge from Auto edits");
+            assert!(manual.is_some_and(|value| value > calculated.unwrap()));
+        }
+        // Auto returns to the calculated value.
         render(2., vec![egui::Event::PointerMoved(a), button(a, true)]);
         let (changed, _, manual) = render(2.1, vec![button(a, false)]);
-        assert!(changed);
-        assert_eq!(manual, Some(calculated.unwrap_or(1.)));
-        render(2.2, vec![]); // Register the now-enabled slider for hit testing.
+        if calculated.is_some() {
+            assert!(changed);
+            assert_eq!(manual, None, "{label}: Auto is on again");
+            // Leaving Auto keeps the shown value as the manual one.
+            render(2.2, vec![egui::Event::PointerMoved(a), button(a, true)]);
+            let (changed, _, manual) = render(2.3, vec![button(a, false)]);
+            assert!(changed);
+            assert_eq!(manual, calculated, "{label}: the shown value stays");
+        } else {
+            assert!(changed);
+            assert_eq!(
+                manual,
+                Some(1.),
+                "{label}: no calculation leaves the default"
+            );
+        }
+        // A slider press outside the value moves it and leaves Auto off.
+        render(3.5, vec![egui::Event::PointerMoved(a), button(a, true)]);
+        render(3.55, vec![button(a, false)]);
         let pos = egui::pos2(150., 18.);
         let (changed, _, value) =
-            render(3., vec![egui::Event::PointerMoved(pos), button(pos, true)]);
-        assert!(changed);
-        assert_ne!(value, manual);
-        render(3.1, vec![button(pos, false)]);
-        render(4., vec![egui::Event::PointerMoved(a), button(a, true)]);
-        let (changed, _, manual) = render(4.1, vec![button(a, false)]);
-        assert!(changed);
-        assert_eq!(manual, None);
+            render(4., vec![egui::Event::PointerMoved(pos), button(pos, true)]);
+        assert!(changed, "{label}: the slider is editable from Auto");
+        assert!(value.is_some());
+        render(4.1, vec![button(pos, false)]);
     }
 }
 
@@ -4248,7 +4254,7 @@ fn saturation_panel_leaves_shared_clipping_policy_to_the_editing_menu() {
 }
 
 #[test]
-fn exposure_auto_is_editable_toggled_and_reset_in_both_tone_methods() {
+fn exposure_auto_is_editable_and_leaving_it_keeps_the_shown_value() {
     for method in [
         foveonic::render::PhotographicMethod::Reference,
         foveonic::render::PhotographicMethod::Universal,
@@ -4311,8 +4317,8 @@ fn exposure_auto_is_editable_toggled_and_reset_in_both_tone_methods() {
         );
         let (changed, output, manual) = frame(1.16, vec![pointer_button(a, false)], Some(-0.3));
         assert!(changed && !manual.exposure_auto);
-        assert_eq!(manual.exposure, 0.);
-        assert!(!text_centers(&output, "0.00").is_empty());
+        assert_eq!(manual.exposure, -0.3, "leaving Auto keeps the shown value");
+        assert!(!text_centers(&output, "-0.30").is_empty());
         frame(
             1.17,
             vec![egui::Event::PointerMoved(a), pointer_button(a, true)],

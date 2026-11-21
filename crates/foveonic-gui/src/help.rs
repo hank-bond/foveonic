@@ -25,16 +25,16 @@ pub fn control(response: egui::Response, label: &str) -> egui::Response {
 pub fn automatic(label: &str) -> Option<&'static str> {
     Some(match label {
         "Exposure" => {
-            "A cancels this photo's recorded exposure compensation. Choose Bracket, Dial or Both under Auto exposure source in Tone’s menu. Click selected A again to turn Auto off and reset Exposure to zero. Both is the default. The slider and value box stay editable. Editing either turns A off, and double-clicking the slider resets to zero. Camera-family defaults retain Auto and its compensation choice, resolving each photo separately. A is unavailable when the selected compensation cannot be determined."
+            "A cancels this photo's recorded exposure compensation. Choose Bracket, Dial or Both under Auto exposure source in Tone’s menu. Both is the default. The slider and value box stay editable while A is on; editing either turns A off. Click the gray A to return to Auto, or the blue A to keep the shown value as your own. Double-clicking the slider resets to zero. Camera-family defaults retain Auto and its compensation choice, resolving each photo separately. A is unavailable when the selected compensation cannot be determined."
         }
         "Highlight correction" => {
-            "A uses the camera's suggested setting. Click A to adjust it yourself, or click again to return to Auto. 0 matches Auto. Use the checkbox to turn correction off without losing your setting."
+            "A uses the camera's suggested setting. The slider and value box stay editable while A is on; editing either turns A off. Click the gray A to return to Auto, or the blue A to keep the shown value as your own. 0 matches Auto. Use the checkbox to turn correction off without losing your setting."
         }
         "Sharpen" => {
-            "A uses the camera's suggested sharpening amount for the current noise settings. Click A to choose your own amount. 0 turns sharpening off. Click again to return to Auto."
+            "A uses the camera's suggested sharpening amount for the current noise settings, reduced for smaller previews and lower RAW resolutions. The slider and value box stay editable while A is on; editing either turns A off. Click the gray A to return to Auto, or the blue A to keep the shown value as your own. 0 turns sharpening off."
         }
         "ColorDQ gain" => {
-            "A chooses the amount automatically using the camera information, while noise reduction is on. Click A to choose your own amount. 0 turns this correction off. Click again to return to automatic. The slider and value cannot be edited while A is on."
+            "A chooses the amount automatically using the camera information, while noise reduction is on. The slider and value box stay editable while A is on; editing either turns A off. Click the gray A to return to Auto, or the blue A to keep the shown value as your own. 0 turns this correction off."
         }
         _ => return None,
     })
