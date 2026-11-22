@@ -66,7 +66,7 @@ use foveonic::{
     source::Metadata,
 };
 use preferences::{FolderMode, Section};
-use rendering::{request, smart, worker};
+use rendering::{smart, worker};
 use std::{path::PathBuf, sync::Arc};
 
 // Keep folder readiness responsive during prefetch without polling idle folders at frame rate.
@@ -119,8 +119,8 @@ struct App {
     comparison: inspect::Comparison,
     /// Every rendered image the app holds, keyed by photo, look and output.
     images: rendering::rendered::RenderedImages<worker::RenderResult>,
-    preview_densities: std::collections::BTreeMap<PathBuf, f32>,
-    fit_densities: std::collections::BTreeMap<PathBuf, f32>,
+    /// Screen pixels per UI point this frame, which photo scales follow.
+    pixels_per_point: f32,
     /// Zoomed photos' moving regions. Planning reads views, so motion uses interior mutability.
     view_motion:
         std::cell::RefCell<std::collections::BTreeMap<PathBuf, rendering::view_plan::Motion>>,
@@ -227,10 +227,6 @@ impl App {
                 .processing_selection(self.selected.as_deref())
                 .into();
             self.browser_selection_key = Some(key);
-            self.preview_densities
-                .retain(|path, _| self.browser_selection.contains(path));
-            self.fit_densities
-                .retain(|path, _| self.browser_selection.contains(path));
         }
         if changed || self.browser_selection_limit != self.preferences.multi_edit_limit {
             self.edit_selection
@@ -355,8 +351,7 @@ impl App {
             channel: -1,
             comparison: Default::default(),
             images: Default::default(),
-            preview_densities: Default::default(),
-            fit_densities: Default::default(),
+            pixels_per_point: 1.,
             view_motion: Default::default(),
             scope_images: None,
             scope_snapshot: None,
@@ -489,13 +484,11 @@ impl App {
                 .cache
                 .source_origin(path)
                 .is_none_or(|origin| origin == frame.origin)
-            && request::camera_preview_scale(
-                self.preview_scale_for(path, self.preferences.processing_quality),
-                &frame.artifact.metadata,
-            )
-            .is_ok_and(|scale| {
-                rendering::quality::accepts_scale(scale, frame.artifact.settings.working_scale)
-            })
+            && self
+                .working_scale_for(path, self.preferences.processing_quality)
+                .is_some_and(|scale| {
+                    rendering::quality::accepts_scale(scale, frame.artifact.settings.working_scale)
+                })
     }
 
     /// Select a photo. Its view is planned like any other, so existing images for
@@ -1467,9 +1460,6 @@ impl App {
                 ));
             });
         }
-        if let Some(path) = self.selected.clone() {
-            self.observe_photo_view_density(&path, ui.ctx().pixels_per_point());
-        }
         if let (Some(path), Some((response, uv))) = (
             &self.selected,
             self.viewport()
@@ -1527,6 +1517,7 @@ impl eframe::App for App {
         self.preferences.save(storage);
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.pixels_per_point = ctx.pixels_per_point();
         self.diagnostics.poll(ctx);
         let _update = timing::Span::new(self.last_request_id.0, "ui_update");
         if let Some(ready) = self.startup_ready.take() {

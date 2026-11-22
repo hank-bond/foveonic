@@ -273,7 +273,7 @@ fn decode(data: &[u8]) -> Result<Source> {
     properties.insert("EXIF_CAPTURE_CHECKED".into(), "1".into());
     properties.extend(adjustments::read(&data[..ranges[0].0])?);
     properties.insert("X3F_MARK_BITS".into(), mark_bits(data)?.to_string());
-    record_image_extent(&mut properties, data)?;
+    record_image_geometry(&mut properties, data)?;
     let raw = raw.ok_or_else(|| damaged("missing X3F sensor image"))?;
     drop(sections_scope);
     let (width, height, storage, pixels, mut timings) = read_pixels(raw)?;
@@ -320,8 +320,10 @@ fn merge_preview_properties(
     }));
 }
 
-/// Keep the declared photograph size separate from compressed sensor storage.
-fn record_image_extent(properties: &mut BTreeMap<String, String>, header: &[u8]) -> Result<()> {
+/// Keep the declared photograph size and orientation separate from compressed
+/// sensor storage, so the shown size is known before decoding.
+fn record_image_geometry(properties: &mut BTreeMap<String, String>, header: &[u8]) -> Result<()> {
+    properties.insert("X3F_ROTATION".into(), rotation(header)?.to_string());
     let bytes = Bytes(header);
     let offset = if bytes.u32(4)? >= 0x40000 { 40 } else { 28 };
     let extent = [bytes.u32(offset)?, bytes.u32(offset + 4)?];
@@ -566,7 +568,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
 mod tests {
     use super::*;
     #[test]
-    fn photograph_dimensions_keep_rectangular_sensor_pixels_separate_from_storage() {
+    fn photograph_geometry_keeps_rectangular_sensor_pixels_separate_from_storage() {
         for version in SUPPORTED_FILE_VERSIONS {
             let mut header = [0_u8; 52];
             header[4..8].copy_from_slice(&version.to_le_bytes());
@@ -574,16 +576,21 @@ mod tests {
             header[offset..offset + 4].copy_from_slice(&3264_u32.to_le_bytes());
             header[offset + 4..offset + 8].copy_from_slice(&2176_u32.to_le_bytes());
             let mut properties = BTreeMap::new();
-            record_image_extent(&mut properties, &header).unwrap();
+            record_image_geometry(&mut properties, &header).unwrap();
             assert_eq!(properties["X3F_IMAGE_WIDTH"], "3264");
             assert_eq!(properties["X3F_IMAGE_HEIGHT"], "2176");
-            assert!(record_image_extent(&mut properties, &header[..offset + 7]).is_err());
+            assert_eq!(properties["X3F_ROTATION"], "0");
+            assert!(record_image_geometry(&mut properties, &header[..offset + 7]).is_err());
             header[offset..offset + 4].fill(255);
-            assert!(record_image_extent(&mut properties, &header).is_err());
+            assert!(record_image_geometry(&mut properties, &header).is_err());
             header[offset..offset + 8].fill(0);
             let mut properties = BTreeMap::new();
-            record_image_extent(&mut properties, &header).unwrap();
-            assert!(properties.is_empty());
+            record_image_geometry(&mut properties, &header).unwrap();
+            assert_eq!(
+                properties.keys().collect::<Vec<_>>(),
+                ["X3F_ROTATION"],
+                "an unrecorded size leaves only the orientation"
+            );
         }
     }
 

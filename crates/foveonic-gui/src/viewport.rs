@@ -661,9 +661,11 @@ pub struct Viewport {
     response: Option<egui::Response>,
     pub one_to_one: bool,
     pub zoom_snap: ZoomPreset,
-    explicit_zoom_pending: bool,
     last_canvas: Option<(egui::Vec2, [u32; 2])>,
     anchor_canvas: Option<(egui::Vec2, [u32; 2])>,
+    /// The tile's size at its last paint. Layout, not view state: resets keep
+    /// it, and a hidden photo keeps its scale.
+    tile: Option<egui::Vec2>,
     last_image: Option<(egui::Rect, egui::Rect)>,
     /// Image-relative center carried until the next photograph's geometry arrives.
     pending_center: Option<egui::Vec2>,
@@ -771,9 +773,9 @@ impl Default for Viewport {
             response: None,
             one_to_one: false,
             zoom_snap: ZoomPreset::default(),
-            explicit_zoom_pending: false,
             last_canvas: None,
             anchor_canvas: None,
+            tile: None,
             last_image: None,
             pending_center: None,
             navigator_offset: egui::Vec2::ZERO,
@@ -799,6 +801,9 @@ impl Viewport {
         self.response = Some(ui.interact(rect, self.id, egui::Sense::click_and_drag()));
         self.last_image = None;
         self.last_canvas = None;
+        if rect.width() > 0. && rect.height() > 0. {
+            self.tile = Some(rect.size());
+        }
     }
     pub fn for_photo(path: &std::path::Path) -> Self {
         Self {
@@ -831,13 +836,11 @@ impl Viewport {
         self.pending_center = transform.center;
         self.pending_zoom = transform.pending_zoom;
         self.pending_pan = transform.pending_pan;
-        self.explicit_zoom_pending = self.explicit_zoom();
     }
 
     pub fn reset(&mut self) {
         self.pending_zoom = None;
         self.pending_pan = egui::Vec2::ZERO;
-        self.explicit_zoom_pending = false;
         self.scale = None;
         self.pan = egui::Vec2::ZERO;
         self.one_to_one = false;
@@ -955,7 +958,6 @@ impl Viewport {
             }
         }
         self.one_to_one = false;
-        self.explicit_zoom_pending = true;
         self.pending_center = Some(center);
         if let Some((size, extent)) = self.last_canvas {
             if size.x > 0. && size.y > 0. {
@@ -987,7 +989,6 @@ impl Viewport {
             if old > 0. {
                 self.pan = anchor - (anchor - self.pan) * (next / old);
             }
-            self.explicit_zoom_pending |= self.scale != Some(next);
             self.scale = Some(next);
             self.one_to_one = false;
         }
@@ -1003,15 +1004,9 @@ impl Viewport {
         }
     }
 
-    /// Distinguish a deliberate zoom from Fit becoming larger after composition changes.
-    pub fn explicit_zoom_pending(&self) -> bool {
-        self.explicit_zoom_pending
-    }
-
     /// Display pixels per image pixel if this view were fitted.
-    pub fn fit_density(&self, pixels_per_point: f32) -> Option<f32> {
-        let (size, extent) = self.last_canvas?;
-        Some(Self::fit_scale(size, extent) * pixels_per_point)
+    pub fn tile_size(&self) -> Option<[f32; 2]> {
+        self.tile.map(|size| [size.x, size.y])
     }
 
     pub fn explicit_zoom(&self) -> bool {
@@ -1100,6 +1095,7 @@ impl Viewport {
         }
         if size.x > 0. && size.y > 0. {
             self.last_canvas = Some((size, extent));
+            self.tile = Some(size);
         }
     }
 
@@ -1214,6 +1210,7 @@ impl Viewport {
         }
         if rect.width() > 0. && rect.height() > 0. {
             self.last_canvas = Some((rect.size(), extent));
+            self.tile = Some(rect.size());
         }
         (rect, self.image_rect(rect, extent))
     }
@@ -2739,10 +2736,8 @@ mod composition_zoom_tests {
         assert!(!viewport.explicit_zoom());
         viewport.zoom_by(1.25);
         assert!(viewport.explicit_zoom());
-        assert!(viewport.explicit_zoom_pending());
         viewport.zoom_by(1.25);
         viewport.reset();
-        assert!(!viewport.explicit_zoom_pending());
         assert!(!viewport.explicit_zoom());
     }
 }

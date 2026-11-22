@@ -860,7 +860,7 @@ impl App {
         let requested_preview_scale = self
             .selected
             .as_deref()
-            .map(|path| self.preview_scale_for(path, self.preferences.processing_quality));
+            .and_then(|path| self.preview_scale_for(path, self.preferences.processing_quality));
         let navigator_ready = self
             .navigator_source()
             .is_some_and(|source| self.navigator.ready(source, mapping));

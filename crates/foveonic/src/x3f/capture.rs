@@ -159,7 +159,7 @@ fn read_impl(
         properties.insert("EXIF_CAPTURE_CHECKED".into(), "1".into());
     }
     properties.insert("X3F_MARK_BITS".into(), mark_bits.to_string());
-    super::record_image_extent(&mut properties, &image_header)?;
+    super::record_image_geometry(&mut properties, &image_header)?;
     Ok(properties)
 }
 

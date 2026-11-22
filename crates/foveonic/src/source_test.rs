@@ -590,3 +590,47 @@ fn memory_source_origins_are_unique_but_clones_keep_the_same_input_lifetime() {
     assert_eq!(first, same);
     assert_ne!(first, second);
 }
+
+#[test]
+fn oriented_extent_turns_the_recorded_size_by_the_file_orientation() {
+    let properties = |rotation: &str| {
+        BTreeMap::from([
+            ("X3F_IMAGE_WIDTH".to_string(), "4704".to_string()),
+            ("X3F_IMAGE_HEIGHT".to_string(), "3136".to_string()),
+            ("X3F_ROTATION".to_string(), rotation.to_string()),
+        ])
+    };
+    assert_eq!(oriented_extent(&properties("0")), Some([4704, 3136]));
+    assert_eq!(oriented_extent(&properties("180")), Some([4704, 3136]));
+    assert_eq!(oriented_extent(&properties("90")), Some([3136, 4704]));
+    assert_eq!(oriented_extent(&properties("270")), Some([3136, 4704]));
+    let mut unrecorded = properties("0");
+    unrecorded.remove("X3F_IMAGE_WIDTH");
+    assert_eq!(oriented_extent(&unrecorded), None);
+}
+
+#[test]
+#[ignore = "requires FOVEONIC_FIXTURE_DIR pointing to original X3Fs of each family"]
+fn capture_geometry_matches_the_rendered_size_for_every_fixture() {
+    let directory = std::env::var_os("FOVEONIC_FIXTURE_DIR").expect("set FOVEONIC_FIXTURE_DIR");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if !path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("x3f"))
+        {
+            continue;
+        }
+        let properties = read_capture_properties(&path).unwrap();
+        let source = Source::open(path.clone()).unwrap();
+        assert_eq!(
+            oriented_extent(&properties),
+            Some(crate::render::native_extent(&source.metadata).unwrap()),
+            "{}",
+            path.display()
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "no fixtures found");
+}

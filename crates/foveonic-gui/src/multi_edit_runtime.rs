@@ -1,6 +1,6 @@
 //! Owns bounded photo settings and images with independent editing selection and render demand.
 
-use crate::{multi_edit_controls, sidecars};
+use crate::{multi_edit_controls, rendering::quality::PhotoGeometry, sidecars};
 use foveonic::{render::Settings, source::Metadata};
 use std::{
     collections::BTreeMap,
@@ -11,6 +11,7 @@ use std::{
 #[derive(Default)]
 struct Photo {
     settings: Option<Settings>,
+    geometry: Option<PhotoGeometry>,
     metadata: Option<Arc<Metadata>>,
     numeric_settings: Option<Settings>,
     reset_settings: Option<Settings>,
@@ -80,7 +81,10 @@ impl Runtime {
         }
         let missing = loaded
             .iter()
-            .filter(|path| self.photos[*path].settings.is_none())
+            .filter(|path| {
+                let photo = &self.photos[*path];
+                photo.settings.is_none() || photo.geometry.is_none()
+            })
             .cloned()
             .collect::<Vec<_>>();
         sidecars.resolve_settings(&missing);
@@ -90,6 +94,7 @@ impl Runtime {
         for reply in replies {
             if let Some(photo) = self.photos.get_mut(&reply.path) {
                 photo.settings.get_or_insert(reply.settings);
+                photo.geometry = Some(reply.geometry);
             }
         }
     }
@@ -198,6 +203,16 @@ impl Runtime {
                 self.targets().all(|photo| default_ready(photo, pointer)),
             )
         })
+    }
+    /// The photo has its settings and geometry, so it can be planned.
+    pub fn resolved(&self, path: &Path) -> bool {
+        self.photos
+            .get(path)
+            .is_some_and(|photo| photo.settings.is_some() && photo.geometry.is_some())
+    }
+    /// The photo's size and family, known once its settings are resolved.
+    pub fn geometry(&self, path: &Path) -> Option<PhotoGeometry> {
+        self.photos.get(path)?.geometry
     }
     pub fn metadata(&self, path: &Path) -> Option<Arc<Metadata>> {
         self.photos.get(path)?.metadata.clone()
@@ -730,6 +745,33 @@ mod tests {
             assert_eq!(sidecars.requested_settings(path), Some(settings));
         }
         assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
+    }
+
+    #[test]
+    fn a_photo_with_settings_but_no_geometry_is_still_resolved() {
+        // Settings recorded before the photo's capture properties were read.
+        let mut runtime = Runtime::default();
+        let mut sidecars = session();
+        let a = PathBuf::from("a.x3f");
+        runtime.sync(std::slice::from_ref(&a), &[], 8, &mut sidecars);
+        runtime.photos.get_mut(&a).unwrap().settings = Some(Settings::default());
+        assert!(!runtime.resolved(&a), "it cannot be planned yet");
+        runtime.sync(&[], std::slice::from_ref(&a), 8, &mut sidecars);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !runtime.resolved(&a) {
+            sidecars.receive();
+            runtime.resolve(sidecars.take_resolved());
+            assert!(
+                std::time::Instant::now() < deadline,
+                "geometry was not resolved"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(
+            runtime.geometry(&a),
+            Some(crate::rendering::quality::PhotoGeometry::default()),
+            "a photo whose properties cannot be read has no recorded size"
+        );
     }
 
     #[test]

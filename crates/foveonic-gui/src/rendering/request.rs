@@ -3,7 +3,7 @@
 use crate::editor::Rendition;
 use foveonic::render::ProcessingQuality;
 use foveonic::{
-    render::{ControlCapabilities, Scale, Settings},
+    render::{Scale, Settings},
     source::{Metadata, Result},
 };
 use std::{path::PathBuf, sync::Arc};
@@ -110,11 +110,10 @@ impl RenderRequest {
 /// Foreground requests and idle preparation use the same camera scale policy.
 /// Camera interpretation remains owned by the processing capabilities.
 pub(crate) fn camera_preview_scale(scale: Scale, metadata: &Metadata) -> Result<Scale> {
-    if scale.divisor() == 8 {
-        Ok(ControlCapabilities::from_metadata(metadata)?.thumb_scale())
-    } else {
-        Ok(scale)
-    }
+    Ok(super::quality::camera_scale(
+        scale,
+        metadata.processing_family()?,
+    ))
 }
 
 #[cfg(test)]

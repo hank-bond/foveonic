@@ -435,12 +435,9 @@ impl Driver {
                 let mut demanded_scales = vec![0; paths.len()];
                 for (index, path) in paths.iter().enumerate() {
                     let frame = app.current_image(path).ok_or("missing Smart Fit image")?;
-                    let preview_scale = app.preview_scale_for(path, ProcessingQuality::Quality);
-                    let scale = crate::rendering::request::camera_preview_scale(
-                        preview_scale,
-                        &frame.artifact.metadata,
-                    )
-                    .map_err(|error| error.to_string())?;
+                    let scale = app
+                        .working_scale_for(path, ProcessingQuality::Quality)
+                        .ok_or("missing photo geometry")?;
                     demanded_scales[index] = scale.divisor();
                     if !crate::rendering::quality::accepts_scale(
                         scale,
@@ -619,11 +616,9 @@ impl Driver {
                     let Some(settings) = app.multi_edit.settings(path) else {
                         return Ok(false);
                     };
-                    let scale = crate::rendering::request::camera_preview_scale(
-                        app.preview_scale_for(path, quality),
-                        &frame.artifact.metadata,
-                    )
-                    .map_err(|error| error.to_string())?;
+                    let Some(scale) = app.working_scale_for(path, quality) else {
+                        return Ok(false);
+                    };
                     if frame.artifact.settings.exposure != self.model.exposures()[index]
                         || !app.reusable_photograph(path, frame, settings)
                         || frame.processing_quality() != quality

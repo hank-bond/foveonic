@@ -17,23 +17,27 @@ impl App {
             .iter()
             .map(|path| {
                 let frame = self.photo_layers(path)[0];
-                frame
-                    .map(|frame| {
-                        let settings = if self.selected.as_ref() == Some(path) {
-                            &self.settings
-                        } else {
-                            self.multi_edit
-                                .settings(path)
-                                .unwrap_or(&frame.request.settings)
-                        };
-                        // Camera/Defaults and framing previews share the camera's
-                        // dimensions but must use this photo's authored composition.
-                        composition_aspect(frame.camera_extent(), settings)
-                    })
-                    .unwrap_or_else(|| {
-                        let extent = self.browser.known_extent(path).unwrap_or([3, 2]);
-                        extent[0] as f32 / extent[1].max(1) as f32
-                    })
+                let settings = if self.selected.as_ref() == Some(path) {
+                    Some(&self.settings)
+                } else {
+                    self.multi_edit
+                        .settings(path)
+                        .or(frame.map(|frame| &frame.request.settings))
+                };
+                // The photo's recorded size gives its shape before any image of it.
+                // The browser's known extent is also the photo's own size.
+                // Camera/Defaults and framing previews share the camera's dimensions
+                // but must use this photo's authored composition.
+                let extent = self
+                    .multi_edit
+                    .geometry(path)
+                    .and_then(|geometry| geometry.extent)
+                    .or(frame.map(|frame| frame.camera_extent()))
+                    .or_else(|| self.browser.known_extent(path))
+                    .unwrap_or([3, 2]);
+                settings.map_or(extent[0] as f32 / extent[1].max(1) as f32, |settings| {
+                    composition_aspect(extent, settings)
+                })
             })
             .collect();
         // Keep the release frame on the gesture's geometry so its click cannot
@@ -148,7 +152,6 @@ impl App {
                         view.show_empty(&mut child);
                     }
                 };
-                self.observe_photo_view_density(path, ui.ctx().pixels_per_point());
             }
             // The image owns its gestures. Only the non-overlapping caption
             // needs a separate selection response.
@@ -274,12 +277,6 @@ impl App {
             &self.viewport_selection,
             ui.ctx().pixels_per_point(),
         ) {
-            // Publish the new sampling demand even for peers already drawn this frame.
-            for path in self.edit_selection.paths().to_vec() {
-                if self.viewport_selection.contains(&path) {
-                    self.observe_photo_view_density(&path, ui.ctx().pixels_per_point());
-                }
-            }
             ui.ctx().request_repaint();
         }
         changed
@@ -287,9 +284,8 @@ impl App {
 }
 
 fn composition_aspect(camera_extent: [u32; 2], settings: &foveonic::render::Settings) -> f32 {
-    let extent = settings.rotation.extent(camera_extent);
-    let [left, top, right, bottom] = settings.crop.pixels(extent);
-    (right - left) as f32 / (bottom - top).max(1) as f32
+    let [width, height] = crate::rendering::quality::shown_extent(camera_extent, settings, false);
+    width as f32 / height.max(1) as f32
 }
 
 #[cfg(test)]

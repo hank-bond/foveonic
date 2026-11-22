@@ -1720,3 +1720,13 @@ fn a_malformed_recipe_is_never_recorded_in_a_cached_selection() {
     fs::write(crate::sidecar::path(&fixture.source), b"malformed").unwrap();
     assert!(recorded().is_err(), "readers must find and report it");
 }
+
+#[test]
+fn an_entry_without_a_recorded_orientation_takes_it_from_the_cached_decode_while_offline() {
+    // The fixture's cached properties predate the recorded orientation.
+    let fixture = Fixture::new();
+    let (cache, _foreground, _identity) = fixture.ready_cache();
+    fs::remove_file(&fixture.source).unwrap();
+    let properties = cache.capture_properties(&fixture.source).unwrap();
+    assert_eq!(properties["X3F_ROTATION"], "90");
+}

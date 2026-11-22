@@ -1118,7 +1118,7 @@ fn thumb_ready(app: &App, path: &Path) -> bool {
             && frame.artifact.settings.working_scale.divisor()
                 <= app
                     .preview_scale_for(path, app.preferences.processing_quality)
-                    .divisor()
+                    .map_or(0, |scale| scale.divisor())
     })
 }
 fn image_id(frame: &worker::RenderResult) -> ImageId {

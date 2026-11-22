@@ -18,6 +18,11 @@ impl PhotoViews {
             .unwrap_or(&self.empty)
     }
 
+    /// The photo's own viewport, which exists once it has been laid out.
+    pub fn photo(&self, path: &Path) -> Option<&Viewport> {
+        self.photos.get(path)
+    }
+
     pub fn view_mut(&mut self, path: Option<&Path>) -> &mut Viewport {
         match path {
             Some(path) => self

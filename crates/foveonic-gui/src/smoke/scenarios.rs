@@ -1128,7 +1128,7 @@ impl Scenario {
                         .filter(|frame| self.matches(app, path, frame))
                     {
                         if !self.observed.contains_key(path) {
-                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.request.id,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":crate::rendering::request::camera_preview_scale(app.preview_scale_for(path, self.expected_frame_quality()), &frame.artifact.metadata).ok().map(|scale|scale.divisor())}));
+                            self.marker("current",serde_json::json!({"source":path,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"photo":frame.diagnostic_identity(false).map(|identity|identity.context.photo),"presentation_revision":frame.request.id,"scale_divisor":frame.artifact.settings.working_scale.divisor(),"expected_scale_divisor":app.working_scale_for(path, self.expected_frame_quality()).map(|scale|scale.divisor())}));
                             self.observed.insert(path.clone(), frame.diagnostic_task.id);
                         }
                     }
@@ -1604,7 +1604,7 @@ impl Scenario {
                     && frame.artifact.settings.working_scale.divisor()
                         <= app
                             .preview_scale_for(path, self.expected_frame_quality())
-                            .divisor())
+                            .map_or(0, |scale| scale.divisor()))
             && crate::rendering::matching::same_authored_edits(
                 &frame.request.settings,
                 self.expected

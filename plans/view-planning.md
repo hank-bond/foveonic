@@ -67,6 +67,17 @@ Then, agreed with the owner (vocabulary in the spec):
 
 5. **Planning split and GPU-free tests.** `viewport_photo_inputs()` reads each photo's inputs; a pure `plan_photos` returns the publication. Tests per case: loading, failed, Before while zoomed, loupe on an unedited photo, history photos.
 
+## Photo geometry and scale (owner agreed)
+
+Latency trials disagreed on first-image scales: a photo planned before any image showed its size took a half-size default, and the planner rightly keeps a finer image, so the guess stuck (up to 16× the pixels on large files). Old-format previews also reported their own size as the photo's, so sd9/sd10 tiles asked for full size. Density came from whatever was painted. The capture properties' recorded size, with the header orientation, equals `native_extent` for all 28 example photos across Classic, Merrill and Quattro.
+
+- **Geometry.** Capture properties record the orientation (`X3F_ROTATION`). `foveonic::source::oriented_extent` gives the photo's shown size before authored edits. The GUI's `PhotoGeometry` holds that size and the camera family.
+- **Resolution.** Settings resolution also returns each photo's geometry, from the decode cache's properties or one header read on the sidecars thread. The runtime stores it beside settings, and a photo is planned only once both are known.
+- **One scale owner** (`rendering/quality.rs`). A photo's scale comes from its tile size at the last paint, its zoom, pixels per point, the policy and its geometry with the photo's crop and rotation (uncropped while framing). The Classic smallest-grid mapping lives there. A photo with no recorded size renders at full size (owner). A photo never given a tile, such as an overflowed editing photo, uses the camera's thumbnail scale.
+- **Removed.** Both density maps and their reset, `observe_photo_view_density` and the half-size default. A fitted photo's density no longer reads the drawn image; an explicit zoom still does, because zoom is relative to what is drawn. Tile layout's aspect fallback uses geometry instead of a guessed 3:2.
+- **Edges.** A photo the layout has no room for keeps its last tile, as hidden photos keep their last geometry. A decode-cache entry written before orientations were recorded takes it from its cached decode, so offline cached photos keep their scale. Photos with saved recipes or edits in memory wait for one capture-properties read, usually cached, before their first plan.
+- **Consumers.** Scale deciders move to the owner: view requests, the zoomed-placement check, frame acceptance, preparation, worker reuse and the smoke harness. Images that exist keep mapping with their own size: display windows, loupe, framing, crop and rotate tools, browser thumbnails and drawn previews.
+
 ## Follow-ups
 
 - **Editing model (owner, for step 2):** one photo is a native selection of one: one edit model for the editing selection, without a separate single-photo path. Automatic values (Sharpen, ColorDQ, highlight threshold, automatic exposure) are always per photo and come from each photo's render-produced numeric snapshot; the value box reads "Multi" when they differ. Waiting for renders before editing is accepted, because a new selection already waits for its renders. This replaces the single photo's local calculation of automatic values.

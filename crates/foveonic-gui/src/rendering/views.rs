@@ -164,10 +164,11 @@ impl App {
     /// their own ids when they are planned.
     fn view_request(&self, path: &Path) -> Option<RenderRequest> {
         let key = self.image_key(path);
+        let policy = self.preferences.processing_quality;
+        let preview_scale = self.preview_scale_for(path, policy)?;
         let mut settings = self.photo_view_settings(path)?;
         settings.working_scale = Scale::NATIVE;
         settings.preview_region = None;
-        let policy = self.preferences.processing_quality;
         let quality = super::quality::for_view(policy, key.look, &key.output, key.comparison);
         settings.processing_quality = quality;
         Some(RenderRequest {
@@ -180,7 +181,7 @@ impl App {
             id: RequestId::default(),
             path: path.to_owned(),
             settings,
-            preview_scale: self.preview_scale_for(path, policy),
+            preview_scale,
             processing_quality: quality,
             output: key.output,
             comparison: key.comparison,
@@ -212,12 +213,13 @@ impl App {
                             patch: geometry.region,
                         }),
                     }
-                } else if view.explicit_zoom()
-                    && self.preview_scale_for(&path, policy) == Scale::NATIVE
-                {
+                } else if let Some(fit_scale) = self.fit_scale_for(&path, policy).filter(|_| {
+                    view.explicit_zoom()
+                        && self.preview_scale_for(&path, policy) == Some(Scale::NATIVE)
+                }) {
                     Placement::Zoomed {
                         visible: view.visible_pixels(),
-                        fit_scale: self.fit_scale_for(&path, policy),
+                        fit_scale,
                     }
                 } else {
                     Placement::Fit
@@ -234,9 +236,15 @@ impl App {
             .collect()
     }
 
-    /// Rendering is not up to date: work is outstanding or a view is still settling.
+    /// Rendering is not up to date: work is outstanding, a view is still
+    /// settling, or a photo's settings and geometry are still being read.
     pub(crate) fn view_busy(&self) -> bool {
-        self.worker.busy() || self.view_motion.borrow().values().any(Motion::settling)
+        self.worker.busy()
+            || self.view_motion.borrow().values().any(Motion::settling)
+            || self
+                .planned_photos()
+                .iter()
+                .any(|path| !self.multi_edit.resolved(path))
     }
 
     /// Photos drawn in the viewport for the current browser selection.

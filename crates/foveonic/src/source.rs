@@ -477,6 +477,20 @@ impl Metadata {
     }
 }
 
+/// The photograph's size as shown: its recorded size after the file's
+/// orientation, before authored rotation and crop. Rendering produces this size.
+pub fn oriented_extent(properties: &BTreeMap<String, String>) -> Option<[u32; 2]> {
+    let extent: [u32; 2] = [
+        properties.get("X3F_IMAGE_WIDTH")?.parse().ok()?,
+        properties.get("X3F_IMAGE_HEIGHT")?.parse().ok()?,
+    ];
+    match properties.get("X3F_ROTATION")?.parse::<u32>().ok()? % 360 {
+        0 | 180 => Some(extent),
+        90 | 270 => Some([extent[1], extent[0]]),
+        _ => None,
+    }
+}
+
 /// Read photographic capture properties without loading sensor samples or CAMF calibration.
 /// Rendering still needs a full `Source`. This lighter read lets capture details
 /// appear while sensor samples and calibration are still loading.

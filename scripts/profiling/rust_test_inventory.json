@@ -597,7 +597,7 @@
         "render::reduced::tests::every_camera_white_balance_matches_source_free_and_fresh_at_native_and_reduced_scales",
         "render::reduced::tests::full_option_dependency_cuts_release_source_and_match_fresh",
         "render::reduced::tests::per_output_scale_and_reduced_roi_hint_match_whole_grid",
-        "render::reduced::tests::visible_reduced_photo_keeps_its_sensor_data_under_pressure",
+        "render::reduced::tests::eviction_protected_reduced_photo_keeps_its_sensor_data_under_pressure",
         "render::reduced::tests::shared_working_set_orders_native_reduced_and_speculative_owners",
         "render::reduced::tests::verified_reload_preserves_main_sensor_data_and_rejects_other_origins_before_mutation",
         "render::tests::automatic_color_dq_matches_native_gain_manual_override_and_preserves_source",
@@ -632,7 +632,8 @@
         "render::working_set::tests::one_photo_cannot_execute_both_representations_or_be_partly_invalidated",
         "render::driver::tests::estimates_exist_for_every_family_and_view_and_cover_measured_peaks",
         "render::scheduler::tests::one_job_per_photo_and_loading_waits_until_alone",
-        "render::scheduler::tests::waiting_job_stays_queued_until_ready"
+        "render::scheduler::tests::waiting_job_stays_queued_until_ready",
+        "source::tests::capture_geometry_matches_the_rendered_size_for_every_fixture"
       ]
     },
     {

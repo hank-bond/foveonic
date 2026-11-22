@@ -376,15 +376,34 @@ impl Cache {
             }
         }
         let settings = self.control.lock().unwrap().settings.clone();
-        let cached = self.selection(path).map(|s| s.properties).or_else(|| {
+        let header = || {
             let identity = identity.as_ref()?;
             let mut file = File::open(self.root.join(identity.name())).ok()?;
-            read_header(&mut file, identity, &settings)
-                .ok()
-                .map(|header| header.properties)
-        });
+            read_header(&mut file, identity, &settings).ok()
+        };
+        let cached = self
+            .selection(path)
+            .map(|s| s.properties)
+            .or_else(|| header().map(|header| header.properties))
+            .map(|mut properties| {
+                // Entries written before capture properties recorded the
+                // orientation take it from the decoded entry, which still
+                // holds it while the original is offline.
+                if !properties.contains_key("X3F_ROTATION") {
+                    if let Some(header) = header() {
+                        properties.insert("X3F_ROTATION".into(), header.rotation.to_string());
+                    }
+                }
+                properties
+            });
         let properties = match cached {
-            Some(properties) if properties.contains_key("EXIF_CAPTURE_CHECKED") => properties,
+            // Older entries lack the embedded EXIF check or the orientation.
+            Some(properties)
+                if properties.contains_key("EXIF_CAPTURE_CHECKED")
+                    && properties.contains_key("X3F_ROTATION") =>
+            {
+                properties
+            }
             Some(properties) => identity
                 .as_ref()
                 .and_then(|id| self.refresh_capture(path, id).ok())

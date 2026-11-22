@@ -1329,12 +1329,12 @@ impl TransitionJourney {
                     _ => return Ok(false),
                 };
                 let _ = which;
-                let divisor = crate::rendering::request::camera_preview_scale(
-                    app.preview_scale_for(&frame.request.path, app.preferences.processing_quality),
-                    &frame.artifact.metadata,
-                )
-                .map_err(|e| e.to_string())?
-                .divisor();
+                let Some(divisor) = app
+                    .working_scale_for(&frame.request.path, app.preferences.processing_quality)
+                    .map(|scale| scale.divisor())
+                else {
+                    return Ok(false);
+                };
                 if frame.processing_quality() != app.preferences.processing_quality
                     || frame.artifact.settings.working_scale.divisor() > divisor
                     || !crate::rendering::matching::same_authored_edits(
@@ -1352,12 +1352,12 @@ impl TransitionJourney {
                         let Some(frame) = app.photo_layers(path)[0] else {
                             return Ok(false);
                         };
-                        let expected = crate::rendering::request::camera_preview_scale(
-                            app.preview_scale_for(path, app.preferences.processing_quality),
-                            &frame.artifact.metadata,
-                        )
-                        .map_err(|e| e.to_string())?
-                        .divisor();
+                        let Some(expected) = app
+                            .working_scale_for(path, app.preferences.processing_quality)
+                            .map(|scale| scale.divisor())
+                        else {
+                            return Ok(false);
+                        };
                         let actual = frame.artifact.settings.working_scale.divisor();
                         if frame.processing_quality() != app.preferences.processing_quality
                             || actual > expected

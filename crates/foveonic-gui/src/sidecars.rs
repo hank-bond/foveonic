@@ -1,5 +1,6 @@
 //! Keeps each photo's latest edits saved without making rendering wait for disk access.
 
+use crate::rendering::quality::PhotoGeometry;
 use eframe::egui;
 use foveonic::diagnostics as trace;
 use foveonic::{render::Settings, sidecar};
@@ -22,22 +23,29 @@ struct Pending {
 }
 enum Reply {
     Saved(PathBuf, Settings, Result<(), String>),
-    Resolved(u64, PathBuf, Settings, Option<String>),
+    Resolved(u64, PathBuf, Restored),
 }
+/// A photo's settings and geometry, which planning needs before its first image.
 pub struct Resolved {
     pub path: PathBuf,
     pub settings: Settings,
+    pub geometry: PhotoGeometry,
 }
-/// A photo's saved recipe, or its source defaults when it has none, with a
-/// warning when the recipe could not be used. A malformed recipe opens with
-/// defaults and the next edit replaces it. A recipe file that cannot be read
-/// also opens with defaults, but saving will not replace it.
+struct Restored {
+    settings: Settings,
+    warning: Option<String>,
+    geometry: PhotoGeometry,
+}
+/// A photo's saved recipe, or its source defaults when it has none, with its
+/// geometry and a warning when the recipe could not be used. A malformed
+/// recipe opens with defaults and the next edit replaces it. A recipe file that
+/// cannot be read also opens with defaults, but saving will not replace it.
 fn restore(
     path: &std::path::Path,
     defaults: &foveonic::render::RecipeDefaults,
     enabled: bool,
     cache: &foveonic::decode_cache::Cache,
-) -> (Settings, Option<String>) {
+) -> Restored {
     let _restore = trace::scope_with(trace::Category::Cpu, "sidecars.restore", |fields| {
         fields
             .str("source", &path.to_string_lossy())
@@ -87,18 +95,23 @@ fn restore(
             }
         }
     };
+    let properties = cache.capture_properties(path).ok();
+    let geometry = properties
+        .as_ref()
+        .map(PhotoGeometry::from_properties)
+        .unwrap_or_default();
     // Only a missing recipe gets source defaults. Saved recipes,
     // including explicit neutral values, are complete edits.
     let settings = saved.unwrap_or_else(|| {
-        cached
-            .map(|s| s.properties)
-            .map(Ok)
-            .unwrap_or_else(|| cache.capture_properties(path))
-            .ok()
+        properties
             .and_then(|properties| source_defaults(properties, defaults).ok())
             .unwrap_or_default()
     });
-    (settings, warning)
+    Restored {
+        settings,
+        warning,
+        geometry,
+    }
 }
 
 /// An immutable recipe snapshot for optional work on already-local sources.
@@ -183,8 +196,8 @@ impl Store {
                                 .u64("generation", generation)
                                 .str("source", &path.to_string_lossy());
                         });
-                    let (settings, warning) = restore(&path, &defaults, enabled, &cache);
-                    Reply::Resolved(generation, path, settings, warning)
+                    let restored = restore(&path, &defaults, enabled, &cache);
+                    Reply::Resolved(generation, path, restored)
                 }
                 Job::Save(path, settings) => {
                     let _context = trace::enabled().then(|| {
@@ -315,17 +328,11 @@ impl Session {
     pub fn resolve_settings(&mut self, paths: &[PathBuf]) {
         self.resolve_generation += 1;
         self.resolved.clear();
-        let mut pending = VecDeque::new();
-        for path in paths {
-            if let Some(settings) = self.requested_settings(path).cloned() {
-                self.resolved.push(Resolved {
-                    path: path.clone(),
-                    settings,
-                });
-            } else {
-                pending.push_back((self.resolve_generation, path.clone(), self.defaults.clone()));
-            }
-        }
+        // Photos with edits in memory are read too, for their geometry.
+        let pending = paths
+            .iter()
+            .map(|path| (self.resolve_generation, path.clone(), self.defaults.clone()))
+            .collect();
         let (lock, wake) = &*self.store.pending;
         lock.lock().unwrap().resolve = pending;
         wake.notify_one();
@@ -338,13 +345,22 @@ impl Session {
     pub fn receive(&mut self) {
         while let Ok(reply) = self.store.replies.try_recv() {
             match reply {
-                Reply::Resolved(generation, path, settings, warning)
+                Reply::Resolved(generation, path, restored)
                     if generation == self.resolve_generation =>
                 {
-                    if let Some(warning) = warning {
-                        self.errors.insert(path.clone(), warning);
-                    } else if !self.unsaved.contains_key(&path) {
-                        self.errors.remove(&path);
+                    let Restored {
+                        settings,
+                        warning,
+                        geometry,
+                    } = restored;
+                    // An edit can arrive while a background read is completing.
+                    let requested = self.requested_settings(&path).cloned();
+                    if requested.is_none() {
+                        if let Some(warning) = warning {
+                            self.errors.insert(path.clone(), warning);
+                        } else if !self.unsaved.contains_key(&path) {
+                            self.errors.remove(&path);
+                        }
                     }
                     trace::event(
                         trace::Category::Coordinator,
@@ -355,9 +371,11 @@ impl Session {
                                 .str("source", &path.to_string_lossy());
                         },
                     );
-                    // An edit can arrive while a background read is completing.
-                    let settings = self.requested_settings(&path).cloned().unwrap_or(settings);
-                    self.resolved.push(Resolved { path, settings });
+                    self.resolved.push(Resolved {
+                        path,
+                        settings: requested.unwrap_or(settings),
+                        geometry,
+                    });
                 }
                 Reply::Saved(path, settings, result)
                     if self.unsaved.get(&path) == Some(&settings) =>

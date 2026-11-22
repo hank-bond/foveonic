@@ -271,7 +271,7 @@ impl App {
                     && frame.artifact.settings.working_scale.divisor()
                         <= self
                             .preview_scale_for(path, self.preferences.processing_quality)
-                            .divisor()
+                            .map_or(0, |scale| scale.divisor())
             })
         })
     }
@@ -349,9 +349,9 @@ impl App {
                     .unwrap();
                 assert_eq!(
                     frame.artifact.settings.working_scale, smoke.multi_cached_scales[index],
-                    "selecting an unchanged overview photo changed its working scale: target={target}, path={}, density={:?}, zoom={:?}, explicit_zoom={}, rectangles={:?}, task={}, task_revision={}, purpose={}, app_revision={}, requested_scale={:?}",
+                    "selecting an unchanged overview photo changed its working scale: target={target}, path={}, scale={:?}, zoom={:?}, explicit_zoom={}, rectangles={:?}, task={}, task_revision={}, purpose={}, app_revision={}, requested_scale={:?}",
                     path.display(),
-                    self.preview_densities.get(path),
+                    self.preview_scale_for(path, self.preferences.processing_quality),
                     self.viewports.view(Some(path)).zoom_percent(self.context.pixels_per_point()),
                     self.viewports.view(Some(path)).explicit_zoom(),
                     self.viewports.view(Some(path)).image_rectangles(),

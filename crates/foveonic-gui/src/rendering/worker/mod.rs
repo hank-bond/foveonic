@@ -164,12 +164,11 @@ impl RenderResult {
     }
     /// Native sampling extent before any requested final output resize.
     pub fn native_display_extent(&self) -> [u32; 2] {
-        if self.request.framing_preview {
-            self.editing_extent()
-        } else {
-            let [l, t, r, b] = self.request.settings.crop.pixels(self.uncropped_extent());
-            [r - l, b - t]
-        }
+        crate::rendering::quality::shown_extent(
+            self.native_extent,
+            &self.request.settings,
+            self.request.framing_preview,
+        )
     }
     pub fn uncropped_extent(&self) -> [u32; 2] {
         self.request.settings.rotation.extent(self.native_extent)
