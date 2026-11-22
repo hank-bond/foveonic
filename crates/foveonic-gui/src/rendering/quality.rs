@@ -128,8 +128,16 @@ pub(crate) fn photo_scale(
 const SMALLEST_GRID: u32 = 8;
 
 impl App {
+    /// A photo's geometry, from the capture properties the browser reads for
+    /// every listed photo; `None` until they are read.
+    pub(crate) fn photo_geometry(&self, path: &Path) -> Option<PhotoGeometry> {
+        self.browser
+            .capture_properties(path)
+            .map(PhotoGeometry::from_properties)
+    }
+
     /// The scale a photo's view needs now, including zoom; `None` until its
-    /// settings and geometry are loaded.
+    /// settings and capture properties are loaded.
     pub(crate) fn preview_scale_for(
         &self,
         path: &Path,
@@ -146,8 +154,7 @@ impl App {
     ) -> Option<Scale> {
         let requested = self.preview_scale_for(path, policy)?;
         Some(
-            self.multi_edit
-                .geometry(path)?
+            self.photo_geometry(path)?
                 .family
                 .map_or(requested, |family| camera_scale(requested, family)),
         )
@@ -161,7 +168,7 @@ impl App {
     fn scale_for(&self, path: &Path, policy: ProcessingQuality, fit: bool) -> Option<Scale> {
         Some(photo_scale(
             policy,
-            self.multi_edit.geometry(path)?,
+            self.photo_geometry(path)?,
             &self.photo_view_settings(path)?,
             self.image_key(path).framing,
             self.viewports.photo(path),

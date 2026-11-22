@@ -237,14 +237,11 @@ impl App {
     }
 
     /// Rendering is not up to date: work is outstanding, a view is still
-    /// settling, or a photo's settings and geometry are still being read.
+    /// settling, or the last plan had photos still loading.
     pub(crate) fn view_busy(&self) -> bool {
         self.worker.busy()
             || self.view_motion.borrow().values().any(Motion::settling)
-            || self
-                .planned_photos()
-                .iter()
-                .any(|path| !self.multi_edit.resolved(path))
+            || self.photos_loading
     }
 
     /// Photos drawn in the viewport for the current browser selection.
@@ -271,6 +268,12 @@ impl App {
     /// Plan every viewport photo's images in use and publish them.
     pub(crate) fn submit_photos(&mut self) {
         self.sync_multi_edit();
+        // Planning and the selected photo's controls wait for capture properties.
+        let mut needed = self.planned_photos();
+        if let Some(selected) = self.selected.clone().filter(|path| !needed.contains(path)) {
+            needed.push(selected);
+        }
+        self.browser.need_capture(&needed);
         let now = std::time::Instant::now();
         let previous_views = std::mem::take(&mut self.views);
         let mut motion = std::mem::take(self.view_motion.get_mut());
@@ -301,6 +304,7 @@ impl App {
             self.context.request_repaint_after(wait);
         }
         self.views = views;
+        self.photos_loading = !photos.loading.is_empty();
         photos.history = self.multi_edit.retained_paths();
         let viewport = photos.planned.clone();
         if self.worker.plan(photos, planned, now) {

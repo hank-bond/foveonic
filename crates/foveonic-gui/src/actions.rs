@@ -168,7 +168,9 @@ impl App {
                                     controls::normalize_with_capture(
                                         &mut settings,
                                         self.metadata.as_deref(),
-                                        self.capture.properties.as_ref(),
+                                        self.selected
+                                            .as_deref()
+                                            .and_then(|path| self.browser.capture_properties(path)),
                                     );
                                     self.settings = settings.clone();
                                     inspect::normalize(

@@ -3325,7 +3325,7 @@ fn quattro_saved_slider_values_are_stable_when_full_metadata_arrives() {
     .into_iter()
     .map(|(key, value)| (key.into(), value.into()))
     .collect();
-    let mut metadata = crate::capture::processing_metadata(capture.clone());
+    let mut metadata = crate::metadata::processing_metadata(capture.clone());
     metadata.processing_version = Some([3, 1, 2, 0]);
     metadata.width = 5888;
     metadata.height = 3776;

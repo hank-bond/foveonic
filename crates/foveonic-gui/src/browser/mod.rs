@@ -103,6 +103,8 @@ pub struct Browser {
     records: HashMap<PathBuf, query::Entry>,
     list_columns: Option<items::ListColumns>,
     metadata_loaded: HashSet<PathBuf>,
+    /// Photos sent to the metadata loader's needed lane in this listing.
+    metadata_needed: HashSet<PathBuf>,
     rating_changes: HashMap<PathBuf, foveonic::review::Rating>,
     rating_errors: std::collections::BTreeMap<PathBuf, String>,
     pub sort: Sort,
@@ -201,6 +203,7 @@ impl Browser {
             records: HashMap::new(),
             list_columns: None,
             metadata_loaded: HashSet::new(),
+            metadata_needed: HashSet::new(),
             rating_changes: HashMap::new(),
             rating_errors: Default::default(),
             sort: Sort::default(),
@@ -282,6 +285,7 @@ impl Browser {
         self.metadata_generation = self.metadata_loader.replace(&self.files);
         self.records.clear();
         self.metadata_loaded.clear();
+        self.metadata_needed.clear();
         query::sort(&mut self.files, &self.records, self.sort);
         self.reindex_files();
         self.review_counts = (0, 0);
@@ -696,9 +700,31 @@ impl Browser {
     pub fn thumbnails_ready(&self) -> bool {
         self.pending.is_empty() && self.cache.values().all(Option::is_some)
     }
-    /// Read dimensions already supplied by background preview loading.
-    pub fn known_extent(&self, path: &Path) -> Option<[u32; 2]> {
-        self.records.get(path)?.extent
+    /// The photo's capture properties, once read. Every listed photo's are
+    /// read in the background; `need_capture` reads some at once.
+    pub fn capture_properties(
+        &self,
+        path: &Path,
+    ) -> Option<&std::collections::BTreeMap<String, String>> {
+        self.records
+            .get(path)
+            .filter(|_| self.metadata_loaded.contains(path))
+            .map(|entry| &entry.properties)
+    }
+
+    /// Read these photos' capture properties now, without yielding to rendering.
+    pub fn need_capture(&mut self, paths: &[PathBuf]) {
+        let missing: Vec<_> = paths
+            .iter()
+            .filter(|path| {
+                !self.metadata_loaded.contains(*path) && !self.metadata_needed.contains(*path)
+            })
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            self.metadata_needed.extend(missing.iter().cloned());
+            self.metadata_loader.need(&missing);
+        }
     }
 
     pub fn thumbnail(&mut self, path: &Path) -> Option<Thumbnail> {

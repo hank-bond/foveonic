@@ -249,3 +249,18 @@ mod compensation_tests {
         assert_eq!(super::capture_values(&p), vec!["+1.0 EV"]);
     }
 }
+
+/// Adapt early capture properties to processing-owned defaults without decoding pixels.
+pub(crate) fn processing_metadata(
+    properties: std::collections::BTreeMap<String, String>,
+) -> foveonic::source::Metadata {
+    foveonic::source::Metadata {
+        processing_version: None,
+        width: 0,
+        height: 0,
+        rotation: 0,
+        properties,
+        matrices: Default::default(),
+        lists: Default::default(),
+    }
+}

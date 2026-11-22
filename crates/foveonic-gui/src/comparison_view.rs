@@ -8,6 +8,9 @@ mod layout;
 pub(crate) use layout::State;
 use layout::CAPTION;
 
+/// The shape a tile takes while its photo's size is still being read.
+const PLACEHOLDER_ASPECT: [u32; 2] = [3, 2];
+
 impl App {
     pub(crate) fn comparison_view(&mut self, ui: &mut egui::Ui, paths: &[PathBuf]) -> bool {
         let mut changed = false;
@@ -24,17 +27,12 @@ impl App {
                         .settings(path)
                         .or(frame.map(|frame| &frame.request.settings))
                 };
-                // The photo's recorded size gives its shape before any image of it.
-                // The browser's known extent is also the photo's own size.
-                // Camera/Defaults and framing previews share the camera's dimensions
-                // but must use this photo's authored composition.
+                // The photo's recorded size gives its shape before any image of
+                // it, with its authored composition.
                 let extent = self
-                    .multi_edit
-                    .geometry(path)
+                    .photo_geometry(path)
                     .and_then(|geometry| geometry.extent)
-                    .or(frame.map(|frame| frame.camera_extent()))
-                    .or_else(|| self.browser.known_extent(path))
-                    .unwrap_or([3, 2]);
+                    .unwrap_or(PLACEHOLDER_ASPECT);
                 settings.map_or(extent[0] as f32 / extent[1].max(1) as f32, |settings| {
                     composition_aspect(extent, settings)
                 })

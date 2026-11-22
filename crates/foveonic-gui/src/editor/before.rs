@@ -136,7 +136,7 @@ mod tests {
     use foveonic::render::{EditScope, EditSection, PhotographicMethod, RecipeDefaults, Settings};
     #[test]
     fn camera_and_default_renditions_never_replace_authored_values() {
-        let metadata = crate::capture::processing_metadata(
+        let metadata = crate::metadata::processing_metadata(
             [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into(),
         );
         let mut current = Settings {
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn group_baselines_use_each_cameras_defaults_and_authored_geometry() {
         let metadata = ["SIGMA DP2 Merrill", "SIGMA SD14"].map(|model| {
-            crate::capture::processing_metadata([("CAMMODEL".into(), model.into())].into())
+            crate::metadata::processing_metadata([("CAMMODEL".into(), model.into())].into())
         });
         let mut defaults = RecipeDefaults::default();
         let universal = Settings {

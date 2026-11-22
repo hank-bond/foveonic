@@ -172,6 +172,28 @@ fn handled_results_settle_siblings_and_cannot_settle_a_newer_request() {
 }
 
 #[test]
+fn work_stays_busy_until_the_ui_receives_every_finished_image() {
+    let rig = Rig::new();
+    rig.requests(
+        (0..3)
+            .map(|i| request(&format!("{i}.x3f"), i + 1, 0.))
+            .collect(),
+    );
+    for task in rig.tasks() {
+        rig.results.send(result(&task)).unwrap();
+    }
+    // Two images fill the UI queue and the coordinator holds the third.
+    wait(|| rig.updates.is_full() && rig.tasks().is_empty());
+    assert!(rig.handle.busy());
+    rig.receive();
+    rig.receive();
+    assert!(rig.handle.busy());
+    rig.receive();
+    rig.applied();
+    assert!(!rig.handle.busy());
+}
+
+#[test]
 fn full_ui_queue_does_not_prevent_new_intent_or_shutdown() {
     let rig = Rig::new();
     rig.requests(
@@ -200,7 +222,11 @@ fn full_ui_queue_does_not_prevent_new_intent_or_shutdown() {
     rig.handle.clear(true);
     rig.applied();
     assert!(rig.tasks().is_empty());
-    assert!(!rig.handle.busy());
+    // Images already handed to the UI stay busy until it receives them.
+    wait(|| {
+        while rig.updates.try_recv().is_ok() {}
+        !rig.handle.busy()
+    });
     let slot = rig.slot.clone();
     drop(rig);
     wait(|| slot.0.lock().unwrap().stop);

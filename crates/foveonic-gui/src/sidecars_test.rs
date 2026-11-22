@@ -406,8 +406,9 @@ fn editing_subset_resolution_replaces_old_reads_and_keeps_import_edits_in_memory
     let mut edited = saved.clone();
     edited.exposure = 1.7;
     session.apply(b.clone(), edited.clone());
-    // Edits in memory still win once the read for the photo's geometry returns.
-    assert_eq!(load(&mut session, &b), edited);
+    session.resolve_settings(std::slice::from_ref(&b));
+    let resolved = session.take_resolved();
+    assert_eq!(resolved[0].settings, edited);
     drop(session);
     assert_eq!(sidecar::load(&b).unwrap().settings(), Some(saved));
 }

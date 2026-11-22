@@ -11,7 +11,6 @@ mod application_settings;
 mod automation;
 mod batch;
 mod browser;
-mod capture;
 mod chromaticity;
 mod comparison_view;
 mod controls;
@@ -106,7 +105,6 @@ struct App {
     browser: browser::Browser,
     folder_loader: folder_loader::Loader,
     worker: worker::Worker,
-    capture: capture::Loader,
     sidecars: sidecars::Session,
     metadata: Option<Arc<Metadata>>,
     selected: Option<PathBuf>,
@@ -121,6 +119,9 @@ struct App {
     images: rendering::rendered::RenderedImages<worker::RenderResult>,
     /// Screen pixels per UI point this frame, which photo scales follow.
     pixels_per_point: f32,
+    /// The last plan had photos whose settings or capture properties were
+    /// still being read.
+    photos_loading: bool,
     /// Zoomed photos' moving regions. Planning reads views, so motion uses interior mutability.
     view_motion:
         std::cell::RefCell<std::collections::BTreeMap<PathBuf, rendering::view_plan::Motion>>,
@@ -335,7 +336,6 @@ impl App {
             browser,
             folder_loader: folder_loader::Loader::new(context.clone()),
             previews,
-            capture: capture::Loader::new(context.clone(), worker.cache.clone()),
             sidecars: sidecars::Session::new(
                 context.clone(),
                 std::env::var_os("FOVEONIC_GUI_SMOKE_DIR").is_none()
@@ -352,6 +352,7 @@ impl App {
             comparison: Default::default(),
             images: Default::default(),
             pixels_per_point: 1.,
+            photos_loading: false,
             view_motion: Default::default(),
             scope_images: None,
             scope_snapshot: None,
@@ -450,7 +451,6 @@ impl App {
         self.opening = None;
         self.settings_photo = None;
         self.sidecars.resolve_settings(&[]);
-        self.capture.select(None);
         self.metadata = None;
         self.scope_images = None;
         self.scope_snapshot = None;
@@ -509,7 +509,6 @@ impl App {
             _priority: self.worker.cache.priority().demand(Priority::Viewport),
             began,
         });
-        self.capture.select(Some(path.clone()));
         self.metadata = self.multi_edit.metadata(&path);
         self.settings = Settings::new("", "");
         self.settings_photo = None;
@@ -558,15 +557,14 @@ impl App {
             timing::selection_ready(self.last_request_id.0, &path, opening.began);
         }
         self.settings = settings.clone();
-        self.settings_photo = Some(path);
+        self.settings_photo = Some(path.clone());
         inspect::normalize(
             &self.settings,
             &mut self.output,
             &mut self.channel,
             self.metadata.as_deref(),
-            self.capture
-                .properties
-                .as_ref()
+            self.browser
+                .capture_properties(&path)
                 .and_then(|p| p.get("CAMMODEL"))
                 .and_then(|model| foveonic::source::ProcessingFamily::from_camera_model(model)),
         );
@@ -1073,7 +1071,9 @@ impl App {
                             ui,
                             &mut self.settings,
                             self.metadata.as_deref(),
-                            self.capture.properties.as_ref(),
+                            self.selected
+                                .as_deref()
+                                .and_then(|path| self.browser.capture_properties(path)),
                             &mut self.preferences.editing_sections,
                             &mut editor::Menus {
                                 exposure_auto_compensation,
@@ -1206,9 +1206,9 @@ impl App {
                                 &mut self.output,
                                 &mut self.channel,
                                 self.metadata.as_deref(),
-                                self.capture
-                                    .properties
-                                    .as_ref()
+                                self.selected
+                                    .as_deref()
+                                    .and_then(|path| self.browser.capture_properties(path))
                                     .and_then(|p| p.get("CAMMODEL"))
                                     .and_then(|model| {
                                         foveonic::source::ProcessingFamily::from_camera_model(model)
@@ -1351,7 +1351,11 @@ impl App {
             .active_image()
             .map(|f| &f.artifact.metadata.properties)
             .or_else(|| self.metadata.as_ref().map(|metadata| &metadata.properties))
-            .or(self.capture.properties.as_ref());
+            .or_else(|| {
+                self.selected
+                    .as_deref()
+                    .and_then(|path| self.browser.capture_properties(path))
+            });
         information::show(ui, properties, &filename, self.viewport().visible_pixels());
         changed
     }
@@ -1546,7 +1550,6 @@ impl eframe::App for App {
             );
         }
         self.receive_folder();
-        self.capture.receive();
         self.import.update(&mut self.browser);
         let cache_status = self.worker.cache.status();
         self.browser.decode_states = cache_status.files;
@@ -1592,7 +1595,9 @@ impl eframe::App for App {
         let normalized = controls::normalize_with_capture(
             &mut self.settings,
             self.metadata.as_deref(),
-            self.capture.properties.as_ref(),
+            self.selected
+                .as_deref()
+                .and_then(|path| self.browser.capture_properties(path)),
         );
         editor::advanced_color::sync_photo(ctx, self.selected.as_deref());
         let previous_settings = self.settings.clone();

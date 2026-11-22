@@ -18,7 +18,7 @@ pub(super) fn show(
 ) -> bool {
     let early = capture
         .filter(|_| metadata.is_none())
-        .map(|properties| crate::capture::processing_metadata(properties.clone()));
+        .map(|properties| crate::metadata::processing_metadata(properties.clone()));
     let source = metadata.or(early.as_ref());
     let capabilities = ControlCapabilities::from_family(ProcessingFamily::Quattro);
     let camera_model = capture

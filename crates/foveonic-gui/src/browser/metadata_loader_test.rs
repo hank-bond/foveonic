@@ -112,3 +112,63 @@ fn damaged_metadata_does_not_stop_the_remaining_folder_thumbnails() {
     assert!(browser.cache[&bad].is_none());
     assert!(browser.thumbnail(&good).is_some());
 }
+
+#[test]
+fn needed_photos_load_while_rendering_demand_holds_back_background_reads() {
+    let folder = tempfile::tempdir().unwrap();
+    let paths: Vec<_> = ["a.x3f", "b.x3f"]
+        .map(|name| folder.path().join(name))
+        .into();
+    for path in &paths {
+        std::fs::write(path, b"metadata fixture").unwrap();
+    }
+    let cache = Arc::new(Cache::new());
+    let loader = Loader::new(egui::Context::default(), Some(cache.clone()));
+    // A selection holds viewport demand until its photo is planned, and
+    // planning waits for this photo's capture properties.
+    let _selection = cache
+        .priority()
+        .demand(foveonic::priority::Priority::Viewport);
+    loader.replace(&paths);
+    loader.need(&paths[1..]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if loader
+            .receive()
+            .any(|reply| matches!(reply, Reply::Loaded { path, .. } if path == paths[1]))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "a needed photo waited for rendering demand to end"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn a_needed_photo_arrives_through_the_browser_and_is_asked_for_again_after_a_reload() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("a.x3f");
+    std::fs::write(&path, b"metadata fixture").unwrap();
+    let context = egui::Context::default();
+    let mut browser = super::super::Browser::new(context.clone());
+    let arrive = |browser: &mut super::super::Browser| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while browser.capture_properties(&path).is_none() {
+            browser.need_capture(std::slice::from_ref(&path));
+            browser.receive(&context);
+            assert!(Instant::now() < deadline, "needed metadata did not arrive");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    browser.open(folder.path()).unwrap();
+    arrive(&mut browser);
+    browser.open(folder.path()).unwrap();
+    assert!(
+        browser.capture_properties(&path).is_none(),
+        "a reload forgets the old listing's properties"
+    );
+    arrive(&mut browser);
+}

@@ -1665,3 +1665,33 @@ fn shift_down_keeps_extending_when_the_app_selects_another_photo() {
         "the range keeps growing from the browser's own cursor"
     );
 }
+
+#[test]
+fn capture_properties_count_once_read_and_give_the_recorded_size() {
+    let mut fixture = Fixture::new(Organizer::Large);
+    let path = fixture.browser.files[0].clone();
+    // A thumbnail can create the record before its capture properties arrive.
+    fixture
+        .browser
+        .records
+        .entry(path.clone())
+        .or_default()
+        .extent = Some([640, 426]);
+    assert!(fixture.browser.capture_properties(&path).is_none());
+    let properties: std::collections::BTreeMap<_, _> = [
+        ("X3F_IMAGE_WIDTH", "2268"),
+        ("X3F_IMAGE_HEIGHT", "1512"),
+        ("X3F_ROTATION", "0"),
+    ]
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .into();
+    fixture.browser.records.get_mut(&path).unwrap().properties = properties.clone();
+    fixture.browser.metadata_loaded.insert(path.clone());
+    assert_eq!(fixture.browser.capture_properties(&path), Some(&properties));
+    let entry = &fixture.browser.records[&path];
+    assert_eq!(
+        entry.number(query::Field::Width),
+        Some(2268.),
+        "width is the photo's, not its preview's"
+    );
+}

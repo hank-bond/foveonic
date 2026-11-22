@@ -40,7 +40,6 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[application_settings.rs](./application_settings.rs)** Configures display, editing targets, retained memory and background disk reuse independently of photographic edits.
 - **[automation.rs](./automation.rs)** Observes real controls for opt-in scripted application checks.
 - **[batch.rs](./batch.rs)** Runs frozen processing batches, source scans and destination probes off-thread while yielding to interactive rendering; import-history matching never waits for rendering.
-- **[capture.rs](./capture.rs)** Shows capture details without waiting for rendering or publishing an older selection.
 - **[chromaticity.rs](./chromaticity.rs)** Draws a CIE 1931 xy guide with fixed visual anchors for the layer mixer.
 - **[comparison_view.rs](./comparison_view.rs)** Fits browser-selected photographs into bounded comparison tiles with explicit viewport editing targets.
 - **[controls.rs](./controls.rs)** Selects the camera family's editing panel and shares numerical editing widgets.

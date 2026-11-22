@@ -79,6 +79,7 @@ pub struct Sort {
 pub struct Entry {
     pub properties: BTreeMap<String, String>,
     pub bytes: Option<u64>,
+    /// The thumbnail's shape, which large rows are laid out to.
     pub extent: Option<[u32; 2]>,
     pub rating: Rating,
 }
@@ -91,11 +92,11 @@ impl Entry {
             extent: None,
         }
     }
-    fn number(&self, field: Field) -> Option<f64> {
+    pub(super) fn number(&self, field: Field) -> Option<f64> {
         let value = match field {
             Field::Rating => f64::from(self.rating.stars()),
-            Field::Width => f64::from(self.extent?[0]),
-            Field::Height => f64::from(self.extent?[1]),
+            Field::Width => f64::from(foveonic::source::oriented_extent(&self.properties)?[0]),
+            Field::Height => f64::from(foveonic::source::oriented_extent(&self.properties)?[1]),
             Field::FileSize => self.bytes? as f64,
             _ => self
                 .properties

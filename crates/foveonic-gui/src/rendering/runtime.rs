@@ -49,6 +49,8 @@ pub(super) struct Handle {
     pending: Cell<u64>,
     status: Arc<Mutex<Arc<Status>>>,
     observed: RefCell<Arc<Status>>,
+    /// Updates the UI has not received yet keep work busy.
+    ui_queue: Receiver<Update>,
     /// The last published planned photos and images in use, to skip unchanged publication.
     planned: RefCell<(Photos, Vec<Planned>)>,
     preparation: RefCell<Option<Arc<PreparationConfig>>>,
@@ -82,6 +84,7 @@ impl Handle {
                     context,
                     status: published,
                     processed: 0,
+                    held: None,
                     loader,
                     tracked: Vec::new(),
                     pass: None,
@@ -96,6 +99,7 @@ impl Handle {
                 pending: Cell::new(0),
                 status,
                 observed: Default::default(),
+                ui_queue: updates.clone(),
                 planned: Default::default(),
                 preparation: Default::default(),
                 #[cfg(test)]
@@ -124,7 +128,7 @@ impl Handle {
 
     pub fn busy(&self) -> bool {
         let status = self.status();
-        self.pending.get() > status.processed || status.busy
+        self.pending.get() > status.processed || status.busy || !self.ui_queue.is_empty()
     }
 
     #[cfg(test)]
@@ -254,6 +258,8 @@ struct Runtime {
     context: egui::Context,
     status: Arc<Mutex<Arc<Status>>>,
     processed: u64,
+    /// A result from the executor, until it has room in the UI queue.
+    held: Option<Update>,
     loader: super::source_loader::Service,
     /// The latest plan's tracked images, which the progress pass follows.
     tracked: Vec<(super::coordinator::Target, RequestId, ImageState)>,
@@ -270,7 +276,6 @@ impl Runtime {
     ) {
         let source_signals = self.loader.signals.clone();
         let loaded_sources = self.loader.results.clone();
-        let mut waiting = None;
         let mut handled = false;
         loop {
             // Apply queued intent before exposing another plan or handling a result.
@@ -286,18 +291,16 @@ impl Runtime {
                 self.publish();
                 self.context.request_repaint();
             }
-            if !handled {
-                if let Some(update) = waiting.take() {
-                    waiting = self.handle(update);
-                    handled = waiting.is_some();
-                }
+            if !handled && self.held.is_some() {
+                self.handle();
+                handled = self.held.is_some();
             }
             let mut select = Select::new();
             let command = select.recv(&commands);
             let source_request = select.recv(&source_signals);
             let source_result = select.recv(&loaded_sources);
-            let receive = waiting.is_none().then(|| select.recv(&results));
-            let send = waiting.is_some().then(|| select.send(&output));
+            let receive = self.held.is_none().then(|| select.recv(&results));
+            let send = self.held.is_some().then(|| select.send(&output));
             let operation = select.select();
             let index = operation.index();
             if index == command {
@@ -340,7 +343,7 @@ impl Runtime {
             } else if Some(index) == receive {
                 match operation.recv(&results) {
                     Ok(update) => {
-                        waiting = Some(update);
+                        self.held = Some(update);
                         handled = false;
                     }
                     Err(_) => {
@@ -349,10 +352,11 @@ impl Runtime {
                     }
                 }
             } else if Some(index) == send {
-                if operation.send(&output, waiting.take().unwrap()).is_err() {
+                if operation.send(&output, self.held.take().unwrap()).is_err() {
                     self.stop();
                     return;
                 }
+                self.publish_status();
                 handled = false;
                 self.context.request_repaint();
             }
@@ -450,31 +454,25 @@ impl Runtime {
         started
     }
 
-    fn handle(&mut self, mut update: Update) -> Option<Update> {
+    /// Settle the held result's work, dropping stale scope and pick replies.
+    fn handle(&mut self) {
         let _scope = foveonic::diagnostics::scope(
             foveonic::diagnostics::Category::Coordinator,
             "coordinator.result",
         );
-        match &mut update {
-            Update::Image(reply) if reply.handling.is_none() => {
+        let current = match &mut self.held {
+            Some(Update::Image(reply)) if reply.handling.is_none() => {
                 reply.handling = Some(self.coordinator.handle_result(reply));
+                true
             }
-            Update::Scopes { id, .. } => {
-                if !self.coordinator.finish_scope(*id) {
-                    self.publish();
-                    return None;
-                }
-            }
-            Update::ColorPick { id, .. } => {
-                if !self.coordinator.finish_pick(*id) {
-                    self.publish();
-                    return None;
-                }
-            }
-            _ => return Some(update),
+            Some(Update::Scopes { id, .. }) => self.coordinator.finish_scope(*id),
+            Some(Update::ColorPick { id, .. }) => self.coordinator.finish_pick(*id),
+            _ => return,
+        };
+        if !current {
+            self.held = None;
         }
         self.publish();
-        Some(update)
     }
 
     fn work_plan(&self) -> Arc<WorkPlan> {
@@ -566,13 +564,18 @@ impl Runtime {
             pending.plan = plan;
             pending.retained = retained.into();
         }
+        self.publish_status();
+        self.slot.1.notify_one();
+    }
+
+    fn publish_status(&self) {
         *self.status.lock().unwrap() = Arc::new(Status {
             processed: self.processed,
-            busy: self.coordinator.busy(),
+            // A held result is finished work the UI has not received yet.
+            busy: self.coordinator.busy() || self.held.is_some(),
             #[cfg(test)]
             admitted: self.coordinator.admitted_images(),
         });
-        self.slot.1.notify_one();
     }
 
     fn prioritize_sources(&mut self) {
