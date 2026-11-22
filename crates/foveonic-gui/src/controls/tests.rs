@@ -9,15 +9,20 @@ use foveonic::render::{
 };
 use std::ops::RangeInclusive;
 
-// Existing widget interaction fixtures exercise the Merrill panel while full
-// metadata is absent. Capture-only and unidentified states are checked separately.
+// The summary comes from the fixture's metadata, as in the app; fixtures that
+// name no camera exercise the Merrill panel. Summary-only and unidentified
+// states are checked separately.
 fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
-    let capture = [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into();
+    let mut properties = metadata.map_or_else(Default::default, |m| m.properties.clone());
+    properties
+        .entry("CAMMODEL".into())
+        .or_insert_with(|| "SIGMA DP2 Merrill".into());
+    let summary = foveonic::source::MetadataSummary::from_properties(properties);
     super::processing(
         ui,
         settings,
         metadata,
-        Some(&capture),
+        Some(&summary),
         &mut EditingSection::ALL.to_vec(),
         &mut crate::editor::Menus {
             prevent_color_clipping: true,
@@ -85,11 +90,13 @@ fn directional_band_groups_follow_capture_orientation_and_preserve_saved_values(
         settings.merrill_banding.rows.bands[0].size = 17;
         settings.merrill_banding.columns.bands[0].size = 35;
         let before = settings.clone();
-        let capture = [
-            ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
-            ("ROTATION".into(), rotation.to_string()),
-        ]
-        .into();
+        let capture = foveonic::source::MetadataSummary::from_properties(
+            [
+                ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
+                ("ROTATION".into(), rotation.to_string()),
+            ]
+            .into(),
+        );
         let output = ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -713,11 +720,11 @@ fn classic_metadata_restores_intrinsic_correction_contract() {
         settings.row_correction = false;
         settings.highlight_restoration = false;
         settings.reconstruction = None;
-        assert!(normalize_incompatible(&mut settings, Some(&metadata)));
+        assert!(normalize(&mut settings, metadata.processing_family().ok()));
         assert!(settings.row_correction);
         assert!(!settings.highlight_restoration);
         assert!(settings.reconstruction.is_none());
-        assert!(!normalize_incompatible(&mut settings, Some(&metadata)));
+        assert!(!normalize(&mut settings, metadata.processing_family().ok()));
     }
 }
 
@@ -2930,25 +2937,27 @@ fn family_metadata_changes_normalize_only_incompatible_settings() {
     settings.highlight_restoration = false;
     settings.reconstruction = None;
     let saved = settings.clone();
-    assert!(!normalize_incompatible(&mut settings, None));
+    assert!(!normalize(&mut settings, None));
     assert_eq!(settings, saved);
-    assert!(!normalize_incompatible(&mut settings, Some(&merrill)));
-    assert!(!normalize_incompatible(&mut settings, Some(&classic)));
+    assert!(!normalize(&mut settings, merrill.processing_family().ok()));
+    assert!(!normalize(&mut settings, classic.processing_family().ok()));
     assert_eq!(settings.rendering, Rendering::Monochrome);
     assert_eq!(settings.exposure, 1.2);
     assert_eq!(settings.white_balance, "Shade");
     assert!(!settings.highlight_restoration && settings.reconstruction.is_none());
     let compatible = settings.clone();
-    assert!(!normalize_incompatible(&mut settings, Some(&merrill)));
+    assert!(!normalize(&mut settings, merrill.processing_family().ok()));
     assert_eq!(settings, compatible);
 }
 
 #[test]
 fn capture_properties_select_classic_before_a_render_completes() {
-    let capture = [("CAMMODEL".into(), "SIGMA SD14".into())].into();
+    let capture = foveonic::source::MetadataSummary::from_properties(
+        [("CAMMODEL".into(), "SIGMA SD14".into())].into(),
+    );
     let mut settings = Settings::new("Sunlight", "Standard");
     settings.rendering = Rendering::Monochrome;
-    assert!(!normalize_with_capture(&mut settings, None, Some(&capture)));
+    assert!(!normalize(&mut settings, capture.family));
     assert_eq!(settings.rendering, Rendering::Monochrome);
     for capture in [None, Some(&capture)] {
         let ctx = egui::Context::default();
@@ -3089,7 +3098,9 @@ fn unsupported_tiger_geometry_keeps_inspection_without_photographic_controls() {
                 ui,
                 &mut settings,
                 Some(&metadata),
-                Some(&capture),
+                Some(&foveonic::source::MetadataSummary::from_properties(
+                    capture.clone()
+                )),
                 &mut EditingSection::ALL.to_vec(),
                 &mut crate::editor::Menus {
                     prevent_color_clipping: true,
@@ -3129,7 +3140,9 @@ fn ordinary_quattro_controls_arrive_with_capture_before_processing_metadata() {
     ] {
         for rendering in [Rendering::Color, Rendering::Monochrome] {
             let ctx = egui::Context::default();
-            let capture = [("CAMMODEL".into(), model.into())].into();
+            let capture = foveonic::source::MetadataSummary::from_properties(
+                [("CAMMODEL".into(), model.into())].into(),
+            );
             let mut settings = Settings::new("Sunlight", "Standard");
             settings.rendering = rendering;
             let before = settings.clone();
@@ -3231,7 +3244,9 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
                     ui,
                     &mut settings,
                     Some(&metadata),
-                    None,
+                    Some(&foveonic::source::MetadataSummary::from_properties(
+                        metadata.properties.clone()
+                    )),
                     &mut EditingSection::ALL.to_vec(),
                     &mut crate::editor::Menus {
                         prevent_color_clipping: true,
@@ -3287,7 +3302,9 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
                     ui,
                     &mut settings,
                     Some(&metadata),
-                    None,
+                    Some(&foveonic::source::MetadataSummary::from_properties(
+                        metadata.properties.clone()
+                    )),
                     &mut EditingSection::ALL.to_vec(),
                     &mut crate::editor::Menus {
                         prevent_color_clipping: true,
@@ -3362,7 +3379,9 @@ fn quattro_saved_slider_values_are_stable_when_full_metadata_arrives() {
                             ui,
                             &mut settings,
                             full,
-                            Some(&capture),
+                            Some(&foveonic::source::MetadataSummary::from_properties(
+                                capture.clone()
+                            )),
                             &mut EditingSection::ALL.to_vec(),
                             &mut crate::editor::Menus {
                                 prevent_color_clipping: true,

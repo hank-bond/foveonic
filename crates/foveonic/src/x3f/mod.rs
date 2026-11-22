@@ -269,11 +269,12 @@ fn decode(data: &[u8]) -> Result<Source> {
         .map(read_properties)
         .transpose()?
         .unwrap_or_default();
-    merge_preview_properties(&mut properties, preview_properties);
-    properties.insert("EXIF_CAPTURE_CHECKED".into(), "1".into());
-    properties.extend(adjustments::read(&data[..ranges[0].0])?);
-    properties.insert("X3F_MARK_BITS".into(), mark_bits(data)?.to_string());
-    record_image_geometry(&mut properties, data)?;
+    complete_properties(
+        &mut properties,
+        Some(preview_properties),
+        adjustments::read(&data[..ranges[0].0])?,
+        data,
+    )?;
     let raw = raw.ok_or_else(|| damaged("missing X3F sensor image"))?;
     drop(sections_scope);
     let (width, height, storage, pixels, mut timings) = read_pixels(raw)?;
@@ -305,6 +306,24 @@ fn decode(data: &[u8]) -> Result<Source> {
         camf,
         timings,
     })
+}
+
+/// Completes a file's PROP record from its other sections. Full decoding and
+/// the capture read both use it, so they describe a photograph identically.
+/// `preview` holds the largest embedded preview's EXIF when the previews were checked.
+fn complete_properties(
+    properties: &mut BTreeMap<String, String>,
+    preview: Option<BTreeMap<String, String>>,
+    adjustments: BTreeMap<String, String>,
+    header: &[u8],
+) -> Result<()> {
+    if let Some(preview) = preview {
+        merge_preview_properties(properties, preview);
+        properties.insert("EXIF_CAPTURE_CHECKED".into(), "1".into());
+    }
+    properties.extend(adjustments);
+    properties.insert("X3F_MARK_BITS".into(), mark_bits(header)?.to_string());
+    record_image_geometry(properties, header)
 }
 
 /// Older PROP records keep their authoritative camera choices and exposure units.

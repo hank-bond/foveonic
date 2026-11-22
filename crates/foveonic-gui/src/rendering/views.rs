@@ -76,7 +76,10 @@ impl App {
         else {
             return "final".into();
         };
-        let family = metadata.processing_family().ok();
+        let family = self
+            .browser
+            .metadata_summary(path)
+            .and_then(|summary| summary.family);
         let offered =
             foveonic::inspection::image_outputs_with_family(settings, Some(&metadata), family)
                 .iter()
@@ -268,12 +271,12 @@ impl App {
     /// Plan every viewport photo's images in use and publish them.
     pub(crate) fn submit_photos(&mut self) {
         self.sync_multi_edit();
-        // Planning and the selected photo's controls wait for capture properties.
+        // Planning and the selected photo's controls wait for metadata summaries.
         let mut needed = self.planned_photos();
         if let Some(selected) = self.selected.clone().filter(|path| !needed.contains(path)) {
             needed.push(selected);
         }
-        self.browser.need_capture(&needed);
+        self.browser.need_summaries(&needed);
         let now = std::time::Instant::now();
         let previous_views = std::mem::take(&mut self.views);
         let mut motion = std::mem::take(self.view_motion.get_mut());

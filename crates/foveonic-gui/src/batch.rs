@@ -532,7 +532,7 @@ fn read_settings(scan: &Scan, cache: &Cache, superseded: impl Fn() -> bool) -> O
                 }
                 saved.settings().map(Ok).unwrap_or_else(|| {
                     scan.defaults
-                        .from_properties(&cache.capture_properties(&path)?)
+                        .from_properties(&cache.metadata_summary(&path)?.properties)
                 })
             }
         })()

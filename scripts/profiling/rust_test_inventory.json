@@ -633,7 +633,7 @@
         "render::driver::tests::estimates_exist_for_every_family_and_view_and_cover_measured_peaks",
         "render::scheduler::tests::one_job_per_photo_and_loading_waits_until_alone",
         "render::scheduler::tests::waiting_job_stays_queued_until_ready",
-        "source::tests::capture_geometry_matches_the_rendered_size_for_every_fixture"
+        "source::tests::capture_read_describes_every_fixture_as_full_decoding_does"
       ]
     },
     {

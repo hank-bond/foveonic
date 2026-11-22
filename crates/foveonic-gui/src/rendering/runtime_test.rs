@@ -189,8 +189,8 @@ fn work_stays_busy_until_the_ui_receives_every_finished_image() {
     rig.receive();
     assert!(rig.handle.busy());
     rig.receive();
-    rig.applied();
-    assert!(!rig.handle.busy());
+    // The coordinator republishes idle just after the hand-off.
+    wait(|| !rig.handle.busy());
 }
 
 #[test]

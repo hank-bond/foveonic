@@ -359,9 +359,14 @@ impl Cache {
             .map(|identity| identity.length)
     }
 
-    /// Reuse verified header metadata before loading the much larger pixel payload.
-    /// Selection and editing defaults must not seek through the card again on a cache hit.
-    pub fn capture_properties(&self, path: &Path) -> Result<BTreeMap<String, String>> {
+    /// A photograph's metadata summary, from verified cached header metadata
+    /// when present, so selection and editing defaults do not seek through the card again.
+    pub fn metadata_summary(&self, path: &Path) -> Result<crate::source::MetadataSummary> {
+        self.capture_properties(path)
+            .map(crate::source::MetadataSummary::from_properties)
+    }
+
+    pub(crate) fn capture_properties(&self, path: &Path) -> Result<BTreeMap<String, String>> {
         let identity = self
             .control
             .lock()

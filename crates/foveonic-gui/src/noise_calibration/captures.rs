@@ -164,7 +164,7 @@ pub(super) fn visit(
             {
                 return Ok(None);
             }
-            let properties = cache.capture_properties(&canonical)?;
+            let properties = cache.metadata_summary(&canonical)?.properties;
             let capture = Capture::from_properties(canonical, &properties)?;
             Ok(Some((capture, properties)))
         })();

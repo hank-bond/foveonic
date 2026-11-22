@@ -30,8 +30,9 @@ impl App {
                 // The photo's recorded size gives its shape before any image of
                 // it, with its authored composition.
                 let extent = self
-                    .photo_geometry(path)
-                    .and_then(|geometry| geometry.extent)
+                    .browser
+                    .metadata_summary(path)
+                    .and_then(|summary| summary.extent)
                     .unwrap_or(PLACEHOLDER_ASPECT);
                 settings.map_or(extent[0] as f32 / extent[1].max(1) as f32, |settings| {
                     composition_aspect(extent, settings)

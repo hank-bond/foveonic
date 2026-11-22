@@ -9,7 +9,9 @@ fn sorting_is_numeric_stable_and_missing_last_in_both_directions() {
         (
             files[0].clone(),
             Entry::new(
-                BTreeMap::from([("ISO".into(), "1000".into())]),
+                foveonic::source::MetadataSummary::from_properties(
+                    std::collections::BTreeMap::from([("ISO".into(), "1000".into())]),
+                ),
                 None,
                 Rating::default(),
             ),
@@ -17,7 +19,9 @@ fn sorting_is_numeric_stable_and_missing_last_in_both_directions() {
         (
             files[1].clone(),
             Entry::new(
-                BTreeMap::from([("ISO".into(), "200".into())]),
+                foveonic::source::MetadataSummary::from_properties(
+                    std::collections::BTreeMap::from([("ISO".into(), "200".into())]),
+                ),
                 None,
                 Rating::default(),
             ),
@@ -58,7 +62,10 @@ fn sorting_is_numeric_stable_and_missing_last_in_both_directions() {
 #[test]
 fn substring_search_combines_names_relative_paths_and_ratings_without_hidden_metadata_matches() {
     let entry = Entry::new(
-        BTreeMap::from([("CAMMODEL".into(), "SIGMA DP3 Merrill".into())]),
+        foveonic::source::MetadataSummary::from_properties(std::collections::BTreeMap::from([(
+            "CAMMODEL".into(),
+            "SIGMA DP3 Merrill".into(),
+        )])),
         None,
         Rating::try_from(4).unwrap(),
     );
@@ -69,7 +76,10 @@ fn substring_search_combines_names_relative_paths_and_ratings_without_hidden_met
     }
     .matches(path, Some(Path::new("card")), Some(&entry)));
     let serial_match = Entry::new(
-        BTreeMap::from([("CAMSERIAL".into(), "123899".into())]),
+        foveonic::source::MetadataSummary::from_properties(std::collections::BTreeMap::from([(
+            "CAMSERIAL".into(),
+            "123899".into(),
+        )])),
         None,
         Rating::default(),
     );

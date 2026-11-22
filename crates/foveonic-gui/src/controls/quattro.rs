@@ -5,24 +5,23 @@ use crate::preferences::EditingSection;
 use eframe::egui;
 use foveonic::render::{ControlCapabilities, Settings};
 use foveonic::source::{Metadata, ProcessingFamily};
-use std::collections::BTreeMap;
 
 pub(super) fn show(
     ui: &mut egui::Ui,
     settings: &mut Settings,
     metadata: Option<&Metadata>,
-    capture: Option<&BTreeMap<String, String>>,
+    summary: Option<&foveonic::source::MetadataSummary>,
     exposure: Option<foveonic::source::CaptureExposureCompensation>,
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
-    let early = capture
+    let early = summary
         .filter(|_| metadata.is_none())
-        .map(|properties| crate::metadata::processing_metadata(properties.clone()));
+        .map(|summary| crate::metadata::processing_metadata(summary.properties.clone()));
     let source = metadata.or(early.as_ref());
     let capabilities = ControlCapabilities::from_family(ProcessingFamily::Quattro);
-    let camera_model = capture
-        .and_then(|properties| properties.get("CAMMODEL"))
+    let camera_model = summary
+        .and_then(|summary| summary.properties.get("CAMMODEL"))
         .map(String::as_str);
     if let Some(source) = source.filter(|_| capabilities.editing_available(metadata, camera_model))
     {

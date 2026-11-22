@@ -78,7 +78,7 @@ impl App {
             &mut self.output,
             &mut self.channel,
             Some(&metadata),
-            None,
+            Some(family),
         );
         if previous_defaults != self.preferences.editor.defaults {
             let defaults = &self.preferences.editor.defaults;

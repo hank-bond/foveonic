@@ -327,7 +327,7 @@ impl Runtime {
             }
             multi_edit_controls::apply(settings, &target_edits);
             if let Some(metadata) = &photo.metadata {
-                crate::controls::normalize_with_capture(settings, Some(metadata), None);
+                crate::controls::normalize(settings, metadata.processing_family().ok());
             }
             if *settings != before {
                 sidecars.apply(path.clone(), settings.clone());

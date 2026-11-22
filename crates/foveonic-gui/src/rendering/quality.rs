@@ -3,7 +3,7 @@
 use crate::{editor::Rendition, App};
 use foveonic::render::{ControlCapabilities, ProcessingQuality, Scale, Settings};
 use foveonic::source::ProcessingFamily;
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
 /// Before is photographic even while the saved Current root is an inspector.
 pub(crate) fn for_view(
@@ -16,25 +16,6 @@ pub(crate) fn for_view(
         ProcessingQuality::Quality
     } else {
         policy
-    }
-}
-
-/// A photo's size and camera family from its capture properties, known before
-/// any image of it exists.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct PhotoGeometry {
-    /// The oriented photograph size; `None` when the file records none.
-    pub extent: Option<[u32; 2]>,
-    pub family: Option<ProcessingFamily>,
-}
-impl PhotoGeometry {
-    pub fn from_properties(properties: &BTreeMap<String, String>) -> Self {
-        Self {
-            extent: foveonic::source::oriented_extent(properties),
-            family: properties
-                .get("CAMMODEL")
-                .and_then(|model| ProcessingFamily::from_camera_model(model)),
-        }
     }
 }
 
@@ -100,20 +81,20 @@ fn tile_density(
     Some(fitted * pixels_per_point)
 }
 
-/// The scale a photo is processed at, from its geometry, its view settings and
-/// its tile. A photo whose file records no size renders at full size (owner),
-/// and one never given a tile, such as an overflowed editing photo, at the
-/// camera's smallest grid.
+/// The scale a photo is processed at, from its shown size before edits
+/// (`MetadataSummary::extent`), its view settings and its tile. A photo whose
+/// file records no size renders at full size (owner), and one never given a
+/// tile, such as an overflowed editing photo, at the camera's smallest grid.
 pub(crate) fn photo_scale(
     policy: ProcessingQuality,
-    geometry: PhotoGeometry,
+    extent: Option<[u32; 2]>,
     settings: &Settings,
     framing: bool,
     view: Option<&crate::viewport::Viewport>,
     pixels_per_point: f32,
     fit: bool,
 ) -> Scale {
-    let Some(native) = geometry.extent else {
+    let Some(native) = extent else {
         return Scale::NATIVE;
     };
     let shown = shown_extent(native, settings, framing);
@@ -128,16 +109,8 @@ pub(crate) fn photo_scale(
 const SMALLEST_GRID: u32 = 8;
 
 impl App {
-    /// A photo's geometry, from the capture properties the browser reads for
-    /// every listed photo; `None` until they are read.
-    pub(crate) fn photo_geometry(&self, path: &Path) -> Option<PhotoGeometry> {
-        self.browser
-            .capture_properties(path)
-            .map(PhotoGeometry::from_properties)
-    }
-
     /// The scale a photo's view needs now, including zoom; `None` until its
-    /// settings and capture properties are loaded.
+    /// settings and metadata summary are loaded.
     pub(crate) fn preview_scale_for(
         &self,
         path: &Path,
@@ -154,7 +127,8 @@ impl App {
     ) -> Option<Scale> {
         let requested = self.preview_scale_for(path, policy)?;
         Some(
-            self.photo_geometry(path)?
+            self.browser
+                .metadata_summary(path)?
                 .family
                 .map_or(requested, |family| camera_scale(requested, family)),
         )
@@ -168,7 +142,7 @@ impl App {
     fn scale_for(&self, path: &Path, policy: ProcessingQuality, fit: bool) -> Option<Scale> {
         Some(photo_scale(
             policy,
-            self.photo_geometry(path)?,
+            self.browser.metadata_summary(path)?.extent,
             &self.photo_view_settings(path)?,
             self.image_key(path).framing,
             self.viewports.photo(path),
@@ -276,13 +250,6 @@ mod tests {
         view
     }
 
-    fn merrill(extent: Option<[u32; 2]>) -> PhotoGeometry {
-        PhotoGeometry {
-            extent,
-            family: Some(ProcessingFamily::Merrill),
-        }
-    }
-
     #[test]
     fn a_photo_is_planned_from_its_geometry_before_any_image_is_drawn() {
         let quality = ProcessingQuality::Quality;
@@ -292,25 +259,22 @@ mod tests {
         };
         // 553 screen pixels across 4704 photo pixels: an eighth fits.
         let tile = tiled([276.5, 184.]);
-        assert_eq!(scale(merrill(Some([4704, 3136])), &tile), 8);
-        assert_eq!(scale(merrill(Some([2268, 1512])), &tile), 4);
+        assert_eq!(scale(Some([4704, 3136]), &tile), 8);
+        assert_eq!(scale(Some([2268, 1512]), &tile), 4);
         assert_eq!(
-            scale(merrill(None), &tile),
+            scale(None, &tile),
             1,
             "a file that records no size renders at full size"
         );
         assert_eq!(
-            scale(
-                merrill(Some([4704, 3136])),
-                &crate::viewport::Viewport::default()
-            ),
+            scale(Some([4704, 3136]), &crate::viewport::Viewport::default()),
             8,
             "a photo never given a tile uses the smallest grid"
         );
         assert_eq!(
             photo_scale(
                 quality,
-                merrill(Some([4704, 3136])),
+                Some([4704, 3136]),
                 &settings,
                 false,
                 None,
@@ -334,7 +298,7 @@ mod tests {
         let scale = |framing| {
             photo_scale(
                 quality,
-                merrill(Some([4000, 2000])),
+                Some([4000, 2000]),
                 &settings,
                 framing,
                 Some(&tile),
@@ -380,7 +344,7 @@ mod tests {
         settings.crop.bounds = [0., 0., 1., 0.375];
         let scale = photo_scale(
             ProcessingQuality::Quality,
-            merrill(Some([4704, 3136])),
+            Some([4704, 3136]),
             &settings,
             false,
             Some(&view),

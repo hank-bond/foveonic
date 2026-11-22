@@ -358,8 +358,7 @@ impl Metadata {
     }
 
     pub fn processing_family(&self) -> Result<ProcessingFamily> {
-        family(self.properties.get("CAMMODEL").map(String::as_str))
-            .ok_or_else(|| "unsupported camera family".into())
+        family_of(&self.properties).ok_or_else(|| "unsupported camera family".into())
     }
 
     /// Camera-ordered illuminants. Classic monochrome is a separate rendering choice.
@@ -477,9 +476,34 @@ impl Metadata {
     }
 }
 
-/// The photograph's size as shown: its recorded size after the file's
-/// orientation, before authored rotation and crop. Rendering produces this size.
-pub fn oriented_extent(properties: &BTreeMap<String, String>) -> Option<[u32; 2]> {
+/// A photograph's metadata as read without decoding sensor data or calibration.
+/// Browsing and planning read its facts here instead of interpreting property
+/// keys, so another raw format only has to produce this summary.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MetadataSummary {
+    pub family: Option<ProcessingFamily>,
+    /// The size as shown: the recorded size after the file's orientation,
+    /// before authored rotation and crop. Rendering produces this size.
+    pub extent: Option<[u32; 2]>,
+    /// Every recorded property, for display and recipe defaults.
+    pub properties: BTreeMap<String, String>,
+}
+
+impl MetadataSummary {
+    pub fn from_properties(properties: BTreeMap<String, String>) -> Self {
+        Self {
+            family: family_of(&properties),
+            extent: oriented_extent(&properties),
+            properties,
+        }
+    }
+}
+
+fn family_of(properties: &BTreeMap<String, String>) -> Option<ProcessingFamily> {
+    family(properties.get("CAMMODEL").map(String::as_str))
+}
+
+fn oriented_extent(properties: &BTreeMap<String, String>) -> Option<[u32; 2]> {
     let extent: [u32; 2] = [
         properties.get("X3F_IMAGE_WIDTH")?.parse().ok()?,
         properties.get("X3F_IMAGE_HEIGHT")?.parse().ok()?,
@@ -491,10 +515,13 @@ pub fn oriented_extent(properties: &BTreeMap<String, String>) -> Option<[u32; 2]
     }
 }
 
-/// Read photographic capture properties without loading sensor samples or CAMF calibration.
-/// Rendering still needs a full `Source`. This lighter read lets capture details
-/// appear while sensor samples and calibration are still loading.
-pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String, String>> {
+/// Read a photograph's metadata summary without loading sensor samples or CAMF
+/// calibration, so capture details appear while those are still loading.
+pub fn read_metadata_summary(path: impl AsRef<Path>) -> Result<MetadataSummary> {
+    read_capture_properties(path).map(MetadataSummary::from_properties)
+}
+
+pub(crate) fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String, String>> {
     let path = path.as_ref();
     let _scope = crate::diagnostics::scope_with(
         crate::diagnostics::Category::Io,
@@ -508,7 +535,7 @@ pub fn read_capture_properties(path: impl AsRef<Path>) -> Result<BTreeMap<String
         let mut file = crate::diagnostics::io::ObservedReader::new(file, "original-metadata", path);
         let properties = crate::x3f::capture::read_for_export(&mut file)?;
         file.complete();
-        if family(properties.get("CAMMODEL").map(String::as_str)).is_none() {
+        if family_of(&properties).is_none() {
             return Err("unsupported camera family".into());
         }
         Ok(properties)

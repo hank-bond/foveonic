@@ -46,7 +46,6 @@ fn read_impl(
         reader.read_exact(&mut header[BASE_HEADER_BYTES..])?;
     }
     let image_header = header;
-    let mark_bits = super::mark_bits(&header)?;
     super::processing_version(&header)?;
     reader.seek(SeekFrom::End(-4))?;
     let mut pointer = [0; 4];
@@ -116,12 +115,12 @@ fn read_impl(
     } else {
         BTreeMap::new()
     };
-    if include_embedded
+    let checks_previews = include_embedded
         || properties.is_empty()
         || properties.get("CAMMODEL").is_some_and(|m| {
             m.trim().to_ascii_uppercase().starts_with("SIGMA ") && !m.contains("Merrill")
-        })
-    {
+        });
+    let preview = if checks_previews {
         let mut preview_properties = BTreeMap::new();
         let mut preview_area = 0_u64;
         for (start, size) in images {
@@ -142,24 +141,22 @@ fn read_impl(
                 preview_area = area;
             }
         }
-        super::merge_preview_properties(&mut properties, preview_properties);
-    }
-    if file_version >= 0x40000 && ranges[0].0 >= 56 {
+        Some(preview_properties)
+    } else {
+        None
+    };
+    let adjustments = if file_version >= 0x40000 && ranges[0].0 >= 56 {
         let header_bytes = (ranges[0].0 as usize).min(super::adjustments::MAXIMUM_HEADER_BYTES);
         reader.seek(SeekFrom::Start(0))?;
         let mut header = vec![0; header_bytes];
         reader.read_exact(&mut header)?;
         // Browsing can retain capture information even if saved adjustments
         // are malformed. Full RAW decoding reports that header error.
-        if let Ok(adjustments) = super::adjustments::read(&header) {
-            properties.extend(adjustments);
-        }
-    }
-    if include_embedded {
-        properties.insert("EXIF_CAPTURE_CHECKED".into(), "1".into());
-    }
-    properties.insert("X3F_MARK_BITS".into(), mark_bits.to_string());
-    super::record_image_geometry(&mut properties, &image_header)?;
+        super::adjustments::read(&header).unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
+    super::complete_properties(&mut properties, preview, adjustments, &image_header)?;
     Ok(properties)
 }
 

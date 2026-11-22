@@ -279,7 +279,10 @@ fn fresh_merrill_capture_defaults_enable_noise_before_rendering() {
         "SIGMA DP3 Merrill",
         "SIGMA SD1 Merrill",
     ] {
-        let fresh = capture_defaults([("CAMMODEL".into(), model.into())].into()).unwrap();
+        let fresh = capture_defaults(MetadataSummary::from_properties(
+            [("CAMMODEL".into(), model.into())].into(),
+        ))
+        .unwrap();
         assert_eq!(fresh.reconstruction, Some(Default::default()), "{model}");
     }
 }
@@ -322,7 +325,7 @@ fn fresh_capture_defaults_follow_the_recorded_adjustments() {
         ("X3F_ADJUSTMENT_SHARPNESS".into(), "-1".into()),
     ]
     .into();
-    let fresh = capture_defaults(properties).unwrap();
+    let fresh = capture_defaults(MetadataSummary::from_properties(properties)).unwrap();
     assert_eq!(fresh.exposure, 0.75);
     assert_eq!(fresh.tone.contrast, -0.5);
     assert_eq!(fresh.saturation, 1.5);
@@ -341,7 +344,7 @@ fn neutral_saved_recipe_is_not_reinitialized_from_capture() {
 
 #[test]
 fn fresh_monochrome_marks_select_monochrome_saved_tones() {
-    let settings = capture_defaults(
+    let settings = capture_defaults(foveonic::source::MetadataSummary::from_properties(
         [
             ("CAMMODEL".into(), "SIGMA sd Quattro".into()),
             ("X3F_MARK_BITS".into(), "2".into()),
@@ -349,7 +352,7 @@ fn fresh_monochrome_marks_select_monochrome_saved_tones() {
             ("X3F_ADJUSTMENT_MONO_EXPOSURE".into(), "-0.5".into()),
         ]
         .into(),
-    )
+    ))
     .unwrap();
     assert!(settings.is_monochrome());
     assert_eq!(settings.exposure, -0.5);
@@ -357,7 +360,7 @@ fn fresh_monochrome_marks_select_monochrome_saved_tones() {
 
 #[test]
 fn fresh_capture_defaults_read_the_recorded_mixture() {
-    let fresh = capture_defaults(
+    let fresh = capture_defaults(foveonic::source::MetadataSummary::from_properties(
         [
             ("CAMMODEL".into(), "SIGMA sd Quattro".into()),
             ("X3F_ADJUSTMENT_MONO_MIX_RED".into(), "10813".into()),
@@ -365,7 +368,7 @@ fn fresh_capture_defaults_read_the_recorded_mixture() {
             ("X3F_ADJUSTMENT_MONO_MIX_BLUE".into(), "11142".into()),
         ]
         .into(),
-    )
+    ))
     .unwrap();
     assert_eq!(
         fresh.monochrome.mix,

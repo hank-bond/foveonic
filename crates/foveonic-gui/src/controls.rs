@@ -16,55 +16,28 @@ use crate::preferences::EditingSection;
 use eframe::egui;
 use foveonic::{
     render::{ControlCapabilities, Settings},
-    source::{Metadata, ProcessingFamily},
+    source::{Metadata, MetadataSummary, ProcessingFamily},
 };
 
-/// Reset unsupported adjustments when the selected camera's metadata arrives.
-pub fn normalize_incompatible(settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
-    metadata
-        .and_then(|metadata| ControlCapabilities::from_metadata(metadata).ok())
-        .is_some_and(|capabilities| capabilities.normalize(settings))
+/// Reset adjustments the photo's camera family does not offer.
+pub fn normalize(settings: &mut Settings, family: Option<ProcessingFamily>) -> bool {
+    family.is_some_and(|family| ControlCapabilities::from_family(family).normalize(settings))
 }
 
-/// Use bounded capture properties until complete processing metadata is available.
-fn capabilities(
-    metadata: Option<&Metadata>,
-    capture: Option<&std::collections::BTreeMap<String, String>>,
-) -> Option<ControlCapabilities> {
-    metadata
-        .and_then(|m| ControlCapabilities::from_metadata(m).ok())
-        .or_else(|| {
-            capture?
-                .get("CAMMODEL")
-                .and_then(|model| ProcessingFamily::from_camera_model(model))
-                .map(ControlCapabilities::from_family)
-        })
-}
-
-pub fn normalize_with_capture(
-    settings: &mut Settings,
-    metadata: Option<&Metadata>,
-    capture: Option<&std::collections::BTreeMap<String, String>>,
-) -> bool {
-    if metadata.is_some() {
-        normalize_incompatible(settings, metadata)
-    } else {
-        capabilities(None, capture).is_some_and(|c| c.normalize(settings))
-    }
-}
-
+/// The panel for the photo's camera family, from its summary; full `metadata`
+/// adds camera presets once a render has read it.
 pub fn processing(
     ui: &mut egui::Ui,
     settings: &mut Settings,
     metadata: Option<&Metadata>,
-    capture: Option<&std::collections::BTreeMap<String, String>>,
+    summary: Option<&MetadataSummary>,
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
-    let exposure = metadata
-        .map(|m| foveonic::source::CaptureExposureCompensation::from_properties(&m.properties))
-        .or_else(|| capture.map(foveonic::source::CaptureExposureCompensation::from_properties));
-    match capabilities(metadata, capture).map(|c| c.family) {
+    let exposure = summary.map(|summary| {
+        foveonic::source::CaptureExposureCompensation::from_properties(&summary.properties)
+    });
+    match summary.and_then(|summary| summary.family) {
         Some(ProcessingFamily::Classic) => {
             classic::show(ui, settings, metadata, exposure, order, menus)
         }
@@ -75,13 +48,13 @@ pub fn processing(
             exposure,
             metadata
                 .map(|m| m.rotation)
-                .or_else(|| capture?.get("ROTATION")?.parse().ok())
+                .or_else(|| summary?.properties.get("ROTATION")?.parse().ok())
                 .unwrap_or(0),
             order,
             menus,
         ),
         Some(ProcessingFamily::Quattro) => {
-            quattro::show(ui, settings, metadata, capture, exposure, order, menus)
+            quattro::show(ui, settings, metadata, summary, exposure, order, menus)
         }
         None => {
             let mut changed = common::white_balance(ui, settings, metadata, true);

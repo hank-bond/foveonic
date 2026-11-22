@@ -5,7 +5,7 @@ use foveonic::{
     output::{EncodingOptions, Format},
     profile::Profile,
     render::{Engine, Settings},
-    source::{read_capture_properties, Source},
+    source::{read_metadata_summary, Source},
 };
 use serde_json::{json, Value};
 
@@ -82,7 +82,7 @@ fn run(format: Format, file: &str, expected: Value, shutter: (u32, u32)) {
     let directory = tempfile::tempdir().unwrap();
     let local = directory.path().join(file);
     fs::copy(path, &local).unwrap();
-    let capture = read_capture_properties(&local).unwrap();
+    let capture = read_metadata_summary(&local).unwrap().properties;
     assert_eq!(capture["EXIF_CAPTURE_CHECKED"], "1");
     let source = Source::open(&local).unwrap();
     assert_eq!(

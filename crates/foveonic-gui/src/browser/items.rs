@@ -103,7 +103,7 @@ impl Browser {
             let properties = self
                 .records
                 .get(path)
-                .map(|entry| crate::metadata::property_rows(&entry.properties))
+                .map(|entry| crate::metadata::property_rows(&entry.summary.properties))
                 .unwrap_or_default();
             for (index, field) in COLUMNS.into_iter().enumerate() {
                 if field != Field::Rating {
@@ -309,7 +309,7 @@ impl Browser {
         let properties = self
             .records
             .get(path)
-            .map(|entry| crate::metadata::property_rows(&entry.properties))
+            .map(|entry| crate::metadata::property_rows(&entry.summary.properties))
             .unwrap_or_default();
         let mut left = rect.left() + LIST_LEAD;
         for (field, width) in columns.columns() {
@@ -407,10 +407,12 @@ mod tests {
                 browser.records.insert(
                     path,
                     super::super::query::Entry::new(
-                        std::collections::BTreeMap::from([(
-                            "ISO".into(),
-                            "12345678901234567890".into(),
-                        )]),
+                        foveonic::source::MetadataSummary::from_properties(
+                            std::collections::BTreeMap::from([(
+                                "ISO".into(),
+                                "12345678901234567890".into(),
+                            )]),
+                        ),
                         None,
                         Default::default(),
                     ),

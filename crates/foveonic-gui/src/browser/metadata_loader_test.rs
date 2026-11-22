@@ -125,7 +125,7 @@ fn needed_photos_load_while_rendering_demand_holds_back_background_reads() {
     let cache = Arc::new(Cache::new());
     let loader = Loader::new(egui::Context::default(), Some(cache.clone()));
     // A selection holds viewport demand until its photo is planned, and
-    // planning waits for this photo's capture properties.
+    // planning waits for this photo's metadata summary.
     let _selection = cache
         .priority()
         .demand(foveonic::priority::Priority::Viewport);
@@ -156,8 +156,8 @@ fn a_needed_photo_arrives_through_the_browser_and_is_asked_for_again_after_a_rel
     let mut browser = super::super::Browser::new(context.clone());
     let arrive = |browser: &mut super::super::Browser| {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while browser.capture_properties(&path).is_none() {
-            browser.need_capture(std::slice::from_ref(&path));
+        while browser.metadata_summary(&path).is_none() {
+            browser.need_summaries(std::slice::from_ref(&path));
             browser.receive(&context);
             assert!(Instant::now() < deadline, "needed metadata did not arrive");
             std::thread::sleep(Duration::from_millis(2));
@@ -167,7 +167,7 @@ fn a_needed_photo_arrives_through_the_browser_and_is_asked_for_again_after_a_rel
     arrive(&mut browser);
     browser.open(folder.path()).unwrap();
     assert!(
-        browser.capture_properties(&path).is_none(),
+        browser.metadata_summary(&path).is_none(),
         "a reload forgets the old listing's properties"
     );
     arrive(&mut browser);

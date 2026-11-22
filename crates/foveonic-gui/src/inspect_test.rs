@@ -60,7 +60,7 @@ fn quattro_layer_popup_opens_without_requiring_hover_help() {
                         &mut output,
                         &mut channel,
                         Some(&metadata),
-                        None
+                        metadata.processing_family().ok()
                     ));
                 });
             },
@@ -585,13 +585,31 @@ fn classic_selection_normalizes_unavailable_stages_and_layer_components() {
     settings.reconstruction = Some(Default::default());
     let mut output = "noise.layers".into();
     let mut channel = 1;
-    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
+    normalize(
+        &settings,
+        &mut output,
+        &mut channel,
+        Some(&metadata),
+        metadata.processing_family().ok(),
+    );
     assert_eq!((&*output, channel), ("final", -1));
     output = "chroma.layers".into();
-    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
+    normalize(
+        &settings,
+        &mut output,
+        &mut channel,
+        Some(&metadata),
+        metadata.processing_family().ok(),
+    );
     assert_eq!((&*output, channel), ("chroma.layers", 0));
     metadata.properties.insert("ISO".into(), "400".into());
-    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
+    normalize(
+        &settings,
+        &mut output,
+        &mut channel,
+        Some(&metadata),
+        metadata.processing_family().ok(),
+    );
     assert_eq!((&*output, channel), ("final", -1));
 }
 
@@ -623,7 +641,7 @@ fn quattro_unavailable_final_preserves_selection_and_plane_views_use_their_compo
                 &mut output,
                 &mut channel,
                 Some(&metadata),
-                None
+                metadata.processing_family().ok()
             ));
         });
     });
@@ -631,10 +649,22 @@ fn quattro_unavailable_final_preserves_selection_and_plane_views_use_their_compo
     assert_eq!(channel, -1);
     assert!(rendered.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="final (unavailable)")));
     output = "sensor.rgb".into();
-    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
+    normalize(
+        &settings,
+        &mut output,
+        &mut channel,
+        Some(&metadata),
+        metadata.processing_family().ok(),
+    );
     assert_eq!(channel, 0);
     output = "sensor.blue".into();
-    normalize(&settings, &mut output, &mut channel, Some(&metadata), None);
+    normalize(
+        &settings,
+        &mut output,
+        &mut channel,
+        Some(&metadata),
+        metadata.processing_family().ok(),
+    );
     assert_eq!(channel, -1);
 }
 

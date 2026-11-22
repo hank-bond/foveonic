@@ -339,12 +339,12 @@ fn read_entry(
         .and_then(|ratings| ratings.get(Path::new(request.path.file_name().unwrap_or_default())))
         .copied()
         .unwrap_or_default();
-    // A photo whose capture properties cannot be read is listed without them
-    // and renders at full size.
-    let properties = cache
+    // A photo whose metadata cannot be read is listed without it and renders
+    // at full size.
+    let summary = cache
         .map_or_else(
-            || foveonic::source::read_capture_properties(&request.path),
-            |cache| cache.capture_properties(&request.path),
+            || foveonic::source::read_metadata_summary(&request.path),
+            |cache| cache.metadata_summary(&request.path),
         )
         .unwrap_or_else(|error| {
             foveonic::support::report_error(
@@ -363,7 +363,7 @@ fn read_entry(
     Some(Reply::Loaded {
         generation: request.generation,
         path: request.path.clone(),
-        entry: Entry::new(properties, bytes, rating),
+        entry: Entry::new(summary, bytes, rating),
         error,
     })
 }

@@ -700,20 +700,17 @@ impl Browser {
     pub fn thumbnails_ready(&self) -> bool {
         self.pending.is_empty() && self.cache.values().all(Option::is_some)
     }
-    /// The photo's capture properties, once read. Every listed photo's are
-    /// read in the background; `need_capture` reads some at once.
-    pub fn capture_properties(
-        &self,
-        path: &Path,
-    ) -> Option<&std::collections::BTreeMap<String, String>> {
+    /// The photo's metadata summary, once read. Every listed photo's is read
+    /// in the background; `need_summaries` reads some at once.
+    pub fn metadata_summary(&self, path: &Path) -> Option<&foveonic::source::MetadataSummary> {
         self.records
             .get(path)
             .filter(|_| self.metadata_loaded.contains(path))
-            .map(|entry| &entry.properties)
+            .map(|entry| &entry.summary)
     }
 
-    /// Read these photos' capture properties now, without yielding to rendering.
-    pub fn need_capture(&mut self, paths: &[PathBuf]) {
+    /// Read these photos' metadata summaries now, without yielding to rendering.
+    pub fn need_summaries(&mut self, paths: &[PathBuf]) {
         let missing: Vec<_> = paths
             .iter()
             .filter(|path| {
@@ -763,7 +760,7 @@ impl Browser {
             .to_string_lossy()
             .into_owned()];
         if let Some(entry) = self.records.get(path) {
-            lines.extend(crate::metadata::capture_values(&entry.properties));
+            lines.extend(crate::metadata::capture_values(&entry.summary.properties));
         }
         lines.join("\n")
     }
@@ -1154,16 +1151,18 @@ mod tests {
         browser.records.insert(
             path.into(),
             super::query::Entry::new(
-                [
-                    ("SHUTTER", "0.00625"),
-                    ("APERTURE", "5.6"),
-                    ("FLENGTH", "19"),
-                    ("ISO", "100"),
-                    ("EXPCOMP", "0"),
-                ]
-                .into_iter()
-                .map(|(key, value)| (key.into(), value.into()))
-                .collect(),
+                foveonic::source::MetadataSummary::from_properties(
+                    [
+                        ("SHUTTER", "0.00625"),
+                        ("APERTURE", "5.6"),
+                        ("FLENGTH", "19"),
+                        ("ISO", "100"),
+                        ("EXPCOMP", "0"),
+                    ]
+                    .into_iter()
+                    .map(|(key, value)| (key.into(), value.into()))
+                    .collect(),
+                ),
                 None,
                 Default::default(),
             ),

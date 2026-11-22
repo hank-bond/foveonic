@@ -165,12 +165,11 @@ impl App {
                                     // Preview policy and inspection belong to the workspace.
                                     settings.working_scale = self.settings.working_scale;
                                     settings.preview_region = self.settings.preview_region;
-                                    controls::normalize_with_capture(
+                                    controls::normalize(
                                         &mut settings,
-                                        self.metadata.as_deref(),
-                                        self.selected
-                                            .as_deref()
-                                            .and_then(|path| self.browser.capture_properties(path)),
+                                        self.browser
+                                            .metadata_summary(&path)
+                                            .and_then(|summary| summary.family),
                                     );
                                     self.settings = settings.clone();
                                     inspect::normalize(
@@ -178,7 +177,9 @@ impl App {
                                         &mut self.output,
                                         &mut self.channel,
                                         self.metadata.as_deref(),
-                                        None,
+                                        self.browser
+                                            .metadata_summary(&path)
+                                            .and_then(|summary| summary.family),
                                     );
                                 }
                                 self.sidecars.apply(path, settings);

@@ -4,7 +4,7 @@ use foveonic::review::Rating;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     path::{Path, PathBuf},
 };
 
@@ -77,16 +77,20 @@ pub struct Sort {
 
 #[derive(Clone, Debug, Default)]
 pub struct Entry {
-    pub properties: BTreeMap<String, String>,
+    pub summary: foveonic::source::MetadataSummary,
     pub bytes: Option<u64>,
     /// The thumbnail's shape, which large rows are laid out to.
     pub extent: Option<[u32; 2]>,
     pub rating: Rating,
 }
 impl Entry {
-    pub fn new(properties: BTreeMap<String, String>, bytes: Option<u64>, rating: Rating) -> Self {
+    pub fn new(
+        summary: foveonic::source::MetadataSummary,
+        bytes: Option<u64>,
+        rating: Rating,
+    ) -> Self {
         Self {
-            properties,
+            summary,
             bytes,
             rating,
             extent: None,
@@ -95,10 +99,11 @@ impl Entry {
     pub(super) fn number(&self, field: Field) -> Option<f64> {
         let value = match field {
             Field::Rating => f64::from(self.rating.stars()),
-            Field::Width => f64::from(foveonic::source::oriented_extent(&self.properties)?[0]),
-            Field::Height => f64::from(foveonic::source::oriented_extent(&self.properties)?[1]),
+            Field::Width => f64::from(self.summary.extent?[0]),
+            Field::Height => f64::from(self.summary.extent?[1]),
             Field::FileSize => self.bytes? as f64,
             _ => self
+                .summary
                 .properties
                 .get(field.property()?)?
                 .trim()
@@ -196,7 +201,7 @@ pub fn sort(files: &mut [PathBuf], entries: &HashMap<PathBuf, Entry>, sort: Sort
         } else if matches!(field, Field::Camera | Field::Lens) {
             let text = |entry: Option<&Entry>| {
                 entry
-                    .and_then(|e| e.properties.get(field.property().unwrap()))
+                    .and_then(|e| e.summary.properties.get(field.property().unwrap()))
                     .map(|s| s.trim().to_lowercase())
                     .filter(|s| !s.is_empty())
             };

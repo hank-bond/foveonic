@@ -221,21 +221,18 @@ pub struct ImageOutput {
 
 /// Visual buffers and their component meanings. Components remain views of one retained image.
 pub fn image_outputs(settings: &Settings, metadata: Option<&Metadata>) -> Vec<ImageOutput> {
-    image_outputs_with_family(settings, metadata, None)
+    let family = metadata.and_then(|metadata| metadata.processing_family().ok());
+    image_outputs_with_family(settings, metadata, family)
 }
 
-/// Use early capture identity until complete processing metadata becomes available.
-/// A family hint exposes only planes established by decoding, without guessing calibration.
+/// The outputs for a photo whose family is already decided, as by its metadata
+/// summary before full metadata arrives. Without full `metadata`, only planes
+/// established by decoding are offered, without guessing calibration.
 pub fn image_outputs_with_family(
     settings: &Settings,
     metadata: Option<&Metadata>,
     family: Option<ProcessingFamily>,
 ) -> Vec<ImageOutput> {
-    let family = if let Some(metadata) = metadata {
-        metadata.processing_family().ok()
-    } else {
-        family
-    };
     if family == Some(ProcessingFamily::Quattro) {
         let mut outputs = crate::render::quattro_inspection_outputs(metadata);
         outputs.extend(finishing_outputs(settings, metadata));
@@ -834,7 +831,7 @@ mod quattro_tests {
     use super::*;
 
     #[test]
-    fn early_family_catalogue_is_decoded_only_and_metadata_remains_authoritative() {
+    fn early_family_catalogue_is_decoded_only_and_the_decided_family_selects_the_catalogue() {
         let settings = Settings::new("Sunlight", "Standard");
         let early = image_outputs_with_family(&settings, None, Some(ProcessingFamily::Quattro));
         assert_eq!(
@@ -860,7 +857,7 @@ mod quattro_tests {
             lists: Default::default(),
         };
         let full =
-            image_outputs_with_family(&settings, Some(&metadata), Some(ProcessingFamily::Merrill));
+            image_outputs_with_family(&settings, Some(&metadata), Some(ProcessingFamily::Quattro));
         for image in full {
             let expected = if image.name.ends_with(".blue") {
                 Channels::Scalar
@@ -873,7 +870,7 @@ mod quattro_tests {
             .properties
             .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
         let full =
-            image_outputs_with_family(&settings, Some(&metadata), Some(ProcessingFamily::Quattro));
+            image_outputs_with_family(&settings, Some(&metadata), Some(ProcessingFamily::Merrill));
         assert!(full.iter().any(|o| o.name == "final"));
         assert!(!full.iter().any(|o| o.name == "sensor.blue"));
     }

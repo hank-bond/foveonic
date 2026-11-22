@@ -611,7 +611,7 @@ fn oriented_extent_turns_the_recorded_size_by_the_file_orientation() {
 
 #[test]
 #[ignore = "requires FOVEONIC_FIXTURE_DIR pointing to original X3Fs of each family"]
-fn capture_geometry_matches_the_rendered_size_for_every_fixture() {
+fn capture_read_describes_every_fixture_as_full_decoding_does() {
     let directory = std::env::var_os("FOVEONIC_FIXTURE_DIR").expect("set FOVEONIC_FIXTURE_DIR");
     let mut checked = 0;
     for entry in std::fs::read_dir(directory).unwrap() {
@@ -624,6 +624,7 @@ fn capture_geometry_matches_the_rendered_size_for_every_fixture() {
         }
         let properties = read_capture_properties(&path).unwrap();
         let source = Source::open(path.clone()).unwrap();
+        assert_eq!(properties, source.metadata.properties, "{}", path.display());
         assert_eq!(
             oriented_extent(&properties),
             Some(crate::render::native_extent(&source.metadata).unwrap()),

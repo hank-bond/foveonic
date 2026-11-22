@@ -119,7 +119,7 @@ struct App {
     images: rendering::rendered::RenderedImages<worker::RenderResult>,
     /// Screen pixels per UI point this frame, which photo scales follow.
     pixels_per_point: f32,
-    /// The last plan had photos whose settings or capture properties were
+    /// The last plan had photos whose settings or metadata summaries were
     /// still being read.
     photos_loading: bool,
     /// Zoomed photos' moving regions. Planning reads views, so motion uses interior mutability.
@@ -564,9 +564,8 @@ impl App {
             &mut self.channel,
             self.metadata.as_deref(),
             self.browser
-                .capture_properties(&path)
-                .and_then(|p| p.get("CAMMODEL"))
-                .and_then(|model| foveonic::source::ProcessingFamily::from_camera_model(model)),
+                .metadata_summary(&path)
+                .and_then(|summary| summary.family),
         );
     }
     pub(crate) fn navigator_source(&self) -> Option<&worker::RenderResult> {
@@ -1073,16 +1072,16 @@ impl App {
                             self.metadata.as_deref(),
                             self.selected
                                 .as_deref()
-                                .and_then(|path| self.browser.capture_properties(path)),
+                                .and_then(|path| self.browser.metadata_summary(path)),
                             &mut self.preferences.editing_sections,
                             &mut editor::Menus {
                                 exposure_auto_compensation,
                                 prevent_color_clipping,
-                                family: self.metadata.as_deref().and_then(|m| {
-                                    foveonic::render::ControlCapabilities::from_metadata(m)
-                                        .ok()
-                                        .map(|c| c.family)
-                                }),
+                                family: self
+                                    .selected
+                                    .as_deref()
+                                    .and_then(|path| self.browser.metadata_summary(path))
+                                    .and_then(|summary| summary.family),
                                 library: &self.preferences.editor,
                                 state: &mut self.editor_ui,
                             },
@@ -1120,13 +1119,10 @@ impl App {
                                     .settings
                                     .exposure_auto_compensation,
                                 family: self
-                                    .metadata
+                                    .selected
                                     .as_deref()
-                                    .and_then(|m| {
-                                        foveonic::render::ControlCapabilities::from_metadata(m)
-                                            .ok()
-                                            .map(|c| c.family)
-                                    })
+                                    .and_then(|path| self.browser.metadata_summary(path))
+                                    .and_then(|summary| summary.family)
                                     .filter(|_| self.selection_loaded()),
                                 library: &self.preferences.editor,
                                 state: &mut self.editor_ui,
@@ -1208,11 +1204,8 @@ impl App {
                                 self.metadata.as_deref(),
                                 self.selected
                                     .as_deref()
-                                    .and_then(|path| self.browser.capture_properties(path))
-                                    .and_then(|p| p.get("CAMMODEL"))
-                                    .and_then(|model| {
-                                        foveonic::source::ProcessingFamily::from_camera_model(model)
-                                    }),
+                                    .and_then(|path| self.browser.metadata_summary(path))
+                                    .and_then(|summary| summary.family),
                             );
                             let requested = self.comparison.show(
                                 ui,
@@ -1347,15 +1340,9 @@ impl App {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
-        let properties = self
-            .active_image()
-            .map(|f| &f.artifact.metadata.properties)
-            .or_else(|| self.metadata.as_ref().map(|metadata| &metadata.properties))
-            .or_else(|| {
-                self.selected
-                    .as_deref()
-                    .and_then(|path| self.browser.capture_properties(path))
-            });
+        let properties = path
+            .and_then(|path| self.browser.metadata_summary(path))
+            .map(|summary| &summary.properties);
         information::show(ui, properties, &filename, self.viewport().visible_pixels());
         changed
     }
@@ -1592,12 +1579,12 @@ impl eframe::App for App {
         let tile_selected = self.apply_tile_selection();
         self.smoke_tick(ctx);
         automation::begin_frame(ctx);
-        let normalized = controls::normalize_with_capture(
+        let normalized = controls::normalize(
             &mut self.settings,
-            self.metadata.as_deref(),
             self.selected
                 .as_deref()
-                .and_then(|path| self.browser.capture_properties(path)),
+                .and_then(|path| self.browser.metadata_summary(path))
+                .and_then(|summary| summary.family),
         );
         editor::advanced_color::sync_photo(ctx, self.selected.as_deref());
         let previous_settings = self.settings.clone();

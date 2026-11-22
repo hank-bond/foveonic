@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use foveonic::diagnostics as trace;
+use foveonic::source::MetadataSummary;
 use foveonic::{render::Settings, sidecar};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -91,11 +92,10 @@ fn restore(
     // including explicit neutral values, are complete edits.
     let settings = saved.unwrap_or_else(|| {
         cached
-            .map(|s| s.properties)
-            .map(Ok)
-            .unwrap_or_else(|| cache.capture_properties(path))
+            .map(|s| Ok(MetadataSummary::from_properties(s.properties)))
+            .unwrap_or_else(|| cache.metadata_summary(path))
             .ok()
-            .and_then(|properties| source_defaults(properties, defaults).ok())
+            .and_then(|summary| source_defaults(summary, defaults).ok())
             .unwrap_or_default()
     });
     (settings, warning)
@@ -121,18 +121,21 @@ impl CachedRecipes {
         if let Some(settings) = selection.settings.filter(|_| self.enabled) {
             return Ok(settings);
         }
-        source_defaults(selection.properties, &self.defaults)
+        source_defaults(
+            MetadataSummary::from_properties(selection.properties),
+            &self.defaults,
+        )
     }
 }
 
 fn source_defaults(
-    properties: BTreeMap<String, String>,
+    summary: MetadataSummary,
     defaults: &foveonic::render::RecipeDefaults,
 ) -> foveonic::source::Result<Settings> {
     if defaults.is_empty() {
-        capture_defaults(properties)
+        capture_defaults(summary)
     } else {
-        defaults.from_properties(&properties)
+        defaults.from_properties(&summary.properties)
     }
 }
 
@@ -419,15 +422,9 @@ impl Session {
 
 /// Resolve scalar source defaults off the UI thread, before launch choices and
 /// edits are applied. CAMF preset catalogues arrive separately with full metadata.
-pub(crate) fn capture_defaults(
-    properties: BTreeMap<String, String>,
-) -> foveonic::source::Result<Settings> {
-    if properties
-        .get("CAMMODEL")
-        .and_then(|model| foveonic::source::ProcessingFamily::from_camera_model(model))
-        .is_none()
-    {
+pub(crate) fn capture_defaults(summary: MetadataSummary) -> foveonic::source::Result<Settings> {
+    if summary.family.is_none() {
         return Ok(Settings::default());
     }
-    foveonic::render::camera_settings_from_properties(properties)
+    foveonic::render::camera_settings_from_properties(summary.properties)
 }
