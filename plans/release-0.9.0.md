@@ -11,6 +11,10 @@ On 2026-11-17 the owner held 0.9.0. The candidate's wide rendering runs only war
 - [ ] Complete the [render scheduler plan](./render-scheduler.md).
 - [ ] Freeze a new candidate and repeat every release check below, including the comparison with published 0.8.4.
 
+### Scope (owner, 2026-11-22)
+
+0.9.0 ships wide rendering and the start of the simplicity and coherence cleanup: one owner per concern, with no near-duplicate paths that must be kept in sync. 0.10.0 completes that cleanup, until the major sources are gone, before feature work resumes. In 0.9.0: the cleanup already done, the [render scheduler](./render-scheduler.md) step 7 leftovers, persisted-stores slice 2 (the panel sends edits) and the GPU-free view-state owner with its tests, all in [view planning](./view-planning.md). Duplicated paths found from now on are recorded for 0.10.0 unless they break 0.9.0 behavior. Which of the other planned items (stores slices 3–5, the five items found by slice 1, scheduler steps 9–11 and its naming follow-up) stay in 0.9.0 is the owner's call and not yet decided.
+
 The owner authorizes merging the completed wide-rendering work into main, preparing the next minor release and running the new release test process. The subsequent Shift viewing reports belong to this candidate: each photograph must preserve its own point at the same relative position within its displayed region, independently of aspect ratio or pan. Shift-drag must move every edited photograph by the same on-screen displacement. Publication remains a separate owner review.
 
 Requirements: [release specification](../docs/specs/releases.md), [release guide](../docs/releases.md), [test inventory](../docs/testing-coverage.md) and [multi-edit viewing](../docs/specs/multi-edit.md#per-photo-viewing). The [cleanup history](archived/wide-rendering-cleanup.md) records earlier experimental validation. That evidence does not replace testing the merged release candidate.
