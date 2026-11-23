@@ -16,6 +16,6 @@ Update implemented descriptions only when code changes. Discuss and record names
 
 - **[concepts](./concepts.md)** _(reference)._ Shared vocabulary distinguishes requested edits, render coordination, processing reuse and display without prescribing Rust types prematurely.
 - **[open-questions](./open-questions.md)** _(reference)._ Open architecture decisions are reviewed in implementation order instead of becoming a speculative type system.
-- **[principles](./principles.md)** _(reference)._ Architecture changes prioritize responsive culling, clear ownership and one reviewable conceptual improvement at a time.
+- **[principles](./principles.md)** _(reference)._ Architecture changes put one owner and one path per concern first, then responsive culling and one reviewable conceptual improvement at a time.
 
 <!-- INDEX:END -->

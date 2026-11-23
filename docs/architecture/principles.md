@@ -1,11 +1,29 @@
 ---
-summary: "Architecture changes prioritize responsive culling, clear ownership and one reviewable conceptual improvement at a time."
+summary: "Architecture changes put one owner and one path per concern first, then responsive culling and one reviewable conceptual improvement at a time."
 kind: reference
 ---
 
 # Design principles
 
 The [render orchestration requirements](../specs/render-orchestration.md) record the workflow and execution goals. These principles guide how we reach them.
+
+## Keep one owner and one path
+
+This is the first principle. Each concern has one owner and one path. When two pieces of code hold the same value or answer the same question, someone has to keep them in agreement, and that is where this project's bugs have come from. Remove the second path. Do not add handling for the cases where the two disagree.
+
+Apply it in these situations. Each example is something this project built the other way and then had to undo.
+
+- **When you need a value that already has an owner, read it from the owner.** The selected photo's settings lived in the app, in the editing runtime and in the sidecar session. Each frame copied them back and forth. A paste could be overwritten by a file read that finished later, because two copies each thought they were current. Now the editing store owns loaded settings and everything else reads from it.
+- **When you change a value, send the owner an edit that names the change.** The panel edited a copy of the first photo's settings, and a diff worked out the edits afterwards. With several photos selected, the diff saw only the first photo, so a change that depended on each photo's own values could miss the others. Writers now name their change, and the store applies it to every target.
+- **When a new case needs loading, saving or rendering, make it an input to the existing path.** The selected photo had its own sidecar load with its own ready, writable and dirty flags beside the path every other photo used. Rendering had five paths: serial, wide for one camera family, borrowed native sessions, preview prefetch, and fresh renders for the CLI. A new case is a priority or a target on the one path, and never a sibling of it.
+- **When you need an answer something else already gives, ask it.** "Is this view still loading" was decided by the planner and again by a separate busy check. Memory admission was decided in the engine, in the GUI with hand-tuned constants, and again for prefetch. If the owner's answer is not enough, improve the answer there.
+- **When you need a fact about a photo, read it from its one source and wait if it has not arrived.** The camera family was read from rendered metadata, or full metadata, or capture properties, whichever had arrived, and recipe resolution worked it out again. Photo size arrived by two routes. Now each photo has one summary, read once.
+- **When something works on one item or many, write it for many.** Single-photo editing and multi-photo editing were separate paths with separate rules for automatic values. One photo is now a selection of one.
+- **When a change always needs a follow-up step, the owner does it as part of the change.** After a recipe changes, the inspection choice may no longer be valid, and a recipe must fit its camera. Paste, editor actions and two places in the app each call the inspection check themselves. The camera fit runs in the store, again in the worker and again in core edits. A new writer that forgets the call leaves the state invalid.
+- **When a fix needs a flag, a special case or a retry so that two paths agree, merge the paths.** The need for it is the signal that there are two paths.
+- **When a test changes state, it does what a user would do.** Smoke scenarios wrote settings straight into app fields, so they did not exercise the path a real edit takes. Tests now write through the same edit the app uses, or through input events.
+
+The cleanup that applies this principle started in 0.9.0. The [coherence cleanup plan](../../plans/coherence-cleanup.md) lists what remains.
 
 ## Align each slice with the three goals
 

@@ -20,6 +20,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[behavioral-testing](./behavioral-testing.md)** Extend real-app interaction checks and diagnostic feedback across camera families without binding behavior to the current render architecture.
 - **[cache-workflow-measurements](./cache-workflow-measurements.md)** Measure memory ownership and latency across editing workflows before recommending cache budgets or changing retention policy.
 - **[classic-coverage](./classic-coverage.md)** Complete ordinary color rendering and editable DNG export across all pre-Merrill Sigma Classic cameras.
+- **[coherence-cleanup](./coherence-cleanup.md)** Finish removing duplicated owners and near-duplicate paths in 0.10.0, following the one-owner principle that 0.9.0 started applying.
 - **[color-field-boundaries](./color-field-boundaries.md)** Prepare the reviewed Color Field boundary recovery with separate evidence and application masks for a scoped commit.
 - **[color-field-controls](./color-field-controls.md)** Investigate whether color agreement and boundary controls produce visible changes independently of GUI and cache behavior.
 - **[color-field-production](./color-field-production.md)** Remove exploratory color-field paths, resolve the strict Output blocker, and prepare reviewed integration onto current main.

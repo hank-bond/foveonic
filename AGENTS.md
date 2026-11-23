@@ -18,6 +18,7 @@ read_when: "Read first when entering the repository."
 
 ## Implementation approach
 
+- Simplicity and coherence come first. Before adding a copy of a value, a second path or a special case, read [keep one owner and one path](./docs/architecture/principles.md#keep-one-owner-and-one-path) and its examples.
 - Choose the simplest architecture that meets current needs. Add complexity when actual work demonstrates its value.
 - Write the simplest code that does the job in the most obvious, least surprising way. Lines are a maintenance burden, but overly dense code is hard to read. Do as little as is needed and keep it readable.
 - Comment only to explain a non-obvious choice: the why, not the what.
