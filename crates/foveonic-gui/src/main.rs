@@ -78,6 +78,8 @@ const TOOLS_DEFAULT_WIDTH: f32 = 330.;
 struct Opening {
     _priority: foveonic::priority::Demand,
     began: std::time::Instant,
+    /// The photo's settings have loaded.
+    ready: bool,
 }
 
 struct App {
@@ -106,12 +108,10 @@ struct App {
     folder_loader: folder_loader::Loader,
     worker: worker::Worker,
     sidecars: sidecars::Session,
-    metadata: Option<Arc<Metadata>>,
     selected: Option<PathBuf>,
-    settings: Settings,
-    /// The photo whose loaded settings `settings` holds. Until the selected
-    /// photo's settings load, `settings` is a placeholder that nothing saves.
-    settings_photo: Option<PathBuf>,
+    /// The Color Editor range previewed on the selected photo. It is view
+    /// state, so it never enters the photo's recipe.
+    range_preview: Option<usize>,
     output: String,
     channel: i32,
     comparison: inspect::Comparison,
@@ -182,13 +182,10 @@ impl App {
         let photos: Vec<_> = photos
             .iter()
             .map(|path| {
-                let settings = if self.selected.as_ref() == Some(path) {
-                    Some(&self.settings)
-                } else {
-                    self.sidecars
-                        .requested_settings(path)
-                        .or_else(|| self.multi_edit.settings(path))
-                };
+                let settings = self
+                    .multi_edit
+                    .settings(path)
+                    .or_else(|| self.sidecars.requested_settings(path));
                 serde_json::json!({"source":path.to_string_lossy(),
                     "photo":timing::context_for(0,0,path,"snapshot").photo,
                     "settings":settings})
@@ -196,7 +193,7 @@ impl App {
             .collect();
         serde_json::json!({"workspace_mode":if self.browser.import_mode {"import"} else {"browse"},
             "active_photo":self.selected.as_deref().map(|path|path.to_string_lossy()),"targets":self.edit_selection.paths().iter().map(|path|path.to_string_lossy()).collect::<Vec<_>>(),"photos":photos,
-            "settings":self.settings,"processing_quality":self.preferences.processing_quality,
+            "settings":self.selected_settings(),"processing_quality":self.preferences.processing_quality,
             "displayed":self.active_image().map(|frame|serde_json::json!({"source":frame.request.path.to_string_lossy(),
                 "task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,
                 "presentation_revision":frame.request.id,"artifact":frame.artifact.name,
@@ -343,10 +340,8 @@ impl App {
                 worker.cache.clone(),
             ),
             worker,
-            metadata: None,
             selected: None,
-            settings: Settings::new("", ""),
-            settings_photo: None,
+            range_preview: None,
             output: "final".into(),
             channel: -1,
             comparison: Default::default(),
@@ -420,7 +415,6 @@ impl App {
                     // Import review's edits were held only in memory. The session
                     // dropped them above, so the reload reads the saved recipes.
                     self.multi_edit.forget_settings(&mut self.sidecars);
-                    self.settings_photo = None;
                 }
                 if let Some(folder) = canonical {
                     self.preferences.last_folder = Some(folder);
@@ -449,9 +443,7 @@ impl App {
             .sync_browser(&[], self.preferences.multi_edit_limit);
         self.multi_edit.clear();
         self.opening = None;
-        self.settings_photo = None;
         self.sidecars.resolve_settings(&[]);
-        self.metadata = None;
         self.scope_images = None;
         self.scope_snapshot = None;
         self.scope_key = None;
@@ -508,65 +500,56 @@ impl App {
         self.opening = Some(Opening {
             _priority: self.worker.cache.priority().demand(Priority::Viewport),
             began,
+            ready: false,
         });
-        self.metadata = self.multi_edit.metadata(&path);
-        self.settings = Settings::new("", "");
-        self.settings_photo = None;
         self.selected = Some(path);
+        self.range_preview = None;
         self.last_request_id = self.last_request_id.next();
         self.output = "final".into();
         self.channel = -1;
         self.scope_key = None;
         viewport::clear(&self.render_state);
-        self.adopt_selected_settings();
     }
-    /// The selected photo, once `settings` holds its loaded settings.
-    pub(crate) fn loaded_selection(&self) -> Option<&std::path::Path> {
-        self.selected
-            .as_deref()
-            .filter(|path| self.settings_photo.as_deref() == Some(*path))
-    }
-    /// Whether `settings` holds the selected photo's loaded settings.
+    /// Whether the selected photo's settings have loaded.
     pub(crate) fn selection_loaded(&self) -> bool {
-        self.loaded_selection().is_some()
+        self.selected_settings().is_some()
     }
-    /// Record the selected photo's edited `settings` in the editing runtime and
-    /// save them, once they are its loaded settings.
-    #[must_use]
-    pub(crate) fn commit_settings(&mut self) -> bool {
-        let Some(path) = self.loaded_selection().map(std::path::Path::to_path_buf) else {
+    /// The selected photo's settings, once loaded.
+    pub(crate) fn selected_settings(&self) -> Option<&Settings> {
+        self.multi_edit.settings(self.selected.as_deref()?)
+    }
+    /// The selected photo's full metadata, once a render has read it.
+    pub(crate) fn selected_metadata(&self) -> Option<Arc<Metadata>> {
+        self.multi_edit.metadata(self.selected.as_deref()?)
+    }
+    /// Apply `change` to the selected photo and report whether rendering changed.
+    pub(crate) fn edit_selected(&mut self, change: multi_edit_runtime::Change) -> bool {
+        let Some(path) = self.selected.clone() else {
             return false;
         };
-        self.multi_edit
-            .observe_active(&path, &self.settings, self.metadata.as_ref());
-        self.sidecars.apply(path, self.settings.clone());
-        true
+        self.multi_edit.edit(&[path], &change, &mut self.sidecars)
     }
-    /// Take the selected photo's settings from the editing runtime once they load.
-    fn adopt_selected_settings(&mut self) {
-        let Some(path) = self.selected.clone() else {
+    /// Save a framing tool's crop and rotation for the selected photo.
+    fn edit_framing(
+        &mut self,
+        crop: foveonic::crop::Crop,
+        rotation: foveonic::rotation::Rotation,
+    ) -> bool {
+        use multi_edit_controls::{field, Edit};
+        self.edit_selected(multi_edit_runtime::Change::Fields(vec![
+            Edit::set(field::CROP, &crop),
+            Edit::set(field::ROTATION, &rotation),
+        ]))
+    }
+    /// Record when the selected photo's settings load.
+    fn note_selection_ready(&mut self) {
+        let Some(path) = self.selected.clone().filter(|_| self.selection_loaded()) else {
             return;
         };
-        if self.settings_photo.as_ref() == Some(&path) {
-            return;
-        }
-        let Some(settings) = self.multi_edit.settings(&path) else {
-            return;
-        };
-        if let Some(opening) = &self.opening {
+        if let Some(opening) = self.opening.as_mut().filter(|opening| !opening.ready) {
+            opening.ready = true;
             timing::selection_ready(self.last_request_id.0, &path, opening.began);
         }
-        self.settings = settings.clone();
-        self.settings_photo = Some(path.clone());
-        inspect::normalize(
-            &self.settings,
-            &mut self.output,
-            &mut self.channel,
-            self.metadata.as_deref(),
-            self.browser
-                .metadata_summary(&path)
-                .and_then(|summary| summary.family),
-        );
     }
     pub(crate) fn navigator_source(&self) -> Option<&worker::RenderResult> {
         self.active_image()
@@ -682,11 +665,6 @@ impl App {
                 reply.reset_settings.clone(),
                 &reply.settings,
             );
-            if self.selected.as_ref() == Some(&reply.request.path) {
-                if let Some(metadata) = &reply.metadata {
-                    self.metadata = Some(metadata.clone());
-                }
-            }
         }
         match reply.result {
             worker::RenderOutcome::Rendered(frame) if handling.accepted => {
@@ -712,11 +690,9 @@ impl App {
                     && frame.request.rendition == editor::Rendition::Current
                     && frame.artifact.settings.dehaze_estimate
                 {
-                    editor::dehaze::set_estimate(
-                        ctx,
-                        &self.settings,
-                        frame.artifact.dehaze_estimate,
-                    );
+                    if let Some(settings) = self.selected_settings() {
+                        editor::dehaze::set_estimate(ctx, settings, frame.artifact.dehaze_estimate);
+                    }
                 }
                 let active = self.selected.as_ref() == Some(&frame.request.path);
                 let whole = !frame.request.detail;
@@ -859,8 +835,9 @@ impl App {
                     changed |= self.photo_toolbar(ui);
                     return;
                 }
-                let export_ready = self.selection_loaded()
-                    && toolbar::can_export(&self.settings, self.metadata.as_deref());
+                let export_ready = self.selected_settings().is_some_and(|settings| {
+                    toolbar::can_export(settings, self.selected_metadata().as_deref())
+                });
                 let only_current = self
                     .browser
                     .processing_selection(self.selected.as_deref())
@@ -1012,17 +989,25 @@ impl App {
                     && self.selection_loaded()
                     && self.edit_selection.contains(&f.request.path)
             })
-            .map(|frame| self.settings.rotation.extent(frame.camera_extent()));
-        photo_tools::show(
+            .zip(self.selected_settings())
+            .map(|(frame, settings)| settings.rotation.extent(frame.camera_extent()));
+        let (mut crop, mut rotation) = self
+            .selected_settings()
+            .map(|settings| (settings.crop, settings.rotation))
+            .unwrap_or_default();
+        let framed = photo_tools::show(
             ui,
-            &mut self.settings.crop,
-            &mut self.settings.rotation,
+            &mut crop,
+            &mut rotation,
             extent,
             &mut self.preferences.crop_ratios,
             &mut self.preferences.loupe,
-        )
+        );
+        framed && self.edit_framing(crop, rotation)
     }
-    fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
+    /// Draw `section`; the Editing section edits `draft`, a copy of the
+    /// selected photo's settings.
+    fn section_body(&mut self, ui: &mut egui::Ui, section: Section, draft: &mut Settings) -> bool {
         if self.multi_edit.multiple() && matches!(section, Section::Navigator | Section::Scopes) {
             ui.add_enabled(false, egui::Label::new("Available when editing one photo."));
             return false;
@@ -1064,12 +1049,12 @@ impl App {
                         && !self.edit_selection.paths().is_empty()
                         && self.multi_edit.editable_ready(),
                     |ui| {
-                        let exposure_auto_compensation = self.settings.exposure_auto_compensation;
-                        let prevent_color_clipping = self.settings.prevent_color_clipping;
+                        let exposure_auto_compensation = draft.exposure_auto_compensation;
+                        let prevent_color_clipping = draft.prevent_color_clipping;
                         changed = controls::processing(
                             ui,
-                            &mut self.settings,
-                            self.metadata.as_deref(),
+                            draft,
+                            self.selected_metadata().as_deref(),
                             self.selected
                                 .as_deref()
                                 .and_then(|path| self.browser.metadata_summary(path)),
@@ -1091,12 +1076,12 @@ impl App {
                 changed
             }
             Section::Metadata => {
-                metadata::show(ui, self.metadata.as_deref());
+                metadata::show(ui, self.selected_metadata().as_deref());
                 false
             }
         }
     }
-    fn tools(&mut self, ui: &mut egui::Ui) -> bool {
+    fn tools(&mut self, ui: &mut egui::Ui, draft: &mut Settings) -> bool {
         let _scope = foveonic::diagnostics::scope(foveonic::diagnostics::Category::Ui, "ui.editor");
         let mut changed = false;
         let mut movement = None;
@@ -1114,10 +1099,13 @@ impl App {
                         let header = response.rect;
                         if section == Section::Editing {
                             editor::Menus {
-                                prevent_color_clipping: self.settings.prevent_color_clipping,
+                                prevent_color_clipping: self
+                                    .selected_settings()
+                                    .is_some_and(|settings| settings.prevent_color_clipping),
                                 exposure_auto_compensation: self
-                                    .settings
-                                    .exposure_auto_compensation,
+                                    .selected_settings()
+                                    .map(|settings| settings.exposure_auto_compensation)
+                                    .unwrap_or_default(),
                                 family: self
                                     .selected
                                     .as_deref()
@@ -1139,7 +1127,7 @@ impl App {
                                     sections::CONTENT_HORIZONTAL_PADDING,
                                     0,
                                 ))
-                                .show(ui, |ui| self.section_body(ui, section))
+                                .show(ui, |ui| self.section_body(ui, section, draft))
                                 .inner;
                         }
                         if let Some((source, after)) = sections::drop(ui, header) {
@@ -1186,6 +1174,13 @@ impl App {
         let background_width = 2. * widgets::ControlSize::Medium.side()
             + widgets::MEDIUM_CONTROL_GAP
             + 2. * f32::from(widgets::BUTTON_GROUP_MARGIN);
+        let placeholder = Settings::default();
+        let settings = self
+            .selected
+            .as_deref()
+            .and_then(|path| self.multi_edit.settings(path))
+            .unwrap_or(&placeholder);
+        let metadata = self.selected_metadata();
         toolbar::row_with_trailing(
             ui,
             background_width,
@@ -1198,10 +1193,10 @@ impl App {
                         ui.scope(|ui| {
                             changed |= inspect::show(
                                 ui,
-                                &self.settings,
+                                settings,
                                 &mut self.output,
                                 &mut self.channel,
-                                self.metadata.as_deref(),
+                                metadata.as_deref(),
                                 self.selected
                                     .as_deref()
                                     .and_then(|path| self.browser.metadata_summary(path))
@@ -1209,10 +1204,10 @@ impl App {
                             );
                             let requested = self.comparison.show(
                                 ui,
-                                &self.settings,
+                                settings,
                                 &self.output,
                                 self.channel,
-                                self.metadata.as_deref(),
+                                metadata.as_deref(),
                             );
                             let has_pair =
                                 shown_pair.as_ref().is_some_and(|(output, comparison)| {
@@ -1378,7 +1373,12 @@ impl App {
             .active_image()
             .filter(|f| framing_active && f.request.framing_preview)
             .map(|frame| framing::Presentation {
-                rotation: rotate_tool::displayed(ui.ctx(), self.settings.rotation),
+                rotation: rotate_tool::displayed(
+                    ui.ctx(),
+                    self.selected_settings()
+                        .map(|settings| settings.rotation)
+                        .unwrap_or_default(),
+                ),
                 native_extent: frame.camera_extent(),
             });
         self.viewport_mut().editing = photo_tools::takes_pointer(ui.ctx())
@@ -1420,18 +1420,16 @@ impl App {
             }
         } else if let Some(path) = &self.selected {
             if let Some(preview) = self.browser.preview(path) {
+                let crop = if crop_active {
+                    Default::default()
+                } else {
+                    self.selected_settings()
+                        .map(|settings| settings.crop)
+                        .unwrap_or_default()
+                };
                 let viewport = self.viewports.view_mut(Some(path));
                 viewport.zoom_snap = self.preferences.zoom_snap;
-                viewport.show_preview(
-                    ui,
-                    &preview.texture,
-                    preview.native_extent,
-                    if crop_active {
-                        Default::default()
-                    } else {
-                        self.settings.crop
-                    },
-                );
+                viewport.show_preview(ui, &preview.texture, preview.native_extent, crop);
             } else {
                 self.viewport_mut().show_empty(ui);
             }
@@ -1462,35 +1460,45 @@ impl App {
                         .filter(|f| f.request.framing_preview && &f.request.path == path),
                     self.viewport().image_rectangles(),
                 ) {
-                    return framing::photo(
+                    let native = frame.camera_extent();
+                    let (mut crop, mut rotation) = self
+                        .selected_settings()
+                        .map(|settings| (settings.crop, settings.rotation))
+                        .unwrap_or_default();
+                    let framed = framing::photo(
                         ui,
                         &response,
                         canvas,
                         image,
-                        frame.camera_extent(),
-                        &mut self.settings.crop,
-                        &mut self.settings.rotation,
+                        native,
+                        &mut crop,
+                        &mut rotation,
                     );
+                    return framed && self.edit_framing(crop, rotation);
                 }
                 return false;
             }
             // Existing gestures can continue while their render catches up. Start a new
             // selection only from a frame that represents the current authored recipe.
+            let Some(settings) = self.selected_settings() else {
+                return false;
+            };
             let uv = uv.filter(|_| {
                 self.active_image().is_some_and(|image| {
                     self.preferences
-                        .renders_edits(&image.request.settings, &self.settings)
+                        .renders_edits(&image.request.settings, settings)
                 })
             });
-            let (changed, request) =
-                photo_tools::pick(ui, &response, uv, path, &mut self.settings, allowed);
+            let (edit, request) = photo_tools::pick(ui, &response, uv, path, settings, allowed);
             if let Some(request) = request {
                 if let Some(frame) = self.active_image() {
                     self.worker
                         .pick_color(request, frame.request.id, Some(frame.origin.clone()));
                 }
             }
-            return changed;
+            return edit.is_some_and(|edit| {
+                self.edit_selected(multi_edit_runtime::Change::Fields(vec![edit]))
+            });
         }
         false
     }
@@ -1551,7 +1559,6 @@ impl eframe::App for App {
         }
         photo_tools::source(ctx, self.selected.as_deref());
         self.sidecars.receive();
-        self.adopt_selected_settings();
         if self
             .smoke
             .as_ref()
@@ -1579,16 +1586,7 @@ impl eframe::App for App {
         let tile_selected = self.apply_tile_selection();
         self.smoke_tick(ctx);
         automation::begin_frame(ctx);
-        let normalized = controls::normalize(
-            &mut self.settings,
-            self.selected
-                .as_deref()
-                .and_then(|path| self.browser.metadata_summary(path))
-                .and_then(|summary| summary.family),
-        );
         editor::advanced_color::sync_photo(ctx, self.selected.as_deref());
-        let previous_settings = self.settings.clone();
-        let previous_selection = self.selected.clone();
         let toolbar_changed = egui::TopBottomPanel::top("toolbar")
             .show(ctx, |ui| self.toolbar(ui))
             .inner;
@@ -1680,7 +1678,7 @@ impl eframe::App for App {
             self.browser.invalidate_previews();
             self.previews.invalidate();
         }
-        let mut changed = normalized || actions_changed || tuning_changed || toolbar_changed;
+        let mut changed = actions_changed || tuning_changed || toolbar_changed;
         self.sync_browser_selection();
         if self
             .selected
@@ -1712,7 +1710,10 @@ impl eframe::App for App {
             false
         };
         self.sync_multi_edit();
-        let editor_before = self.settings.clone();
+        self.note_selection_ready();
+        let mut draft = self.selected_settings().cloned().unwrap_or_default();
+        draft.color_range_preview = self.range_preview;
+        let editor_before = draft.clone();
         multi_edit_controls::begin_with_numeric(
             ctx,
             self.multi_edit.snapshots(),
@@ -1735,32 +1736,21 @@ impl eframe::App for App {
             .width_range(TOOLS_MIN_WIDTH..=tools_limit)
             .resizable(true)
             .show(ctx, |ui| {
-                changed |= self.tools(ui);
+                changed |= self.tools(ui, &mut draft);
             });
         automation::panel(settings_panel.response.rect);
         let mut edits = multi_edit_controls::finish(ctx);
+        self.range_preview = draft.color_range_preview;
         if self.multi_edit.editable_ready() {
-            let assignments =
-                multi_edit_controls::assignments(&editor_before, &self.settings, &edits);
+            let assignments = multi_edit_controls::assignments(&editor_before, &draft, &edits);
             edits.extend(assignments);
-            if self.multi_edit.apply_edits(&edits, &mut self.sidecars) {
-                for path in self.edit_selection.paths() {
+            let paths = self.edit_selection.paths().to_vec();
+            let change = multi_edit_runtime::Change::Fields(edits);
+            if self.multi_edit.edit(&paths, &change, &mut self.sidecars) {
+                for path in &paths {
                     self.previews.invalidate_path(path);
                 }
                 changed = true;
-            }
-            if !edits.is_empty() {
-                if let Some(settings) = self
-                    .selected
-                    .as_deref()
-                    .and_then(|path| self.multi_edit.settings(path))
-                {
-                    // The range preview is view state, not an edit, so this frame's
-                    // choice in the panel stands.
-                    let preview = self.settings.color_range_preview;
-                    self.settings = settings.clone();
-                    self.settings.color_range_preview = preview;
-                }
             }
         }
         let mut viewport_frame = egui::Frame::central_panel(&ctx.style());
@@ -1775,11 +1765,6 @@ impl eframe::App for App {
         if photo_tools::take_view_change(ctx) {
             self.viewport_mut().reset();
             changed = true;
-        }
-        let edited = previous_selection == self.selected
-            && (normalized || previous_settings != self.settings);
-        if edited && self.commit_settings() {
-            self.exit_before();
         }
         self.preferences.direct_color = editor::direct_color::configuration(ctx);
         // A tile click this frame selects next frame; it must not leave Before now.
@@ -1829,7 +1814,7 @@ impl eframe::App for App {
                 "requested_workspace",
                 serde_json::json!({
                     "source":self.selected.as_deref().map(crate::support::path),"revision":self.last_request_id,
-                    "settings":foveonic::support::settings_snapshot(&self.settings),"quality":self.preferences.processing_quality,"output":self.output,
+                    "settings":self.selected_settings().map(foveonic::support::settings_snapshot),"range_preview":self.range_preview,"quality":self.preferences.processing_quality,"output":self.output,
                 }),
             );
             self.support_context_due = None;

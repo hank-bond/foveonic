@@ -80,20 +80,35 @@ pub fn takes_pointer(ctx: &egui::Context) -> bool {
     }
 }
 /// Released pickers still consume their pending reply. Selecting another tool cancels that reply.
+/// Each picker returns the edit to the one field it sets.
 pub fn pick(
     ui: &egui::Ui,
     response: &egui::Response,
     uv: Option<[f32; 2]>,
     path: &std::path::Path,
-    settings: &mut foveonic::render::Settings,
+    settings: &foveonic::render::Settings,
     allowed: bool,
-) -> (bool, Option<crate::rendering::worker::ColorPickRequest>) {
+) -> (
+    Option<crate::multi_edit_controls::Edit>,
+    Option<crate::rendering::worker::ColorPickRequest>,
+) {
+    use crate::multi_edit_controls::{field, Edit};
+    let mut picked = settings.clone();
     if editor::white_balance::active(ui.ctx()) || editor::white_balance::pending(ui.ctx()) {
-        editor::white_balance::photo(ui, response, uv, path, settings, allowed)
+        let (changed, request) =
+            editor::white_balance::photo(ui, response, uv, path, &mut picked, allowed);
+        let edit = Edit::set(field::WHITE_BALANCE_BIAS, &picked.white_balance_bias);
+        (changed.then_some(edit), request)
     } else if editor::dehaze::active(ui.ctx()) || editor::dehaze::pending(ui.ctx()) {
-        editor::dehaze::photo(ui, response, uv, path, settings, allowed)
+        let (changed, request) =
+            editor::dehaze::photo(ui, response, uv, path, &mut picked, allowed);
+        let edit = Edit::set(field::DEHAZE_SHADOW, &picked.dehaze.shadow);
+        (changed.then_some(edit), request)
     } else {
-        editor::direct_color::photo(ui, response, uv, path, settings, allowed)
+        let (changed, request) =
+            editor::direct_color::photo(ui, response, uv, path, &mut picked, allowed);
+        let edit = Edit::set(field::COLOR_EDITOR, &picked.photographic.color_editor);
+        (changed.then_some(edit), request)
     }
 }
 pub fn framing(ctx: &egui::Context) -> bool {
@@ -357,7 +372,7 @@ mod tests {
         for tool in [Tool::WhiteBalance, Tool::Dehaze] {
             let ctx = egui::Context::default();
             select(&ctx, tool);
-            let mut settings = foveonic::render::Settings::default();
+            let settings = foveonic::render::Settings::default();
             let mut requests = 0;
             let pos = egui::pos2(100., 100.);
             let mut draw = |time: f64, pressed: Option<bool>| {
@@ -394,7 +409,7 @@ mod tests {
                                 &response,
                                 Some([0.5, 0.5]),
                                 std::path::Path::new("photo.x3f"),
-                                &mut settings,
+                                &settings,
                                 true,
                             );
                             requests += usize::from(request.is_some());

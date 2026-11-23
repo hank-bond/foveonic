@@ -160,19 +160,20 @@ impl DamagedRecovery {
                 if !app.shows_current_view(frame)
                     || !crate::rendering::matching::same_authored_edits(
                         &frame.request.settings,
-                        &app.settings,
+                        app.smoke_recipe(),
                     )
                 {
                     return Ok(false);
                 }
-                let matches =
-                    crate::rendering::matching::same_authored_edits(
-                        &frame.request.settings,
-                        expected,
-                    ) && crate::rendering::matching::same_authored_edits(&app.settings, expected)
-                        && !app.activity.unread_errors();
+                let matches = crate::rendering::matching::same_authored_edits(
+                    &frame.request.settings,
+                    expected,
+                ) && crate::rendering::matching::same_authored_edits(
+                    app.smoke_recipe(),
+                    expected,
+                ) && !app.activity.unread_errors();
                 self.checks.push(json!({"check":"valid-raw-recovers-latest-frame","passed":matches,"source":source,"task":frame.diagnostic_task.id,"revision":frame.diagnostic_task.revision,"unread_errors":app.activity.unread_errors(),
-                    "expected_exposure":expected.exposure,"restored_exposure":app.settings.exposure}));
+                    "expected_exposure":expected.exposure,"restored_exposure":app.smoke_recipe().exposure}));
                 if !matches {
                     return Err(
                         "valid RAW did not restore its expected edits without a new error".into(),

@@ -179,7 +179,6 @@ impl BrowserJourney {
                     let settings = app
                         .multi_edit
                         .settings(path)
-                        .or_else(|| (app.selected.as_ref() == Some(path)).then_some(&app.settings))
                         .ok_or("missing retained settings")?;
                     actual.push(settings.exposure);
                 }

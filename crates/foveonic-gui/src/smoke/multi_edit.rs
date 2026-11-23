@@ -185,15 +185,15 @@ impl App {
                     } else {
                         foveonic::render::BaseResponse::Natural
                     };
-                    self.sidecars.apply(path.clone(), settings.clone());
-                    self.multi_edit.observe_requested(path, &settings);
-                    smoke.multi_expected.push(settings);
+                    self.multi_edit.replace(
+                        std::slice::from_ref(path),
+                        &settings,
+                        &mut self.sidecars,
+                    );
+                    smoke
+                        .multi_expected
+                        .push(self.multi_edit.settings(path).unwrap().clone());
                 }
-                self.settings = self
-                    .multi_edit
-                    .settings(self.selected.as_ref().unwrap())
-                    .unwrap()
-                    .clone();
                 self.submit_photos();
             } else {
                 // Let injected input, layout and the last accepted image reach the screen.
@@ -430,7 +430,11 @@ impl App {
                     range: [-4., 4.],
                     mapping: Mapping::Identity,
                 };
-                assert!(self.multi_edit.apply_edits(&[edit], &mut self.sidecars));
+                assert!(self.multi_edit.edit(
+                    self.edit_selection.paths(),
+                    &crate::multi_edit_runtime::Change::Fields(vec![edit]),
+                    &mut self.sidecars,
+                ));
                 for path in self.edit_selection.paths() {
                     let index = smoke
                         .multi_paths
@@ -439,11 +443,6 @@ impl App {
                         .unwrap();
                     smoke.multi_expected[index] = self.multi_edit.settings(path).unwrap().clone();
                 }
-                self.settings = self
-                    .multi_edit
-                    .settings(self.selected.as_ref().unwrap())
-                    .unwrap()
-                    .clone();
                 self.submit_photos();
                 if target == "multi-relative" {
                     // Viewing A preserves the two-target subset before removing B.
@@ -485,7 +484,11 @@ impl App {
                     pointer: "/photographic/base_response".into(),
                     value: serde_json::to_value(foveonic::render::BaseResponse::Natural).unwrap(),
                 };
-                assert!(self.multi_edit.apply_edits(&[edit], &mut self.sidecars));
+                assert!(self.multi_edit.edit(
+                    self.edit_selection.paths(),
+                    &crate::multi_edit_runtime::Change::Fields(vec![edit]),
+                    &mut self.sidecars,
+                ));
                 for (index, path) in smoke.multi_paths.iter().enumerate() {
                     smoke.multi_expected[index] = self.multi_edit.settings(path).unwrap().clone();
                     assert_eq!(
@@ -493,11 +496,6 @@ impl App {
                         foveonic::render::BaseResponse::Natural
                     );
                 }
-                self.settings = self
-                    .multi_edit
-                    .settings(self.selected.as_ref().unwrap())
-                    .unwrap()
-                    .clone();
                 self.submit_photos();
             }
             _ => unreachable!("unknown multi-edit smoke step"),
@@ -582,17 +580,16 @@ impl App {
             mapping: Mapping::Identity,
         };
         assert!(
-            self.multi_edit.apply_edits(&[edit], &mut self.sidecars),
+            self.multi_edit.edit(
+                self.edit_selection.paths(),
+                &crate::multi_edit_runtime::Change::Fields(vec![edit]),
+                &mut self.sidecars,
+            ),
             "multi-edit sweep reached the exposure limit"
         );
         for (index, path) in smoke.multi_paths.iter().enumerate() {
             smoke.multi_expected[index] = self.multi_edit.settings(path).unwrap().clone();
         }
-        self.settings = self
-            .multi_edit
-            .settings(self.selected.as_ref().unwrap())
-            .unwrap()
-            .clone();
         self.submit_photos();
         smoke.multi_sweep_started = Some(started);
         true

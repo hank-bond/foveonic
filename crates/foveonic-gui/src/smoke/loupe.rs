@@ -623,9 +623,11 @@ impl Driver {
                 settings.crop.bounds = [0.1, 0.2, 0.9, 0.8];
                 settings.rotation.turns = 1;
                 settings.rotation.degrees = 0.;
-                app.sidecars
-                    .apply(self.target().to_owned(), settings.clone());
-                app.multi_edit.observe_requested(self.target(), &settings);
+                app.multi_edit.replace(
+                    &[self.target().to_path_buf()],
+                    &settings,
+                    &mut app.sidecars,
+                );
                 self.transient_settings = Some(settings);
                 app.submit_photos();
                 self.phase = Phase::TransientComposed;
@@ -739,8 +741,11 @@ impl Driver {
                     settings.processing_sections.tone = true;
                     settings.photographic.tone_method = PhotographicMethod::Universal;
                     settings.photographic.base_response = BaseResponse::Natural;
-                    app.sidecars.apply(target.clone(), settings.clone());
-                    app.multi_edit.observe_requested(target, &settings);
+                    app.multi_edit.replace(
+                        std::slice::from_ref(target),
+                        &settings,
+                        &mut app.sidecars,
+                    );
                     app.submit_photos();
                     self.phase = Phase::AdaptiveReady;
                 } else {
@@ -801,7 +806,7 @@ impl Driver {
                     return Ok(false);
                 }
                 let frame = app.current_image(&path).unwrap();
-                let effective = app.preferences.with_workspace_settings(&app.settings);
+                let effective = app.preferences.with_workspace_settings(app.smoke_recipe());
                 self.single_whole = (frame.artifact.settings.working_scale == Scale::NATIVE
                     && frame.artifact.settings.output_size.is_none()
                     && frame.comparison.is_none()
@@ -1059,8 +1064,8 @@ impl Driver {
     fn begin_single(&mut self, app: &mut App) {
         let saved = self.saved.as_ref().unwrap();
         for (path, settings) in &saved.settings {
-            app.sidecars.apply(path.clone(), settings.clone());
-            app.multi_edit.observe_requested(path, settings);
+            app.multi_edit
+                .replace(std::slice::from_ref(path), settings, &mut app.sidecars);
         }
         let origin = app.browser.arrow_origin(app.selected.as_deref());
         let index = app
@@ -1084,8 +1089,8 @@ impl Driver {
     fn restore(&mut self, app: &mut App, ctx: &egui::Context) {
         let saved = self.saved.as_ref().unwrap();
         for (path, settings) in &saved.settings {
-            app.sidecars.apply(path.clone(), settings.clone());
-            app.multi_edit.observe_requested(path, settings);
+            app.multi_edit
+                .replace(std::slice::from_ref(path), settings, &mut app.sidecars);
         }
         app.preferences.processing_quality = saved.quality;
         app.preferences.multi_edit_limit = saved.limit;

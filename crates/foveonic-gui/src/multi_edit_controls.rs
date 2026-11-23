@@ -56,7 +56,27 @@ pub enum Edit {
         value: Value,
     },
 }
+/// A recipe field and the type of its value, so a writer names what it changes.
+pub struct Field<T>(&'static str, std::marker::PhantomData<fn() -> T>);
+impl<T> Clone for Field<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for Field<T> {}
+impl<T> Field<T> {
+    const fn new(pointer: &'static str) -> Self {
+        Self(pointer, std::marker::PhantomData)
+    }
+}
 impl Edit {
+    /// Set `field` to `value`.
+    pub fn set<T: Serialize>(field: Field<T>, value: &T) -> Self {
+        Self::Assign {
+            pointer: field.0.into(),
+            value: serde_json::to_value(value).expect("recipe fields serialize"),
+        }
+    }
     pub fn pointer(&self) -> &str {
         match self {
             Self::Number { pointer, .. }
@@ -67,6 +87,19 @@ impl Edit {
     }
 }
 
+/// Fields that tools and actions outside the panel set.
+pub mod field {
+    use super::Field;
+    use foveonic::render::{AutoExposureCompensation, ColorEditorControls, WhiteBalanceBias};
+    pub const CROP: Field<foveonic::crop::Crop> = Field::new("/crop");
+    pub const ROTATION: Field<foveonic::rotation::Rotation> = Field::new("/rotation");
+    pub const WHITE_BALANCE_BIAS: Field<WhiteBalanceBias> = Field::new("/white_balance_bias");
+    pub const DEHAZE_SHADOW: Field<Option<[f32; 3]>> = Field::new("/dehaze/shadow");
+    pub const COLOR_EDITOR: Field<ColorEditorControls> = Field::new("/photographic/color_editor");
+    pub const PREVENT_COLOR_CLIPPING: Field<bool> = Field::new("/prevent_color_clipping");
+    pub const EXPOSURE_AUTO_COMPENSATION: Field<AutoExposureCompensation> =
+        Field::new("/exposure_auto_compensation");
+}
 /// Each descriptor changes one authored property. Transient render policy stays on its owner.
 pub fn apply(settings: &mut Settings, edits: &[Edit]) -> bool {
     if edits.is_empty() {
@@ -750,6 +783,44 @@ fn selection_slider(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_named_field_sets_its_recipe_value() {
+        let mut settings = Settings::default();
+        settings.crop.bounds = [0.1, 0.2, 0.9, 0.8];
+        settings.rotation.turns = 1;
+        settings.white_balance_bias.warmth = 0.3;
+        settings.dehaze.shadow = Some([0.1, 0.2, 0.3]);
+        settings.photographic.color_editor.bands[0].saturation = -0.2;
+        settings.prevent_color_clipping = !settings.prevent_color_clipping;
+        settings.exposure_auto_compensation = foveonic::render::AutoExposureCompensation::Dial;
+        let edits = [
+            Edit::set(field::CROP, &settings.crop),
+            Edit::set(field::ROTATION, &settings.rotation),
+            Edit::set(field::WHITE_BALANCE_BIAS, &settings.white_balance_bias),
+            Edit::set(field::DEHAZE_SHADOW, &settings.dehaze.shadow),
+            Edit::set(field::COLOR_EDITOR, &settings.photographic.color_editor),
+            Edit::set(
+                field::PREVENT_COLOR_CLIPPING,
+                &settings.prevent_color_clipping,
+            ),
+            Edit::set(
+                field::EXPOSURE_AUTO_COMPENSATION,
+                &settings.exposure_auto_compensation,
+            ),
+        ];
+        for edit in &edits {
+            let mut edited = Settings::default();
+            assert!(
+                apply(&mut edited, std::slice::from_ref(edit)),
+                "{}",
+                edit.pointer()
+            );
+        }
+        let mut edited = Settings::default();
+        assert!(apply(&mut edited, &edits));
+        assert_eq!(edited, settings);
+    }
 
     /// Draw a slider for `values` in [0, 1] with these events and return its rect and change.
     fn slider_frame(

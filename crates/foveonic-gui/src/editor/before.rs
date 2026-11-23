@@ -46,17 +46,6 @@ impl App {
             Rendition::Current
         }
     }
-    /// The photo's capture metadata, once a render or the selected photo's load has read it.
-    pub(crate) fn photo_metadata(
-        &self,
-        path: &std::path::Path,
-    ) -> Option<std::sync::Arc<foveonic::source::Metadata>> {
-        self.multi_edit.metadata(path).or_else(|| {
-            (self.selected.as_deref() == Some(path))
-                .then(|| self.metadata.clone())
-                .flatten()
-        })
-    }
     /// The look a photo shows: its rendition, or Current while Camera or
     /// Defaults cannot be resolved yet, as before capture metadata arrives with
     /// a Current image.
@@ -90,11 +79,15 @@ impl App {
         path: &std::path::Path,
         look: Rendition,
     ) -> Option<foveonic::render::Settings> {
-        let current = self.authored_settings(path)?;
+        let current = self.multi_edit.settings(path)?;
         let settings = if look == Rendition::Current {
-            current.clone()
+            let mut settings = current.clone();
+            if self.selected.as_deref() == Some(path) {
+                settings.color_range_preview = self.range_preview;
+            }
+            settings
         } else {
-            let metadata = self.photo_metadata(path);
+            let metadata = self.multi_edit.metadata(path);
             Before { active: look }
                 .settings(
                     current,

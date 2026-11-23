@@ -67,7 +67,7 @@ fn load(session: &mut Session, path: &std::path::Path) -> Settings {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         session.receive();
-        if let Some(reply) = session.take_resolved().pop() {
+        if let Some(reply) = session.take_resolved(|_| true).pop() {
             assert_eq!(reply.path, path);
             return reply.settings;
         }
@@ -133,6 +133,24 @@ fn pasted_settings_reach_every_photo_and_freeze_independently() {
             Some(frozen.clone())
         );
     }
+}
+
+#[test]
+fn an_edit_recorded_after_a_read_finishes_replaces_what_was_read() {
+    let directory = Directory::new();
+    let a = directory.input("a.x3f");
+    sidecar::save(&a, &Settings::new("Shade", "Vivid")).unwrap();
+    let mut session = session(true);
+    session.resolve_settings(std::slice::from_ref(&a));
+    wait(&mut session, "the read did not finish", |session| {
+        !session.resolved.is_empty()
+    });
+    let mut pasted = Settings::new("Sunlight", "Standard");
+    pasted.exposure = 0.7;
+    session.apply(a.clone(), pasted.clone());
+    let taken = session.take_resolved(|_| true);
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].settings, pasted);
 }
 
 #[test]
@@ -395,7 +413,7 @@ fn editing_subset_resolution_replaces_old_reads_and_keeps_import_edits_in_memory
     let deadline = Instant::now() + Duration::from_secs(5);
     let resolved = loop {
         session.receive();
-        let replies = session.take_resolved();
+        let replies = session.take_resolved(|_| true);
         if !replies.is_empty() {
             break replies;
         }
@@ -410,7 +428,7 @@ fn editing_subset_resolution_replaces_old_reads_and_keeps_import_edits_in_memory
     edited.exposure = 1.7;
     session.apply(b.clone(), edited.clone());
     session.resolve_settings(std::slice::from_ref(&b));
-    let resolved = session.take_resolved();
+    let resolved = session.take_resolved(|_| true);
     assert_eq!(resolved[0].settings, edited);
     drop(session);
     assert_eq!(sidecar::load(&b).unwrap().settings(), Some(saved));

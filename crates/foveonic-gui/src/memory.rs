@@ -151,8 +151,8 @@ impl crate::App {
         for frame in self.images.images() {
             frame_key(frame, &mut key);
         }
-        if let Some(metadata) = &self.metadata {
-            key.push(Arc::as_ptr(metadata) as usize as u64);
+        if let Some(metadata) = self.selected_metadata() {
+            key.push(Arc::as_ptr(&metadata) as usize as u64);
         }
         if let Some(images) = &self.scope_images {
             images.memory_key(&mut key);
@@ -170,8 +170,8 @@ impl crate::App {
         for frame in self.images.images() {
             inventory.frame(frame);
         }
-        if let Some(metadata) = &self.metadata {
-            inventory.metadata(metadata);
+        if let Some(metadata) = self.selected_metadata() {
+            inventory.metadata(&metadata);
         }
         self.browser.memory_resources(&mut inventory);
         self.navigator.memory_resources(&mut inventory);

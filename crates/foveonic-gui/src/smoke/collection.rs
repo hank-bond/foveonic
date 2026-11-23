@@ -237,10 +237,7 @@ fn frames_ready(app: &App, paths: &[PathBuf], exposures: &[f32]) -> bool {
             .active_image()
             .filter(|frame| frame.request.path == *path)
             .or_else(|| app.photo_layers(path)[0]);
-        let settings = app
-            .multi_edit
-            .settings(path)
-            .or_else(|| (app.selected.as_ref() == Some(path)).then_some(&app.settings));
+        let settings = app.multi_edit.settings(path);
         frame.is_some_and(|frame| {
             frame.request.rendition == crate::editor::Rendition::Current
                 && app.shows_current_view(frame)

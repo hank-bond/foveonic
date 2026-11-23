@@ -6,7 +6,7 @@ use crate::{
     App,
 };
 use eframe::egui;
-use foveonic::render::ProcessingQuality;
+use foveonic::render::{ProcessingQuality, Settings};
 use std::path::PathBuf;
 
 mod background;
@@ -683,7 +683,7 @@ impl App {
             "scope_snapshot":self.scope_snapshot.as_ref().map(|snapshot|(snapshot.key.request_id,snapshot.key.region)),
             "navigator":self.navigator.smoke_state(self.navigator_source(),self.displayed_mapping()),
             "frame":self.active_image().map(|frame|serde_json::json!({
-                "matches_settings":crate::rendering::matching::same_authored_edits(&frame.request.settings,&self.settings),
+                "matches_settings":self.matches_selected(&frame.request.settings),
                 "current_view":self.shows_current_view(frame),
                 "navigator_ready":self.navigator_source().is_some_and(|source|self.navigator.ready(source,self.displayed_mapping())),
                 "thumbnail_revision":self.browser.rendered_revision(&frame.request.path),
@@ -713,6 +713,24 @@ impl App {
         }
     }
 
+    /// The selected photo's settings. Harness steps run once they have loaded.
+    pub(crate) fn smoke_recipe(&self) -> &Settings {
+        self.selected_settings()
+            .expect("smoke steps wait for loaded settings")
+    }
+    /// Whether a request rendered the selected photo's loaded edits.
+    fn matches_selected(&self, requested: &Settings) -> bool {
+        self.selected_settings().is_some_and(|settings| {
+            crate::rendering::matching::same_authored_edits(requested, settings)
+        })
+    }
+    /// Author a scenario's change to the selected photo's recipe through the
+    /// editing store, as a person editing would.
+    pub(crate) fn smoke_edit(&mut self, change: impl FnOnce(&mut Settings)) {
+        let mut recipe = self.smoke_recipe().clone();
+        change(&mut recipe);
+        self.edit_selected(crate::multi_edit_runtime::Change::Replace(Box::new(recipe)));
+    }
     pub(super) fn smoke_tick(&mut self, ctx: &egui::Context) {
         self.smoke_check_deadline();
         if self
@@ -765,10 +783,7 @@ impl App {
         let shown_detail = self.active_patch().map(|detail| {
             (
                 detail.request.framing_preview,
-                crate::rendering::matching::same_authored_edits(
-                    &detail.request.settings,
-                    &self.settings,
-                ),
+                self.matches_selected(&detail.request.settings),
             )
         });
         if self.smoke.as_ref().is_some_and(|smoke| {
@@ -785,10 +800,7 @@ impl App {
                     && frame.request.output == "final"
                     && self.selected.as_ref() == Some(&frame.request.path)
                     && frame.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
-                    && crate::rendering::matching::same_authored_edits(
-                        &frame.request.settings,
-                        &self.settings,
-                    )
+                    && self.matches_selected(&frame.request.settings)
             })
         {
             let feedback = self.active_patch().or(self.active_image()).unwrap();
@@ -801,7 +813,7 @@ impl App {
             // Either the regional result or its whole-image continuation may already be visible.
             // Changing settings and submitting must preserve the exact completed feedback.
             for exposure in [0.625, 0.75] {
-                self.settings.exposure = exposure;
+                self.smoke_edit(|recipe| recipe.exposure = exposure);
                 for submitted in [false, true] {
                     if submitted {
                         self.submit_photos();
@@ -831,10 +843,7 @@ impl App {
                         && !frame.request.framing_preview
                         && frame.comparison.is_none()
                         && frame.artifact.settings.working_scale == foveonic::render::Scale::NATIVE
-                        && crate::rendering::matching::same_authored_edits(
-                            &frame.request.settings,
-                            &self.settings,
-                        )
+                        && self.matches_selected(&frame.request.settings)
                 });
         let current_native_whole = self.active_image().is_some_and(|frame| {
             self.selected.as_ref() == Some(&frame.request.path)
@@ -846,10 +855,7 @@ impl App {
                 && !frame.request.detail
                 && !frame.request.framing_preview
                 && frame.comparison.is_none()
-                && crate::rendering::matching::same_authored_edits(
-                    &frame.request.settings,
-                    &self.settings,
-                )
+                && self.matches_selected(&frame.request.settings)
                 && self.shows_current_view(frame)
                 && self
                     .worker
@@ -878,10 +884,7 @@ impl App {
         )
         .is_some_and(|frame| {
             frame.processing_quality() == self.preferences.processing_quality
-                && crate::rendering::matching::same_authored_edits(
-                    &frame.request.settings,
-                    &self.settings,
-                )
+                && self.matches_selected(&frame.request.settings)
                 && self.shows_current_view(frame)
                 && automatic_scale_bound(
                     frame,
@@ -901,11 +904,7 @@ impl App {
             let rows = self.viewport_selection.iter().map(|path| {
                 let frame = self.active_image().filter(|frame| &frame.request.path == path)
                     .or_else(|| self.photo_layers(path)[0]);
-                let expected = if self.selected.as_ref() == Some(path) {
-                    Some(&self.settings)
-                } else {
-                    self.multi_edit.settings(path)
-                };
+                let expected = self.multi_edit.settings(path);
                 let demand = frame.and_then(|frame| automatic_scale_bound(
                     frame, self.viewports.view(Some(path)), self.preferences.processing_quality,
                     ctx.pixels_per_point(),
@@ -1047,7 +1046,7 @@ impl App {
                         ctx,
                         smoke,
                         self.active_image().unwrap(),
-                        &self.settings,
+                        self.smoke_recipe(),
                         self.viewports.view(self.selected.as_deref()),
                     );
                 }
@@ -1064,10 +1063,10 @@ impl App {
                         );
                         assert_eq!(crate::crop_tool::active(ctx), frame.request.framing_preview);
                         assert_eq!(
-                            self.settings.crop.is_full(),
+                            self.smoke_recipe().crop.is_full(),
                             matches!(target, "crop-ready" | "crop-drag")
                         );
-                        assert_eq!(frame.artifact.settings.crop, self.settings.crop);
+                        assert_eq!(frame.artifact.settings.crop, self.smoke_recipe().crop);
                         if target == "crop-smart" {
                             let feedback = self.active_patch().unwrap_or(frame);
                             assert_eq!(
@@ -1114,7 +1113,7 @@ impl App {
                         }
                         std::fs::write(
                             smoke.directory.join(format!("{target}.json")),
-                            serde_json::to_vec_pretty(&self.settings.crop).unwrap(),
+                            serde_json::to_vec_pretty(&self.smoke_recipe().crop).unwrap(),
                         )
                         .unwrap();
                     }
@@ -1150,8 +1149,8 @@ impl App {
                     "target":target,"path":frame.request.path,"rendition":format!("{:?}",frame.request.rendition),
                     "presentation_revision":frame.request.id,"content_revision":frame.request.id,
                     "scale":frame.artifact.settings.working_scale.divisor(),"region":frame.artifact.settings.preview_region,
-                    "exposure":frame.request.settings.exposure,"authored_exposure":self.settings.exposure,
-                    "matches_authored":crate::rendering::matching::same_authored_edits(&frame.request.settings,&self.settings),
+                    "exposure":frame.request.settings.exposure,"authored_exposure":self.smoke_recipe().exposure,
+                    "matches_authored":self.matches_selected(&frame.request.settings),
                     "current_view":self.shows_current_view(frame),
                 }));
                     std::fs::write(
@@ -1160,7 +1159,7 @@ impl App {
                     )
                     .unwrap();
                     if target == "workflow-current" {
-                        smoke.authored = Some(self.settings.clone());
+                        smoke.authored = Some(self.smoke_recipe().clone());
                         smoke.fast_region = self
                             .viewports
                             .view(self.selected.as_deref())
@@ -1178,7 +1177,7 @@ impl App {
                             | "workflow-restored-again"
                     ) {
                         assert_eq!(
-                            Some(&self.settings),
+                            Some(self.smoke_recipe()),
                             smoke.authored.as_ref(),
                             "Before must preserve authored edits"
                         );
@@ -1419,7 +1418,7 @@ impl App {
                     let region = frame.artifact.settings.preview_region;
                     let regional = region.is_some();
                     if !quattro_smart || !matches!(target, "final" | "cache-reopen") {
-                        assert!(self.settings.reconstruction.is_some());
+                        assert!(self.smoke_recipe().reconstruction.is_some());
                         assert!(frame.artifact.settings.reconstruction.is_some());
                     }
                     if matches!(target, "smart-detail" | "smart-edit-detail") {
@@ -1511,10 +1510,7 @@ impl App {
                         } else {
                             assert!(self.shows_current_view(frame));
                         }
-                        assert!(crate::rendering::matching::same_authored_edits(
-                            &frame.request.settings,
-                            &self.settings
-                        ));
+                        assert!(self.matches_selected(&frame.request.settings));
                         assert_eq!(frame.request.framing_preview, target == "smart-crop-enter");
                         assert_eq!(
                             self.scope_key.map(|key| key.request_id),
@@ -1584,11 +1580,11 @@ impl App {
                             "Dehaze preview is coarser than physical display demand"
                         );
                         assert_eq!(frame.artifact.settings.preview_region, None);
-                        assert_eq!(frame.artifact.settings.dehaze, self.settings.dehaze);
+                        assert_eq!(frame.artifact.settings.dehaze, self.smoke_recipe().dehaze);
                     }
-                    let estimated = crate::editor::dehaze::auto_color(ctx, &self.settings);
+                    let estimated = crate::editor::dehaze::auto_color(ctx, self.smoke_recipe());
                     if target == "final" {
-                        assert!(!self.settings.dehaze_auto());
+                        assert!(!self.smoke_recipe().dehaze_auto());
                         assert!(frame.artifact.dehaze_estimate.is_none());
                     }
                     if target == "dehaze-auto" {
@@ -1596,14 +1592,14 @@ impl App {
                         assert!(estimated.is_some(), "fixture needs an automatic haze color");
                     }
                     if target == "dehaze-freeze" {
-                        assert_eq!(self.settings.dehaze.shadow, estimated);
+                        assert_eq!(self.smoke_recipe().dehaze.shadow, estimated);
                     }
                     if target == "dehaze-reset" {
-                        assert!(self.settings.dehaze.shadow.is_some());
-                        assert!(!self.settings.dehaze_auto());
-                        assert_eq!(self.settings.dehaze.amount, 35.);
+                        assert!(self.smoke_recipe().dehaze.shadow.is_some());
+                        assert!(!self.smoke_recipe().dehaze_auto());
+                        assert_eq!(self.smoke_recipe().dehaze.amount, 35.);
                     }
-                    let report = serde_json::json!({"target":target,"dehaze":self.settings.dehaze,"automatic_color":estimated,"shown_color":self.settings.dehaze.shadow.or(estimated),"rendering":self.settings.rendering,"quality":frame.quality_label(),"processing_ms":frame.milliseconds});
+                    let report = serde_json::json!({"target":target,"dehaze":self.smoke_recipe().dehaze,"automatic_color":estimated,"shown_color":self.smoke_recipe().dehaze.shadow.or(estimated),"rendering":self.smoke_recipe().rendering,"quality":frame.quality_label(),"processing_ms":frame.milliseconds});
                     std::fs::write(
                         smoke.directory.join(format!("{target}.json")),
                         serde_json::to_vec_pretty(&report).unwrap(),
@@ -1625,7 +1621,7 @@ impl App {
                     self.preferences
                         .move_section(Section::Metadata, Section::Navigator, false);
                     self.preferences.collapsed = [Section::Editing].into();
-                    self.settings.exposure = 1.25; // deliberately session-only
+                    self.smoke_edit(|recipe| recipe.exposure = 1.25); // deliberately session-only
                     if let Some(seconds) = std::env::var_os("FOVEONIC_GUI_SMOKE_HOLD_SECONDS")
                         .and_then(|s| s.to_str().and_then(|s| s.parse::<u64>().ok()))
                     {
@@ -1747,40 +1743,44 @@ impl App {
                         self.preferences
                             .editing_sections
                             .insert(0, crate::preferences::EditingSection::Corrections);
-                        self.settings.dehaze = foveonic::render::DehazeControls {
-                            amount: 35.,
-                            shadow: None,
-                        };
+                        self.smoke_edit(|recipe| {
+                            recipe.dehaze = foveonic::render::DehazeControls {
+                                amount: 35.,
+                                shadow: None,
+                            }
+                        });
                         self.submit_photos();
                     }
                     "dehaze-freeze" => {
-                        assert!(crate::editor::dehaze::set_auto(
-                            ctx,
-                            &mut self.settings,
-                            false
-                        ));
+                        self.smoke_edit(|recipe| {
+                            assert!(crate::editor::dehaze::set_auto(ctx, recipe, false))
+                        });
                         self.submit_photos();
                     }
                     "dehaze-reset" => {
-                        let family = self.metadata.as_ref().unwrap().processing_family().unwrap();
+                        let family = self
+                            .selected_metadata()
+                            .unwrap()
+                            .processing_family()
+                            .unwrap();
                         let scope = crate::editor::Scope::Tool(crate::editor::Section::Corrections);
                         // Restore a distinct saved amount, so this reset must render an actual change.
-                        let mut defaults = self.settings.clone();
+                        let mut defaults = self.smoke_recipe().clone();
                         defaults.dehaze.amount = 35.;
                         self.preferences
                             .editor
                             .defaults
                             .set(family, scope, &defaults);
-                        self.settings.dehaze.shadow = None;
+                        self.smoke_edit(|recipe| recipe.dehaze.shadow = None);
                         self.editor_ui
                             .actions
                             .push(crate::editor::Action::Reset(scope, false));
                         assert!(self.apply_editor_actions(ctx));
-                        assert!(self.settings.dehaze.shadow.is_some());
+                        assert!(self.smoke_recipe().dehaze.shadow.is_some());
                         self.submit_photos();
                     }
                     "white-balance-ready" => {
-                        self.settings.color_editor_enabled = false;
+                        self.smoke_edit(|recipe| recipe.color_editor_enabled = false);
                         self.submit_photos();
                     }
                     "white-balance-picked" => {
@@ -1802,14 +1802,14 @@ impl App {
                         ]);
                     }
                     "white-balance-reset" => {
-                        assert!(self.settings.white_balance_bias.neutral.is_some());
+                        assert!(self.smoke_recipe().white_balance_bias.neutral.is_some());
                         let scope =
                             crate::editor::Scope::Tool(crate::editor::Section::WhiteBalance);
                         self.editor_ui
                             .actions
                             .push(crate::editor::Action::Reset(scope, false));
                         assert!(self.apply_editor_actions(ctx));
-                        assert!(self.settings.white_balance_bias.is_neutral());
+                        assert!(self.smoke_recipe().white_balance_bias.is_neutral());
                         self.submit_photos();
                     }
                     "dehaze-picked" => {
@@ -1833,16 +1833,20 @@ impl App {
                     }
                     "dehaze-manual" | "dehaze-add" | "dehaze-monochrome" | "dehaze-off" => {
                         crate::editor::dehaze::exit(ctx);
-                        assert!(self.settings.dehaze.shadow.is_some());
+                        assert!(self.smoke_recipe().dehaze.shadow.is_some());
                         let target = smoke.targets[smoke.index];
-                        self.settings.dehaze.amount = match target {
-                            "dehaze-manual" => 65.,
-                            "dehaze-add" => -35.,
-                            "dehaze-off" => 0.,
-                            _ => 35.,
-                        };
+                        self.smoke_edit(|recipe| {
+                            recipe.dehaze.amount = match target {
+                                "dehaze-manual" => 65.,
+                                "dehaze-add" => -35.,
+                                "dehaze-off" => 0.,
+                                _ => 35.,
+                            }
+                        });
                         if target == "dehaze-monochrome" {
-                            self.settings.rendering = foveonic::render::Rendering::Monochrome;
+                            self.smoke_edit(|recipe| {
+                                recipe.rendering = foveonic::render::Rendering::Monochrome
+                            });
                         }
                         self.submit_photos();
                     }
@@ -1855,7 +1859,9 @@ impl App {
                         self.preferences
                             .editing_sections
                             .insert(0, crate::preferences::EditingSection::ColorEditor);
-                        self.settings.photographic.color_editor = Default::default();
+                        self.smoke_edit(|recipe| {
+                            recipe.photographic.color_editor = Default::default()
+                        });
                         let mut state = crate::editor::advanced_color::state(ctx);
                         state.advanced = true;
                         state.selected = 0;
@@ -1914,17 +1920,56 @@ impl App {
                     }
                     "advanced-ranges" | "advanced-selection" | "advanced-monochrome" => {
                         let target = smoke.targets[smoke.index];
-                        assert_eq!(self.settings.photographic.color_editor.advanced.count, 1);
-                        self.settings.photographic.color_editor.advanced.ranges[0]
-                            .adjustment
-                            .lightness = -0.3;
-                        self.settings.color_range_preview =
-                            (target == "advanced-selection").then_some(0);
-                        self.settings.rendering = if target == "advanced-monochrome" {
-                            foveonic::render::Rendering::Monochrome
+                        assert_eq!(
+                            self.smoke_recipe().photographic.color_editor.advanced.count,
+                            1
+                        );
+                        self.smoke_edit(|recipe| {
+                            recipe.photographic.color_editor.advanced.ranges[0]
+                                .adjustment
+                                .lightness = -0.3;
+                        });
+                        if target == "advanced-selection" {
+                            let buttons = crate::automation::snapshot()
+                                .expect("direct smoke runs observe controls")
+                                .buttons;
+                            let eye = buttons
+                                .iter()
+                                .find(|button| button.label == "View color range")
+                                .unwrap_or_else(|| {
+                                    let labels: Vec<_> =
+                                        buttons.iter().map(|button| &button.label).collect();
+                                    panic!("the panel shows no range eye among {labels:?}")
+                                });
+                            let center = egui::pos2(
+                                (eye.rect[0] + eye.rect[2]) / 2.,
+                                (eye.rect[1] + eye.rect[3]) / 2.,
+                            );
+                            smoke.direct_events.extend([
+                                vec![egui::Event::PointerMoved(center)],
+                                vec![egui::Event::PointerButton {
+                                    pos: center,
+                                    button: egui::PointerButton::Primary,
+                                    pressed: true,
+                                    modifiers: egui::Modifiers::NONE,
+                                }],
+                                vec![egui::Event::PointerButton {
+                                    pos: center,
+                                    button: egui::PointerButton::Primary,
+                                    pressed: false,
+                                    modifiers: egui::Modifiers::NONE,
+                                }],
+                            ]);
                         } else {
-                            foveonic::render::Rendering::Color
-                        };
+                            self.range_preview = None;
+                        }
+                        self.smoke_edit(|recipe| {
+                            recipe.rendering = if target == "advanced-monochrome" {
+                                foveonic::render::Rendering::Monochrome
+                            } else {
+                                foveonic::render::Rendering::Color
+                            }
+                        });
                         self.submit_photos();
                     }
                     "base-camera" | "base-natural" | "base-strong" | "base-limits" | "base-hdr"
@@ -1938,13 +1983,15 @@ impl App {
                         self.preferences
                             .editing_sections
                             .insert(0, crate::preferences::EditingSection::Tone);
-                        self.settings.rendering = if target == "base-monochrome" {
-                            foveonic::render::Rendering::Monochrome
-                        } else {
-                            foveonic::render::Rendering::Color
-                        };
-                        self.settings.photographic.tone_method =
-                            foveonic::render::PhotographicMethod::Universal;
+                        self.smoke_edit(|recipe| {
+                            recipe.rendering = if target == "base-monochrome" {
+                                foveonic::render::Rendering::Monochrome
+                            } else {
+                                foveonic::render::Rendering::Color
+                            };
+                            recipe.photographic.tone_method =
+                                foveonic::render::PhotographicMethod::Universal
+                        });
                         self.settings_open = false;
                         crate::application_settings::set_adaptive_open(
                             ctx,
@@ -1954,22 +2001,24 @@ impl App {
                         if target == "base-limits" {
                             self.preferences.adaptive_tone_tuning.natural.shadows = 0.75;
                         }
-                        self.settings.photographic.base_response = if target == "base-camera" {
-                            foveonic::render::BaseResponse::Camera
-                        } else if target == "base-strong" {
-                            foveonic::render::BaseResponse::Strong
-                        } else {
-                            foveonic::render::BaseResponse::Natural
-                        };
-                        self.settings.tonal_ranges = if target == "base-hdr" {
-                            foveonic::render::TonalRanges {
-                                shadows: 0.2,
-                                whites: -0.2,
-                                ..Default::default()
+                        self.smoke_edit(|recipe| {
+                            recipe.photographic.base_response = if target == "base-camera" {
+                                foveonic::render::BaseResponse::Camera
+                            } else if target == "base-strong" {
+                                foveonic::render::BaseResponse::Strong
+                            } else {
+                                foveonic::render::BaseResponse::Natural
+                            };
+                            recipe.tonal_ranges = if target == "base-hdr" {
+                                foveonic::render::TonalRanges {
+                                    shadows: 0.2,
+                                    whites: -0.2,
+                                    ..Default::default()
+                                }
+                            } else {
+                                Default::default()
                             }
-                        } else {
-                            Default::default()
-                        };
+                        });
                         self.submit_photos();
                     }
                     "direct-color-ready" => {
@@ -1988,7 +2037,9 @@ impl App {
                         self.preferences
                             .editing_sections
                             .insert(0, crate::preferences::EditingSection::ColorEditor);
-                        self.settings.photographic.color_editor = Default::default();
+                        self.smoke_edit(|recipe| {
+                            recipe.photographic.color_editor = Default::default()
+                        });
                         smoke.direct_events.push_back(vec![
                             egui::Event::Key {
                                 key: egui::Key::D,
@@ -2099,52 +2150,60 @@ impl App {
                         self.preferences
                             .editing_sections
                             .insert(0, crate::preferences::EditingSection::Tone);
-                        self.settings.rendering = if target == "exposure-auto-monochrome" {
-                            Rendering::Monochrome
-                        } else {
-                            Rendering::Color
-                        };
-                        self.settings.photographic.tone_method =
-                            if target == "exposure-auto-reference" {
+                        self.smoke_edit(|recipe| {
+                            recipe.rendering = if target == "exposure-auto-monochrome" {
+                                Rendering::Monochrome
+                            } else {
+                                Rendering::Color
+                            };
+                            recipe.photographic.tone_method = if target == "exposure-auto-reference"
+                            {
                                 PhotographicMethod::Reference
                             } else {
                                 PhotographicMethod::Universal
                             };
-                        self.settings.photographic.base_response = BaseResponse::Natural;
-                        self.settings.exposure_auto = target != "exposure-auto-manual";
-                        self.settings.exposure = 0.;
-                        self.settings.exposure_auto_compensation = match target {
-                            "exposure-auto-dial" => AutoExposureCompensation::Dial,
-                            "exposure-auto-bracket" => AutoExposureCompensation::Bracket,
-                            _ => AutoExposureCompensation::Both,
-                        };
+                            recipe.photographic.base_response = BaseResponse::Natural;
+                            recipe.exposure_auto = target != "exposure-auto-manual";
+                            recipe.exposure = 0.;
+                            recipe.exposure_auto_compensation = match target {
+                                "exposure-auto-dial" => AutoExposureCompensation::Dial,
+                                "exposure-auto-bracket" => AutoExposureCompensation::Bracket,
+                                _ => AutoExposureCompensation::Both,
+                            }
+                        });
                         self.submit_photos();
                     }
                     "perceptual-neutral" => {
                         self.preferences.collapsed =
                             [Section::Navigator, Section::Scopes, Section::Metadata].into();
-                        self.settings.photographic.tone_method =
-                            foveonic::render::PhotographicMethod::Universal;
-                        self.settings.photographic.saturation_method =
-                            foveonic::render::PhotographicMethod::Universal;
+                        self.smoke_edit(|recipe| {
+                            recipe.photographic.tone_method =
+                                foveonic::render::PhotographicMethod::Universal;
+                            recipe.photographic.saturation_method =
+                                foveonic::render::PhotographicMethod::Universal
+                        });
                         self.submit_photos();
                     }
                     "perceptual-grade" => {
-                        self.settings.photographic.brightness = 0.15;
-                        self.settings.tonal_ranges.shadows = 0.25;
-                        self.settings.tonal_ranges.highlights = -0.6;
-                        let c = &mut self.settings.photographic.perceptual;
-                        c.saturation = 0.123456;
-                        c.contrast = -0.4;
-                        c.bands[1].saturation = 0.1;
-                        c.bands[2].saturation = -0.2;
+                        self.smoke_edit(|recipe| {
+                            recipe.photographic.brightness = 0.15;
+                            recipe.tonal_ranges.shadows = 0.25;
+                            recipe.tonal_ranges.highlights = -0.6;
+                            let c = &mut recipe.photographic.perceptual;
+                            c.saturation = 0.123456;
+                            c.contrast = -0.4;
+                            c.bands[1].saturation = 0.1;
+                            c.bands[2].saturation = -0.2;
+                        });
                         self.submit_photos();
                     }
                     "perceptual-extended" | "perceptual-unlocked" => {
-                        self.settings.photographic.perceptual = Default::default();
-                        self.settings.photographic.perceptual.saturation = 2.;
-                        self.settings.prevent_color_clipping =
-                            smoke.targets[smoke.index] != "perceptual-unlocked";
+                        self.smoke_edit(|recipe| {
+                            recipe.photographic.perceptual = Default::default();
+                            recipe.photographic.perceptual.saturation = 2.;
+                            recipe.prevent_color_clipping =
+                                smoke.targets[smoke.index] != "perceptual-unlocked"
+                        });
                         self.preferences
                             .editing_sections
                             .retain(|s| *s != crate::preferences::EditingSection::Saturation);
@@ -2159,11 +2218,15 @@ impl App {
                     }
                     "perceptual-editor" => {
                         self.output = "final".into();
-                        self.settings.photographic.color_editor.bands[0].saturation = -0.2;
+                        self.smoke_edit(|recipe| {
+                            recipe.photographic.color_editor.bands[0].saturation = -0.2
+                        });
                         self.submit_photos();
                     }
                     "perceptual-mono" => {
-                        self.settings.rendering = foveonic::render::Rendering::Monochrome;
+                        self.smoke_edit(|recipe| {
+                            recipe.rendering = foveonic::render::Rendering::Monochrome
+                        });
                         self.submit_photos();
                     }
                     "comparison-switch" => {
@@ -2183,9 +2246,11 @@ impl App {
                         egui::Modifiers::COMMAND,
                     )]),
                     "workflow-current" => {
-                        self.settings.exposure = 0.7;
-                        self.settings.photographic.tone_method =
-                            foveonic::render::PhotographicMethod::Universal;
+                        self.smoke_edit(|recipe| {
+                            recipe.exposure = 0.7;
+                            recipe.photographic.tone_method =
+                                foveonic::render::PhotographicMethod::Universal
+                        });
                         self.preferences.collapsed =
                             [Section::Navigator, Section::Scopes, Section::Metadata].into();
                         self.viewports.view_mut(self.selected.as_deref()).one_to_one = true;
@@ -2204,7 +2269,7 @@ impl App {
                         self.toggle_before(crate::editor::Rendition::Camera)
                     }
                     "workflow-defaults" => {
-                        let mut defaults = self.settings.clone();
+                        let mut defaults = self.smoke_recipe().clone();
                         defaults.exposure = 0.2;
                         self.preferences.editor.defaults.set(
                             foveonic::source::ProcessingFamily::Merrill,
@@ -2217,8 +2282,10 @@ impl App {
                         self.toggle_before(crate::editor::Rendition::Defaults)
                     }
                     "workflow-wb" => {
-                        self.settings.white_balance_bias.warmth = 0.35;
-                        self.settings.white_balance_bias.tint = -0.2;
+                        self.smoke_edit(|recipe| {
+                            recipe.white_balance_bias.warmth = 0.35;
+                            recipe.white_balance_bias.tint = -0.2;
+                        });
                         self.submit_photos();
                     }
                     "workflow-default-reset" | "workflow-camera-reset" => {
@@ -2228,8 +2295,8 @@ impl App {
                             camera,
                         ));
                         assert!(self.apply_editor_actions(ctx));
-                        assert_eq!(self.settings.exposure, if camera { 0. } else { 0.2 });
-                        assert_eq!(self.settings.white_balance_bias.warmth, 0.35);
+                        assert_eq!(self.smoke_recipe().exposure, if camera { 0. } else { 0.2 });
+                        assert_eq!(self.smoke_recipe().white_balance_bias.warmth, 0.35);
                         self.submit_photos();
                     }
                     "browser-grid" | "browser-list" | "browser-large" => {
@@ -2324,7 +2391,7 @@ impl App {
                                 .and_then(|name| name.to_str()),
                             Some(recipe.source.as_str())
                         );
-                        self.settings = recipe.settings;
+                        self.smoke_edit(|current| *current = recipe.settings);
                         self.preferences.scope = Scope::Waveform;
                         self.preferences.scope_viewport = true;
                         self.browser.reveal_selection();
@@ -2344,7 +2411,7 @@ impl App {
                     "smart-overview" => {
                         self.preferences.processing_quality = ProcessingQuality::Speed;
                         self.preferences.scope_viewport = true;
-                        self.settings.reconstruction = Some(Default::default());
+                        self.smoke_edit(|recipe| recipe.reconstruction = Some(Default::default()));
                         self.submit_photos();
                     }
                     "smart-100" => {
@@ -2360,9 +2427,9 @@ impl App {
                         .view_mut(self.selected.as_deref())
                         .pan_to(egui::vec2(0.8, 0.7)),
                     "smart-edit-detail" => {
-                        self.settings.exposure = 0.25;
+                        self.smoke_edit(|recipe| recipe.exposure = 0.25);
                         self.submit_photos();
-                        self.settings.exposure = 0.5;
+                        self.smoke_edit(|recipe| recipe.exposure = 0.5);
                         self.submit_photos();
                         let regional_revision = self.last_request_id;
                         self.submit_photos();
@@ -2373,7 +2440,7 @@ impl App {
                     }
                     "smart-edit" => {}
                     "smart-zoom-pending" => {
-                        self.settings.exposure = 0.6;
+                        self.smoke_edit(|recipe| recipe.exposure = 0.6);
                         assert!(
                             self.active_patch().is_none(),
                             "a newer Full frame must supersede old detail during the next edit"
@@ -2388,13 +2455,13 @@ impl App {
                             .zoom_by(6.);
                     }
                     "smart-crop-enter" => {
-                        self.settings.exposure = 0.7;
+                        self.smoke_edit(|recipe| recipe.exposure = 0.7);
                         self.submit_photos();
                         assert!(self.busy);
                         crate::crop_tool::toggle(ctx);
                     }
                     "smart-crop-leave" => {
-                        self.settings.exposure = 0.8;
+                        self.smoke_edit(|recipe| recipe.exposure = 0.8);
                         self.submit_photos();
                         assert!(self.busy);
                         crate::crop_tool::exit(ctx);
@@ -2402,11 +2469,13 @@ impl App {
                     // The planner requests the native whole image when memory allows.
                     "smart-transition-full" => self.submit_photos(),
                     "smart-adaptive-edit" => {
-                        self.settings.photographic.tone_method =
-                            foveonic::render::PhotographicMethod::Universal;
-                        self.settings.photographic.base_response =
-                            foveonic::render::BaseResponse::Natural;
-                        assert!(self.settings.adaptive_tone_active());
+                        self.smoke_edit(|recipe| {
+                            recipe.photographic.tone_method =
+                                foveonic::render::PhotographicMethod::Universal;
+                            recipe.photographic.base_response =
+                                foveonic::render::BaseResponse::Natural
+                        });
+                        assert!(self.smoke_recipe().adaptive_tone_active());
                         self.submit_photos();
                     }
                     "smart-fit" => self.viewports.view_mut(self.selected.as_deref()).reset(),
@@ -2458,7 +2527,7 @@ impl App {
                             .pan_to(egui::vec2(0.6, 0.4));
                     }
                     "fast-edit" => {
-                        self.settings.exposure = 0.5;
+                        self.smoke_edit(|recipe| recipe.exposure = 0.5);
                         self.submit_photos();
                     }
                     "viewport-fit" => self.preferences.scope_viewport = true,
@@ -2508,7 +2577,7 @@ impl App {
                     "compare-input" => self.comparison.input = true,
                     "compare-output" => self.comparison.input = false,
                     "diff-rgb" => {
-                        self.settings.saturation = 1.5;
+                        self.smoke_edit(|recipe| recipe.saturation = 1.5);
                         self.output = "saturation.rgb".into();
                         self.channel = 2;
                         self.comparison.difference = true;
@@ -2525,20 +2594,24 @@ impl App {
                         self.output = "final".into();
                         self.channel = -1;
                         self.comparison.difference = false;
-                        self.settings.saturation = 1.;
+                        self.smoke_edit(|recipe| recipe.saturation = 1.);
                         self.submit_photos();
                     }
                     name if name.starts_with("slide-detail-") => {
-                        self.settings.reconstruction.as_mut().unwrap().texture.fine =
-                            name.strip_prefix("slide-detail-").unwrap().parse().unwrap();
+                        let fine = name.strip_prefix("slide-detail-").unwrap().parse().unwrap();
+                        self.smoke_edit(|recipe| {
+                            recipe.reconstruction.as_mut().unwrap().texture.fine = fine;
+                        });
                         self.submit_photos();
                     }
                     "leaf-before" | "leaf-after" => {
                         let enabled = smoke.targets[smoke.index] == "leaf-after";
-                        self.settings.repair =
-                            enabled.then_some(foveonic::render::RepairThreshold::Camera);
-                        self.settings.despeckle = enabled;
-                        self.settings.reconstruction = None;
+                        self.smoke_edit(|recipe| {
+                            recipe.repair =
+                                enabled.then_some(foveonic::render::RepairThreshold::Camera);
+                            recipe.despeckle = enabled;
+                            recipe.reconstruction = None;
+                        });
                         self.output = "final".into();
                         self.channel = -1;
                         self.viewports.view_mut(self.selected.as_deref()).one_to_one = false;
@@ -2553,19 +2626,23 @@ impl App {
                         self.submit_photos();
                     }
                     "camera-only" => {
-                        self.settings.reconstruction = Some(foveonic::noise::Controls {
-                            chroma: 0,
-                            luminance: 0,
-                            ..Default::default()
+                        self.smoke_edit(|recipe| {
+                            recipe.reconstruction = Some(foveonic::noise::Controls {
+                                chroma: 0,
+                                luminance: 0,
+                                ..Default::default()
+                            });
+                            recipe.despeckle = false;
                         });
-                        self.settings.despeckle = false;
                         self.viewports.view_mut(self.selected.as_deref()).one_to_one = true;
                         self.submit_photos();
                     }
                     "bolt-before" | "bolt-after" => {
                         self.output = "final".into();
                         self.channel = -1;
-                        self.settings.despeckle = smoke.targets[smoke.index] == "bolt-after";
+                        self.smoke_edit(|recipe| {
+                            recipe.despeckle = smoke.targets[smoke.index] == "bolt-after"
+                        });
                         if smoke.targets[smoke.index] == "bolt-before" {
                             self.viewports
                                 .view_mut(self.selected.as_deref())
@@ -2582,10 +2659,12 @@ impl App {
                         .pan_to(egui::vec2(0.29, 0.757)),
                     "final-disabled" | "final-default" => {
                         let enabled = smoke.targets[smoke.index] == "final-default";
-                        self.settings.despeckle = enabled;
-                        self.settings.repair =
-                            enabled.then_some(foveonic::render::RepairThreshold::Camera);
-                        self.settings.reconstruction = None;
+                        self.smoke_edit(|recipe| {
+                            recipe.despeckle = enabled;
+                            recipe.repair =
+                                enabled.then_some(foveonic::render::RepairThreshold::Camera);
+                            recipe.reconstruction = None;
+                        });
                         self.output = "final".into();
                         self.channel = -1;
                         self.viewports.view_mut(self.selected.as_deref()).reset();
@@ -2596,21 +2675,27 @@ impl App {
                             self.preferences.collapsed =
                                 [Section::Navigator, Section::Scopes].into();
                         }
-                        self.settings.reconstruction = Some(Default::default());
+                        self.smoke_edit(|recipe| recipe.reconstruction = Some(Default::default()));
                         self.submit_photos();
                     }
                     "fine-soft" => {
-                        self.settings.reconstruction.as_mut().unwrap().texture.fine = 0.5;
+                        self.smoke_edit(|recipe| {
+                            recipe.reconstruction.as_mut().unwrap().texture.fine = 0.5;
+                        });
                         self.submit_photos();
                     }
                     "coarse-large" => {
-                        let controls = self.settings.reconstruction.as_mut().unwrap();
-                        controls.texture.coarse = 0.5;
-                        controls.texture.coarse_size = 2.;
+                        self.smoke_edit(|recipe| {
+                            let controls = recipe.reconstruction.as_mut().unwrap();
+                            controls.texture.coarse = 0.5;
+                            controls.texture.coarse_size = 2.;
+                        });
                         self.submit_photos();
                     }
                     "neutral-detail" => {
-                        self.settings.reconstruction.as_mut().unwrap().texture = Default::default();
+                        self.smoke_edit(|recipe| {
+                            recipe.reconstruction.as_mut().unwrap().texture = Default::default();
+                        });
                         self.submit_photos();
                     }
                     "rgb-blue" => self.channel = 2,
@@ -2620,13 +2705,14 @@ impl App {
                         self.submit_photos();
                     }
                     "repair-auto" | "repair-zero" => {
-                        self.settings.reconstruction = Some(Default::default());
-                        self.settings.repair =
-                            Some(if smoke.targets[smoke.index] == "repair-auto" {
+                        self.smoke_edit(|recipe| {
+                            recipe.reconstruction = Some(Default::default());
+                            recipe.repair = Some(if smoke.targets[smoke.index] == "repair-auto" {
                                 foveonic::render::RepairThreshold::Camera
                             } else {
                                 foveonic::render::RepairThreshold::Manual(0)
-                            });
+                            })
+                        });
                         self.output = "final".into();
                         self.channel = -1;
                         self.submit_photos();
@@ -2662,17 +2748,23 @@ impl App {
                                 controls.chroma = 4;
                                 controls.luminance = 4;
                             }
-                            "color-dq" => self.settings.color_dq_gain = Some(1.),
-                            "color-dq-off" => self.settings.color_dq_gain = Some(0.),
+                            "color-dq" => self.smoke_edit(|recipe| recipe.color_dq_gain = Some(1.)),
+                            "color-dq-off" => {
+                                self.smoke_edit(|recipe| recipe.color_dq_gain = Some(0.))
+                            }
                             "final-neutral" => {
-                                self.settings.repair = None;
-                                self.settings.despeckle = false;
+                                self.smoke_edit(|recipe| {
+                                    recipe.repair = None;
+                                    recipe.despeckle = false;
+                                });
                                 self.channel = -1;
                             }
                             _ => unreachable!(),
                         }
-                        self.settings.reconstruction =
-                            (smoke.targets[smoke.index] != "final-neutral").then_some(controls);
+                        self.smoke_edit(|recipe| {
+                            recipe.reconstruction =
+                                (smoke.targets[smoke.index] != "final-neutral").then_some(controls)
+                        });
                         self.output = "final".into();
                         self.viewports.view_mut(self.selected.as_deref()).reset();
                         self.submit_photos();
@@ -2793,16 +2885,13 @@ impl App {
                             "smart-edit-detail" => {
                                 current_native_feedback
                                     && smoke.smart_scrub_checked
-                                    && self.settings.exposure == 0.75
+                                    && self.smoke_recipe().exposure == 0.75
                             }
                             "smart-transition-full" => current_native_whole,
                             "smart-zoom-pending" | "smart-crop-enter" | "smart-crop-leave" => {
                                 self.active_image().is_some_and(|frame| {
                                     self.shows_current_view(frame)
-                                        && crate::rendering::matching::same_authored_edits(
-                                            &frame.request.settings,
-                                            &self.settings,
-                                        )
+                                        && self.matches_selected(&frame.request.settings)
                                         && frame.request.framing_preview
                                             == (smoke.targets[smoke.index] == "smart-crop-enter")
                                 })
@@ -2827,21 +2916,47 @@ impl App {
                 let ready = ready
                     && (smoke.targets != ADVANCED_COLOR_TARGETS
                         || smoke.targets[smoke.index] != "advanced-picked"
-                        || (self.settings.photographic.color_editor.advanced.count == 1
-                            && self.settings.photographic.color_editor.advanced.ranges[0]
+                        || (self.smoke_recipe().photographic.color_editor.advanced.count == 1
+                            && self
+                                .smoke_recipe()
+                                .photographic
+                                .color_editor
+                                .advanced
+                                .ranges[0]
                                 .adjustment
                                 .hue
                                 > 0.
-                            && self.settings.photographic.color_editor.advanced.ranges[0]
+                            && self
+                                .smoke_recipe()
+                                .photographic
+                                .color_editor
+                                .advanced
+                                .ranges[0]
                                 .adjustment
                                 .lightness
                                 > 0.
                             && !crate::editor::direct_color::active(ctx)
                             && !crate::editor::direct_color::dragging(ctx)));
+                // The eye previews a range on the selected photo's render
+                // without entering its recipe.
+                let ready = ready
+                    && (smoke.targets != ADVANCED_COLOR_TARGETS
+                        || smoke.targets[smoke.index] != "advanced-selection"
+                        || (smoke.direct_events.is_empty()
+                            && self.range_preview == Some(0)
+                            && self.smoke_recipe().color_range_preview.is_none()
+                            && self.active_image().is_some_and(|frame| {
+                                frame.request.settings.color_range_preview == Some(0)
+                            })));
                 let ready = ready
                     && (smoke.targets != ADVANCED_COLOR_TARGETS
                         || smoke.targets[smoke.index] != "advanced-name"
-                        || (self.settings.photographic.color_editor.advanced.ranges[0]
+                        || (self
+                            .smoke_recipe()
+                            .photographic
+                            .color_editor
+                            .advanced
+                            .ranges[0]
                             .name
                             .as_str()
                             == "Petals"
@@ -2860,14 +2975,14 @@ impl App {
                 let ready = ready
                     && (smoke.targets != WHITE_BALANCE_TARGETS
                         || smoke.targets[smoke.index] != "white-balance-picked"
-                        || (self.settings.white_balance_bias.neutral.is_some()
+                        || (self.smoke_recipe().white_balance_bias.neutral.is_some()
                             && !crate::editor::white_balance::active(ctx)
                             && !crate::editor::white_balance::pending(ctx)
                             && smoke.direct_events.is_empty()));
                 let ready = ready
                     && (smoke.targets != DEHAZE_TARGETS
                         || smoke.targets[smoke.index] != "dehaze-picked"
-                        || (self.settings.dehaze.shadow.is_some()
+                        || (self.smoke_recipe().dehaze.shadow.is_some()
                             && !crate::editor::dehaze::active(ctx)
                             && !crate::editor::dehaze::pending(ctx)
                             && smoke.direct_events.is_empty()));
@@ -2876,7 +2991,7 @@ impl App {
                         || match smoke.targets[smoke.index] {
                             "direct-color-ready" => crate::editor::direct_color::active(ctx),
                             "direct-color-edited" => self
-                                .settings
+                                .smoke_recipe()
                                 .photographic
                                 .color_editor
                                 .bands
@@ -2897,7 +3012,7 @@ impl App {
                                             .is_some_and(|f| f.request.framing_preview)
                                 }
                                 "crop-applied" | "crop-reopen" => {
-                                    !self.settings.crop.is_full()
+                                    !self.smoke_recipe().crop.is_full()
                                         && self
                                             .active_image()
                                             .is_some_and(|f| f.request.framing_preview)
@@ -2929,7 +3044,7 @@ impl App {
                         || rotate::ready(
                             ctx,
                             smoke,
-                            &self.settings,
+                            self.smoke_recipe(),
                             self.active_image().filter(|f| self.shows_current_view(f)),
                         ));
                 let ready =

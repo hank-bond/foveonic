@@ -1,7 +1,10 @@
 //! Owns bounded photo settings and images with independent editing selection and render demand.
 
 use crate::{multi_edit_controls, sidecars};
-use foveonic::{render::Settings, source::Metadata};
+use foveonic::{
+    render::{EditScope, Settings},
+    source::{Metadata, ProcessingFamily},
+};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -11,10 +14,28 @@ use std::{
 #[derive(Default)]
 struct Photo {
     settings: Option<Settings>,
+    /// The camera family from the photo's summary, set when its settings
+    /// load. A file whose summary cannot be read has none, and no image.
+    family: Option<ProcessingFamily>,
     metadata: Option<Arc<Metadata>>,
     numeric_settings: Option<Settings>,
     reset_settings: Option<Settings>,
     defaults_basis: Option<Settings>,
+}
+
+/// One change to each target photo's settings.
+pub enum Change {
+    /// Field edits from the panel and tools.
+    Fields(Vec<multi_edit_controls::Edit>),
+    /// A quarter turn, which turns the crop with the photo.
+    Turn { clockwise: bool },
+    /// A preset, reset or default applied over one scope.
+    Scope {
+        scope: EditScope,
+        source: Box<Settings>,
+    },
+    /// A whole pasted recipe.
+    Replace(Box<Settings>),
 }
 
 #[derive(Default)]
@@ -86,33 +107,31 @@ impl Runtime {
         sidecars.resolve_settings(&missing);
         true
     }
-    pub fn resolve(&mut self, replies: Vec<sidecars::Resolved>) {
-        for reply in replies {
-            if let Some(photo) = self.photos.get_mut(&reply.path) {
-                photo.settings.get_or_insert(reply.settings);
-            }
-        }
-    }
-    pub fn observe_active(
+    /// Load resolved settings once each photo's summary is read, with the
+    /// family it gives, fitted to that family. A fit that changes a recipe is
+    /// saved. `summary` gives a read summary's family, which an unreadable
+    /// file does not have.
+    pub fn resolve(
         &mut self,
-        path: &Path,
-        settings: &Settings,
-        metadata: Option<&Arc<Metadata>>,
+        summary: impl Fn(&Path) -> Option<Option<ProcessingFamily>>,
+        sidecars: &mut sidecars::Session,
     ) {
-        if let Some(photo) = self.photos.get_mut(path) {
-            if photo.settings.as_ref() != Some(settings) {
-                photo.settings = Some(settings.clone());
+        // Replies for photos no longer held are taken too, and dropped.
+        let replies = sidecars
+            .take_resolved(|path| !self.photos.contains_key(path) || summary(path).is_some());
+        for reply in replies {
+            let Some(photo) = self.photos.get_mut(&reply.path) else {
+                continue;
+            };
+            if photo.settings.is_some() {
+                continue;
             }
-            if let Some(metadata) = metadata {
-                photo.metadata = Some(metadata.clone());
+            photo.family = summary(&reply.path).flatten();
+            let mut settings = reply.settings;
+            if crate::controls::normalize(&mut settings, photo.family) {
+                sidecars.apply(reply.path, settings.clone());
             }
-        }
-    }
-    pub fn observe_requested(&mut self, path: &Path, settings: &Settings) {
-        if let Some(photo) = self.photos.get_mut(path) {
-            if photo.settings.as_ref() != Some(settings) {
-                photo.settings = Some(settings.clone());
-            }
+            photo.settings = Some(settings);
         }
     }
     pub fn multiple(&self) -> bool {
@@ -199,6 +218,10 @@ impl Runtime {
             )
         })
     }
+    /// The photo's camera family, once its summary is read.
+    pub fn family(&self, path: &Path) -> Option<ProcessingFamily> {
+        self.photos.get(path)?.family
+    }
     pub fn metadata(&self, path: &Path) -> Option<Arc<Metadata>> {
         self.photos.get(path)?.metadata.clone()
     }
@@ -252,26 +275,96 @@ impl Runtime {
         }
         ranges.into_iter().collect()
     }
-    /// Save all edits and report whether any changed rendering.
-    pub fn apply_edits(
+    /// Apply `change` to each photo in `paths`, save what changed and report
+    /// whether rendering changed. Every photo must have loaded settings.
+    pub fn edit(
         &mut self,
-        edits: &[multi_edit_controls::Edit],
+        paths: &[PathBuf],
+        change: &Change,
         sidecars: &mut sidecars::Session,
     ) -> bool {
-        if !self.editable_ready() || edits.is_empty() {
+        if paths.is_empty() || paths.iter().any(|path| self.settings(path).is_none()) {
             return false;
         }
-        let applicable_edits = edits
+        let fields = if let Change::Fields(edits) = change {
+            let fields = self.applicable(paths, edits);
+            if fields.is_empty() {
+                return false;
+            }
+            fields
+        } else {
+            Vec::new()
+        };
+        let mut render_changed = false;
+        for path in paths {
+            let photo = self.photos.get_mut(path).unwrap();
+            let before = photo.settings.clone().unwrap();
+            match change {
+                Change::Fields(_) => apply_fields(photo, &fields),
+                Change::Turn { clockwise } => {
+                    let settings = photo.settings.as_mut().unwrap();
+                    settings.rotation.turn(*clockwise, &mut settings.crop);
+                }
+                // Scoped actions need a render's metadata, which a photo
+                // without a family never has.
+                Change::Scope { scope, source } => {
+                    if let (Some(family), Some(settings)) = (photo.family, &mut photo.settings) {
+                        scope.apply(source, settings, family);
+                    }
+                }
+                Change::Replace(recipe) => photo.settings = Some((**recipe).clone()),
+            }
+            let settings = photo.settings.as_mut().unwrap();
+            crate::controls::normalize(settings, photo.family);
+            if *settings != before {
+                sidecars.apply(path.clone(), settings.clone());
+                render_changed |=
+                    !crate::rendering::matching::same_render_settings(&before, settings);
+            }
+        }
+        render_changed
+    }
+    /// Give `paths` a whole recipe: loaded photos through `edit`, the rest
+    /// recorded on the writer, which they resolve to when they load. Reports
+    /// whether rendering changed.
+    pub fn replace(
+        &mut self,
+        paths: &[PathBuf],
+        recipe: &Settings,
+        sidecars: &mut sidecars::Session,
+    ) -> bool {
+        let (loaded, unloaded): (Vec<_>, Vec<_>) = paths
+            .iter()
+            .cloned()
+            .partition(|path| self.settings(path).is_some());
+        for path in unloaded {
+            sidecars.apply(path, recipe.clone());
+        }
+        self.edit(
+            &loaded,
+            &Change::Replace(Box::new(recipe.clone())),
+            sidecars,
+        )
+    }
+    /// The field edits every target can take: automatic values wait for each
+    /// target's render-produced default.
+    fn applicable(
+        &self,
+        paths: &[PathBuf],
+        edits: &[multi_edit_controls::Edit],
+    ) -> Vec<multi_edit_controls::Edit> {
+        let targets = paths.iter().map(|path| self.photos[path].as_ref());
+        edits
             .iter()
             .filter(|edit| match edit {
                 multi_edit_controls::Edit::Optional {
                     pointer,
                     enabled: true,
-                } => self.targets().all(|photo| default_ready(photo, pointer)),
+                } => targets.clone().all(|photo| default_ready(photo, pointer)),
                 multi_edit_controls::Edit::Number { pointer, .. }
                     if matches!(pointer.as_str(), "/sharpen_amount" | "/color_dq_gain") =>
                 {
-                    self.targets().all(|photo| {
+                    targets.clone().all(|photo| {
                         let settings = photo.settings.as_ref().unwrap();
                         let manual = if pointer == "/sharpen_amount" {
                             settings.sharpen_amount.is_some()
@@ -284,57 +377,7 @@ impl Runtime {
                 _ => true,
             })
             .cloned()
-            .collect::<Vec<_>>();
-        let edits = &applicable_edits;
-        if edits.is_empty() {
-            return false;
-        }
-        let mut changed = false;
-        for path in &self.editing_paths {
-            let photo = self.photos.get_mut(path).unwrap();
-            let settings = photo.settings.as_mut().unwrap();
-            let before = settings.clone();
-            if let Some(numeric) = photo
-                .reset_settings
-                .as_ref()
-                .or(photo.numeric_settings.as_ref())
-            {
-                materialize_defaults(settings, numeric, edits);
-                if settings.exposure_auto && edits.iter().any(|edit| matches!(edit, multi_edit_controls::Edit::Number { pointer, .. } if pointer == "/exposure")) {
-                    settings.exposure = photo.metadata.as_deref().map_or(numeric.exposure, |metadata| {
-                        let capture = foveonic::source::CaptureExposureCompensation::from_properties(&metadata.properties);
-                        settings.exposure_auto_compensation.inverse(capture).unwrap_or(0.)
-                    });
-                    settings.exposure_auto = false;
-                }
-            }
-            let mut target_edits = resolve_optionals(
-                settings,
-                photo
-                    .reset_settings
-                    .as_ref()
-                    .or(photo.numeric_settings.as_ref()),
-                edits,
-            );
-            apply_reset_defaults(&mut target_edits, photo.reset_settings.as_ref());
-            if let Some(metadata) = &photo.metadata {
-                per_photo_ranges(
-                    &mut target_edits,
-                    settings,
-                    photo.numeric_settings.as_ref(),
-                    metadata,
-                );
-            }
-            multi_edit_controls::apply(settings, &target_edits);
-            if let Some(metadata) = &photo.metadata {
-                crate::controls::normalize(settings, metadata.processing_family().ok());
-            }
-            if *settings != before {
-                sidecars.apply(path.clone(), settings.clone());
-                changed |= !crate::rendering::matching::same_render_settings(&before, settings);
-            }
-        }
-        changed
+            .collect()
     }
     /// The photo's settings are loaded or loading, so it can render.
     pub fn loaded(&self, path: &Path) -> bool {
@@ -384,6 +427,47 @@ fn loaded_paths(editing: &[PathBuf], viewport: &[PathBuf]) -> Vec<PathBuf> {
             .cloned(),
     );
     loaded
+}
+
+/// Apply field edits with this photo's own defaults and ranges.
+fn apply_fields(photo: &mut Photo, edits: &[multi_edit_controls::Edit]) {
+    let settings = photo.settings.as_mut().unwrap();
+    let defaults = photo
+        .reset_settings
+        .as_ref()
+        .or(photo.numeric_settings.as_ref());
+    if let Some(numeric) = defaults {
+        materialize_defaults(settings, numeric, edits);
+        let exposure_edited = edits.iter().any(|edit| {
+            matches!(edit, multi_edit_controls::Edit::Number { pointer, .. } if pointer == "/exposure")
+        });
+        if settings.exposure_auto && exposure_edited {
+            settings.exposure = photo
+                .metadata
+                .as_deref()
+                .map_or(numeric.exposure, |metadata| {
+                    let capture = foveonic::source::CaptureExposureCompensation::from_properties(
+                        &metadata.properties,
+                    );
+                    settings
+                        .exposure_auto_compensation
+                        .inverse(capture)
+                        .unwrap_or(0.)
+                });
+            settings.exposure_auto = false;
+        }
+    }
+    let mut target_edits = resolve_optionals(settings, defaults, edits);
+    apply_reset_defaults(&mut target_edits, photo.reset_settings.as_ref());
+    if let Some(metadata) = &photo.metadata {
+        per_photo_ranges(
+            &mut target_edits,
+            settings,
+            photo.numeric_settings.as_ref(),
+            metadata,
+        );
+    }
+    multi_edit_controls::apply(settings, &target_edits);
 }
 
 fn default_ready(photo: &Photo, pointer: &str) -> bool {
@@ -596,18 +680,11 @@ impl crate::App {
                 self.multi_edit.selected(path);
             }
         }
-        for path in self.multi_edit.retained_paths() {
-            if self.selected.as_ref() != Some(&path) {
-                if let Some(settings) = self.sidecars.requested_settings(&path) {
-                    self.multi_edit.observe_requested(&path, settings);
-                }
-            }
-        }
-        if let Some(path) = self.loaded_selection().map(Path::to_path_buf) {
-            self.multi_edit
-                .observe_active(&path, &self.settings, self.metadata.as_ref());
-        }
-        self.multi_edit.resolve(self.sidecars.take_resolved());
+        let browser = &self.browser;
+        self.multi_edit.resolve(
+            |path| browser.metadata_summary(path).map(|summary| summary.family),
+            &mut self.sidecars,
+        );
     }
 }
 
@@ -631,6 +708,11 @@ mod tests {
             range,
             mapping: Mapping::Identity,
         }
+    }
+    /// Edit the editing selection as the panel does.
+    fn apply(runtime: &mut Runtime, edits: &[Edit], sidecars: &mut sidecars::Session) -> bool {
+        let paths = runtime.editing_paths.clone();
+        runtime.edit(&paths, &Change::Fields(edits.to_vec()), sidecars)
     }
     fn runtime() -> Runtime {
         let paths = vec![PathBuf::from("a.x3f"), PathBuf::from("b.x3f")];
@@ -656,6 +738,7 @@ mod tests {
                 Box::new(Photo {
                     defaults_basis: Some(settings.clone()),
                     settings: Some(settings),
+                    family: Some(ProcessingFamily::Merrill),
                     numeric_settings: Some(numeric),
                     ..Default::default()
                 }),
@@ -665,35 +748,121 @@ mod tests {
     }
 
     #[test]
-    fn range_names_are_retained_without_changing_render_demand() {
+    fn settings_load_fitted_to_their_family_once_the_summary_is_read() {
         let mut runtime = runtime();
+        let mut sidecars = session();
+        let a = PathBuf::from("a.x3f");
+        runtime.photos.insert(a.clone(), Box::default());
+        let merrill_only = Settings {
+            merrill_noise_method: foveonic::render::MerrillNoiseMethod::MultiscaleRows,
+            ..Default::default()
+        };
+        sidecars.apply(a.clone(), merrill_only);
+        sidecars.resolve_settings(std::slice::from_ref(&a));
+        runtime.resolve(|_| None, &mut sidecars);
+        assert_eq!(runtime.settings(&a), None, "settings wait for the summary");
+
+        runtime.resolve(|_| Some(Some(ProcessingFamily::Classic)), &mut sidecars);
+        let fitted = runtime.settings(&a).unwrap();
+        assert_eq!(
+            fitted.merrill_noise_method,
+            foveonic::render::MerrillNoiseMethod::Reference,
+            "a Classic photo loses Merrill-only choices"
+        );
+        assert_eq!(
+            sidecars.requested_settings(&a),
+            Some(fitted),
+            "the fit is saved"
+        );
+
+        // A file whose summary cannot be read still loads, so its render can
+        // report why it fails.
+        let unreadable = PathBuf::from("unreadable.x3f");
+        runtime.photos.insert(unreadable.clone(), Box::default());
+        sidecars.apply(unreadable.clone(), Settings::default());
+        sidecars.resolve_settings(std::slice::from_ref(&unreadable));
+        runtime.resolve(|_| Some(None), &mut sidecars);
+        assert!(runtime.settings(&unreadable).is_some());
+        assert_eq!(runtime.family(&unreadable), None);
+    }
+
+    #[test]
+    fn turns_scopes_and_pasted_recipes_save_each_target() {
+        let mut runtime = runtime();
+        let mut sidecars = session();
         let paths = runtime.editing_paths.clone();
+        assert!(runtime.edit(
+            &paths[..1],
+            &Change::Turn { clockwise: true },
+            &mut sidecars
+        ));
+        assert_eq!(runtime.settings(&paths[0]).unwrap().rotation.turns, 1);
+        assert_eq!(runtime.settings(&paths[1]).unwrap().rotation.turns, 0);
+
+        let source = Settings {
+            exposure: 0.5,
+            ..Default::default()
+        };
+        let tone = Change::Scope {
+            scope: EditScope::Tool(foveonic::render::EditSection::Tone),
+            source: Box::new(source.clone()),
+        };
+        assert!(runtime.edit(&paths, &tone, &mut sidecars));
         for path in &paths {
-            runtime
-                .photos
-                .get_mut(path)
-                .unwrap()
-                .settings
-                .as_mut()
-                .unwrap()
-                .photographic
-                .color_editor
-                .advanced
-                .push(Default::default());
+            let settings = runtime.settings(path).unwrap();
+            assert_eq!(settings.exposure, 0.5);
+            assert_eq!(sidecars.requested_settings(path), Some(settings));
         }
-        let mut renamed = runtime.settings(&paths[0]).unwrap().clone();
-        renamed.photographic.color_editor.advanced.ranges[0].name = "Sky".try_into().unwrap();
-        runtime.observe_active(&paths[0], &renamed, None);
-        assert_eq!(runtime.settings(&paths[0]), Some(&renamed));
+        assert_eq!(
+            runtime.settings(&paths[0]).unwrap().rotation.turns,
+            1,
+            "a scope keeps the photo's framing"
+        );
 
-        renamed.photographic.color_editor.advanced.ranges[0].name = "Clouds".try_into().unwrap();
-        runtime.observe_requested(&paths[0], &renamed);
-        assert_eq!(runtime.settings(&paths[0]), Some(&renamed));
+        let pasted = Settings {
+            saturation: 0.25,
+            ..Default::default()
+        };
+        let replace = Change::Replace(Box::new(pasted.clone()));
+        assert!(runtime.edit(&paths[1..], &replace, &mut sidecars));
+        assert_eq!(runtime.settings(&paths[1]), Some(&pasted));
+        assert!(
+            !runtime.edit(&paths[1..], &replace, &mut sidecars),
+            "the same recipe changes nothing"
+        );
+    }
 
-        renamed.photographic.color_editor.advanced.ranges[0].name = "Blue".try_into().unwrap();
-        runtime.observe_active(&paths[0], &renamed, None);
-        renamed.color_range_preview = Some(0);
-        runtime.observe_requested(&paths[0], &renamed);
+    #[test]
+    fn edits_need_every_target_loaded() {
+        let mut runtime = runtime();
+        let mut sidecars = session();
+        let unloaded = PathBuf::from("c.x3f");
+        runtime.photos.insert(unloaded.clone(), Box::default());
+        let before = runtime.settings(Path::new("a.x3f")).cloned();
+        let paths = [PathBuf::from("a.x3f"), unloaded];
+        assert!(!runtime.edit(&paths, &Change::Turn { clockwise: true }, &mut sidecars));
+        assert_eq!(runtime.settings(&paths[0]).cloned(), before);
+        assert_eq!(sidecars.requested_settings(&paths[0]), None);
+    }
+
+    #[test]
+    fn a_whole_recipe_reaches_loaded_photos_now_and_unloaded_photos_when_they_load() {
+        let mut runtime = runtime();
+        let mut sidecars = session();
+        let loaded = PathBuf::from("a.x3f");
+        let unloaded = PathBuf::from("c.x3f");
+        runtime.photos.insert(unloaded.clone(), Box::default());
+        let pasted = Settings {
+            saturation: 0.25,
+            ..Default::default()
+        };
+        assert!(runtime.replace(&[loaded.clone(), unloaded.clone()], &pasted, &mut sidecars));
+        assert_eq!(runtime.settings(&loaded), Some(&pasted));
+        assert_eq!(runtime.settings(&unloaded), None);
+        assert_eq!(sidecars.requested_settings(&unloaded), Some(&pasted));
+        sidecars.resolve_settings(std::slice::from_ref(&unloaded));
+        runtime.resolve(|_| Some(Some(ProcessingFamily::Merrill)), &mut sidecars);
+        assert_eq!(runtime.settings(&unloaded), Some(&pasted));
     }
 
     #[test]
@@ -718,7 +887,7 @@ mod tests {
             pointer: "/photographic/color_editor/advanced/0/name".into(),
             value: serde_json::json!("Petals"),
         };
-        assert!(!runtime.apply_edits(&[rename], &mut sidecars));
+        assert!(!apply(&mut runtime, &[rename], &mut sidecars));
         for path in &paths {
             let settings = runtime.settings(path).unwrap();
             assert_eq!(
@@ -729,7 +898,11 @@ mod tests {
             );
             assert_eq!(sidecars.requested_settings(path), Some(settings));
         }
-        assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
+        assert!(apply(
+            &mut runtime,
+            &[number("/exposure", 0.1, [-8., 8.])],
+            &mut sidecars
+        ));
     }
 
     #[test]
@@ -737,7 +910,11 @@ mod tests {
         let mut runtime = runtime();
         let mut sidecars = session();
         let a = PathBuf::from("a.x3f");
-        assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
+        assert!(apply(
+            &mut runtime,
+            &[number("/exposure", 0.1, [-8., 8.])],
+            &mut sidecars
+        ));
         let edited = runtime.settings(&a).unwrap().clone();
         sidecars.set_memory_only(false);
         runtime.forget_settings(&mut sidecars);
@@ -745,7 +922,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !runtime.ready() {
             sidecars.receive();
-            runtime.resolve(sidecars.take_resolved());
+            runtime.resolve(|_| Some(Some(ProcessingFamily::Merrill)), &mut sidecars);
             assert!(
                 std::time::Instant::now() < deadline,
                 "settings did not reload"
@@ -823,7 +1000,11 @@ mod tests {
         assert!(runtime.editable_ready());
         assert_eq!(runtime.snapshots().len(), 2);
         assert_eq!(runtime.numeric_snapshots().len(), 2);
-        assert!(runtime.apply_edits(&[number("/exposure", 0.1, [-8., 8.])], &mut sidecars));
+        assert!(apply(
+            &mut runtime,
+            &[number("/exposure", 0.1, [-8., 8.])],
+            &mut sidecars
+        ));
         assert!(runtime.photos[&inactive].settings.is_none());
     }
 
@@ -831,7 +1012,11 @@ mod tests {
     fn relative_edits_clamp_independently_and_preserve_unrelated_authored_values() {
         let mut runtime = runtime();
         let mut session = session();
-        assert!(runtime.apply_edits(&[number("/exposure", 0.5, [-8., 8.])], &mut session));
+        assert!(apply(
+            &mut runtime,
+            &[number("/exposure", 0.5, [-8., 8.])],
+            &mut session
+        ));
         assert_eq!(runtime.settings(Path::new("a.x3f")).unwrap().exposure, 8.);
         assert!((runtime.settings(Path::new("b.x3f")).unwrap().exposure - 1.7).abs() < 1e-6);
         for (path, balance) in [("a.x3f", "Sunlight"), ("b.x3f", "Shade")] {
@@ -846,7 +1031,11 @@ mod tests {
     fn optional_numbers_materialize_each_photos_effective_value_only_when_edited() {
         let mut runtime = runtime();
         let mut session = session();
-        assert!(runtime.apply_edits(&[number("/sharpen_amount", 0.1, [0., 3.])], &mut session));
+        assert!(apply(
+            &mut runtime,
+            &[number("/sharpen_amount", 0.1, [0., 3.])],
+            &mut session
+        ));
         assert!(
             (runtime
                 .settings(Path::new("a.x3f"))
@@ -867,7 +1056,8 @@ mod tests {
                 .abs()
                 < 1e-6
         );
-        assert!(runtime.apply_edits(
+        assert!(apply(
+            &mut runtime,
             &[number("/reconstruction/chroma", 1., [0., 4.])],
             &mut session
         ));
@@ -897,7 +1087,8 @@ mod tests {
     fn reconstruction_toggle_leaf_uses_each_photos_own_defaults() {
         let mut runtime = runtime();
         let mut session = session();
-        assert!(runtime.apply_edits(
+        assert!(apply(
+            &mut runtime,
             &[Edit::Assign {
                 pointer: "/reconstruction/noise_enabled".into(),
                 value: serde_json::Value::Bool(true)
@@ -934,7 +1125,7 @@ mod tests {
                 enabled: true,
             },
         ];
-        assert!(runtime.apply_edits(&edits, &mut session()));
+        assert!(apply(&mut runtime, &edits, &mut session()));
         for (path, amount, color) in [
             ("a.x3f", 0.2, [0.1, 0.2, 0.3]),
             ("b.x3f", 0.7, [0.6, 0.5, 0.4]),
@@ -943,7 +1134,8 @@ mod tests {
             assert_eq!(settings.sharpen_amount, Some(amount));
             assert_eq!(settings.dehaze.shadow, Some(color));
         }
-        assert!(runtime.apply_edits(
+        assert!(apply(
+            &mut runtime,
             &[Edit::Optional {
                 pointer: "/sharpen_amount".into(),
                 enabled: false
@@ -971,7 +1163,11 @@ mod tests {
             )));
             photo.settings.as_mut().unwrap().exposure = exposure;
         }
-        assert!(runtime.apply_edits(&[number("/exposure", 0.5, [-2., 2.])], &mut session()));
+        assert!(apply(
+            &mut runtime,
+            &[number("/exposure", 0.5, [-2., 2.])],
+            &mut session()
+        ));
         assert_eq!(runtime.settings(Path::new("a.x3f")).unwrap().exposure, 2.);
         assert_eq!(runtime.settings(Path::new("b.x3f")).unwrap().exposure, 4.);
     }
@@ -991,14 +1187,22 @@ mod tests {
             pointer: "/sharpen_amount".into(),
             enabled: true,
         };
-        assert!(!runtime.apply_edits(std::slice::from_ref(&off), &mut session()));
+        assert!(!apply(
+            &mut runtime,
+            std::slice::from_ref(&off),
+            &mut session()
+        ));
         assert!(runtime.photos.values().all(|photo| photo
             .settings
             .as_ref()
             .unwrap()
             .sharpen_amount
             .is_none()));
-        assert!(runtime.apply_edits(&[number("/exposure", 0.25, [-2., 2.])], &mut session()));
+        assert!(apply(
+            &mut runtime,
+            &[number("/exposure", 0.25, [-2., 2.])],
+            &mut session()
+        ));
         for photo in runtime.photos.values_mut() {
             photo.defaults_basis = photo.settings.clone();
             photo.reset_settings = Some(Settings {
@@ -1007,7 +1211,7 @@ mod tests {
             });
         }
         assert!(runtime.optional_readiness()[0].1);
-        assert!(runtime.apply_edits(&[off], &mut session()));
+        assert!(apply(&mut runtime, &[off], &mut session()));
         assert!(runtime.photos.values().all(|photo| photo
             .settings
             .as_ref()
@@ -1026,7 +1230,8 @@ mod tests {
                 ..Default::default()
             });
         }
-        assert!(runtime.apply_edits(
+        assert!(apply(
+            &mut runtime,
             &[Edit::Optional {
                 pointer: "/sharpen_amount".into(),
                 enabled: true
@@ -1058,14 +1263,19 @@ mod tests {
         // tables, which depend on white balance.
         assert!(!runtime.optional_readiness()[0].1);
         assert!(!runtime.optional_readiness()[1].1);
-        assert!(!runtime.apply_edits(
+        assert!(!apply(
+            &mut runtime,
             &[Edit::Optional {
                 pointer: "/color_dq_gain".into(),
                 enabled: true
             }],
             &mut session()
         ));
-        assert!(runtime.apply_edits(&[number("/exposure", -0.25, [-4., 4.])], &mut session()));
+        assert!(apply(
+            &mut runtime,
+            &[number("/exposure", -0.25, [-4., 4.])],
+            &mut session()
+        ));
     }
 
     #[test]
@@ -1089,7 +1299,7 @@ mod tests {
         if let Edit::Number { change, .. } = &mut edit {
             *change = NumberChange::Reset(2.);
         }
-        assert!(runtime.apply_edits(&[edit], &mut session()));
+        assert!(apply(&mut runtime, &[edit], &mut session()));
         assert_eq!(
             runtime
                 .settings(Path::new("a.x3f"))
@@ -1127,7 +1337,11 @@ mod tests {
         let snapshots = runtime.numeric_snapshots();
         assert_eq!(snapshots[0].exposure, 1.);
         assert_eq!(snapshots[1].exposure, 2.);
-        assert!(runtime.apply_edits(&[number("/exposure", 0.5, [-4., 4.])], &mut session()));
+        assert!(apply(
+            &mut runtime,
+            &[number("/exposure", 0.5, [-4., 4.])],
+            &mut session()
+        ));
         assert_eq!(runtime.settings(Path::new("a.x3f")).unwrap().exposure, 1.5);
         assert_eq!(runtime.settings(Path::new("b.x3f")).unwrap().exposure, 2.5);
         assert!(runtime.photos.values().all(|photo| !photo

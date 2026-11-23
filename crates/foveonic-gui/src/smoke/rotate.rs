@@ -194,8 +194,18 @@ impl App {
                     .push_back(vec![egui::Event::PointerMoved(point)]);
             }
             "rotate-quarter" => {
-                self.settings.rotation.turn(true, &mut self.settings.crop);
-                self.submit_photos();
+                // The workspace shortcut, so the action's own path turns the photo.
+                smoke.direct_events.push_back(
+                    [true, false]
+                        .map(|pressed| egui::Event::Key {
+                            key: egui::Key::ArrowRight,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers: egui::Modifiers::COMMAND,
+                        })
+                        .into(),
+                );
             }
             "rotate-draft" | "rotate-freehand-draft" => {
                 let freehand = smoke.targets[smoke.index] == "rotate-freehand-draft";
@@ -278,6 +288,7 @@ pub(super) fn ready(
                         < smoke.authored.as_ref().unwrap().rotation.degrees - 1.
                 }
                 "rotate-crop" => crate::crop_tool::active(ctx),
+                "rotate-quarter" => settings.rotation.turns == 1,
                 "rotate-return" => crate::rotate_tool::editing(ctx),
                 "rotate-freehand" => {
                     settings.rotation.degrees > smoke.authored.as_ref().unwrap().rotation.degrees

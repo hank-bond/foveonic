@@ -142,7 +142,8 @@ impl App {
         };
         let layers = self.loupe_images(&gesture.path);
         let Some(extent) = self
-            .photo_metadata(&gesture.path)
+            .multi_edit
+            .metadata(&gesture.path)
             .and_then(|metadata| foveonic::render::native_extent(&metadata).ok())
             .or_else(|| {
                 layers

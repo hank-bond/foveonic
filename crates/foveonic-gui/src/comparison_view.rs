@@ -20,13 +20,10 @@ impl App {
             .iter()
             .map(|path| {
                 let frame = self.photo_layers(path)[0];
-                let settings = if self.selected.as_ref() == Some(path) {
-                    Some(&self.settings)
-                } else {
-                    self.multi_edit
-                        .settings(path)
-                        .or(frame.map(|frame| &frame.request.settings))
-                };
+                let settings = self
+                    .multi_edit
+                    .settings(path)
+                    .or(frame.map(|frame| &frame.request.settings));
                 // The photo's recorded size gives its shape before any image of
                 // it, with its authored composition.
                 let extent = self

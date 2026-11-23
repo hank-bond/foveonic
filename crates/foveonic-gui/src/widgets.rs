@@ -642,6 +642,7 @@ pub fn icon_button_with_height(
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, label)
     });
+    crate::automation::button(label, &response);
     response
 }
 

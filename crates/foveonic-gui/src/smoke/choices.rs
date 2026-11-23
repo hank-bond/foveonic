@@ -107,13 +107,6 @@ impl ChoiceJourney {
         }
         smoke.direct_events.push_back(vec![]);
     }
-    fn settings<'a>(app: &'a App, path: &PathBuf) -> Option<&'a Settings> {
-        if app.selected.as_ref() == Some(path) {
-            Some(&app.settings)
-        } else {
-            app.multi_edit.settings(path)
-        }
-    }
     fn frame<'a>(
         app: &'a App,
         path: &PathBuf,
@@ -142,7 +135,10 @@ impl ChoiceJourney {
                     return Ok(false);
                 }
                 for (index, path) in paths.iter().enumerate() {
-                    let settings = Self::settings(app, path).ok_or("missing starting settings")?;
+                    let settings = app
+                        .multi_edit
+                        .settings(path)
+                        .ok_or("missing starting settings")?;
                     if settings.white_balance != self.initial[index].0
                         || !settings.tone_enabled
                         || settings.tone.contrast != self.initial[index].1
@@ -195,8 +191,10 @@ impl ChoiceJourney {
                     return Ok(false);
                 }
                 for path in paths {
-                    let settings =
-                        Self::settings(app, path).ok_or("missing White Balance settings")?;
+                    let settings = app
+                        .multi_edit
+                        .settings(path)
+                        .ok_or("missing White Balance settings")?;
                     if settings.white_balance != "Sunlight" {
                         return self.wait("selected Sunlight did not reach every photo");
                     }
@@ -256,7 +254,10 @@ impl ChoiceJourney {
                     return Ok(false);
                 }
                 for path in paths {
-                    let settings = Self::settings(app, path).ok_or("missing final settings")?;
+                    let settings = app
+                        .multi_edit
+                        .settings(path)
+                        .ok_or("missing final settings")?;
                     if settings.tone_enabled
                         || settings.tone.contrast != 0.25
                         || settings.white_balance != "Sunlight"

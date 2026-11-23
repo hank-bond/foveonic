@@ -291,12 +291,10 @@ impl TransitionJourney {
         let exposures: Result<Vec<_>, String> = paths
             .iter()
             .map(|path| {
-                let settings = if app.selected.as_ref() == Some(path) {
-                    Some(&app.settings)
-                } else {
-                    app.multi_edit.settings(path)
-                }
-                .ok_or_else(|| format!("missing settings for {}", path.display()))?;
+                let settings = app
+                    .multi_edit
+                    .settings(path)
+                    .ok_or_else(|| format!("missing settings for {}", path.display()))?;
                 if settings.exposure_auto {
                     return Err("automatic exposure enabled".into());
                 }
@@ -331,11 +329,7 @@ impl TransitionJourney {
         path: &Path,
         native: bool,
     ) -> Option<&'a RenderResult> {
-        let settings = if app.selected.as_deref() == Some(path) {
-            &app.settings
-        } else {
-            app.multi_edit.settings(path)?
-        };
+        let settings = app.multi_edit.settings(path)?;
         let base = app.current_image(path)?;
         let current = |frame: &RenderResult| {
             crate::rendering::matching::same_authored_edits(&frame.request.settings, settings)
@@ -615,12 +609,10 @@ impl TransitionJourney {
 
     fn check_current_photos(app: &App, after: bool, photos: &[GroupPhoto]) -> Result<(), String> {
         for (index, photo) in photos.iter().enumerate() {
-            let authored = if app.selected.as_ref() == Some(&photo.path) {
-                Some(&app.settings)
-            } else {
-                app.multi_edit.settings(&photo.path)
-            }
-            .ok_or("missing authored group settings")?;
+            let authored = app
+                .multi_edit
+                .settings(&photo.path)
+                .ok_or("missing authored group settings")?;
             if authored != &photo.authored {
                 return Err(format!(
                     "group Before changed authored settings for {}",
@@ -832,11 +824,7 @@ impl TransitionJourney {
         for (index, photo) in group.photos.iter().enumerate() {
             let view = app.viewports.view(Some(&photo.path));
             let (zoom, center) = geometry[index];
-            let authored = if app.selected.as_ref() == Some(&photo.path) {
-                Some(&app.settings)
-            } else {
-                app.multi_edit.settings(&photo.path)
-            };
+            let authored = app.multi_edit.settings(&photo.path);
             let frame = app
                 .current_image(&photo.path)
                 .ok_or("missing group viewing Current")?;
@@ -1339,7 +1327,7 @@ impl TransitionJourney {
                     || frame.artifact.settings.working_scale.divisor() > divisor
                     || !crate::rendering::matching::same_authored_edits(
                         &frame.request.settings,
-                        &app.settings,
+                        app.smoke_recipe(),
                     )
                 {
                     return Ok(false);
@@ -1439,7 +1427,7 @@ impl TransitionJourney {
                         && origin.as_ref().is_none_or(|origin| &frame.origin == origin)
                         && crate::rendering::matching::same_authored_edits(
                             &frame.request.settings,
-                            &app.settings,
+                            app.smoke_recipe(),
                         )
                 };
                 // The viewport reads native whole-photo coordinates even when its
@@ -1529,7 +1517,7 @@ impl TransitionJourney {
                 if frame.processing_quality() != app.preferences.processing_quality
                     || !crate::rendering::matching::same_authored_edits(
                         &frame.request.settings,
-                        &app.settings,
+                        app.smoke_recipe(),
                     )
                 {
                     return Ok(false);
@@ -1539,7 +1527,7 @@ impl TransitionJourney {
                 && app.active_image().is_none_or(|frame| {
                     !crate::rendering::matching::same_authored_edits(
                         &frame.request.settings,
-                        &app.settings,
+                        app.smoke_recipe(),
                     )
                 })
             {
@@ -1653,12 +1641,10 @@ impl TransitionJourney {
                 self.events.push(serde_json::json!({"observed":"Speed Before restored existing Quality inspector", "task":self.inspection_task}));
             }
             if let Some((index, crop, rotation)) = self.composition {
-                let settings = if app.selected.as_ref() == Some(&paths[index]) {
-                    Some(&app.settings)
-                } else {
-                    app.multi_edit.settings(&paths[index])
-                }
-                .ok_or("missing composed settings")?;
+                let settings = app
+                    .multi_edit
+                    .settings(&paths[index])
+                    .ok_or("missing composed settings")?;
                 if settings.crop != crop || settings.rotation != rotation {
                     return Err("composition did not persist".into());
                 }
@@ -1759,8 +1745,8 @@ impl TransitionJourney {
                     .turns
                     + 1)
                     % 4;
-                app.sidecars.apply(paths[1].clone(), distinct_b.clone());
-                app.multi_edit.observe_requested(&paths[1], &distinct_b);
+                app.multi_edit
+                    .replace(&paths[1..2], &distinct_b, &mut app.sidecars);
                 for (index, gesture) in [
                     (0, crate::viewport_selection::Gesture::Replace),
                     (1, crate::viewport_selection::Gesture::Toggle),
@@ -1795,13 +1781,10 @@ impl TransitionJourney {
                     let frame = app
                         .current_image(path)
                         .ok_or("missing saved Current photograph")?;
-                    let current = if app.selected.as_ref() == Some(path) {
-                        &app.settings
-                    } else {
-                        app.multi_edit
-                            .settings(path)
-                            .ok_or("missing saved authored settings")?
-                    };
+                    let current = app
+                        .multi_edit
+                        .settings(path)
+                        .ok_or("missing saved authored settings")?;
                     let mut camera =
                         foveonic::render::camera_settings(&frame.artifact.metadata, None)
                             .map_err(|e| e.to_string())?;
@@ -2016,13 +1999,8 @@ impl TransitionJourney {
             }
             Step::GroupBeforeEnd => {
                 let group = self.group_before.as_ref().ok_or("missing group restore")?;
-                app.sidecars
-                    .apply(paths[1].clone(), group.original_b.clone());
                 app.multi_edit
-                    .observe_requested(&paths[1], &group.original_b);
-                if app.selected.as_ref() == Some(&paths[1]) {
-                    app.settings = group.original_b.clone();
-                }
+                    .replace(&paths[1..2], &group.original_b, &mut app.sidecars);
                 app.preferences.background_full_image_completion = group.idle_completion;
                 for path in paths {
                     app.viewports.view_mut(Some(path)).reset();
@@ -2283,12 +2261,10 @@ impl TransitionJourney {
                     degrees: 2.0,
                 };
                 self.composition = Some((index, crop, rotation));
-                app.settings.crop = crop;
-                app.settings.rotation = rotation;
-                assert!(
-                    app.commit_settings(),
-                    "the selected photo has loaded settings"
-                );
+                app.smoke_edit(|recipe| {
+                    recipe.crop = crop;
+                    recipe.rotation = rotation;
+                });
                 app.submit_photos();
             }
             Step::Before => {
@@ -2323,14 +2299,15 @@ impl TransitionJourney {
                     .ok_or("missing photograph before inspection")?;
                 self.photograph_task =
                     Some((frame.diagnostic_task.id, frame.diagnostic_task.revision));
-                let output =
-                    foveonic::inspection::image_outputs(&app.settings, app.metadata.as_deref())
-                        .into_iter()
-                        .find(|output| {
-                            output.name != "final"
-                                && output.channels == foveonic::inspection::Channels::Rgb
-                        })
-                        .ok_or("no RGB inspection output for this photo")?;
+                let output = foveonic::inspection::image_outputs(
+                    app.smoke_recipe(),
+                    app.selected_metadata().as_deref(),
+                )
+                .into_iter()
+                .find(|output| {
+                    output.name != "final" && output.channels == foveonic::inspection::Channels::Rgb
+                })
+                .ok_or("no RGB inspection output for this photo")?;
                 self.inspection_output = Some(output.name.into());
                 app.output = output.name.into();
                 app.channel = -1;

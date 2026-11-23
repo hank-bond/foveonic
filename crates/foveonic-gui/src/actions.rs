@@ -1,7 +1,7 @@
 //! Applies workspace commands through browser selection and the existing per-photo editing session.
 
 use crate::{
-    controls, inspect,
+    inspect,
     shortcuts::{self, Action},
     App,
 };
@@ -115,8 +115,8 @@ impl App {
             self.actions.clear();
             return false;
         }
-        let before = self.settings.clone();
         let before_output = self.output.clone();
+        let mut changed = false;
         for edit in std::mem::take(&mut self.actions) {
             match edit {
                 edit @ (Edit::Rotate | Edit::CycleRotate) => {
@@ -132,9 +132,8 @@ impl App {
                 }
                 Edit::QuarterTurn(clockwise) => {
                     self.exit_before();
-                    self.settings
-                        .rotation
-                        .turn(clockwise, &mut self.settings.crop);
+                    changed |=
+                        self.edit_selected(crate::multi_edit_runtime::Change::Turn { clockwise });
                     if let Some(path) = &self.selected {
                         self.previews.invalidate_path(path);
                         self.browser.rotate_cached(path, clockwise);
@@ -142,8 +141,11 @@ impl App {
                 }
                 Edit::Before(target) => self.toggle_before(target),
                 Edit::CopySettings => {
-                    match sidecar::encode(&self.settings)
-                        .and_then(|bytes| Ok(String::from_utf8(bytes)?))
+                    match sidecar::encode(
+                        self.selected_settings()
+                            .expect("actions wait for loaded settings"),
+                    )
+                    .and_then(|bytes| Ok(String::from_utf8(bytes)?))
                     {
                         Ok(recipe) => {
                             ctx.copy_text(recipe);
@@ -154,47 +156,36 @@ impl App {
                         }
                     }
                 }
-                Edit::PasteSettings(text) => {
-                    match clipboard_settings(&text) {
-                        Ok(copied) => {
-                            let paths = self.browser.processing_selection(self.selected.as_deref());
-                            let count = paths.len();
-                            for path in paths {
-                                let mut settings = copied.clone();
-                                if self.selected.as_ref() == Some(&path) {
-                                    // Preview policy and inspection belong to the workspace.
-                                    settings.working_scale = self.settings.working_scale;
-                                    settings.preview_region = self.settings.preview_region;
-                                    controls::normalize(
-                                        &mut settings,
-                                        self.browser
-                                            .metadata_summary(&path)
-                                            .and_then(|summary| summary.family),
-                                    );
-                                    self.settings = settings.clone();
-                                    inspect::normalize(
-                                        &self.settings,
-                                        &mut self.output,
-                                        &mut self.channel,
-                                        self.metadata.as_deref(),
-                                        self.browser
-                                            .metadata_summary(&path)
-                                            .and_then(|summary| summary.family),
-                                    );
-                                }
-                                self.sidecars.apply(path, settings);
-                            }
-                            self.activity
-                                .operation(format!("Applied settings to {count} photos"));
+                Edit::PasteSettings(text) => match clipboard_settings(&text) {
+                    Ok(copied) => {
+                        let paths = self.browser.processing_selection(self.selected.as_deref());
+                        let count = paths.len();
+                        changed |= self.multi_edit.replace(&paths, &copied, &mut self.sidecars);
+                        if let Some(settings) = self.selected_settings().cloned() {
+                            let family = self
+                                .selected
+                                .as_deref()
+                                .and_then(|path| self.browser.metadata_summary(path))
+                                .and_then(|summary| summary.family);
+                            let metadata = self.selected_metadata();
+                            inspect::normalize(
+                                &settings,
+                                &mut self.output,
+                                &mut self.channel,
+                                metadata.as_deref(),
+                                family,
+                            );
                         }
-                        Err(error) => {
-                            self.fail(format!("Cannot paste settings: {error}"));
-                        }
+                        self.activity
+                            .operation(format!("Applied settings to {count} photos"));
                     }
-                }
+                    Err(error) => {
+                        self.fail(format!("Cannot paste settings: {error}"));
+                    }
+                },
             }
         }
-        self.settings != before || self.output != before_output
+        changed || self.output != before_output
     }
 }
 

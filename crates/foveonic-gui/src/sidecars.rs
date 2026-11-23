@@ -333,8 +333,19 @@ impl Session {
         lock.lock().unwrap().resolve = pending;
         wake.notify_one();
     }
-    pub fn take_resolved(&mut self) -> Vec<Resolved> {
-        std::mem::take(&mut self.resolved)
+    /// Resolved settings for the photos `ready` accepts, with any edit recorded
+    /// since a read finished in place of what it read. The rest wait.
+    pub fn take_resolved(&mut self, ready: impl Fn(&std::path::Path) -> bool) -> Vec<Resolved> {
+        let (mut taken, waiting) = std::mem::take(&mut self.resolved)
+            .into_iter()
+            .partition::<Vec<_>, _>(|reply| ready(&reply.path));
+        self.resolved = waiting;
+        for reply in &mut taken {
+            if let Some(settings) = self.requested_settings(&reply.path) {
+                reply.settings.clone_from(settings);
+            }
+        }
+        taken
     }
 
     /// Collect finished resolutions and saves. An older resolution is ignored.
@@ -358,8 +369,6 @@ impl Session {
                                 .str("source", &path.to_string_lossy());
                         },
                     );
-                    // An edit can arrive while a background read is completing.
-                    let settings = self.requested_settings(&path).cloned().unwrap_or(settings);
                     self.resolved.push(Resolved { path, settings });
                 }
                 Reply::Saved(path, settings, result)

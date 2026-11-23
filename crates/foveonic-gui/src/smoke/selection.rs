@@ -68,12 +68,10 @@ impl SelectionJourney {
         let exposures: Result<Vec<_>, _> = paths
             .iter()
             .map(|path| {
-                let settings = if app.selected.as_ref() == Some(path) {
-                    Some(&app.settings)
-                } else {
-                    app.multi_edit.settings(path)
-                }
-                .ok_or_else(|| format!("missing settings for {}", path.display()))?;
+                let settings = app
+                    .multi_edit
+                    .settings(path)
+                    .ok_or_else(|| format!("missing settings for {}", path.display()))?;
                 if settings.exposure_auto {
                     return Err(format!("automatic Exposure enabled for {}", path.display()));
                 }

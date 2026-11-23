@@ -53,13 +53,9 @@ impl BackgroundEdit {
                 }
                 let mut observed = Vec::with_capacity(paths.len());
                 for path in paths {
-                    let settings = app
-                        .multi_edit
-                        .settings(path)
-                        .or_else(|| (app.selected.as_ref() == Some(path)).then_some(&app.settings))
-                        .ok_or_else(|| {
-                            format!("missing starting settings for {}", path.display())
-                        })?;
+                    let settings = app.multi_edit.settings(path).ok_or_else(|| {
+                        format!("missing starting settings for {}", path.display())
+                    })?;
                     if settings.exposure_auto {
                         return Err(format!("manual exposure required for {}", path.display()));
                     }

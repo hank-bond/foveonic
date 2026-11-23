@@ -1,8 +1,12 @@
 //! Applies queued editor actions through shared recipe scopes and the existing editing session.
 
 use super::{menus::Action, Scope};
-use crate::App;
-use foveonic::render::{camera_settings, ControlCapabilities};
+use crate::{
+    multi_edit_controls::{field, Edit},
+    multi_edit_runtime::Change,
+    App,
+};
+use foveonic::render::camera_settings;
 
 impl App {
     pub(crate) fn apply_editor_actions(&mut self, ctx: &eframe::egui::Context) -> bool {
@@ -13,29 +17,42 @@ impl App {
             self.editor_ui.actions.clear();
             return false;
         }
-        let Some(metadata) = self.metadata.clone() else {
+        let (Some(metadata), Some(family)) = (
+            self.selected_metadata(),
+            self.selected
+                .as_deref()
+                .and_then(|path| self.multi_edit.family(path)),
+        ) else {
             self.editor_ui.actions.clear();
             return false;
         };
-        let Ok(capabilities) = ControlCapabilities::from_metadata(&metadata) else {
-            self.editor_ui.actions.clear();
-            return false;
-        };
-        let family = capabilities.family;
-        let before = self.settings.clone();
         let previous_defaults = self.preferences.editor.defaults.clone();
+        let mut changed = false;
         for action in std::mem::take(&mut self.editor_ui.actions) {
-            match action {
-                Action::NoiseCalibration => self.noise_calibration.open = true,
+            let settings = self
+                .selected_settings()
+                .expect("editor actions wait for loaded settings");
+            let change = match action {
+                Action::NoiseCalibration => {
+                    self.noise_calibration.open = true;
+                    None
+                }
                 Action::PreventSaturationClipping(enabled) => {
-                    self.settings.prevent_color_clipping = enabled
+                    Some(Change::Fields(vec![Edit::set(
+                        field::PREVENT_COLOR_CLIPPING,
+                        &enabled,
+                    )]))
                 }
-                Action::AdaptiveLimits => crate::application_settings::open_adaptive(ctx),
-                Action::ExposureAutoCompensation(choice) => {
-                    self.settings.exposure_auto_compensation = choice;
+                Action::AdaptiveLimits => {
+                    crate::application_settings::open_adaptive(ctx);
+                    None
                 }
+                Action::ExposureAutoCompensation(choice) => Some(Change::Fields(vec![Edit::set(
+                    field::EXPOSURE_AUTO_COMPENSATION,
+                    &choice,
+                )])),
                 Action::Reset(scope, camera) => {
-                    let rendering = (scope != Scope::All).then_some(self.settings.rendering);
+                    let rendering = (scope != Scope::All).then_some(settings.rendering);
                     match camera_settings(&metadata, rendering) {
                         Ok(baseline) => {
                             let baseline = if camera {
@@ -43,43 +60,59 @@ impl App {
                             } else {
                                 self.preferences.editor.defaults.apply(family, &baseline)
                             };
-                            scope.apply(&baseline, &mut self.settings, family);
                             if matches!(
                                 scope,
                                 Scope::All | Scope::Tool(super::Section::Corrections)
                             ) {
                                 super::dehaze::exit(ctx);
                             }
+                            Some(Change::Scope {
+                                scope,
+                                source: Box::new(baseline),
+                            })
                         }
                         Err(error) => {
                             self.fail(error.to_string());
+                            None
                         }
                     }
                 }
-                Action::Apply(scope, settings) => {
-                    scope.apply(&settings, &mut self.settings, family)
+                Action::Apply(scope, source) => Some(Change::Scope { scope, source }),
+                Action::Save(scope) => {
+                    let settings = settings.clone();
+                    self.editor_ui.start_save(family, scope, &settings);
+                    None
                 }
-                Action::Save(scope) => self.editor_ui.start_save(family, scope, &self.settings),
                 Action::Default(scope) => {
+                    let settings = settings.clone();
                     self.preferences
                         .editor
                         .defaults
-                        .set(family, scope, &self.settings)
+                        .set(family, scope, &settings);
+                    None
                 }
-                Action::ClearDefaults => self.preferences.editor.defaults.clear(family),
+                Action::ClearDefaults => {
+                    self.preferences.editor.defaults.clear(family);
+                    None
+                }
                 Action::Delete(index) => {
                     self.preferences.editor.presets.remove(index);
+                    None
                 }
+            };
+            if let Some(change) = change {
+                changed |= self.edit_selected(change);
             }
         }
-        capabilities.normalize(&mut self.settings);
-        crate::inspect::normalize(
-            &self.settings,
-            &mut self.output,
-            &mut self.channel,
-            Some(&metadata),
-            Some(family),
-        );
+        if let Some(settings) = self.selected_settings().cloned() {
+            crate::inspect::normalize(
+                &settings,
+                &mut self.output,
+                &mut self.channel,
+                Some(&metadata),
+                Some(family),
+            );
+        }
         if previous_defaults != self.preferences.editor.defaults {
             let defaults = &self.preferences.editor.defaults;
             self.sidecars.set_defaults(defaults);
@@ -92,6 +125,6 @@ impl App {
             self.browser.invalidate_previews();
             self.previews.invalidate();
         }
-        before != self.settings
+        changed
     }
 }

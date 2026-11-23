@@ -476,7 +476,7 @@ impl eframe::App for Startup {
                 match result {
                     Ok(mut app) => {
                         // Control observations are thread-local and must start on the UI thread.
-                        app.enable_scenario_automation();
+                        app.enable_smoke_automation();
                         app.diagnostics = self.capture.take();
                         app.startup_ready = Some(Instant::now());
                         self.window.restore(context);

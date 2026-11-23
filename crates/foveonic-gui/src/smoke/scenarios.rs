@@ -1421,7 +1421,9 @@ impl Scenario {
         }
     }
     fn settings<'a>(&self, app: &'a App, path: &Path) -> &'a Settings {
-        app.multi_edit.settings(path).unwrap_or(&app.settings)
+        app.multi_edit
+            .settings(path)
+            .expect("scenario photos have loaded settings")
     }
 
     fn observe_ui(&mut self, app: &App, ctx: &egui::Context) {
@@ -2093,13 +2095,15 @@ fn enable_automation_for(case: Option<Case>) {
 }
 
 impl App {
-    pub(crate) fn enable_scenario_automation(&self) {
-        enable_automation_for(
-            self.smoke
-                .as_ref()
-                .and_then(|smoke| smoke.scenario.as_ref())
-                .map(|scenario| scenario.config.name),
-        );
+    /// Observe controls on the UI thread: scenarios that declare it, and
+    /// direct steps, which press panel controls at their recorded positions.
+    pub(crate) fn enable_smoke_automation(&self) {
+        match self.smoke.as_ref().map(|smoke| smoke.scenario.as_ref()) {
+            Some(None) => crate::automation::enable(),
+            scenario => {
+                enable_automation_for(scenario.flatten().map(|scenario| scenario.config.name))
+            }
+        }
     }
 }
 
@@ -2131,15 +2135,12 @@ pub(super) fn apply_edits(app: &mut App, edits: &[Edit]) {
         app.multi_edit.editable_ready(),
         "edit before the editing selection was ready"
     );
+    let paths = app.edit_selection.paths().to_vec();
+    let change = crate::multi_edit_runtime::Change::Fields(edits.to_vec());
     assert!(
-        app.multi_edit.apply_edits(edits, &mut app.sidecars),
+        app.multi_edit.edit(&paths, &change, &mut app.sidecars),
         "edit changed no photo"
     );
-    app.settings = app
-        .multi_edit
-        .settings(app.selected.as_ref().unwrap())
-        .unwrap()
-        .clone();
     app.submit_photos();
 }
 

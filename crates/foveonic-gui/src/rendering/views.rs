@@ -47,11 +47,11 @@ impl App {
         };
         let comparison = look == Rendition::Current
             && self.comparison.requested()
-            && self.authored_settings(path).is_some_and(|settings| {
+            && self.multi_edit.settings(path).is_some_and(|settings| {
                 foveonic::inspection::comparison_input(
                     settings,
                     &output,
-                    self.photo_metadata(path).as_deref(),
+                    self.multi_edit.metadata(path).as_deref(),
                 )
                 .is_some()
             });
@@ -71,9 +71,10 @@ impl App {
             // The selected photo's output was normalized for its own camera.
             return self.output.clone();
         }
-        let (Some(settings), Some(metadata)) =
-            (self.authored_settings(path), self.photo_metadata(path))
-        else {
+        let (Some(settings), Some(metadata)) = (
+            self.multi_edit.settings(path),
+            self.multi_edit.metadata(path),
+        ) else {
             return "final".into();
         };
         let family = self
@@ -88,16 +89,6 @@ impl App {
             self.output.clone()
         } else {
             "final".into()
-        }
-    }
-
-    /// The photo's edits, once loaded. The selected photo's are `App::settings`
-    /// once they hold its loaded settings.
-    pub(crate) fn authored_settings(&self, path: &Path) -> Option<&foveonic::render::Settings> {
-        if self.selected.as_deref() == Some(path) {
-            self.selection_loaded().then_some(&self.settings)
-        } else {
-            self.multi_edit.settings(path)
         }
     }
 
@@ -322,8 +313,11 @@ impl App {
                 },
             );
             self.last_request_id = last_request_id;
-            if let Some((id, path)) = selected_request.zip(self.selected.clone()) {
-                crate::timing::requested(id.0, &path, "final", &self.settings);
+            if let Some(((id, path), settings)) = selected_request
+                .zip(self.selected.as_deref())
+                .zip(self.selected_settings())
+            {
+                crate::timing::requested(id.0, path, "final", settings);
             }
         }
         if self

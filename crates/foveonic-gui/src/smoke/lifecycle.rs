@@ -29,6 +29,9 @@ enum Phase {
     CameraReset,
     DefaultReset,
     Paste,
+    PasteHighlighted,
+    MenuActions,
+    MenuApplied,
     InvalidPaste,
     AcknowledgePaste,
     ImportDisk,
@@ -54,6 +57,8 @@ pub(super) struct LifecycleJourney {
     saved: Option<Settings>,
     review: Option<Settings>,
     clipboard: Option<String>,
+    /// The photo's settings before the menu actions.
+    expected_menu: Option<Settings>,
     read: Option<mpsc::Receiver<Result<Option<Settings>, String>>>,
     io: Option<mpsc::Receiver<Result<Value, String>>>,
     last_read: Option<Instant>,
@@ -71,6 +76,7 @@ impl LifecycleJourney {
             saved: None,
             review: None,
             clipboard: None,
+            expected_menu: None,
             read: None,
             io: None,
             last_read: None,
@@ -174,7 +180,7 @@ impl LifecycleJourney {
                     .get(first)
                     .ok_or("missing declared starting settings")?
                     .clone();
-                self.check("browse-start", Self::matches(&app.settings, &baseline) && baseline.exposure == self.initial_exposure && !baseline.exposure_auto && baseline.exposure <= 3.5, json!({"source":first,"expected_exposure":self.initial_exposure,"actual_exposure":app.settings.exposure}))?;
+                self.check("browse-start", Self::matches(app.smoke_recipe(), &baseline) && baseline.exposure == self.initial_exposure && !baseline.exposure_auto && baseline.exposure <= 3.5, json!({"source":first,"expected_exposure":self.initial_exposure,"actual_exposure":app.smoke_recipe().exposure}))?;
                 let mut saved = baseline.clone();
                 saved.exposure += 0.125;
                 saved.saturation = 0.75;
@@ -214,7 +220,7 @@ impl LifecycleJourney {
                 if !smoke.direct_events.is_empty() || !Self::ready(app, first) {
                     return Ok(false);
                 }
-                self.check("browse-switch-restores-latest", Self::matches(&app.settings, self.saved.as_ref().unwrap()), json!({"actual_exposure":app.settings.exposure,"expected_exposure":self.saved.as_ref().unwrap().exposure}))?;
+                self.check("browse-switch-restores-latest", Self::matches(app.smoke_recipe(), self.saved.as_ref().unwrap()), json!({"actual_exposure":app.smoke_recipe().exposure,"expected_exposure":self.saved.as_ref().unwrap().exposure}))?;
                 self.phase = Phase::Saved;
             }
             Phase::Saved => {
@@ -258,7 +264,7 @@ impl LifecycleJourney {
                 {
                     return Ok(false);
                 }
-                self.check("import-restores-saved", Self::matches(&app.settings, self.saved.as_ref().unwrap()), json!({"actual_exposure":app.settings.exposure,"expected_exposure":self.saved.as_ref().unwrap().exposure}))?;
+                self.check("import-restores-saved", Self::matches(app.smoke_recipe(), self.saved.as_ref().unwrap()), json!({"actual_exposure":app.smoke_recipe().exposure,"expected_exposure":self.saved.as_ref().unwrap().exposure}))?;
                 let mut review = self.saved.as_ref().unwrap().clone();
                 review.exposure += 0.25;
                 self.review = Some(review);
@@ -283,7 +289,7 @@ impl LifecycleJourney {
                 if !smoke.direct_events.is_empty() || !Self::ready(app, first) {
                     return Ok(false);
                 }
-                self.check("import-switch-retains-review", Self::matches(&app.settings, self.review.as_ref().unwrap()), json!({"actual_exposure":app.settings.exposure,"expected_exposure":self.review.as_ref().unwrap().exposure}))?;
+                self.check("import-switch-retains-review", Self::matches(app.smoke_recipe(), self.review.as_ref().unwrap()), json!({"actual_exposure":app.smoke_recipe().exposure,"expected_exposure":self.review.as_ref().unwrap().exposure}))?;
                 app.preferences.processing_destination = None;
                 app.import.rescan(&mut app.browser, None);
                 self.phase = Phase::NoDestination;
@@ -347,25 +353,25 @@ impl LifecycleJourney {
                 self.phase = Phase::CameraReset;
             }
             Phase::CameraReset => {
-                let metadata = app.metadata.as_ref().ok_or("missing metadata for reset")?;
-                let camera =
-                    foveonic::render::camera_settings(metadata, Some(app.settings.rendering))
-                        .map_err(|e| e.to_string())?;
+                let metadata = app
+                    .selected_metadata()
+                    .ok_or("missing metadata for reset")?;
+                let camera = foveonic::render::camera_settings(
+                    &metadata,
+                    Some(app.smoke_recipe().rendering),
+                )
+                .map_err(|e| e.to_string())?;
                 app.editor_ui.actions.push(crate::editor::Action::Reset(
                     crate::editor::Scope::Tool(crate::editor::Section::Tone),
                     true,
                 ));
                 app.apply_editor_actions(ctx);
-                self.check("camera-reset", app.settings.exposure == camera.exposure && app.settings.exposure_auto == camera.exposure_auto, json!({"expected_exposure":camera.exposure,"actual_exposure":app.settings.exposure}))?;
+                self.check("camera-reset", app.smoke_recipe().exposure == camera.exposure && app.smoke_recipe().exposure_auto == camera.exposure_auto, json!({"expected_exposure":camera.exposure,"actual_exposure":app.smoke_recipe().exposure}))?;
                 self.check(
                     "tone-camera-reset-preserves-saturation",
-                    app.settings.saturation == 0.75,
-                    json!({"expected":0.75,"actual":app.settings.saturation}),
+                    app.smoke_recipe().saturation == 0.75,
+                    json!({"expected":0.75,"actual":app.smoke_recipe().saturation}),
                 )?;
-                assert!(
-                    app.commit_settings(),
-                    "the selected photo has loaded settings"
-                );
                 app.submit_photos();
                 self.phase = Phase::DefaultReset;
             }
@@ -378,16 +384,12 @@ impl LifecycleJourney {
                     false,
                 ));
                 app.apply_editor_actions(ctx);
-                self.check("user-default-reset", app.settings.exposure == self.review.as_ref().unwrap().exposure && app.settings.exposure_auto == self.review.as_ref().unwrap().exposure_auto, json!({"expected_exposure":self.review.as_ref().unwrap().exposure,"actual_exposure":app.settings.exposure}))?;
+                self.check("user-default-reset", app.smoke_recipe().exposure == self.review.as_ref().unwrap().exposure && app.smoke_recipe().exposure_auto == self.review.as_ref().unwrap().exposure_auto, json!({"expected_exposure":self.review.as_ref().unwrap().exposure,"actual_exposure":app.smoke_recipe().exposure}))?;
                 self.check(
                     "tone-user-reset-preserves-saturation",
-                    app.settings.saturation == 0.75,
-                    json!({"expected":0.75,"actual":app.settings.saturation}),
+                    app.smoke_recipe().saturation == 0.75,
+                    json!({"expected":0.75,"actual":app.smoke_recipe().saturation}),
                 )?;
-                assert!(
-                    app.commit_settings(),
-                    "the selected photo has loaded settings"
-                );
                 app.submit_photos();
                 self.phase = Phase::Paste;
             }
@@ -400,11 +402,97 @@ impl LifecycleJourney {
                     self.clipboard.clone().unwrap(),
                 ));
                 let changed = app.dispatch_actions(ctx);
-                self.check("paste-copied-settings", changed && Self::matches(&app.settings, self.review.as_ref().unwrap()), json!({"actual_exposure":app.settings.exposure,"expected_exposure":self.review.as_ref().unwrap().exposure}))?;
-                assert!(
-                    app.commit_settings(),
-                    "the selected photo has loaded settings"
-                );
+                self.check("paste-copied-settings", changed && Self::matches(app.smoke_recipe(), self.review.as_ref().unwrap()), json!({"actual_exposure":app.smoke_recipe().exposure,"expected_exposure":self.review.as_ref().unwrap().exposure}))?;
+                app.submit_photos();
+                self.phase = Phase::PasteHighlighted;
+            }
+            Phase::PasteHighlighted => {
+                if !Self::ready(app, first) {
+                    return Ok(false);
+                }
+                // Highlighting every photo pastes to loaded and unloaded photos alike.
+                app.browser.highlight_paths(paths);
+                app.actions.push(crate::actions::Edit::PasteSettings(
+                    self.clipboard.clone().unwrap(),
+                ));
+                app.dispatch_actions(ctx);
+                let review = self.review.as_ref().unwrap();
+                let photos = paths
+                    .iter()
+                    .map(|path| {
+                        let loaded = app.multi_edit.settings(path);
+                        let recorded = app.sidecars.requested_settings(path);
+                        json!({"source":path,"loaded":loaded.is_some(),
+                            "loaded_matches":loaded.is_none_or(|settings| Self::matches(settings, review)),
+                            "recorded_matches":recorded.is_some_and(|settings| Self::matches(settings, review))})
+                    })
+                    .collect::<Vec<_>>();
+                self.check(
+                    "paste-reaches-every-highlighted-photo",
+                    photos.iter().all(|photo| {
+                        photo["loaded_matches"] == true && photo["recorded_matches"] == true
+                    }),
+                    json!({"photos":photos}),
+                )?;
+                app.browser.highlight_paths(std::slice::from_ref(first));
+                self.phase = Phase::MenuActions;
+            }
+            Phase::MenuActions => {
+                if !Self::ready(app, first)
+                    || app.edit_selection.paths() != std::slice::from_ref(first)
+                {
+                    return Ok(false);
+                }
+                // Menu edits reach the photo through the frame's own action pass,
+                // and an edit made while Before is shown returns to Current.
+                app.toggle_before(crate::editor::Rendition::Camera);
+                let current = app.smoke_recipe().clone();
+                let mut preset = current.clone();
+                preset.saturation_enabled = true;
+                preset.saturation = 0.5;
+                app.editor_ui.actions.extend([
+                    crate::editor::Action::PreventSaturationClipping(
+                        !current.prevent_color_clipping,
+                    ),
+                    crate::editor::Action::ExposureAutoCompensation(
+                        foveonic::render::AutoExposureCompensation::Dial,
+                    ),
+                    crate::editor::Action::Apply(
+                        crate::editor::Scope::Tool(crate::editor::Section::Saturation),
+                        Box::new(preset),
+                    ),
+                ]);
+                self.expected_menu = Some(current);
+                self.phase = Phase::MenuApplied;
+            }
+            Phase::MenuApplied => {
+                if !app.editor_ui.actions.is_empty() || !Self::ready(app, first) {
+                    return Ok(false);
+                }
+                let before = self.expected_menu.take().unwrap();
+                let settings = app.smoke_recipe();
+                self.check(
+                    "menu-actions-edit-the-photo",
+                    settings.prevent_color_clipping != before.prevent_color_clipping
+                        && settings.exposure_auto_compensation
+                            == foveonic::render::AutoExposureCompensation::Dial
+                        && settings.saturation == 0.5
+                        && settings.crop == before.crop
+                        && settings.rotation == before.rotation,
+                    json!({"prevent_color_clipping":settings.prevent_color_clipping,
+                        "exposure_auto_compensation":format!("{:?}",settings.exposure_auto_compensation),
+                        "saturation":settings.saturation}),
+                )?;
+                self.check(
+                    "menu-edit-leaves-before",
+                    app.before.active == crate::editor::Rendition::Current,
+                    json!({"rendition":format!("{:?}",app.before.active)}),
+                )?;
+                // Pasting the copied review recipe restores it for the steps after.
+                app.actions.push(crate::actions::Edit::PasteSettings(
+                    self.clipboard.clone().unwrap(),
+                ));
+                app.dispatch_actions(ctx);
                 app.submit_photos();
                 self.phase = Phase::InvalidPaste;
             }
@@ -412,14 +500,14 @@ impl LifecycleJourney {
                 if !Self::ready(app, first) {
                     return Ok(false);
                 }
-                let before = app.settings.clone();
+                let before = app.smoke_recipe().clone();
                 app.actions
                     .push(crate::actions::Edit::PasteSettings("not a recipe".into()));
                 let changed = app.dispatch_actions(ctx);
                 self.check(
                     "invalid-paste-reports-error",
                     !changed
-                        && Self::matches(&app.settings, &before)
+                        && Self::matches(app.smoke_recipe(), &before)
                         && app.activity.unread_errors(),
                     json!({"changed":changed,"unread_errors":app.activity.unread_errors()}),
                 )?;
@@ -661,7 +749,7 @@ impl LifecycleJourney {
                 if !smoke.direct_events.is_empty() || !Self::ready(app, first) {
                     return Ok(false);
                 }
-                self.check("browse-reopen-restores-saved", Self::matches(&app.settings, self.saved.as_ref().unwrap()), json!({"actual_exposure":app.settings.exposure,"expected_exposure":self.saved.as_ref().unwrap().exposure}))?;
+                self.check("browse-reopen-restores-saved", Self::matches(app.smoke_recipe(), self.saved.as_ref().unwrap()), json!({"actual_exposure":app.smoke_recipe().exposure,"expected_exposure":self.saved.as_ref().unwrap().exposure}))?;
                 expected.insert(first.clone(), self.saved.as_ref().unwrap().clone());
                 app.browser.set_actions(vec![(
                     crate::shortcuts::BrowserAction::SelectAll,
@@ -693,7 +781,7 @@ impl LifecycleJourney {
         }
     }
     pub(super) fn evidence(&self) -> Value {
-        json!({"checks":self.checks,"damaged":self.damaged.evidence(),"actions":["open-browse","edit-exposure:+0.125","switch-away","switch-back","read-sidecar","open-import","edit-exposure:+0.25","switch-away","switch-back","process-without-destination","copy-settings","save-tone-default","reset-camera-tone","reset-user-tone","edit-and-paste","paste-invalid","acknowledge-log","read-sidecar","pick-and-copy-original","edit-after-submission","verify-copy-and-frozen-recipe","open-damaged-raw","recover-valid-raw","open-missing-folder","acknowledge-log","open-browse","select-all"],"scope":"recipe persistence, import review, clipboard handlers, scoped resets, copied originals and file error recovery; processed image encoding is not exercised"})
+        json!({"checks":self.checks,"damaged":self.damaged.evidence(),"actions":["open-browse","edit-exposure:+0.125","switch-away","switch-back","read-sidecar","open-import","edit-exposure:+0.25","switch-away","switch-back","process-without-destination","copy-settings","save-tone-default","reset-camera-tone","reset-user-tone","edit-and-paste","paste-to-highlighted","menu-actions-during-before","paste-invalid","acknowledge-log","read-sidecar","pick-and-copy-original","edit-after-submission","verify-copy-and-frozen-recipe","open-damaged-raw","recover-valid-raw","open-missing-folder","acknowledge-log","open-browse","select-all"],"scope":"recipe persistence, import review, clipboard handlers, scoped resets, copied originals and file error recovery; processed image encoding is not exercised"})
     }
 }
 
