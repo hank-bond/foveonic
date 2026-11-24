@@ -21,14 +21,14 @@ Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps and the same
 
 | Time | 0.8.4 | 0.9.0 |
 | --- | --- | --- |
-| Open eight photographs | 7.7 s | 2.8 s |
-| Rapid edits across eight photographs settle | 2.9 s | 0.25 s |
-| Edit eight photographs while memory is tight | 2.7 s | 0.18 s |
-| Slowest 5% of edits across eight photographs | 2.9 s | 0.13 s |
+| Open eight photographs | 7,758 ms | 2,814 ms |
+| Rapid edits across eight photographs settle | 2,949 ms | 253 ms |
+| Edit eight photographs while memory is tight | 2,705 ms | 182 ms |
+| Slowest 5% of edits across eight photographs | 2,908 ms | 129 ms |
 | Typical edit across eight photographs | 142 ms | 122 ms |
 | Remove a photograph while it renders | 385 ms | 49 ms |
 | Edit one photograph | 40 ms | 35 ms |
-| Open one photograph | 0.39 s | 0.40 s |
+| Open one photograph | 390 ms | 404 ms |
 
 | Peak memory | 0.8.4 | 0.9.0 |
 | --- | --- | --- |
