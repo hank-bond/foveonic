@@ -216,8 +216,10 @@ class ProcessingModeMatrixTests(unittest.TestCase):
             self.assertEqual(reduced['raw_size'],size)
             self.assertIn(reduced['source'],manifest['sample_hashes'])
             self.assertEqual(reduced['resolutions'],['full','fast','draft','thumb'])
-            self.assertEqual(reduced['options'],['--wb','Sunlight','--mode','Standard'])
+            self.assertEqual(reduced['options'],['--wb','Sunlight','--mode','Standard','--reconstruction'])
         self.assertTrue(all(case['processing_qualities']==['quality','speed'] for case in cases))
+        # Merrill is never measured without noise reduction, which the app turns on by default.
+        self.assertTrue(all('--reconstruction' in case['options'] for case in cases if case['family']=='merrill' and 'options' in case))
         self.assertTrue({'merrill-dense-adaptive','merrill-dense-hdr','merrill-dense-color','merrill-dense-dehaze'} <= {case['label'] for case in cases})
         flower=next(case for case in cases if case['label']=='sunlit-red-flower-edited')
         self.assertNotIn('options',flower)
