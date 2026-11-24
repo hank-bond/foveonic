@@ -1319,11 +1319,8 @@ impl Operation {
                     Stage::Correct(..) => (vec![ConditionedTiles, BandEstimates], ConditionedTiles),
                 }
             }
-            Self::Ratio(_) => (
-                vec![ConditionedTiles, FilteredTiles],
-                UnconditionedRatioTiles,
-            ),
-            Self::Pattern { .. } => (vec![UnconditionedRatioTiles, PatternSeedTiles], RatioTiles),
+            Self::Ratio(_) => (vec![ConditionedTiles, FilteredTiles], RatioTiles),
+            Self::Pattern { .. } => (vec![RatioTiles, PatternSeedTiles], RatioTiles),
             Self::Texture { prepared, .. } => {
                 let mut inputs = vec![ConditionedTiles];
                 if prepared.needs_base() {

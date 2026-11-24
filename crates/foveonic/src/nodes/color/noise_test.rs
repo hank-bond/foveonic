@@ -281,3 +281,24 @@ fn adaptive_sampling_support_invalidates_only_the_noise_base() {
         }
     }
 }
+
+#[test]
+fn pattern_thresholds_extrapolated_below_zero_select_nothing() {
+    let metadata = Metadata {
+        width: 0,
+        height: 0,
+        rotation: 0,
+        processing_version: None,
+        properties: [("ISO".to_owned(), "6400".to_owned())].into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    let mut params: Parameters = bytemuck::Zeroable::zeroed();
+    params.tile = [80, 72, 0, 0];
+    params.window = [0, 0, 1, 1];
+    // The estimated ISO picks the 1600–3200 rows; the capture ISO extrapolates past them.
+    params.edge[3] = 2000.;
+    let pattern = pattern_parameters(&metadata, params).unwrap();
+    assert_eq!(pattern.params.thresholds, [0., 0., 1., 0.]);
+    assert!(!pattern.blends());
+}

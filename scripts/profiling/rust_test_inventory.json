@@ -604,6 +604,7 @@
         "render::tests::camera_repair_matches_manual_cutoff_and_sensor_inspection_skips_selection",
         "render::tests::merrill_auto_sharpens_and_explicit_zero_skips_signal",
         "render::tests::native_sharpen_is_before_tone_reuses_signed_signal_and_keeps_inputs_immutable",
+        "render::tests::pattern_conditioning_runs_only_when_it_blends",
         "render::tests::reconstruction_inspection_is_selective_and_retains_signed_detail",
         "render::tests::reconstruction_originals_stay_finite_across_noise_choices",
         "render::tiger_tests::original_tiger_modes_masks_and_retained_results",

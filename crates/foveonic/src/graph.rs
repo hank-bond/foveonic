@@ -33,7 +33,6 @@ pub enum DataType {
     /// Cumulative native band offsets, indexed by tile, block and support.
     BandEstimates,
     PatternSeedTiles,
-    UnconditionedRatioTiles,
     RatioTiles,
     ColorTiles(ColorSpace),
     BlackLevels,
@@ -99,7 +98,6 @@ impl DataType {
             | Self::ConditionedTiles
             | Self::BandEstimates
             | Self::PatternSeedTiles
-            | Self::UnconditionedRatioTiles
             | Self::RatioTiles
             | Self::ColorTiles(_) => return None,
         };

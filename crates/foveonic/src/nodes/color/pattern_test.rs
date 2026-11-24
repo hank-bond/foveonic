@@ -26,6 +26,13 @@ fn offsets_match_native_sequence_and_invalid_parameters_are_rejected() {
     assert!(Prepared::new([80, 72, 1, 4], [0.075, 0.1, 1.1, 0.]).is_err());
 }
 #[test]
+fn only_a_nonzero_blend_with_a_nonzero_blend_threshold_conditions_ratios() {
+    let blends = |thresholds| Prepared::new([80, 72, 1, 4], thresholds).unwrap().blends();
+    assert!(blends([0.075, 0.1, 0.65, 0.]));
+    assert!(!blends([0.075, 0.1, 0., 0.]));
+    assert!(!blends([0., 0.1, 0.65, 0.]));
+}
+#[test]
 #[ignore = "requires a GPU"]
 fn gpu_pattern_matches_native_extents_seeded_edges_and_global_offset_order() {
     let f = fixture();
@@ -51,6 +58,20 @@ fn gpu_pattern_matches_native_extents_seeded_edges_and_global_offset_order() {
     )
     .unwrap();
     let seed_before = gpu.readback(&edge).unwrap();
+    // Recipes omit the node when it does not blend, so the blending rectangle must equal its input.
+    let assert_blending_rectangle_unchanged = |actual: &[f32]| {
+        let (w, h, span) = (80, 72, 9);
+        for (i, (a, b)) in actual.iter().zip(&input).enumerate() {
+            let (x, y) = (i % w, i / w % h);
+            if (span..w - span).contains(&x) && (span..h - span).contains(&y) {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "non-blending pattern changed ratio {i}"
+                );
+            }
+        }
+    };
     for output in f["outputs"].as_array().unwrap() {
         let blend = output["blend"].as_f64().unwrap() as f32;
         let p = Prepared::new([80, 72, 2, 4], [0.075, 0.1, blend, 0.]).unwrap();
@@ -80,6 +101,9 @@ fn gpu_pattern_matches_native_extents_seeded_edges_and_global_offset_order() {
             error < 0.0000003,
             "pattern blend {blend}: maximum {error} at {position}"
         );
+        if !p.blends() {
+            assert_blending_rectangle_unchanged(actual);
+        }
         let mask = gpu.readback(result.mask.as_ref().unwrap()).unwrap();
         let mask = bytemuck::cast_slice::<u8, f32>(&mask);
         for (i, &a) in mask.iter().enumerate() {
@@ -112,4 +136,18 @@ fn gpu_pattern_matches_native_extents_seeded_edges_and_global_offset_order() {
     assert!(bytemuck::cast_slice::<u8, f32>(&bytes)
         .iter()
         .all(|v| *v == 0.));
+    let p = Prepared::new([80, 72, 2, 4], [0., 0.1, 0.65, 0.]).unwrap();
+    assert!(!p.blends());
+    let result = apply(
+        &gpu,
+        &original,
+        &edge,
+        &p,
+        true,
+        false,
+        &mut Profile::default(),
+    )
+    .unwrap();
+    let bytes = gpu.readback(result.ratio.as_ref().unwrap()).unwrap();
+    assert_blending_rectangle_unchanged(bytemuck::cast_slice(&bytes));
 }

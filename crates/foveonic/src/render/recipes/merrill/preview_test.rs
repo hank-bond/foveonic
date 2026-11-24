@@ -273,7 +273,6 @@ fn reduced_render_matches_cached_edits_and_keeps_full_images_and_inspection_nati
         "submit reference noise base",
         "submit reference column conditioning",
         "submit reference luminance ratio",
-        "submit reference pattern conditioning",
         "submit texture restoration",
         "submit tiled ColorDQ",
         "submit color tile projection",

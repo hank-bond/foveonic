@@ -576,7 +576,6 @@ fn image_signals_round_trip_with_their_canonical_layout_and_extent() {
         DataType::FilteredTiles,
         DataType::ConditionedTiles,
         DataType::PatternSeedTiles,
-        DataType::UnconditionedRatioTiles,
         DataType::RatioTiles,
         DataType::ColorTiles(ColorSpace::Srgb),
         DataType::File,

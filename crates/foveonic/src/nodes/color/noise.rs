@@ -322,7 +322,14 @@ pub(crate) fn pattern_parameters(
             p.tile_count(),
             (half as u32).div_ceil(p.sampling[0].max(1)),
         ],
-        [extra[1], extra[2], extra[3].clamp(0., 1.), 0.],
+        // Extrapolation can take a threshold below zero, where the strict comparisons select
+        // nothing, exactly as at zero.
+        [
+            extra[1].max(0.),
+            extra[2].max(0.),
+            extra[3].clamp(0., 1.),
+            0.,
+        ],
     )
 }
 

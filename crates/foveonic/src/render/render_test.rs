@@ -779,6 +779,63 @@ fn gpu_retained_results_survive_scratch_reuse_and_feed_texture_and_export() {
 
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
+fn pattern_conditioning_runs_only_when_it_blends() {
+    let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
+    let engine = Engine::new().unwrap();
+    let mut settings = Settings::new("Sunlight", "Standard");
+    settings.reconstruction = Some(Default::default());
+    for (file, blends) in [
+        ("blue-parking-sign.x3f", false),
+        ("rocks-and-tree-shadows.x3f", true),
+    ] {
+        let source = Source::open(dir.join(file)).unwrap();
+        let parameters =
+            crate::noise::prepare(&source.metadata, "Sunlight", Default::default()).unwrap();
+        let pattern = crate::noise::pattern_parameters(&source.metadata, parameters).unwrap();
+        assert_eq!(pattern.blends(), blends, "{file}");
+        for divisor in [1, 2] {
+            settings.working_scale = Scale::new(divisor).unwrap();
+            let mut profile = Profile::new(crate::profile::Mode::Gpu);
+            engine.render(&source, &settings, &mut profile).unwrap();
+            let ran = |stage: &str| profile.gpu.iter().any(|t| t.stage == stage);
+            assert!(
+                ran("detail ratio") && ran("texture restoration"),
+                "{file} at 1/{divisor}"
+            );
+            assert_eq!(
+                profile.gpu.iter().any(|t| t.stage.starts_with("pattern")),
+                blends,
+                "{file} at 1/{divisor}"
+            );
+        }
+    }
+    // Inspecting the conditioned ratio runs the node without changing a zero-blend image.
+    let source = Source::open(dir.join("blue-parking-sign.x3f")).unwrap();
+    settings.working_scale = Scale::NATIVE;
+    // Only the widest detail supports reach the tile margins the node still permutes.
+    let texture = &mut settings.reconstruction.as_mut().unwrap().texture;
+    (texture.fine, texture.coarse) = (3., 3.);
+    (texture.fine_size, texture.coarse_size) = (2., 2.);
+    let image = |names: &[&str], pattern: bool| {
+        let mut profile = Profile::new(crate::profile::Mode::Gpu);
+        let mut artifacts = engine
+            .render_artifacts(&source, &settings, names, &mut profile)
+            .unwrap();
+        assert!(profile.gpu.iter().any(|t| t.stage == "texture restoration"));
+        assert_eq!(
+            profile.gpu.iter().any(|t| t.stage.starts_with("pattern")),
+            pattern
+        );
+        let crate::inspection::Content::Image(image) = artifacts.pop().unwrap().content else {
+            panic!("expected an image")
+        };
+        engine.readback_image(&image).unwrap()
+    };
+    assert!(image(&["color.rgb"], false) == image(&["detail.ratio", "color.rgb"], true));
+}
+
+#[test]
+#[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
 fn reconstruction_inspection_is_selective_and_retains_signed_detail() {
     let dir = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let source = Source::open(dir.join("blue-parking-sign.x3f")).unwrap();

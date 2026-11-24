@@ -152,26 +152,24 @@ pub(super) fn append(
         )?
     };
     checkpoint!();
-    let inspect_ratio = request
-        .names
-        .iter()
-        .any(|name| matches!(*name, "detail.raw-ratio" | "detail.ratio" | "pattern.mask"));
-    let ratio = if effects.strength[2] != 0. || inspect_ratio {
+    let inspected = |name| request.names.contains(&name);
+    let inspect_pattern = inspected("detail.ratio") || inspected("pattern.mask");
+    let ratio = if effects.strength[2] != 0. || inspect_pattern || inspected("detail.raw-ratio") {
         let ratio = graph.add(Operation::Ratio(params), &[conditioned, base])?;
         checkpoint!();
-        let pattern_recipe = profile.measure("prepare pattern recipe", || {
+        let prepared = profile.measure("prepare pattern recipe", || {
             crate::noise::pattern_parameters(request.source.metadata(), params)
         })?;
-        let seed = graph.named_output(base, "noise.pattern-seed-tiles")?;
-        let pattern = graph.add(
-            Operation::Pattern {
-                params,
-                prepared: pattern_recipe,
-            },
-            &[ratio, seed],
-        )?;
-        checkpoint!();
-        Some(pattern)
+        let blends = prepared.blends();
+        // Inspection adds the node without changing which ratio the image reads.
+        if blends || inspect_pattern {
+            let seed = graph.named_output(base, "noise.pattern-seed-tiles")?;
+            let pattern = graph.add(Operation::Pattern { params, prepared }, &[ratio, seed])?;
+            checkpoint!();
+            Some(if blends { pattern } else { ratio })
+        } else {
+            Some(ratio)
+        }
     } else {
         None
     };

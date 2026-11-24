@@ -25,6 +25,13 @@ pub(crate) struct Prepared {
     pub offsets: Vec<u32>,
 }
 impl Prepared {
+    /// Whether any ratio inside the blending rectangle can change. The shader blends only
+    /// ratios strictly within the blend threshold, so a zero threshold blends nothing.
+    /// Swaps still permute the outer tile margin when this is false.
+    pub(crate) fn blends(&self) -> bool {
+        let [blend_threshold, _, blend, _] = self.params.thresholds;
+        blend_threshold > 0. && blend > 0.
+    }
     pub(crate) fn key(&self) -> crate::recipe::Key {
         crate::recipe::Key::pod(&self.params).slice(&self.offsets)
     }
