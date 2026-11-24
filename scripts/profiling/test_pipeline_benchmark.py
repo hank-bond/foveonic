@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from pipeline_benchmark import compare_reports, parse_run, portable_report, record
+from pipeline_benchmark import build, compare_reports, parse_run, portable_report, record, summary
 
 
 def renderer_records(source, times, *, scale=8):
@@ -172,14 +172,99 @@ class PipelineBenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'uncontended'):
             portable_report(report, 'a' * 64)
 
+    def test_runs_that_did_different_work_for_the_same_request_still_compare(self):
+        before = self.capture()
+        after = copy.deepcopy(before)
+        after['cases'][0].update(settings={'exposure': 1}, effective_scale_divisor=4)
+        row = compare_reports(before, after)['cases'][0]
+        self.assertFalse(row['settings_equal'])
+        self.assertEqual(row['delivered_scale'], {'before': 8, 'after': 4})
+        after['cases'][0].update(resolution='draft')
+        with self.assertRaises(ValueError):
+            compare_reports(before, after)
+
+    def test_only_shared_cases_compare_and_the_rest_are_named(self):
+        before = self.capture()
+        after = copy.deepcopy(before)
+        added = copy.deepcopy(after['cases'][0])
+        added['id'] = 'new-recipe-thumb-quality'
+        after['cases'].append(added)
+        after['cases_requested'] = 2
+        result = compare_reports(before, after)
+        self.assertEqual([row['id'] for row in result['cases']], ['sample-thumb-quality'])
+        self.assertEqual(result['only_after'], ['new-recipe-thumb-quality'])
+        self.assertEqual(result['only_before'], [])
+        self.assertIn('Only in the second run: new-recipe-thumb-quality', summary(result))
+
+    def test_a_timing_change_counts_only_when_the_samples_do_not_overlap(self):
+        before = self.capture()
+        self.times = [1000, 500, 12, 31, 22]
+        overlapping = compare_reports(before, self.capture('overlapping'))
+        self.assertFalse(overlapping['cases'][0]['beyond_spread'])
+        self.times = [1000, 500, 5, 6, 7]
+        faster = compare_reports(before, self.capture('faster'))
+        self.assertTrue(faster['cases'][0]['beyond_spread'])
+        self.assertIn('sample-thumb-quality: 20.0 -> 6.0 ms (-70%)', summary(faster))
+
+    def test_changed_pixels_are_measured_and_identical_ones_are_not(self):
+        before = self.capture()
+        measured = []
+        difference = {'samples': 6, 'different_samples': 3, 'nonfinite_samples': 0,
+                      'max_absolute': 0.5, 'mean_absolute': 0.125, 'rms': 0.25}
+
+        def measure(old, new):
+            measured.append((old['id'], new['id']))
+            return difference
+        same = compare_reports(before, copy.deepcopy(before), measure=measure)
+        self.assertEqual(measured, [])
+        self.assertIn('Pixels: 1 identical, 0 changed.', summary(same))
+        self.pixel_data = bytes(reversed(range(24)))
+        changed = compare_reports(before, self.capture('changed'), measure=measure)
+        self.assertEqual(measured, [('sample-thumb-quality', 'sample-thumb-quality')])
+        self.assertEqual(changed['cases'][0]['numerical']['difference'], difference)
+        self.assertIn('sample-thumb-quality: 50.0% of samples, max 0.5, mean 0.125', summary(changed))
+
+    def test_a_revision_is_exported_and_built_once_and_the_worktree_is_named_dirty(self):
+        repository = self.root / 'repository'
+        repository.mkdir()
+
+        def git(*arguments):
+            return subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', *arguments],
+                                  cwd=repository, check=True, capture_output=True, text=True).stdout.strip()
+        git('init', '-q')
+        (repository / 'Cargo.toml').write_text('first\n')
+        git('add', '.')
+        git('commit', '-q', '-m', 'first')
+        first = git('rev-parse', 'HEAD')
+        (repository / 'Cargo.toml').write_text('second\n')
+        builds = []
+
+        run = subprocess.run
+
+        def cargo(command, *, cwd=None, **options):
+            if command[0] != 'cargo':
+                return run(command, cwd=cwd, **options)
+            builds.append((Path(cwd), (Path(cwd) / 'Cargo.toml').read_text()))
+            renderer = Path(cwd) / 'target/release/examples'
+            renderer.mkdir(parents=True, exist_ok=True)
+            (renderer / 'profile_pipeline').write_text('built')
+            (renderer / 'profile_pipeline.exe').write_text('built')
+        with patch('pipeline_benchmark.subprocess.run', cargo):
+            binary, name = build(first, root=repository)
+            self.assertEqual(name, first)
+            self.assertEqual(builds, [(repository / '.local/runs/builds' / first, 'first\n')])
+            self.assertTrue(binary.is_file())
+            self.assertEqual(build(first, root=repository), (binary, first))
+            self.assertEqual(len(builds), 1, 'a built revision is not built again')
+            _, name = build('worktree', root=repository)
+            self.assertEqual(name, first + '-dirty')
+            self.assertEqual(builds[-1], (repository, 'second\n'))
+
     def test_comparison_rejects_changed_workload_hardware_and_incomplete_samples(self):
         before = self.capture()
         changes = [lambda report: report['hardware'].update(host='other host'),
                    lambda report: report['measurement'].update(warmups=1),
-                   lambda report: report['cases'][0].update(settings={'exposure': 1}),
                    lambda report: report['cases'][0].update(source_sha256='different original'),
-                   lambda report: report['cases'][0].update(adapter='other GPU'),
-                   lambda report: report['cases'][0]['geometry'].update(extent=[2, 1]),
                    lambda report: report.update(hardware={}),
                    lambda report: report['cases'][0]['warm_completed_ms'].pop(),
                    lambda report: report['cases'].append(copy.deepcopy(report['cases'][0]))]

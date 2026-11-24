@@ -1,4 +1,4 @@
-"""Record matched fresh-processing Off distributions and compare timings and exact output separately."""
+"""Record a render run from any revision and compare two runs by case for timing and pixel changes."""
 
 import argparse
 import copy
@@ -8,14 +8,47 @@ import os
 from pathlib import Path
 import platform
 import subprocess
+import sys
+import time
 
 from file_hash import digest
 from native import recording_environment, workload_monitor
 from process_memory import run_captured
 from render_matrix import expand_cases, render_arguments
+
+ROOT = Path(__file__).resolve().parents[2]
+RENDERER = Path('target/release/examples') / ('profile_pipeline.exe' if os.name == 'nt' else 'profile_pipeline')
+# What a case asked for. Two runs compare a case when these agree.
+REQUESTED = ('source_sha256', 'resolution', 'processing_quality', 'options', 'settings_snapshot')
 from results import IMAGE_GEOMETRY_FIELDS, render_result
 from trace_analysis import distribution
 from watch_workloads import concurrent_workloads, require_quiet
+
+
+def git(*arguments, cwd=ROOT):
+    return subprocess.run(['git', *arguments], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def build(revision, *, root=ROOT, offline=False):
+    """Build the renderer of `revision`, or of the working tree, and name the source it came from.
+
+    A commit is exported to its own directory under `.local/runs/builds` and built once.
+    """
+    cargo = ['cargo', 'build', '--release', '--locked', '-p', 'foveonic', '--example', 'profile_pipeline',
+             *(['--offline'] if offline else [])]
+    if revision == 'worktree':
+        source = root
+        name = git('rev-parse', 'HEAD', cwd=root) + ('-dirty' if git('status', '--porcelain', cwd=root) else '')
+    else:
+        name = git('rev-parse', '--verify', revision + '^{commit}', cwd=root)
+        source = root / '.local/runs/builds' / name
+        if not (source / 'Cargo.toml').exists():
+            source.mkdir(parents=True, exist_ok=True)
+            archive = subprocess.run(['git', 'archive', name], cwd=root, check=True, capture_output=True).stdout
+            subprocess.run(['tar', '-x', '-C', str(source)], input=archive, check=True)
+    if revision == 'worktree' or not (source / RENDERER).exists():
+        subprocess.run(cargo, cwd=source, check=True, stdout=sys.stderr)
+    return source / RENDERER, name
 
 
 def host_identity():
@@ -195,20 +228,49 @@ def checked_cases(report):
     return {row['id']: row for row in rows}
 
 
-def compare_reports(before, after, max_regression_percent=None):
+def render_image(report, row, directory):
+    """Render one recorded case again with its run's renderer and return the image file."""
+    directory.mkdir(parents=True)
+    result = subprocess.run([report['build']['binary'], row['source'], str(directory / 'export'), '--render-only',
+                             '--warm', '0', '--goldens', str(directory / 'image'),
+                             *render_arguments(row, directory / 'settings.json')],
+                            capture_output=True, text=True, env=recording_environment(directory, 'off'))
+    image = directory / 'image' / (row['source_stem'] + '.f32')
+    if result.returncode or digest(image) != row['pixels_sha256']:
+        raise ValueError(f"{row['id']}: rendering again did not reproduce the recorded image")
+    return image
+
+
+def measure_difference(before, after, old, new, directory):
+    """Render a changed case from both runs and describe how far the images differ."""
+    images = [render_image(report, row, directory / side)
+              for side, report, row in (('before', before, old), ('after', after, new))]
+    result = subprocess.run([after['build']['binary'], '--compare-samples', *map(str, images),
+                             '--endianness', new['geometry']['endianness']], capture_output=True, text=True)
+    if result.returncode:
+        raise ValueError(f"{new['id']}: sample comparison failed: {result.stderr.strip()}")
+    data = json.loads(result.stdout)['data']
+    for image in images:
+        image.unlink()
+    return {key: data[key] for key in ('samples', 'different_samples', 'nonfinite_samples',
+                                       'max_absolute', 'mean_absolute', 'rms')}
+
+
+def compare_reports(before, after, max_regression_percent=None, *, measure=None):
+    """Compare the cases both runs share, matched by name and by what each asked for.
+
+    `measure(old, new)` describes the difference between two cases whose images differ.
+    """
     if max_regression_percent is not None and (not math.isfinite(max_regression_percent) or max_regression_percent < 0):
         raise ValueError('regression budget must be a finite nonnegative percentage')
     left, right = checked_cases(before), checked_cases(after)
-    if (before['hardware'] != after['hardware'] or before['measurement'] != after['measurement']
-            or left.keys() != right.keys()):
-        raise ValueError('reports have different hardware, measurement setup or case sets')
+    if before['hardware'] != after['hardware'] or before['measurement'] != after['measurement']:
+        raise ValueError('reports have different hardware or measurement setup')
     comparisons, decisions = [], []
-    for name, old in left.items():
-        new = right[name]
-        identity = ('source_sha256', 'family', 'raw_size', 'resolution', 'processing_quality',
-                    'options', 'settings', 'effective_scale_divisor', 'adapter', 'geometry')
-        if any(old[key] != new[key] for key in identity) or old.get('settings_snapshot') != new.get('settings_snapshot'):
-            raise ValueError(f'{name}: reports have different source, recipe, actual settings, grid or adapter')
+    for name in left.keys() & right.keys():
+        old, new = left[name], right[name]
+        if any(old.get(key) != new.get(key) for key in REQUESTED):
+            raise ValueError(f'{name}: the two runs asked for different photographs or recipes')
         baseline, candidate = distribution(old['warm_completed_ms']), distribution(new['warm_completed_ms'])
         metrics = {}
         for metric in ('median', 'p95'):
@@ -219,15 +281,57 @@ def compare_reports(before, after, max_regression_percent=None):
             metrics[metric] = {'before_ms': a, 'after_ms': b, 'delta_ms': b - a,
                                'delta_percent': 100 * (b - a) / a if a else (0. if b == 0 else None),
                                'within_budget': within}
-        exact = (old['pixels_sha256'] == new['pixels_sha256'] and old['pixel_bytes'] == new['pixel_bytes']
-                 and old['geometry'] == new['geometry'])
+        # A change counts as beyond the spread when the two sets of samples do not overlap.
+        beyond_spread = (min(new['warm_completed_ms']) > max(old['warm_completed_ms'])
+                         or max(new['warm_completed_ms']) < min(old['warm_completed_ms']))
+        geometry_equal = old['geometry'] == new['geometry']
+        pixels_equal = old['pixels_sha256'] == new['pixels_sha256']
+        numerical = {'exact': pixels_equal and geometry_equal, 'pixels_equal': pixels_equal,
+                     'geometry_equal': geometry_equal}
+        if not pixels_equal and geometry_equal and measure is not None:
+            numerical['difference'] = measure(old, new)
         comparisons.append({'id': name, 'before_samples': baseline['count'], 'after_samples': candidate['count'],
-                            'numerical': {'exact': exact, 'pixels_equal': old['pixels_sha256'] == new['pixels_sha256'],
-                                          'geometry_equal': old['geometry'] == new['geometry']}, **metrics})
-    return {'schema_version': 1, 'kind': 'fresh-processing-off-comparison',
+                            'delivered_scale': {'before': old['effective_scale_divisor'],
+                                                'after': new['effective_scale_divisor']},
+                            'settings_equal': old['settings'] == new['settings'],
+                            'beyond_spread': beyond_spread, 'numerical': numerical, **metrics})
+    comparisons.sort(key=lambda row: row['id'])
+    return {'schema_version': 2, 'kind': 'fresh-processing-off-comparison',
             'max_regression_percent': max_regression_percent,
             'timing_passed': all(decisions) if decisions else None,
-            'numerical_exact': all(row['numerical']['exact'] for row in comparisons), 'cases': comparisons}
+            'numerical_exact': all(row['numerical']['exact'] for row in comparisons),
+            'only_before': sorted(left.keys() - right.keys()), 'only_after': sorted(right.keys() - left.keys()),
+            'cases': comparisons}
+
+
+def summary(result):
+    """The comparison as text: pixel changes first, then timing changes beyond the spread."""
+    cases = result['cases']
+    changed = [row for row in cases if not row['numerical']['exact']]
+    lines = [f"{len(cases)} cases compared. Pixels: {len(cases) - len(changed)} identical, {len(changed)} changed."]
+    for row in changed:
+        difference = row['numerical'].get('difference')
+        if not row['numerical']['geometry_equal']:
+            detail = 'size or layout differs'
+        elif difference is None:
+            detail = 'not measured'
+        else:
+            share = 100 * difference['different_samples'] / difference['samples']
+            detail = (f"{share:.1f}% of samples, max {difference['max_absolute']:.4g}, "
+                      f"mean {difference['mean_absolute']:.4g}")
+        lines.append(f"  {row['id']}: {detail}")
+    moved = [row for row in cases if row['beyond_spread']]
+    lines.append(f"Timing: {len(moved)} of {len(cases)} cases changed beyond their sample spread.")
+    for row in sorted(moved, key=lambda row: row['median']['delta_percent'] or 0):
+        median = row['median']
+        scale = row['delivered_scale']
+        note = '' if scale['before'] == scale['after'] else f" (delivered 1/{scale['before']} -> 1/{scale['after']})"
+        lines.append(f"  {row['id']}: {median['before_ms']:.1f} -> {median['after_ms']:.1f} ms "
+                     f"({median['delta_percent']:+.0f}%){note}")
+    for label, names in (('Only in the first run', result['only_before']), ('Only in the second run', result['only_after'])):
+        if names:
+            lines.append(f"{label}: {', '.join(names)}")
+    return '\n'.join(lines)
 
 
 def portable_report(report, source_report_sha256):
@@ -246,49 +350,73 @@ def portable_report(report, source_report_sha256):
     return result
 
 
+def load_report(path):
+    """A run is named by its directory or by the report inside it."""
+    path = path / 'report.json' if path.is_dir() else path
+    return path, json.loads(path.read_text())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    capture = commands.add_parser('record')
-    capture.add_argument('--binary', type=Path, required=True)
-    capture.add_argument('--cases', type=Path, required=True)
-    capture.add_argument('--directory', type=Path, required=True)
-    capture.add_argument('--build-source-revision', help='optional caller-declared source revision used to build the supplied executable')
+    capture = commands.add_parser('record', help='run the cases through one renderer and write a run')
+    renderer = capture.add_mutually_exclusive_group(required=True)
+    renderer.add_argument('--revision', help='a commit, tag or branch to build, or "worktree" for the working tree')
+    renderer.add_argument('--binary', type=Path, help='an already built profile_pipeline')
+    capture.add_argument('--offline', action='store_true', help='build without network access')
+    capture.add_argument('--cases', type=Path, default=ROOT / '.local/test-inputs/render-cases.json')
+    capture.add_argument('--directory', type=Path, help='new run directory; defaults to one under .local/runs')
+    capture.add_argument('--build-source-revision', help='source revision of a supplied --binary')
     capture.add_argument('--warmups', type=int, default=1)
     capture.add_argument('--samples', type=int, default=5)
     capture.add_argument('--max-memory-mb', type=int, default=5120)
     capture.add_argument('--retain-floats', action='store_true')
-    comparison = commands.add_parser('compare')
+    comparison = commands.add_parser('compare', help='compare two runs made on the same machine')
     comparison.add_argument('before', type=Path)
     comparison.add_argument('after', type=Path)
     comparison.add_argument('--max-regression-percent', type=float)
-    comparison.add_argument('--output', type=Path)
+    comparison.add_argument('--output', type=Path, help='new file for the full comparison as JSON')
+    comparison.add_argument('--fingerprints-only', action='store_true',
+                            help='do not render changed cases again to measure their difference')
     export = commands.add_parser('export', help='write a validated report without local input and artifact paths')
     export.add_argument('report', type=Path)
     export.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.command == 'record':
-            result = record(args.binary, json.loads(args.cases.read_text()), args.directory,
-                            build_source_revision=args.build_source_revision, warmups=args.warmups,
+            binary, revision = (args.binary, args.build_source_revision) if args.binary else build(
+                args.revision, offline=args.offline)
+            directory = args.directory or ROOT / '.local/runs' / f"{(revision or 'binary')[:12]}-{time.strftime('%Y%m%d-%H%M%S')}"
+            directory.parent.mkdir(parents=True, exist_ok=True)
+            result = record(binary, json.loads(args.cases.read_text()), directory,
+                            build_source_revision=revision, warmups=args.warmups,
                             samples=args.samples, max_memory_mb=args.max_memory_mb, retain_floats=args.retain_floats)
             failed = not result['passed'] or not result['timing_valid']
+            failures = [f"{row['id']}: {row['failure']}" for row in result['cases'] if row.get('failure')]
+            text = '\n'.join([f"{sum(row['passed'] for row in result['cases'])} of {result['cases_requested']} cases recorded in {directory}",
+                              *failures, *([] if result['timing_valid'] or failures else ['timing is not valid: other work ran during the run'])])
         elif args.command == 'compare':
-            result = compare_reports(json.loads(args.before.read_text()), json.loads(args.after.read_text()), args.max_regression_percent)
-            result['reports'] = {name: {'path': str(path.resolve()), 'sha256': digest(path)}
-                                 for name, path in (('before', args.before), ('after', args.after))}
+            (before_path, before), (after_path, after) = load_report(args.before), load_report(args.after)
+            scratch = after_path.parent / f"difference-{time.strftime('%Y%m%d-%H%M%S')}"
+            measure = None if args.fingerprints_only else (
+                lambda old, new: measure_difference(before, after, old, new, scratch / new['id']))
+            result = compare_reports(before, after, args.max_regression_percent, measure=measure)
+            result['reports'] = {name: {'path': str(path.resolve()), 'sha256': digest(path),
+                                        'source_revision': report['build']['source_revision']}
+                                 for name, path, report in (('before', before_path, before), ('after', after_path, after))}
             if args.output:
                 with args.output.open('x') as output:
                     output.write(json.dumps(result, indent=2, allow_nan=False) + '\n')
-            failed = result['timing_passed'] is False or not result['numerical_exact']
+            failed = result['timing_passed'] is False
+            text = summary(result)
         else:
             result = portable_report(json.loads(args.report.read_text()), digest(args.report))
             with args.output.open('x') as output:
                 output.write(json.dumps(result, indent=2, allow_nan=False) + '\n')
-            failed = False
-    except (OSError, ValueError, KeyError, RuntimeError) as error:
+            failed, text = False, f'wrote {args.output}'
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError) as error:
         parser.exit(1, str(error) + '\n')
-    print(json.dumps(result, indent=2, allow_nan=False))
+    print(text)
     if failed:
         raise SystemExit(1)
 

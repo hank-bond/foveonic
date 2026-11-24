@@ -26,6 +26,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[color-field-production](./color-field-production.md)** Remove exploratory color-field paths, resolve the strict Output blocker, and prepare reviewed integration onto current main.
 - **[color-field-restraint](./color-field-restraint.md)** Expose one per-image highlight color restraint adjustment and remove rejected shader experiments while preserving optimized Local/Global defaults.
 - **[color-field](./color-field.md)** Implement GPU color-field highlight reconstruction, validate against the pinned reference, and compare quality/performance experiments using saved edits.
+- **[comparable-runs](./comparable-runs.md)** Generate a render run from any revision and compare two runs for pixel changes and timing, and time every behavioral step, so release checks need nothing stored on one machine.
 - **[complete-reference-algorithms](./complete-reference-algorithms.md)** Track remaining reference-algorithm follow-ups and the completed default photographic output resizer.
 - **[coordination-overhead-profile](./coordination-overhead-profile.md)** Measure data movement, preparation, scheduling, synchronization and delivery overhead before selecting current-architecture optimizations.
 - **[dehaze](./dehaze.md)** Adapt recovered haze estimation and patch picking into a saved GPU Dehaze correction.
