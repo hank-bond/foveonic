@@ -35,6 +35,7 @@ Record duplicated paths found after 2026-11-22 here, with where they are and wha
   - The four remaining exclusions (missing originals, capture-specific values) are decided one by one.
   - A renamed test must fail a local check. In 0.9.0 a rename left a stale inventory name that only the test machine found.
 - [ ] **Warm one-photo edits are 4 to 5 ms faster when every step waits for itself.** Measured 2026-11-24, interleaved on one tree, 40 edits each: waiting every step 34.5 ms, one step in flight 36 to 40 ms, 0.8.4 39 to 40 ms. Fresh renders go the other way (35 s against 30 s over the 144 render cases), so 0.9.0 keeps one step in flight. Find why a short warm edit loses time to the in-flight step before choosing a rule by workload.
+- [ ] **Stage profile beside the trace.** Owner, 2026-11-24. Perfetto is the one trace recorder, but each render also keeps its own list of stage names and times (`Profile`), which tests, the profiling example and the comparable-runs stage times read. Find what the profile records that a trace does not, and what needs it with tracing off. Then either read stages from the trace or state why the profile stays.
 - [ ] **One GPU wait per delivered image.** Delivery waits once per finished frame instead of once per tick, which may limit the gain from wide rendering. Not measured.
 
 ## Audit
