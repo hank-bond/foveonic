@@ -5,7 +5,7 @@ status: archived
 
 # Neutral restored grain parameter sweep
 
-The owner authorized a parameter sweep of the test-only neutral-restored-grain candidate. Keep app processing unchanged. Extend the existing [research harness](../../crates/foveonic/examples/chroma_investigation/AGENTS.md) rather than introducing a new production stage.
+The owner authorized a parameter sweep of the test-only neutral-restored-grain candidate. Keep app processing unchanged. Extend the existing research harness, since removed from the repository, rather than introducing a new production stage.
 
 - [x] Parameterize gain, weak-signal, input-disagreement and maximum-correction gates with the existing candidate as the control.
 - [x] Measure a broad grid on the reported portrait and other supplied Merrill photographs.

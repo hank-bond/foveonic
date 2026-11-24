@@ -14,7 +14,7 @@ A prior controlled comparison reproduces green-pixel amplification with Multisca
 - [x] Separate brightness restoration and ColorDQ from the color-proportion blend.
 - [x] Record the actual cause, evidence limits and a minimal proposed next step before implementation.
 
-Use the opt-in [chroma investigation](../../crates/foveonic/examples/chroma_investigation/AGENTS.md). It records small matched GPU sample tables and changes no photographic settings or defaults.
+Use the opt-in chroma investigation harness, since removed from the repository. It records small matched GPU sample tables and changes no photographic settings or defaults.
 
 
 ## Findings

@@ -15,7 +15,6 @@ Setup reports complete file-read, in-memory decode and total source-open wall ti
 
 ### Directories
 
-- **[chroma_investigation/](./chroma_investigation/AGENTS.md)** Opt-in chroma diagnostics inspect matched native-layer samples, normalization and ColorDQ without changing app processing.
 - **[profile_pipeline/](./profile_pipeline/AGENTS.md)** Independent verification batches and bounded float statistics extend the shared renderer without changing photographic processing.
 
 ### Source files

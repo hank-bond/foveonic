@@ -5,7 +5,7 @@ status: archived
 
 # Local chroma reliability
 
-The owner authorized continuing the [green-outlier investigation](./merrill-chroma-outliers.md). Compare local color safeguards on the reported portrait and other Merrill photographs, keeping the existing app unchanged. See the [opt-in research harness](../../crates/foveonic/examples/chroma_investigation/AGENTS.md) for reproduction.
+The owner authorized continuing the [green-outlier investigation](./merrill-chroma-outliers.md). Compare local color safeguards on the reported portrait and other Merrill photographs, keeping the existing app unchanged. The opt-in research harness used for reproduction has since been removed from the repository.
 
 - [x] Verify that candidate changes remain inside their masks and preserve their declared brightness measure.
 - [x] Check known bad estimates, supported dim colored points, real edges and independent brightness texture.

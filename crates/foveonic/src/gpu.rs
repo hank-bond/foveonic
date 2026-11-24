@@ -1135,10 +1135,6 @@ mod scheduling_tests {
 }
 
 #[cfg(test)]
-#[path = "../examples/chroma_investigation/gpu.rs"]
-pub(crate) mod chroma_investigation;
-
-#[cfg(test)]
 mod accounting_tests {
     use super::*;
 

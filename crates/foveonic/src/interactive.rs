@@ -1973,10 +1973,6 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "../examples/chroma_investigation/mod.rs"]
-mod chroma_investigation;
-
-#[cfg(test)]
 #[path = "interactive_scale_test.rs"]
 mod scale_tests;
 

@@ -1000,34 +1000,6 @@
     },
     {
       "suite": "foveonic",
-      "test": "interactive::chroma_investigation::controls::local_reference_known_color_controls",
-      "reason": "Local chroma investigation with explicit research inputs and outputs; not part of the retained release correctness selection.",
-      "requirements": "GPU, FOVEONIC_CHROMA_CONTROLS new synthetic-results path; optional declared control grid",
-      "source": "crates/foveonic/examples/chroma_investigation/controls.rs"
-    },
-    {
-      "suite": "foveonic",
-      "test": "interactive::chroma_investigation::inspect_green_outliers",
-      "reason": "Local chroma investigation with explicit research inputs and outputs; not part of the retained release correctness selection.",
-      "requirements": "GPU, FOVEONIC_CHROMA_SOURCE and FOVEONIC_CHROMA_OUTPUT new diagnostic directory",
-      "source": "crates/foveonic/examples/chroma_investigation/mod.rs"
-    },
-    {
-      "suite": "foveonic",
-      "test": "interactive::chroma_investigation::neutralization::inspect_shadow_protection",
-      "reason": "Local chroma investigation with explicit research inputs and outputs; not part of the retained release correctness selection.",
-      "requirements": "GPU, FOVEONIC_CHROMA_SOURCE and FOVEONIC_SHADOW_DIAGNOSIS new diagnostic JSON path",
-      "source": "crates/foveonic/examples/chroma_investigation/neutralization.rs"
-    },
-    {
-      "suite": "foveonic",
-      "test": "interactive::chroma_investigation::trials::compare_local_color",
-      "reason": "Local chroma investigation with explicit research inputs and outputs; not part of the retained release correctness selection.",
-      "requirements": "GPU and explicit FOVEONIC_CHROMA_TRIALS study configuration",
-      "source": "crates/foveonic/examples/chroma_investigation/trials.rs"
-    },
-    {
-      "suite": "foveonic",
       "test": "nodes::color::blue_guided_reconstruct::tests::bounded_native_reconstruction_matches",
       "reason": "Requires private/native comparison data, unsupported originals, or an explicit research input: BLUE_GUIDED_REFERENCE",
       "requirements": "requires BLUE_GUIDED_REFERENCE and GPU",
