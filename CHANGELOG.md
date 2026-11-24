@@ -17,6 +17,27 @@ Open and edit groups of photographs much faster, with every editing tool working
 - Prioritize visible images, navigator and scopes, then browser thumbnails. Make full-image completion while idle optional.
 - Preserve useful native detail while a new zoomed area renders, and keep each photograph's image on screen while it renders again.
 
+Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps and the same eight photographs.
+
+| Time | 0.8.4 | 0.9.0 |
+| --- | --- | --- |
+| Open eight photographs | 7.7 s | 2.8 s |
+| Rapid edits across eight photographs settle | 2.9 s | 0.25 s |
+| Edit eight photographs while memory is tight | 2.7 s | 0.18 s |
+| Slowest 5% of edits across eight photographs | 2.9 s | 0.13 s |
+| Typical edit across eight photographs | 142 ms | 122 ms |
+| Remove a photograph while it renders | 385 ms | 49 ms |
+| Edit one photograph | 40 ms | 35 ms |
+| Open one photograph | 0.39 s | 0.40 s |
+
+| Peak memory | 0.8.4 | 0.9.0 |
+| --- | --- | --- |
+| Open eight photographs | 3.6 GB | 2.1 GB |
+| Edit eight photographs | 3.6 GB | 1.9 GB |
+| Rapid edits across eight photographs | 3.6 GB | 2.1 GB |
+| Open one photograph | 1.1 GB | 1.0 GB |
+| Edit one photograph | 1.2 GB | 0.95 GB |
+
 ### New functionality
 
 - Apply Before/After to every actively edited photograph, using its own Camera or Defaults settings.
