@@ -31,18 +31,18 @@ Open and edit groups of photographs much faster, with every editing tool working
 
 ### Behavior changes
 
-- Follow the original Merrill sharpening by default. Merrill photographs set to automatic sharpening render sharper than before.
+- **Breaking:** Follow the original Merrill sharpening by default. Merrill photographs set to automatic sharpening, including ones already edited, render sharper than before.
+- **Breaking:** Open a photograph with defaults and a warning when its saved recipe is damaged or was written by a newer version. The next edit replaces that recipe. Earlier versions left it untouched.
+- **Breaking:** Remove the `--wb` and `--mode` launch options.
 - Keep automatic values editable. Editing an automatic value makes it manual, and turning Auto off keeps the value shown.
 - Reset the white balance adjustment on every edited photograph when choosing a white balance, and keep each photograph's own exposure when turning Auto off.
 - Disable navigator and scopes during multi-edit without moving the editing controls. Copy settings, Save preset and Set as default need one edited photograph.
 - Simplify editing outlines and resize image tiles continuously with either side panel.
-- Remove the `--wb` and `--mode` launch options.
 
 ### Bug fixes
 
 - Keep group zoom anchored within each photograph's displayed view and group panning at the same on-screen distance across different aspect ratios.
 - Zoom into and render Merrill photographs with noise reduction on Windows integrated graphics, where the app could previously stop or freeze.
-- Open a photograph with defaults and a warning when its saved recipe cannot be read.
 - Restore browser thumbnails after reloading a folder.
 - Keep Shift-arrow selection in the browser extending from where it left off.
 
