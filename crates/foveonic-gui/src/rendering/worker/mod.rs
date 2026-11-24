@@ -2149,9 +2149,11 @@ pub(crate) mod tests {
         (pixels, worker.checks.widest.load(Ordering::Relaxed))
     }
 
-    /// Median milliseconds to deliver a warm exposure edit to every photograph in
-    /// the group, and the widest admitted set, at one width cap.
-    fn warm_group_latency(width: usize, detail: bool) -> (f64, u64) {
+    /// Median milliseconds to deliver an exposure edit to every photograph in the
+    /// group, and the widest admitted set, at one width cap. A warm edit reuses the
+    /// group's earlier work. A fresh one renders after that work was cleared, as
+    /// when the group is first opened.
+    fn group_latency(width: usize, detail: bool, fresh: bool) -> (f64, u64) {
         use std::sync::atomic::Ordering;
         const TRIALS: u64 = 7;
         let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
@@ -2188,6 +2190,9 @@ pub(crate) mod tests {
                 .collect()
         };
         let deliver = |revision: u64| {
+            if fresh {
+                worker.clear();
+            }
             let started = std::time::Instant::now();
             worker.show(requests(revision), &[]);
             let mut delivered = 0;
@@ -2210,17 +2215,25 @@ pub(crate) mod tests {
         )
     }
 
+    /// Prints one line per work kind, view and width cap. `FOVEONIC_GROUP_WIDTHS`
+    /// limits the caps, so a caller can sample one cap's peak memory per process.
     #[test]
     #[ignore = "timing experiment: requires GPU, an uncontended host and FOVEONIC_FIXTURE_DIR with every camera family"]
-    fn warm_group_latency_by_width() {
-        for detail in [false, true] {
-            for width in [1, 2, 4, 8] {
-                let (median, widest) = warm_group_latency(width, detail);
-                println!(
-                    "{}",
-                    serde_json::json!({"view": if detail {"native_region"} else {"reduced"},
-                        "width_cap": width, "widest": widest, "median_ms": median})
-                );
+    fn group_latency_by_width() {
+        let widths: Vec<usize> = std::env::var("FOVEONIC_GROUP_WIDTHS")
+            .map(|widths| widths.split(',').map(|w| w.parse().unwrap()).collect())
+            .unwrap_or_else(|_| vec![1, 2, 4, 8]);
+        for fresh in [false, true] {
+            for detail in [false, true] {
+                for &width in &widths {
+                    let (median, widest) = group_latency(width, detail, fresh);
+                    println!(
+                        "{}",
+                        serde_json::json!({"work": if fresh {"fresh"} else {"warm"},
+                            "view": if detail {"native_region"} else {"reduced"},
+                            "width_cap": width, "widest": widest, "median_ms": median})
+                    );
+                }
             }
         }
     }

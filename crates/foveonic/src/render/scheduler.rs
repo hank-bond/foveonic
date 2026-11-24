@@ -496,7 +496,15 @@ impl<J: Job> Scheduler<J> {
                 Err(error) => admitted.outcome = Some(Err(error)),
             }
         }
-        let waited = tick.complete();
+        // A finished job's results must be complete before they are delivered.
+        // Several jobs keep the GPU busy by themselves, so only a job running
+        // alone leaves its step in flight.
+        let settle = self.admitted.len() > 1
+            || self
+                .admitted
+                .iter()
+                .any(|admitted| admitted.outcome.is_some());
+        let waited = tick.complete(settle);
         for admitted in &mut self.admitted {
             match &waited {
                 Ok(waited) => {

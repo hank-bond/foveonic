@@ -153,7 +153,7 @@ fn step(
 ) -> crate::source::Result<bool> {
     let tick = engine.tick();
     let more = execution.step(engine, working, cancel);
-    let waited = tick.complete()?;
+    let waited = tick.complete(true)?;
     execution.complete_tick(engine, waited, &|_| {});
     more
 }
@@ -206,6 +206,35 @@ fn same_photo_is_rejected_before_validation_profile_or_session_mutation() {
         PhotoRender::Superseded
     ));
     assert!(working.remove_photo(1).unwrap());
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn job_stopped_between_steps_retires_the_step_it_left_in_flight() {
+    let engine = Engine::new().unwrap();
+    let source = fixture();
+    let settings = settings();
+    let mut working = working(&engine, &source, &settings);
+    let mut profile = profile();
+    let mut execution = begin(&engine, &mut working, &settings, &mut profile);
+    while !engine.gpu.has_work_in_flight() {
+        let tick = engine.tick();
+        assert!(execution.step(&engine, &mut working, &|| false).unwrap());
+        let waited = tick.complete(false).unwrap();
+        execution.complete_tick(&engine, waited, &|_| {});
+    }
+    assert!(matches!(
+        execution
+            .finish(
+                &engine,
+                &mut working,
+                Err(Box::new(Superseded)),
+                &mut profile
+            )
+            .unwrap(),
+        PhotoRender::Superseded
+    ));
+    assert!(!engine.gpu.has_work_in_flight());
 }
 
 #[test]

@@ -133,7 +133,7 @@ Today the selected photo's settings exist in `App::settings`, the editing runtim
 
 - **Memory research.** Whether a reduced whole image or downscaled checkpoints can be derived from native sensor data already resident for a patch, so a zoomed photo needs one decode. Measure against separate reduced sensor data within the memory target and choose by interactivity.
 
-- Measure whether running several native patches side by side helps on one GPU (`warm_group_latency_by_width`), before changing admission headroom.
+- Measure whether running several native patches side by side helps on one GPU (`group_latency_by_width`), before changing admission headroom.
 
 ## Discoveries
 

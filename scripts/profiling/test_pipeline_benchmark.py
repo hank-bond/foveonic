@@ -51,6 +51,7 @@ class PipelineBenchmarkTests(unittest.TestCase):
         self.times = [1000, 500, 10, 30, 20]
         self.pixel_data = bytes(range(24))
         self.mutations = lambda rows: rows
+        self.memory = []
         self.addCleanup(patch.stopall)
         patch('pipeline_benchmark.require_quiet').start()
         patch('pipeline_benchmark.workload_monitor', fake_monitor).start()
@@ -62,6 +63,8 @@ class PipelineBenchmarkTests(unittest.TestCase):
         self.assertIn('--render-only', command)
         self.assertEqual(command[command.index('--warm') + 1], str(len(self.times) - 1))
         on_started(123)
+        if self.memory:
+            Path(samples).write_text(''.join(json.dumps({'physical_footprint_bytes': value}) + '\n' for value in self.memory))
         destination = Path(command[command.index('--goldens') + 1])
         destination.mkdir(parents=True)
         (destination / 'sample.f32').write_bytes(self.pixel_data)
@@ -223,6 +226,20 @@ class PipelineBenchmarkTests(unittest.TestCase):
         self.assertEqual(measured, [('sample-thumb-quality', 'sample-thumb-quality')])
         self.assertEqual(changed['cases'][0]['numerical']['difference'], difference)
         self.assertIn('sample-thumb-quality: 50.0% of samples, max 0.5, mean 0.125', summary(changed))
+
+    def test_peak_memory_is_recorded_and_large_changes_are_reported(self):
+        self.memory = [2**30, 3 * 2**30, 2 * 2**30]
+        before = self.capture()
+        self.assertEqual(before['cases'][0]['peak_memory_bytes'], 3 * 2**30)
+        self.memory = [3 * 2**30 + 2**28]
+        steady = compare_reports(before, self.capture('steady'))
+        self.assertIn('Peak memory: 0 of 1 cases changed', summary(steady))
+        self.memory = [6 * 2**30]
+        grown = compare_reports(before, self.capture('grown'))
+        self.assertIn('sample-thumb-quality: 3.00 -> 6.00 GiB (+100%)', summary(grown))
+        self.memory = []
+        unsampled = compare_reports(before, self.capture('unsampled'))
+        self.assertIsNone(unsampled['cases'][0]['peak_memory']['delta_percent'])
 
     def test_a_revision_is_exported_and_built_once_and_the_worktree_is_named_dirty(self):
         repository = self.root / 'repository'

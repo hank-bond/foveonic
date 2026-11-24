@@ -395,7 +395,7 @@ impl Engine {
     }
 
     /// Returns owned full-sensor, tone-mapped floating RGB with a logical output view.
-    /// Off and wall modes return after submission. GPU diagnostics wait for timestamps.
+    /// Returns once all submitted work has finished.
     pub fn render(
         &self,
         source: &Source,

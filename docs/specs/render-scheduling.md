@@ -83,8 +83,9 @@ Higher tiers come first. Export ranks above Speculative so that, once interactio
 ## Execution
 
 - Every render **must** use one execution path. A job steps through its graph: traversal skips cached nodes and runs the next uncached node. Each tick, every admitted job takes one step, followed by one GPU wait. A single job is a tick of one.
+- A tick with one job **must** wait for the previous tick's work, so one step stays in flight and the GPU does not idle while the next step is prepared. This bounds unfinished GPU work, and the storage it holds, to one step. A tick with several jobs, a job's last step and an error **must** wait for all submitted work: several jobs keep the GPU busy by themselves, and their steps would otherwise all stay in flight. A newer or higher-priority job can therefore start behind at most one step of a job that was running alone.
 - Export **must** be an ordinary job: the same graph, stepped by ticks like any other, with file writing in place of display output when it finishes. The CLI **must** submit export jobs to a Scheduler with a target it chooses. Neither keeps its own execution path.
-- Progress **must** be reported after the tick's GPU wait.
+- Progress **must** be reported after the tick's GPU wait, so a step's progress can show one tick before its work has finished.
 - Failure or cancellation of one job **must** retire its submitted work before releasing its guard. Peers continue and settle independently.
 - Output **must** be identical at every width. Every camera family **must** be eligible to run with others.
 - GPU profiling **must** work at any width.

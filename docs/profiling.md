@@ -38,27 +38,26 @@ Use `--capture-float OUTPUT NEW_FILE` to render a named floating image output af
 
 Request `--profile gpu` for one additional synchronized diagnostic iteration after the ordinary warm repetitions. Its results remain in a separate mode group. Render and TIFF export have separate profiles/activity deltas. Optional `--goldens DIR` compares or creates full-float snapshots outside timed intervals; choose a distinct golden directory per intended recipe. Byte equality applies to output-equivalent optimizations, not to different denoisers or recovery methods. Evaluate photographic quality separately.
 
-## Fresh-processing matrix comparisons
+## Render runs from any revision
 
-Use `pipeline_benchmark.py` to compare fixed engine workloads before changing processing code. It shares the render matrix's case declarations and expands resolution separately from processing quality. Supply reproducible cases from the [maintained input setup](./testing-coverage.md).
+Use `pipeline_benchmark.py` to record a render run from any revision and compare two runs. A run is one revision's renderer executed over the render cases. It keeps each case's image fingerprint and warm render times, not the images. Supply reproducible cases from the [maintained input setup](./testing-coverage.md). The [comparable runs plan](../plans/comparable-runs.md) records the design and what remains.
 
 ```sh
-python3 scripts/profiling/pipeline_benchmark.py record \
-  --binary PATH_TO_BASELINE_RENDERER --cases CASES.json \
-  --directory .local/pipeline-before --warmups 1 --samples 5
-python3 scripts/profiling/pipeline_benchmark.py record \
-  --binary target/release/examples/profile_pipeline --cases CASES.json \
-  --directory .local/pipeline-after --warmups 1 --samples 5
-python3 scripts/profiling/pipeline_benchmark.py compare \
-  .local/pipeline-before/report.json .local/pipeline-after/report.json \
-  --output .local/pipeline-comparison.json
+python3 scripts/profiling/pipeline_benchmark.py record --revision v0.8.4 --directory .local/runs/before
+python3 scripts/profiling/pipeline_benchmark.py record --revision worktree --directory .local/runs/after
+python3 scripts/profiling/pipeline_benchmark.py compare .local/runs/before .local/runs/after \
+  --output .local/runs/comparison.json
 ```
+
+`--revision` takes a commit, tag or branch, or `worktree` for the working tree. A commit is exported to `.local/runs/builds/COMMIT` and built once. The current tool drives every revision's renderer, so both runs use the same cases. `--binary` records an already built renderer instead.
+
+`compare` matches cases by name and requires that both asked for the same photograph, recipe, size and processing quality. Both runs must come from the same machine. It prints the cases whose pixels changed, with the share of samples that differ and the largest and mean difference, then the cases whose timing changed beyond the spread of their samples. A timing change counts when the two sets of samples do not overlap. To measure a pixel difference it renders the changed case again from both runs, so both renderers must still be present. `--fingerprints-only` skips that. Cases present in one run only are named. The delivered size is reported beside each case and may differ between runs.
 
 Each invocation uses profiling Off. The declared warmup iterations are excluded from the reported distributions. Subsequent iterations are fresh graphs from the already-decoded source, not retained edits. Source loading and the first image's numerical readback remain separate from measured processing. The runner records per-case median and nearest-rank p95, actual settings and geometry, input hashes, measured executable identity and hardware. `--build-source-revision` adds a caller-declared label rather than attesting which sources produced the executable.
 
 A case may declare either photographic CLI `options` or an inline `settings_snapshot` from a fixed workload. Snapshots preserve saved controls and request-owned analysis flags that the CLI does not expose. The runner writes an owned copy with the matrix-selected working scale and processing policy, then checks the actual serialized photographic settings. The maintained flower case uses this route rather than reading a mutable sidecar.
 
-Comparison requires matching workloads and hardware. Without an explicit `--max-regression-percent`, timing remains observational. Exact photographic SHA-256 and geometry are checked independently of the timing decision. A heuristic candidate can differ intentionally, but its failed exact comparison is not a new approved baseline. Review its quality separately.
+Without an explicit `--max-regression-percent`, timing remains observational and the command succeeds. Pixel changes are reported for review and do not fail the comparison.
 
 The runner monitors known competing workloads through each owned renderer and uses the sampled memory guard described below. Successful full-float files are discarded after hashing by default. Use `--retain-floats` for numerical or crop investigations. Failed or contended evidence is retained. Compact reports can accompany release baselines, while raw records and large images remain separate artifacts.
 

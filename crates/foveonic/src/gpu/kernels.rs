@@ -1782,6 +1782,7 @@ impl Gpu {
             shader_writes,
             adapter_name,
             activity: Default::default(),
+            in_flight: Default::default(),
             diagnostics: Default::default(),
         })
     }

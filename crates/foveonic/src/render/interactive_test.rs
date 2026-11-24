@@ -280,29 +280,36 @@ fn session_image_profiled(
 
 #[test]
 #[ignore = "requires a GPU and FOVEONIC_FIXTURE_DIR"]
-fn merrill_auto_zero_sharpen_session_matches_fresh_and_explicit_off() {
+fn merrill_sharpen_session_matches_fresh_for_auto_and_explicit_off() {
     let dir = PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let engine = Engine::test_executor();
     let mut session = NativePhoto::new(Source::open(dir.join("blue-parking-sign.x3f")).unwrap());
     let mut settings = Settings::new("Sunlight", "Standard");
-    let fresh = engine
-        .render(&session.source, &settings, &mut Profile::default())
-        .unwrap();
-    let expected = engine.readback_image(&fresh).unwrap();
+    let fresh = |settings: &Settings| {
+        let image = engine
+            .render(&session.source, settings, &mut Profile::default())
+            .unwrap();
+        engine.readback_image(&image).unwrap()
+    };
+    let auto = fresh(&settings);
+    settings.sharpen_amount = Some(0.);
+    let off = fresh(&settings);
+    assert_ne!(auto, off, "Auto follows the original and sharpens");
+    settings.sharpen_amount = None;
     for _ in 0..2 {
         let image = session_image(&engine, &mut session, &settings);
         assert_same_pixels(
             "Auto session/fresh",
             &engine.readback_image(&image).unwrap(),
-            &expected,
+            &auto,
         );
     }
     settings.sharpen_amount = Some(0.);
     let image = session_image(&engine, &mut session, &settings);
     assert_same_pixels(
-        "explicit off/Auto",
+        "explicit off session/fresh",
         &engine.readback_image(&image).unwrap(),
-        &expected,
+        &off,
     );
 }
 

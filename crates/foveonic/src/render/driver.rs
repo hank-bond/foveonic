@@ -28,13 +28,14 @@ mod named_tests;
 #[path = "driver_test.rs"]
 pub(crate) mod tests;
 
-/// One GPU wait shared by every step submitted since the tick began.
+/// The steps submitted since the tick began.
 pub struct Tick<'a>(crate::gpu::Tick<'a>);
 
 impl Tick<'_> {
-    /// Returns how long the wait took, zero when nothing was submitted.
-    pub fn complete(self) -> Result<Duration> {
-        self.0.complete()
+    /// Wait for the previous tick's work, or for everything after a job's
+    /// `last` step. Returns how long the wait took.
+    pub fn complete(self, last: bool) -> Result<Duration> {
+        self.0.complete(last)
     }
 }
 
@@ -92,7 +93,7 @@ impl Engine {
             loop {
                 let tick = self.tick();
                 let more = traversal.step(self, context, graph, profile, execution)?;
-                traversal.complete_tick(tick.complete()?, profile, execution.progress);
+                traversal.complete_tick(tick.complete(!more)?, profile, execution.progress);
                 if !more {
                     break;
                 }
@@ -239,7 +240,8 @@ pub(super) struct RecipeExecution {
     context: Option<Context>,
     complete: bool,
     reservation: Option<Reservation>,
-    /// GPU submissions when the last tick completed. Later ones are not yet retired.
+    /// GPU submissions when the last tick completed. Later ones are not yet
+    /// retired, and the last tick's own may still be in flight.
     retired_submissions: u64,
     // Operations own their prepared parameters. Retain the request's immutable
     // calibration snapshot for the entire execution as well.
@@ -408,7 +410,7 @@ impl RecipeExecution {
         loop {
             let tick = engine.tick();
             let more = step(self)?;
-            self.complete_tick(engine, tick.complete()?, progress);
+            self.complete_tick(engine, tick.complete(!more)?, progress);
             if !more {
                 return Ok(());
             }
@@ -442,8 +444,10 @@ impl RecipeExecution {
             }
         });
         // Keep the traversal's storage alive until submitted work has retired.
-        if engine.gpu_activity().submissions != retired_submissions {
-            if let Err(error) = engine.wait_for_submitted_work() {
+        if engine.gpu_activity().submissions != retired_submissions
+            || engine.gpu.has_work_in_flight()
+        {
+            if let Err(error) = engine.gpu.settle() {
                 outcome = Err(error);
             }
         }

@@ -144,6 +144,10 @@ Each slice ends with an independent review, owner testing and the checks listed 
   - Idle reduced preparation still runs as one exclusive job with its own result-fits check, which is the speculative admission rule applied in the host.
   - Delivery waits once more for view-texture conversion before handing a frame to the UI.
   - At width above one, each job's profile records the shared tick wait.
+- **Fresh renders slower than 0.8.4 (found by comparable runs, 2026-11-23).**
+  - Waiting for the GPU after every tick left it idle while the next step was prepared. Across 144 render cases a fresh render took 34% longer than 0.8.4 with identical GPU work.
+  - Removing the wait restored the speed but a full-size Quattro render passed 5.9 GB, against 1.8 GB with the wait, because storage is released only when the device is polled.
+  - A tick with one job now waits for the previous tick's work, and completion is checked every 0.1 ms (owner). Ticks with several jobs still wait for their own work: keeping a step in flight there measured no faster for warm edits at widths two to eight or in the app's eight-photo jobs. Total time is within 2% of 0.8.4, including the new Merrill sharpening, and peak memory stays below 0.8.4 in every group. Two ticks in flight was 3% faster and gave back most of the memory saving.
 - **Second review.**
   - The width test sampled admitted jobs after the tick had removed finished ones. Warm edits finish in one step, so width was never seen. The scheduler now records the widest stepped set.
   - Speculative jobs without their original defer instead of spinning.

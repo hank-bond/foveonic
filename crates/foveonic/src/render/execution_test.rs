@@ -141,7 +141,7 @@ fn four_jobs_preserve_exact_outputs_and_report_progress_only_after_shared_comple
                 Err(error) => job.outcome = Some(Err(error)),
             }
         }
-        let waited = tick.complete().unwrap();
+        let waited = tick.complete(true).unwrap();
         for job in &mut jobs {
             let Some(execution) = &mut job.execution else {
                 continue;
@@ -240,7 +240,7 @@ fn cancelled_peer_retries_without_source_while_unchanged_peer_commits() {
                 Err(error) => job.outcome = Some(Err(error)),
             }
         }
-        let waited = tick.complete().unwrap();
+        let waited = tick.complete(true).unwrap();
         for job in &mut jobs {
             let Some(execution) = &mut job.execution else {
                 continue;
@@ -360,7 +360,7 @@ fn finish_jobs(
                 assert_eq!(job.progress.borrow().len(), progress_before);
             }
         }
-        let waited = tick.complete().unwrap();
+        let waited = tick.complete(true).unwrap();
         for job in jobs.iter_mut() {
             if let Some(execution) = &mut job.execution {
                 execution.complete_tick(engine, waited, &|stage| {
@@ -522,7 +522,7 @@ fn native_cancelled_submission_retires_claim_and_preserves_peer_and_retry() {
                 );
             }
         }
-        let waited = tick.complete().unwrap();
+        let waited = tick.complete(true).unwrap();
         for job in &mut jobs {
             if let Some(execution) = &mut job.execution {
                 execution.complete_tick(&engine, waited, &|event| {
@@ -750,7 +750,7 @@ fn execution_inventory_deduplicates_two_live_graphs_caches_and_frontend_owners()
                 Err(error) => job.outcome = Some(Err(error)),
             }
         }
-        let waited = tick.complete().unwrap();
+        let waited = tick.complete(true).unwrap();
         for job in &mut jobs {
             job.execution
                 .as_mut()

@@ -165,6 +165,8 @@ pub struct Gpu {
     shader_writes: Vec<u32>,
     pub adapter_name: String,
     activity: std::sync::Mutex<crate::profile::GpuActivity>,
+    /// Signals when the previous tick's work has finished. See [`scheduling::Tick`].
+    in_flight: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     diagnostics: std::sync::Arc<diagnostics::DeviceDiagnostics>,
 }
 
@@ -195,6 +197,7 @@ impl Gpu {
             shader_writes: self.shader_writes.clone(),
             adapter_name: self.adapter_name.clone(),
             activity: Default::default(),
+            in_flight: Default::default(),
             diagnostics: self.diagnostics.clone(),
         }
     }

@@ -3,16 +3,22 @@
 use crate::source::Result;
 use std::{sync::mpsc, time::Duration};
 
-const POLL_INTERVAL: Duration = Duration::from_millis(1);
+// A render waits many times, once per tick, so a coarse interval adds up.
+const POLL_INTERVAL: Duration = Duration::from_micros(100);
 
 /// The callback captures work submitted before registration, including any UI
 /// submission that raced with it. Submissions after registration do not extend it.
 pub(super) fn submitted(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<()> {
+    wait(device, marker(queue), || Ok(()))
+}
+
+/// Signals once the work submitted so far has finished.
+pub(super) fn marker(queue: &wgpu::Queue) -> mpsc::Receiver<()> {
     let (sender, receiver) = mpsc::channel();
     queue.on_submitted_work_done(move || {
         let _ = sender.send(());
     });
-    wait(device, receiver, || Ok(()))
+    receiver
 }
 
 /// The caller supplies its existing interruption policy. Submitted-stage waits

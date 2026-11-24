@@ -31,7 +31,7 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 - **[interaction_latency.py](./interaction_latency.py)** Describe comparable application workloads and summarize observed UI timing.
 - **[loupe_motion.py](./loupe_motion.py)** Check retained loupe coverage and sustained input independently of render scheduling.
 - **[native.py](./native.py)** Record shared native captures and inject explicit macOS pointer drags without changing app scheduling.
-- **[pipeline_benchmark.py](./pipeline_benchmark.py)** Record matched fresh-processing Off distributions and compare timings and exact output separately.
+- **[pipeline_benchmark.py](./pipeline_benchmark.py)** Record a render run from any revision and compare two runs by case for timing and pixel changes.
 - **[prepare_inputs.py](./prepare_inputs.py)** Resolve tracked test recipes and explicit photo aliases into portable runner inputs.
 - **[process_memory.py](./process_memory.py)** Identify owned macOS processes and guard their OS-accounted physical footprint.
 - **[render_matrix.py](./render_matrix.py)** Record or compare exact rendered samples across an explicit camera and preview matrix.

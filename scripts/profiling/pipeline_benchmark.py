@@ -18,6 +18,8 @@ from render_matrix import expand_cases, render_arguments
 
 ROOT = Path(__file__).resolve().parents[2]
 RENDERER = Path('target/release/examples') / ('profile_pipeline.exe' if os.name == 'nt' else 'profile_pipeline')
+# Peak memory is sampled, so smaller changes are not reported.
+MEMORY_CHANGE_PERCENT = 10
 # What a case asked for. Two runs compare a case when these agree.
 REQUESTED = ('source_sha256', 'resolution', 'processing_quality', 'options', 'settings_snapshot')
 from results import IMAGE_GEOMETRY_FIELDS, render_result
@@ -115,6 +117,14 @@ def parse_run(stdout, case, warmups, samples):
             'preview_assertions': assertion['assertions']}
 
 
+def peak_memory(samples):
+    """The renderer's largest sampled physical footprint, where the host can sample it."""
+    if not samples.exists():
+        return None
+    values = [json.loads(line).get('physical_footprint_bytes') for line in samples.read_text().splitlines() if line.strip()]
+    return max((value for value in values if value is not None), default=None)
+
+
 def record(binary, cases, directory, *, build_source_revision=None, warmups=1, samples=5,
            max_memory_mb=5120, retain_floats=False):
     if type(warmups) is not int or warmups < 1 or type(samples) is not int or samples < 1:
@@ -175,6 +185,7 @@ def record(binary, cases, directory, *, build_source_revision=None, warmups=1, s
                 if row['pixel_bytes'] == 0 or row['pixel_bytes'] % 4:
                     raise ValueError('validation did not produce complete floating samples')
                 row['summary_ms'] = distribution(row['warm_completed_ms'])
+                row['peak_memory_bytes'] = peak_memory(directory / (name + '.memory.jsonl'))
                 row['passed'] = True
                 row['timing_valid'] = row['contention']['checked'] and row['contention']['uncontended']
                 if not retain_floats and row['timing_valid']:
@@ -290,7 +301,11 @@ def compare_reports(before, after, max_regression_percent=None, *, measure=None)
                      'geometry_equal': geometry_equal}
         if not pixels_equal and geometry_equal and measure is not None:
             numerical['difference'] = measure(old, new)
+        memory = {'before_bytes': old.get('peak_memory_bytes'), 'after_bytes': new.get('peak_memory_bytes')}
+        memory['delta_percent'] = (100 * (memory['after_bytes'] - memory['before_bytes']) / memory['before_bytes']
+                                   if memory['before_bytes'] and memory['after_bytes'] is not None else None)
         comparisons.append({'id': name, 'before_samples': baseline['count'], 'after_samples': candidate['count'],
+                            'peak_memory': memory,
                             'delivered_scale': {'before': old['effective_scale_divisor'],
                                                 'after': new['effective_scale_divisor']},
                             'settings_equal': old['settings'] == new['settings'],
@@ -328,6 +343,12 @@ def summary(result):
         note = '' if scale['before'] == scale['after'] else f" (delivered 1/{scale['before']} -> 1/{scale['after']})"
         lines.append(f"  {row['id']}: {median['before_ms']:.1f} -> {median['after_ms']:.1f} ms "
                      f"({median['delta_percent']:+.0f}%){note}")
+    memory_moved = [row for row in cases if abs(row['peak_memory']['delta_percent'] or 0) >= MEMORY_CHANGE_PERCENT]
+    lines.append(f"Peak memory: {len(memory_moved)} of {len(cases)} cases changed by {MEMORY_CHANGE_PERCENT}% or more.")
+    for row in sorted(memory_moved, key=lambda row: -row['peak_memory']['delta_percent']):
+        memory = row['peak_memory']
+        lines.append(f"  {row['id']}: {memory['before_bytes'] / 2**30:.2f} -> {memory['after_bytes'] / 2**30:.2f} GiB "
+                     f"({memory['delta_percent']:+.0f}%)")
     for label, names in (('Only in the first run', result['only_before']), ('Only in the second run', result['only_after'])):
         if names:
             lines.append(f"{label}: {', '.join(names)}")

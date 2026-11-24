@@ -1,4 +1,5 @@
-//! Groups submitted graph steps into ticks that share one GPU wait.
+//! Groups submitted graph steps into ticks. Each tick waits for the tick before it, so one
+//! tick of work stays in flight and the GPU does not idle while the next step is prepared.
 
 use super::Gpu;
 use std::cell::Cell;
@@ -56,8 +57,9 @@ impl Drop for BackgroundStage<'_> {
     }
 }
 
-/// One GPU wait shared by every step submitted since the tick began.
-/// Drop waits for an unfinished tick before its caller can release live jobs.
+/// The steps submitted since the tick began. Completing a tick waits for the
+/// previous tick's work, which bounds unfinished work and the storage it holds
+/// to one tick. Drop waits for everything before its caller can release live jobs.
 pub(crate) struct Tick<'a> {
     gpu: &'a Gpu,
     background: BackgroundStage<'a>,
@@ -73,13 +75,31 @@ impl Gpu {
             completed: false,
         }
     }
+
+    /// Whether a tick left work in flight that nothing has waited for since.
+    pub(crate) fn has_work_in_flight(&self) -> bool {
+        self.in_flight.lock().unwrap().is_some()
+    }
+
+    /// Wait for all submitted work, including the tick left in flight.
+    pub(crate) fn settle(&self) -> crate::source::Result<()> {
+        self.in_flight.lock().unwrap().take();
+        self.wait_for_submitted_work()
+    }
 }
 impl Tick<'_> {
-    /// Returns how long the wait took, zero when nothing was submitted.
-    pub(crate) fn complete(mut self) -> crate::source::Result<std::time::Duration> {
+    /// Returns how long the wait took. The `last` tick of a job waits for
+    /// everything, so nothing outlives the job.
+    pub(crate) fn complete(mut self, last: bool) -> crate::source::Result<std::time::Duration> {
         let started = std::time::Instant::now();
-        if self.gpu.activity().submissions != self.initial_submissions {
-            self.gpu.wait_for_submitted_work()?;
+        if last {
+            self.gpu.settle()?;
+        } else if self.gpu.activity().submissions != self.initial_submissions {
+            let submitted = super::completion::marker(&self.gpu.queue);
+            let previous = self.gpu.in_flight.lock().unwrap().replace(submitted);
+            if let Some(previous) = previous {
+                super::completion::wait(&self.gpu.device, previous, || Ok(()))?;
+            }
         }
         self.background.complete();
         self.completed = true;
@@ -90,9 +110,7 @@ impl Drop for Tick<'_> {
     fn drop(&mut self) {
         if !self.completed {
             // Errors cannot leave unfinished work behind a later request.
-            if self.gpu.activity().submissions != self.initial_submissions {
-                let _ = self.gpu.wait_for_submitted_work();
-            }
+            let _ = self.gpu.settle();
             self.background.complete();
         }
     }
