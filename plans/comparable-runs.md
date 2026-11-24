@@ -50,14 +50,14 @@ The scenarios currently run through several drivers with their own step bookkeep
 
 0.9.0:
 
-- [ ] **1. Record from a revision.** Build a revision's renderer in a cached checkout and run the existing cases through it. Measure how long a run takes.
-- [ ] **2. Compare by name.** Match items by photograph, recipe, size and quality. Report time changes against sample spread, and measure pixel differences by rendering changed cases again.
+- [x] **1. Record from a revision.** Build a revision's renderer in a cached checkout and run the existing cases through it. Measure how long a run takes.
+- [x] **2. Compare by name.** Match items by photograph, recipe, size and quality. Report time changes against sample spread, and measure pixel differences by rendering changed cases again.
+- [ ] **5. Release check.** Compare the previous release tag with the candidate and upload the comparison report and the candidate's run with the release. Replace the `render-baseline` job. Update the [release guide](../docs/releases.md) and [test inventory](../docs/testing-coverage.md). The job, its driver and the stored-baseline mode are removed and the guides updated (2026-11-24). The 0.9.0 comparison against `v0.8.4` and its upload remain.
+
+0.10.0, as these need structural change (owner, 2026-11-23). Steps 6 and 7 wait for the single scenario driver:
+
 - [ ] **3. Derived cases.** Track the example collection's manifest. Derive cases from the manifests and recipe files, and move the existing declared cases' recipes into recipe files.
 - [ ] **4. Stage times.** Add one profiled render per item and report stages by name.
-- [ ] **5. Release check.** Compare the previous release tag with the candidate and upload the comparison report and the candidate's run with the release. Replace the `render-baseline` job. Update the [release guide](../docs/releases.md) and [test inventory](../docs/testing-coverage.md).
-
-0.10.0, with the single scenario driver:
-
 - [ ] **6. Step timing.** Record action-to-settled time for every named step in the one driver.
 - [ ] **7. Compare behavioral reports** with the same comparer and retire the latency jobs.
 

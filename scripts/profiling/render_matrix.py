@@ -1,4 +1,4 @@
-"""Record or compare exact rendered samples across an explicit camera and preview matrix."""
+"""Record exact rendered samples across an explicit camera and preview matrix."""
 
 import argparse
 import copy
@@ -10,7 +10,7 @@ import subprocess
 
 from file_hash import digest
 from image_replay import events
-from results import IMAGE_GEOMETRY_FIELDS, RESOLUTIONS, PROCESSING_QUALITIES, compare_images, expected_resolution_scale, include_assertions, render_result
+from results import IMAGE_GEOMETRY_FIELDS, RESOLUTIONS, PROCESSING_QUALITIES, expected_resolution_scale, render_result
 from watch_workloads import require_quiet, running_workloads
 from process_memory import run_captured
 
@@ -66,11 +66,6 @@ def expand_cases(cases):
     raw_sizes = {family: sorted({row['raw_size'] for row in expanded if row['family'] == family}) for family in REQUIRED_SOURCES_BY_FAMILY}
     return expanded, {'families': coverage, 'raw_sizes': raw_sizes, 'missing_resolutions': missing_resolutions, 'missing_processing_qualities': missing_policies,
                       'complete': bool(expanded) and not missing_resolutions and not missing_policies and all(row['missing']==0 for row in coverage.values())}
-
-
-def same_input(left, right):
-    return (all(left[key] == right[key] for key in ('id', 'family', 'raw_size', 'source_stem', 'source_sha256', 'resolution', 'processing_quality', 'options'))
-            and left.get('settings_snapshot') == right.get('settings_snapshot'))
 
 
 def render_arguments(case, snapshot_path):
@@ -134,10 +129,10 @@ def processing_mode_difference(quality_file, speed_file, geometry, *, comparator
             'failure':'processing-mode images contain nonfinite samples' if nonfinite else None,
             **{key:data[key] for key in ('max_absolute', 'mean_absolute', 'rms')},
             'visual_acceptance':'unreviewed',
-            'limits':'Differences are descriptive evidence. They do not approve dense output or replace immutable exact baselines.'}
+            'limits':'Differences are descriptive evidence. They do not approve dense output.'}
 
 
-def run(binary, cases, directory, baseline=None, require_coverage=False, max_memory_mb=None,
+def run(binary, cases, directory, require_coverage=False, max_memory_mb=None,
         allow_contended_correctness=False, *, sample_comparator=None):
     if max_memory_mb is not None and max_memory_mb <= 0:
         raise ValueError('physical-footprint limit must be positive')
@@ -148,22 +143,11 @@ def run(binary, cases, directory, baseline=None, require_coverage=False, max_mem
         raise ValueError('the matrix must contain at least one case')
     if require_coverage and not coverage['complete']:
         raise ValueError('the declared matrix does not cover all camera families, resolutions and processing modes: '+json.dumps(coverage))
-    prior = None
-    if baseline:
-        baseline = baseline.resolve(strict=True)
-        prior = json.loads((baseline/'manifest.json').read_text())
-        if prior.get('schema_version') != 2:
-            raise ValueError('baseline must use the resolution/processing-quality matrix schema')
-        if prior.get('passed') is not True:
-            raise ValueError('baseline is incomplete or failed')
-        previous = {row['id']: row for row in prior['cases']}
-        if len(previous) != len(matrix) or any(row['id'] not in previous or not same_input(row, previous[row['id']]) for row in matrix):
-            raise ValueError('baseline and current matrix have different source identities, recipes, resolutions or processing modes')
     directory.mkdir(parents=True, exist_ok=False)
     report = {'schema_version': 2, 'kind': 'exact-render-matrix', 'passed': False,
               'physical_memory_guard_limit_bytes':None if max_memory_mb is None else max_memory_mb * 1024 * 1024,
               'binary': str(binary), 'binary_sha256': digest(binary),
-              'sample_comparator': {'path': str(sample_comparator), 'sha256': digest(sample_comparator)}, 'baseline': str(baseline) if baseline else None,
+              'sample_comparator': {'path': str(sample_comparator), 'sha256': digest(sample_comparator)},
               'coverage': coverage, 'cases': [], 'processing_mode_comparisons': [],
               'allow_contended_correctness': allow_contended_correctness,
               'limits': ['Camera family and RAW size are supplied by the fixture manifest, not independently verified.',
@@ -179,11 +163,6 @@ def run(binary, cases, directory, baseline=None, require_coverage=False, max_mem
             report['cases'].append(row)
             abort = False
             try:
-                if baseline:
-                    expected = previous[name]
-                    baseline_image = baseline/'goldens'/name/golden.name
-                    if not baseline_image.is_file() or digest(baseline_image) != expected['pixels_sha256']:
-                        raise ValueError('baseline samples are missing or modified')
                 if allow_contended_correctness:
                     row['concurrent_workloads_before_render'] = running_workloads()
                     row['timing_validity'] = 'not evaluated; correctness-only run permits concurrent workloads'
@@ -213,15 +192,6 @@ def run(binary, cases, directory, baseline=None, require_coverage=False, max_mem
                 row.update(settings=data['session']['settings'], scale=data['session']['scale_divisor'],
                            geometry={key: validation[key] for key in IMAGE_GEOMETRY_FIELDS},
                            digest=validation['digest'], pixels_sha256=digest(golden))
-                if baseline:
-                    for key in ('settings', 'scale'):
-                        if row[key] != expected[key]:
-                            raise ValueError(f'{key} differs from baseline')
-                    comparison = compare_images(case['source'], 'render', baseline_image, expected['geometry'],
-                                                golden, row['geometry'])
-                    include_assertions(row['test_result'], [comparison])
-                    if comparison['outcome'] != 'passed':
-                        raise ValueError('image samples or geometry differ from baseline')
                 row['passed'] = True
                 tiff = out/(Path(case['source']).stem+'-0.tiff')
                 tiff.unlink()
@@ -240,7 +210,7 @@ def run(binary, cases, directory, baseline=None, require_coverage=False, max_mem
             test_result_path.write_text(json.dumps(row['test_result'], indent=2)+'\n')
             row['test_result_artifact'] = {'path':str(test_result_path), 'sha256':digest(test_result_path)}
             (directory/'manifest.json').write_text(json.dumps(report, indent=2)+'\n')
-            print(f"{name}: {('exact' if baseline else 'recorded') if row['passed'] else 'FAILED: '+row['failure']}", flush=True)
+            print(f"{name}: {'recorded' if row['passed'] else 'FAILED: '+row['failure']}", flush=True)
             if abort:
                 break
         paired = {}
@@ -272,14 +242,13 @@ def main():
     parser.add_argument('--cases', type=Path, required=True, help='JSON array of labelled camera sources and optional options/resolutions/processing_qualities')
     parser.add_argument('--directory', type=Path, required=True, help='new owned output directory')
     parser.add_argument('--sample-comparator', type=Path, help='current profile_pipeline for bounded float statistics; defaults to --binary, supply explicitly when rendering an older release')
-    parser.add_argument('--baseline', type=Path, help='compare against a previously recorded matrix instead of recording')
     parser.add_argument('--require-coverage', action='store_true', help='require three Classic, Merrill and Quattro inputs, one Tiger input, and all resolutions and both processing modes')
     parser.add_argument('--max-memory-mb', type=int, help='sample and guard each renderer child physical footprint on macOS')
     parser.add_argument('--allow-contended-correctness', action='store_true',
                         help='permit and record other workloads for numerical checks only; timings are not performance evidence')
     args = parser.parse_args()
     try:
-        report = run(args.binary, json.loads(args.cases.read_text()), args.directory, args.baseline,
+        report = run(args.binary, json.loads(args.cases.read_text()), args.directory,
                      args.require_coverage, args.max_memory_mb, args.allow_contended_correctness,
                      sample_comparator=args.sample_comparator)
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:

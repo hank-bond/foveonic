@@ -233,15 +233,6 @@ def command(job, args, out):
         if getattr(args, 'slider_memory_budget_mb', None) is not None:
             cmd += ['--memory-budget-mb', str(args.slider_memory_budget_mb)]
         return cmd, None, out / 'behavioral-report.json'
-    if driver == 'matrix':
-        require('renderer', 'render_cases', 'baseline')
-        cmd = [sys.executable, str(HERE / 'render_matrix.py'), '--binary', str(Path(args.renderer).resolve()),
-                '--cases', str(Path(args.render_cases).resolve()), '--baseline', str(Path(args.baseline).resolve()),
-                '--directory', str(out)]
-        if getattr(args, 'sample_comparator', None):
-            require('sample_comparator')
-            cmd += ['--sample-comparator', str(args.sample_comparator.resolve())]
-        return cmd, None, out / 'manifest.json'
     raise ValueError('unknown driver: ' + driver)
 
 
@@ -318,7 +309,7 @@ def execute(job, args, root):
                     result['outcome'] = 'passed' if decision is True else 'observed'
         elif 'completion_sha256' in result:
             result['outcome'] = 'passed'
-        if job['driver'] in ('behavioral', 'matrix') and required.is_file():
+        if job['driver'] == 'behavioral' and required.is_file():
             coverage = json.loads(required.read_text()).get('coverage', {})
             result['coverage'] = coverage
             key = 'complete_for_observed_controls' if job['driver'] == 'behavioral' else 'complete'
@@ -362,7 +353,7 @@ def main():
     p.add_argument('--directory', type=Path)
     p.add_argument('--binary', type=Path)
     p.add_argument('--source', type=Path, action='append', default=[])
-    for name in ('cases', 'fixtures', 'slider-cases', 'renderer', 'render-cases', 'baseline'):
+    for name in ('cases', 'fixtures', 'slider-cases', 'renderer'):
         p.add_argument('--' + name, type=Path)
     p.add_argument('--choice-cases', type=Path, help='two choice-journey recipes: Sunlight and Incandescent white balance, neutral bias, tone enabled with contrast 0.25, and manual exposure')
     p.add_argument('--tiger-source', type=Path, help='Tiger source for the Tiger smoke suite')
@@ -375,7 +366,6 @@ def main():
     p.add_argument('--seed', type=int, default=1)
     p.add_argument('--action-count', type=int, default=12)
     p.add_argument('--foreground', action='store_true')
-    p.add_argument('--sample-comparator',type=Path,help='current renderer for bounded numerical statistics when the matrix renderer is older')
     p.add_argument('--prune-verified-images',action='store_true',help='prune independently verified successful slider raw samples while retaining JSON proofs')
     p.add_argument('--batch-image-verification',action='store_true',help='verify each checked case in a finite independent fresh-graph batch')
     p.add_argument('--reuse-slider-sessions', action='store_true', help='opt-in session reuse for the slider correctness matrix; other jobs keep their process boundaries')

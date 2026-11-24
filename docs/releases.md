@@ -80,6 +80,17 @@ The workflows cache compatible dependency compilation, preferring matching compi
 
 Every release needs a matched latency and memory comparison against the previous published app before publication, in addition to correctness checks. Use the exact packaged executables on the same quiet test host, with the same pinned photographs, fixed recipes, display geometry, processing policies and cache budgets. Record executable hashes and actual delivered resolution. A workload label such as Full or Fast does not establish the working grid. Keep enabled ColorField, nonneutral HDR, native-detail and representative multi-photo work in the declared coverage, alongside camera defaults.
 
+Record a render run from the previous release tag and from the candidate on the same host, and compare them. The comparison lists every case whose pixels changed, with the size of the change, and every timing and peak-memory change. Review it against the changelog, which says what was meant to change, and upload `comparison.json` and the candidate's run report with the release. Follow [render runs](./profiling.md#render-runs-from-any-revision).
+
+```sh
+python3 scripts/profiling/pipeline_benchmark.py record --revision PREVIOUS_TAG \
+  --cases RENDER_CASES.json --directory .local/runs/before
+python3 scripts/profiling/pipeline_benchmark.py record --revision CANDIDATE_COMMIT \
+  --cases RENDER_CASES.json --directory .local/runs/after
+python3 scripts/profiling/pipeline_benchmark.py compare .local/runs/before .local/runs/after \
+  --output .local/runs/comparison.json
+```
+
 The correctness command `acceptance.py --full` deliberately excludes latency jobs. Run the existing latency domain separately for both versions:
 
 ```sh

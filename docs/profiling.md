@@ -271,22 +271,19 @@ Behavioral matrices request a background window by default. On macOS it stays be
 
 ### Exact render matrix
 
-The maintained headless `profile_pipeline` example reports float-sample digests and image geometry outside its timed render. `render_matrix.py` records and checks these results against full float buffers. It refuses a comparison if a baseline buffer is missing or changed, and checks source hashes, recipe options, effective scale and image geometry as well as every output byte. Candidate samples stay in the new run directory; the baseline is read-only. Baseline and app comparisons use the same image assertion.
+The maintained headless `profile_pipeline` example reports float-sample digests and image geometry outside its timed render. `render_matrix.py` records these results with full float buffers and checks source hashes, recipe options, effective scale and image geometry. To compare two revisions' pixels, use [render runs](#render-runs-from-any-revision); no approved images are stored.
 
 ```sh
 cargo build --release --offline -p foveonic --example profile_pipeline
 python3 scripts/profiling/render_matrix.py --binary target/release/examples/profile_pipeline \
-  --cases RENDER_CASES.json --directory .local/render-baseline --require-coverage
-python3 scripts/profiling/render_matrix.py --binary target/release/examples/profile_pipeline \
-  --cases RENDER_CASES.json --directory .local/render-candidate \
-  --baseline .local/render-baseline --require-coverage
+  --cases RENDER_CASES.json --directory .local/render-matrix --require-coverage
 ```
 
 `RENDER_CASES.json` is an array of objects with a unique `label`, camera `family`, `source`, and optional `raw_size`, `resolutions`, `processing_qualities` and `options`. Numeric resolutions are `full`, `fast`, `draft` and `thumb`. They are internal size probes, separate from the application's two processing modes. The default crosses all four resolutions with `quality` and `speed`, using Sunlight white balance and Standard color mode. For example, `{"label":"merrill-haze","family":"merrill","source":"INPUT.x3f","resolutions":["full","fast"],"processing_qualities":["quality","speed"],"options":["--dehaze","35","--haze-color","auto"]}` declares both policies at two working grids. The runner owns `--resolution` and `--processing-quality`.
 
-The coverage gate requires three distinct source contents each for Classic, Merrill and Quattro, plus one for Tiger, with all resolutions and both modes for every case. Smaller matrices report omitted families, resolutions and modes. Family and RAW size come from the manifest and are not independently verified. Both recording and comparison use new directories and save per-case output and a manifest. The new schema rejects historical `qualities` fields instead of inferring their meaning.
+The coverage gate requires three distinct source contents each for Classic, Merrill and Quattro, plus one for Tiger, with all resolutions and both modes for every case. Smaller matrices report omitted families, resolutions and modes. Family and RAW size come from the manifest and are not independently verified. A recording uses a new directory and saves per-case output and a manifest. The new schema rejects historical `qualities` fields instead of inferring their meaning.
 
-Exact comparisons use immutable approved outputs for the same resolution, processing mode, input and recipe. Repeating a newly recorded candidate against itself establishes reproducibility, not approval of a changed algorithm. The maintained test-input manifest retains all ten camera fixtures and adds Merrill adaptive, HDR, local-color and automatic Dehaze cases for dense-processing evaluation. Its source hashes remain unchanged. Paired Quality/Speed outputs report differing sample counts, maximum and mean absolute differences, RMS, image geometry and both hashes outside timed renders. These comparisons remain marked `visual_acceptance: unreviewed`. Any NaN or infinity fails the pair and matrix, with difference metrics withheld. Inspect representative crops before approving dense results. Their differences never replace a baseline or become an automatic pass for photographic quality. GPU/backend changes can affect bit equality.
+The maintained test-input manifest retains all ten camera fixtures and adds Merrill adaptive, HDR, local-color and automatic Dehaze cases for dense-processing evaluation. Its source hashes remain unchanged. Paired Quality/Speed outputs report differing sample counts, maximum and mean absolute differences, RMS, image geometry and both hashes outside timed renders. These comparisons remain marked `visual_acceptance: unreviewed`. Any NaN or infinity fails the pair and matrix, with difference metrics withheld. Inspect representative crops before approving dense results. Their differences never become an automatic pass for photographic quality. GPU/backend changes can affect bit equality.
 
 The [implementation plan](../plans/performance-diagnostics.md) records the native scenario, smoke, numerical and overhead checks. Physical manual-control verification remains pending desktop availability. Portable tests alone do not establish native behavior or latency.
 

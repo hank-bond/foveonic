@@ -34,7 +34,7 @@ Follow [profiling requirements](../../docs/specs/profiling.md) and [measurement 
 - **[pipeline_benchmark.py](./pipeline_benchmark.py)** Record a render run from any revision and compare two runs by case for timing and pixel changes.
 - **[prepare_inputs.py](./prepare_inputs.py)** Resolve tracked test recipes and explicit photo aliases into portable runner inputs.
 - **[process_memory.py](./process_memory.py)** Identify owned macOS processes and guard their OS-accounted physical footprint.
-- **[render_matrix.py](./render_matrix.py)** Record or compare exact rendered samples across an explicit camera and preview matrix.
+- **[render_matrix.py](./render_matrix.py)** Record exact rendered samples across an explicit camera and preview matrix.
 - **[resources.py](./resources.py)** Sample settled macOS memory at explicit boundaries in an owned headless render run.
 - **[results.py](./results.py)** Report shared preview-scale assertions and exact image comparisons across test drivers.
 - **[rust_test_inventory.py](./rust_test_inventory.py)** Reconcile ignored Rust test capabilities and print pinned, serial libtest commands without running tests.

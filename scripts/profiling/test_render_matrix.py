@@ -1,4 +1,4 @@
-"""Check exact matrix coverage, immutable baselines and failure reporting without a GPU."""
+"""Check exact matrix coverage and failure reporting without a GPU."""
 
 from contextlib import redirect_stdout
 import io
@@ -9,7 +9,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from render_matrix import expand_cases, render_arguments, run, same_input, processing_mode_difference
+from render_matrix import expand_cases, render_arguments, run, processing_mode_difference
 from scenarios import application_result
 
 
@@ -105,8 +105,6 @@ class MatrixTests(unittest.TestCase):
             self.assertEqual(effective['processing_quality'],'speed')
             self.assertTrue(effective['dehaze_estimate'])
             self.assertEqual(snapshot['working_scale'],1)
-            changed={**rows[0],'settings_snapshot':{**snapshot,'dehaze_estimate':False}}
-            self.assertFalse(same_input(rows[0],changed))
             with self.assertRaisesRegex(ValueError,'cannot be combined'):
                 expand_cases([{**case,'options':[]}])
 
@@ -120,12 +118,12 @@ class MatrixTests(unittest.TestCase):
             self.assertEqual(len(coverage['missing_resolutions']),3)
             self.assertFalse(coverage['complete'])
 
-    def test_record_repeat_and_changed_input_never_rewrite_the_baseline(self):
+    def test_recorded_result_matches_the_application_result_shape(self):
         with tempfile.TemporaryDirectory() as tmp, patch('render_matrix.require_quiet'), redirect_stdout(io.StringIO()):
             root=Path(tmp); binary=root/'renderer';binary.write_text(FAKE_RENDERER);binary.chmod(0o755)
             source=root/'sample.x3f';source.write_bytes(b'original')
             cases=[{'label':'sample','family':'merrill','source':str(source),'resolutions':['thumb'],'processing_qualities':['quality']}]
-            first=run(binary,cases,root/'baseline')
+            first=run(binary,cases,root/'recorded')
             self.assertTrue(first['passed']);self.assertFalse(first['coverage']['complete'])
             self.assertEqual(first['cases'][0]['test_result']['outcome'],'passed')
             self.assertEqual(first['cases'][0]['test_result']['assertions'][0]['name'],'preview_scale')
@@ -140,27 +138,6 @@ class MatrixTests(unittest.TestCase):
                 self.assertEqual(headless['observations'][0][key],application['observations'][0][key])
             for key in ('name','expected','actual','outcome'):
                 self.assertEqual(headless['assertions'][0][key],application['assertions'][0][key])
-            golden=root/'baseline/goldens/sample-thumb-quality/sample.f32'
-            original=golden.read_bytes()
-            repeated=run(binary,cases,root/'repeat',root/'baseline')
-            self.assertTrue(repeated['passed'])
-            self.assertEqual(repeated['cases'][0]['test_result']['assertions'][-1]['name'],'image_samples')
-            binary.write_text(FAKE_RENDERER.replace(".digest()[:24]", ".digest()[-24:]"))
-            changed_output=run(binary,cases,root/'different-output',root/'baseline')
-            self.assertFalse(changed_output['passed'])
-            self.assertEqual(changed_output['cases'][0]['test_result']['assertions'][-1]['outcome'],'failed')
-            self.assertEqual(golden.read_bytes(),original)
-            source.write_bytes(b'changed')
-            with self.assertRaisesRegex(ValueError,'different source identities'):
-                run(binary,cases,root/'changed',root/'baseline')
-            self.assertEqual(golden.read_bytes(),original)
-            golden.unlink()
-            source.write_bytes(b'original')
-            result=run(binary,cases,root/'missing',root/'baseline')
-            self.assertFalse(result['passed'])
-            self.assertIn('missing or modified',result['cases'][0]['failure'])
-            self.assertFalse(golden.exists())
-            self.assertFalse(json.loads((root/'missing/manifest.json').read_text())['passed'])
 
     def test_headless_report_fails_when_the_delivered_scale_violates_the_contract(self):
         with tempfile.TemporaryDirectory() as tmp, patch('render_matrix.require_quiet'), redirect_stdout(io.StringIO()):

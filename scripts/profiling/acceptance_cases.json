@@ -343,12 +343,6 @@
       "evidence": "Actual egui slider input and structured checks for explicitly declared fixtures and controls."
     },
     {
-      "id": "render-baseline",
-      "domain": "processing",
-      "driver": "matrix",
-      "evidence": "Headless complete floating samples and geometry compared with the supplied approved baseline."
-    },
-    {
       "id": "scenario-transition-journey",
       "domain": "viewport",
       "driver": "scenario",
@@ -682,12 +676,10 @@
       "domain": "processing",
       "path": "Processing, export and exact render output",
       "jobs": [
-        "scenario-background-edit",
-        "render-baseline"
+        "scenario-background-edit"
       ],
       "checks": [
-        "Native scenario result and settlement checks; inspect its detailed report for individual assertions.",
-        "Headless complete floating samples and geometry compared with the supplied approved baseline."
+        "Native scenario result and settlement checks; inspect its detailed report for individual assertions."
       ]
     },
     {
