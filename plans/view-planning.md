@@ -23,13 +23,13 @@ Six-photo zoom captures on 2026-11-19 showed:
 - [~] Images in use for Current zoom, loupe and fit (built, superseded): the seams with the paths that had not moved caused every remaining scenario failure, so the owner agreed the complete design instead.
 - [x] Single migration to the accepted design: views with look, output and shown; one collection of rendered images keyed by photo, look and output; the planner's images in use for every look and output; one reconcile rule; delivery by image in use. Delete the overview path, Before staging, the active photo's separate path, delivery destinations, the old stores and the step-5 bridges (`restore_photograph`, `mark_stale`) in the same step.
 - [x] App-level planning-loop tests without a GPU for every view kind and the cases scenarios found (`view_images_test.rs`).
-- [ ] Scenario waits that name their condition.
+- [ ] Scenario waits that name their condition. Moved to the [coherence cleanup](./coherence-cleanup.md) test-harness item for 0.10.0.
 - [x] Native scenarios: six-photo zoom workflow and transition journey.
 - [~] Design pass: decisions agreed (see Design pass below); implementing.
 
 ## Migration checklist
 
-Done: views, planner, rendered images, one reconcile rule, delivery by image in use, and the deletions in steps 1–5 below, including `delivery.rs`, Before staging, the overview path, the auxiliary preview, `Purpose::Detail` (a patch is a target flag) and the coordinator's view snapshot. `views.rs` owns every displayed-photo decision. GUI unit tests, clippy and docs pass; the six-photo zoom workflow and the transition journey pass natively. Remaining: scenario waits that name their condition and the review findings that need owner decisions.
+Done: views, planner, rendered images, one reconcile rule, delivery by image in use, and the deletions in steps 1–5 below, including `delivery.rs`, Before staging, the overview path, the auxiliary preview, `Purpose::Detail` (a patch is a target flag) and the coordinator's view snapshot. `views.rs` owns every displayed-photo decision. GUI unit tests, clippy and docs pass; the six-photo zoom workflow and the transition journey pass natively. Remaining for 0.10.0: scenario waits that name their condition.
 
 1. **Views.** One `App` function builds every viewport photo's view each frame: key from its look (`photo_rendition`), output and comparison (the active photo's `output` and `comparison`, else final), framing for the active photo while the plane is active; shown from loupe, zoom or framing with settling. The template request carries the look's settings (`Before::settings` for Camera and Defaults, authored settings otherwise), output, comparison, framing and the quality from `quality::for_view`.
 2. **One collection.** `App` owns `RenderedImages<Frame>`. Delivery stores every accepted image with `accept`; it accepts a result whose key and request are in the last published images in use. Remove `delivery.rs` destinations, `App::frame`, `multi_edit` frame, detail and preview slots, `Before::saved` and `Before::detail`, `restore_photograph`, `mark_stale` and the Before cache-and-restore code.

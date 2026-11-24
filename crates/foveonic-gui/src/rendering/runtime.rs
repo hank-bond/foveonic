@@ -365,19 +365,21 @@ impl Runtime {
             }
             Command::Plan(photos, planned, queued_at) => {
                 // The progress pass follows the plan's tracked images; a pass
-                // starts when new work begins after the last one finished.
+                // starts when a tracked image has new work after the last one finished.
                 let mut tracked = Vec::new();
                 let mut new_work = false;
                 for planned in &planned {
                     let target = super::coordinator::Target::of(&planned.request);
                     if planned.state == ImageState::Render {
                         let origin = self.cache.source_origin(&planned.request.path);
-                        new_work |= self.desire(
+                        let started = self.desire(
                             planned.request.clone(),
                             origin,
                             queued_at,
                             planned.speculative,
                         );
+                        // Work the bar does not follow leaves its last time showing.
+                        new_work |= started && planned.tracked.is_some();
                     }
                     if let Some(place) = planned.tracked {
                         tracked.push((place, target, planned.request.id, planned.state));

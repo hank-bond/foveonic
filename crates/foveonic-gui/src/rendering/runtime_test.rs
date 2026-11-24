@@ -364,3 +364,38 @@ fn the_progress_pass_follows_only_the_photos_the_latest_plan_tracks() {
     assert_eq!(snapshot.request_id, 3);
     assert!(snapshot.running());
 }
+
+#[test]
+fn work_the_bar_does_not_follow_leaves_the_finished_time_showing() {
+    let rig = Rig::new();
+    let whole = request("a.x3f", 1, 0.);
+    let photos = vec![PathBuf::from("a.x3f")];
+    let started = Instant::now() - std::time::Duration::from_millis(40);
+    let tracked_whole = |state| Planned {
+        request: whole.clone(),
+        speculative: false,
+        state,
+        tracked: Some(0),
+    };
+    rig.handle.plan(
+        planned(photos.clone()),
+        vec![tracked_whole(ImageState::Render)],
+        started,
+    );
+    rig.applied();
+    rig.results.send(result(&rig.tasks()[0])).unwrap();
+    rig.receive();
+    wait(|| !rig.progress.snapshot().unwrap().running());
+    let finished = rig.progress.snapshot().unwrap().milliseconds();
+    assert!(finished >= 40.);
+    // Zooming plans work the bar does not follow beside the current whole image.
+    let mut patch = planned_patch("a.x3f");
+    patch.tracked = None;
+    rig.handle.plan(
+        planned(photos),
+        vec![tracked_whole(ImageState::Ready), patch],
+        Instant::now(),
+    );
+    rig.applied();
+    assert_eq!(rig.progress.snapshot().unwrap().milliseconds(), finished);
+}
