@@ -9,33 +9,42 @@ kind: reference
 
 Open and edit groups of photographs much faster, with every editing tool working across the group.
 
-### Changes
+### Performance improvements
 
 - Open a group of photographs in less than half the time, and edit a group without multi-second pauses.
 - Render photographs together when cache memory allows, each at the size it is shown, while preserving useful cached inputs.
 - Reuse fitted-image output for browser previews and refresh previews behind active editing.
 - Prioritize visible images, navigator and scopes, then browser thumbnails. Make full-image completion while idle optional.
+- Preserve useful native detail while a new zoomed area renders, and keep each photograph's image on screen while it renders again.
+
+### New functionality
+
 - Apply Before/After to every actively edited photograph, using its own Camera or Defaults settings.
 - Use Shift-drag, Shift-scroll or pinch, and Shift-double-click to move and zoom the editing group together.
-- Keep group zoom anchored within each photograph's displayed view and group panning at the same on-screen distance across different aspect ratios.
 - Edit one photograph or several with the same slider. It shows the group's values as a range and moves every photograph by the same amount.
 - Nudge a focused value with Up and Down by the digits it shows, and with Option for the last digit.
 - Apply Reset, presets, saturation clipping, automatic exposure compensation and quarter turns to every edited photograph. Reset returns each photograph to its own camera values, and a preset reaches the photographs of its camera family.
 - Use the white balance, dehaze and color pickers with several photographs. Click any edited photograph to apply the result to all of them.
-- Reset the white balance adjustment on every edited photograph when choosing a white balance, and keep each photograph's own exposure when turning Auto off.
-- Keep automatic values editable. Editing an automatic value makes it manual, and turning Auto off keeps the value shown.
-- Follow the original Merrill sharpening by default. Merrill photographs set to automatic sharpening render sharper than before.
 - Apply inspection views and comparison to every photograph in the viewport.
 - Show one progress bar for a group update, with a mark for each photograph, and keep the last render time until new work starts.
-- Simplify editing outlines and resize image tiles continuously with either side panel.
+- Open the macOS download without the **Open Anyway** step. The app is now notarized by Apple.
+
+### Behavior changes
+
+- Follow the original Merrill sharpening by default. Merrill photographs set to automatic sharpening render sharper than before.
+- Keep automatic values editable. Editing an automatic value makes it manual, and turning Auto off keeps the value shown.
+- Reset the white balance adjustment on every edited photograph when choosing a white balance, and keep each photograph's own exposure when turning Auto off.
 - Disable navigator and scopes during multi-edit without moving the editing controls. Copy settings, Save preset and Set as default need one edited photograph.
-- Preserve useful native detail while a new zoomed area renders, and keep each photograph's image on screen while it renders again.
+- Simplify editing outlines and resize image tiles continuously with either side panel.
+- Remove the `--wb` and `--mode` launch options.
+
+### Bug fixes
+
+- Keep group zoom anchored within each photograph's displayed view and group panning at the same on-screen distance across different aspect ratios.
+- Zoom into and render Merrill photographs with noise reduction on Windows integrated graphics, where the app could previously stop or freeze.
 - Open a photograph with defaults and a warning when its saved recipe cannot be read.
 - Restore browser thumbnails after reloading a folder.
 - Keep Shift-arrow selection in the browser extending from where it left off.
-- Zoom into and render Merrill photographs with noise reduction on Windows integrated graphics, where the app could previously stop or freeze.
-- Open the macOS download without the **Open Anyway** step. The app is now notarized by Apple.
-- Remove the `--wb` and `--mode` launch options.
 
 ## 0.8.4
 
