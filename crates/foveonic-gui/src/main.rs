@@ -1013,38 +1013,48 @@ impl App {
     /// Draw `section`. The Editing section draws the selected photo's settings
     /// and pushes its edits for the editing selection.
     fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
-        if self.multi_edit.multiple() && matches!(section, Section::Navigator | Section::Scopes) {
-            ui.add_enabled(false, egui::Label::new("Available when editing one photo."));
-            return false;
-        }
+        // With several photos edited, the navigator and scopes keep their size
+        // and say why they are empty, so the sections below do not move.
+        let several = self.multi_edit.multiple();
+        let unavailable = several.then_some(editor::ONE_PHOTO_ONLY);
         match section {
             Section::Navigator => {
                 let mapping = self.displayed_mapping();
                 let texture = self
                     .navigator_source()
+                    .filter(|_| !several)
                     .map(|frame| self.navigator.image(frame, mapping));
                 let preview = self
                     .selected
                     .as_ref()
+                    .filter(|_| !several)
                     .and_then(|p| self.browser.thumbnail(p));
                 let viewport = self.viewports.view_mut(self.selected.as_deref());
                 viewport.zoom_snap = self.preferences.zoom_snap;
-                viewport.navigator(ui, texture, preview.as_ref());
+                ui.add_enabled_ui(!several, |ui| {
+                    viewport.navigator(ui, texture, preview.as_ref(), unavailable);
+                });
                 self.preferences.zoom_snap = viewport.zoom_snap;
                 false
             }
             Section::Scopes => {
-                scopes::controls(
-                    ui,
-                    &mut self.preferences.scope,
-                    &mut self.preferences.scope_viewport,
-                );
-                scopes::show(
-                    ui,
-                    self.preferences.scope,
-                    self.scope_snapshot.as_ref().map(|snapshot| &snapshot.data),
-                    self.scope_images.as_mut(),
-                );
+                ui.add_enabled_ui(!several, |ui| {
+                    scopes::controls(
+                        ui,
+                        &mut self.preferences.scope,
+                        &mut self.preferences.scope_viewport,
+                    );
+                    scopes::show(
+                        ui,
+                        self.preferences.scope,
+                        self.scope_snapshot
+                            .as_ref()
+                            .filter(|_| !several)
+                            .map(|snapshot| &snapshot.data),
+                        self.scope_images.as_mut(),
+                        unavailable.unwrap_or(scopes::WAITING),
+                    );
+                });
                 false
             }
             Section::Editing => {
@@ -1080,6 +1090,7 @@ impl App {
                                     .as_deref()
                                     .and_then(|path| self.browser.metadata_summary(path))
                                     .and_then(|summary| summary.family),
+                                several_photos: self.multi_edit.multiple(),
                                 library: &self.preferences.editor,
                                 state: &mut self.editor_ui,
                             },
@@ -1125,6 +1136,7 @@ impl App {
                                     .and_then(|path| self.browser.metadata_summary(path))
                                     .and_then(|summary| summary.family)
                                     .filter(|_| self.selection_loaded()),
+                                several_photos: self.multi_edit.multiple(),
                                 library: &self.preferences.editor,
                                 state: &mut self.editor_ui,
                             }

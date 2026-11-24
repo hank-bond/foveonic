@@ -489,6 +489,58 @@ impl LifecycleJourney {
                     photos.iter().all(|photo| photo["reset"] == true),
                     json!({"photos":photos}),
                 )?;
+                // Menu choices and the quarter turn reach every editing photo too.
+                let before: Vec<_> = paths
+                    .iter()
+                    .map(|path| app.multi_edit.settings(path).cloned().unwrap())
+                    .collect();
+                let clipping = !before[0].prevent_color_clipping;
+                let compensation = foveonic::render::AutoExposureCompensation::Dial;
+                app.editor_ui.actions.extend([
+                    crate::editor::Action::PreventSaturationClipping(clipping),
+                    crate::editor::Action::ExposureAutoCompensation(compensation),
+                ]);
+                app.apply_editor_actions(ctx);
+                app.actions.push(crate::actions::Edit::QuarterTurn(true));
+                app.dispatch_actions(ctx);
+                let photos = paths
+                    .iter()
+                    .zip(&before)
+                    .map(|(path, before)| {
+                        let settings = app.multi_edit.settings(path).unwrap();
+                        json!({"source":path,
+                            "clipping":settings.prevent_color_clipping == clipping,
+                            "compensation":settings.exposure_auto_compensation == compensation,
+                            "turned":settings.rotation.turns == (before.rotation.turns + 1) % 4})
+                    })
+                    .collect::<Vec<_>>();
+                self.check(
+                    "menu-choices-and-quarter-turn-reach-every-editing-photo",
+                    photos.iter().all(|photo| {
+                        photo["clipping"] == true
+                            && photo["compensation"] == true
+                            && photo["turned"] == true
+                    }),
+                    json!({"photos":photos}),
+                )?;
+                // Several edited photos have no one recipe to copy.
+                let copies = |ctx: &egui::Context| {
+                    ctx.output(|output| {
+                        output
+                            .commands
+                            .iter()
+                            .filter(|command| matches!(command, egui::OutputCommand::CopyText(_)))
+                            .count()
+                    })
+                };
+                let copied = copies(ctx);
+                app.actions.push(crate::actions::Edit::CopySettings);
+                app.dispatch_actions(ctx);
+                self.check(
+                    "copy-settings-needs-one-editing-photo",
+                    copies(ctx) == copied,
+                    json!({"editing":paths.len()}),
+                )?;
                 // Later steps expect the review recipe on every photo.
                 app.actions.push(crate::actions::Edit::PasteSettings(
                     self.clipboard.clone().unwrap(),

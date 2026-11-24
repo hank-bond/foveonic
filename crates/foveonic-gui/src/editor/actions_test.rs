@@ -85,12 +85,20 @@ fn a_reset_gives_each_photo_its_own_camera_values() {
 
 #[test]
 fn a_reset_waits_for_every_photo_to_be_rendered() {
-    let (path, settings, numeric, _) = photo("a.x3f", "SIGMA DP2 Merrill", "0");
-    let runtime = Runtime::rendered([(path.clone(), settings, numeric, None)]);
+    let ready = photo("a.x3f", "SIGMA DP2 Merrill", "0");
+    let (waiting, settings, numeric, _) = photo("b.x3f", "SIGMA DP2 Merrill", "0");
+    let paths = [ready.0.clone(), waiting.clone()];
+    let runtime = Runtime::rendered([ready, (waiting, settings, numeric, None)]);
 
-    assert!(reset_baselines(&runtime, None, &[path], Scope::All)
+    assert!(reset_baselines(&runtime, None, &paths, Scope::All)
         .unwrap()
         .is_empty());
+    assert_eq!(
+        reset_baselines(&runtime, None, &paths[..1], Scope::All)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]

@@ -52,7 +52,9 @@ Agreed terms. Code and prose use these names only.
 
 With the Pointer tool, clicking is itself the selection action: a click selects the photo and Shift-click extends the selection to a range. One function returns an action's scope, and every tool applies its edit to that scope through one path that writes each photo's settings.
 
-There is no active photo. Other tools used by pointing act on the photo pointed at, whether or not it is in the editing selection. Pick tools do nothing on a photo outside the editing selection; see [multi-photo editing](./multi-edit.md#selection-and-tools). The crop and rotation plane, inspection outputs and comparison apply to every viewport photo. Scopes, the navigator and the information bar show only when the viewport selection is one photo.
+There is no active photo. Other tools used by pointing act on the photo pointed at, whether or not it is in the editing selection. Pick tools do nothing on a photo outside the editing selection; see [multi-photo editing](./multi-edit.md#selection-and-tools). Inspection outputs and comparison apply to every viewport photo. Scopes and the navigator work only when the editing selection is one photo. With several, they keep their size and say they need one photo, so the editing controls below them do not move.
+
+The selected photo still decides a few things in 0.9.0: the crop and rotation plane edits it, the Editing menu lists presets for its camera family, and the navigator shows it. Copy settings, Save preset and Set as default read one photo's recipe, so they are available only when the editing selection is one photo. Removing the remaining uses of the selected photo, and crop presets per photo, are in the [coherence cleanup](../../plans/coherence-cleanup.md).
 
 ## Model
 

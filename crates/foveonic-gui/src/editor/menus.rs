@@ -31,10 +31,15 @@ struct Save {
     focused: bool,
 }
 
+/// Shown on actions that read one photo's recipe while several are edited.
+pub const ONE_PHOTO_ONLY: &str = "Available when editing one photo.";
+
 pub struct Menus<'a> {
     pub prevent_color_clipping: bool,
     pub exposure_auto_compensation: foveonic::render::AutoExposureCompensation,
     pub family: Option<ProcessingFamily>,
+    /// Several photos are edited together, so one photo's recipe cannot be saved.
+    pub several_photos: bool,
     pub library: &'a Library,
     pub state: &'a mut State,
 }
@@ -200,7 +205,11 @@ impl Menus<'_> {
             ("Save preset…", Action::Save(scope)),
             (default_title.as_str(), Action::Default(scope)),
         ] {
-            if ui.button(title).clicked() {
+            if ui
+                .add_enabled(!self.several_photos, egui::Button::new(title))
+                .on_disabled_hover_text(ONE_PHOTO_ONLY)
+                .clicked()
+            {
                 self.state.actions.push(action);
                 ui.close_kind(egui::UiKind::Menu);
             }
@@ -312,6 +321,7 @@ mod tests {
                                 prevent_color_clipping: true,
                                 exposure_auto_compensation: Default::default(),
                                 family: Some(family),
+                                several_photos: false,
                                 library: &library,
                                 state: &mut state,
                             }
@@ -337,6 +347,69 @@ mod tests {
                 [Action::PreventSaturationClipping(false)]
             ));
         }
+    }
+
+    /// Click the menu item with this label and return the actions it pushed.
+    fn click_item(several_photos: bool, label: &str) -> Vec<Action> {
+        let ctx = egui::Context::default();
+        let mut state = State::default();
+        let library = Library::default();
+        let mut point = egui::Pos2::ZERO;
+        for (time, pressed) in [(0., None), (1., Some(true)), (1.1, Some(false))] {
+            let output = ctx.run(
+                egui::RawInput {
+                    time: Some(time),
+                    events: pressed
+                        .map(|pressed| {
+                            vec![
+                                egui::Event::PointerMoved(point),
+                                egui::Event::PointerButton {
+                                    pos: point,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: Default::default(),
+                                },
+                            ]
+                        })
+                        .unwrap_or_default(),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        Menus {
+                            prevent_color_clipping: true,
+                            exposure_auto_compensation: Default::default(),
+                            family: Some(ProcessingFamily::Merrill),
+                            several_photos,
+                            library: &library,
+                            state: &mut state,
+                        }
+                        .menu(ui, Scope::All);
+                    });
+                },
+            );
+            point = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .expect("the menu shows the item");
+        }
+        std::mem::take(&mut state.actions)
+    }
+
+    #[test]
+    fn saving_one_photos_recipe_is_offered_only_when_one_photo_is_edited() {
+        for label in ["Save preset…", "Set as default for Merrill"] {
+            assert_eq!(click_item(false, label).len(), 1, "{label}");
+            assert!(click_item(true, label).is_empty(), "{label}");
+        }
+        // Actions that reach every edited photo stay available.
+        assert_eq!(click_item(true, "Prevent saturation clipping").len(), 1);
     }
 
     #[test]
@@ -378,6 +451,7 @@ mod tests {
                                 prevent_color_clipping: true,
                                 exposure_auto_compensation: Default::default(),
                                 family: Some(ProcessingFamily::Merrill),
+                                several_photos: false,
                                 library: &Library::default(),
                                 state: &mut state,
                             }

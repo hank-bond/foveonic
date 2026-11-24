@@ -1418,6 +1418,8 @@ impl Viewport {
         ui: &mut egui::Ui,
         texture: Option<crate::navigator::Image>,
         preview: Option<&crate::browser::Thumbnail>,
+        // Shown in the empty canvas when there is no photo to navigate.
+        empty: Option<&str>,
     ) {
         let extent = texture
             .as_ref()
@@ -1430,6 +1432,15 @@ impl Viewport {
         ui.painter()
             .rect_filled(canvas, 3., egui::Color32::from_gray(14));
         let Some(extent) = extent else {
+            if let Some(empty) = empty {
+                ui.painter().text(
+                    canvas.center(),
+                    egui::Align2::CENTER_CENTER,
+                    empty,
+                    egui::FontId::proportional(12.5),
+                    ui.visuals().weak_text_color(),
+                );
+            }
             self.navigator_zoom_controls(ui);
             return;
         };
@@ -1573,6 +1584,44 @@ mod photo_navigation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Draw the navigator and return its height and the text painted in it.
+    fn navigator_panel(
+        texture: Option<crate::navigator::Image>,
+        empty: Option<&str>,
+    ) -> (f32, Vec<String>) {
+        let ctx = egui::Context::default();
+        let mut height = 0.;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.add_enabled_ui(texture.is_some(), |ui| {
+                    Viewport::default().navigator(ui, texture, None, empty);
+                });
+                height = ui.min_rect().height();
+            });
+        });
+        let text = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        (height, text)
+    }
+
+    #[test]
+    fn an_unavailable_navigator_keeps_its_height_and_says_why() {
+        let image = crate::navigator::Image {
+            id: Some(egui::TextureId::User(7)),
+            extent: [900, 600],
+        };
+        let (shown, _) = navigator_panel(Some(image), None);
+        let (unavailable, text) = navigator_panel(None, Some("Only with one photo"));
+        assert_eq!(unavailable, shown);
+        assert!(text.iter().any(|text| text == "Only with one photo"));
+    }
     #[test]
     fn ordinary_navigator_clips_without_compression_and_overlay_tracks_original_geometry() {
         for offset in [0., -60., -140.] {
@@ -1601,6 +1650,7 @@ mod tests {
                                 id: Some(egui::TextureId::User(7)),
                                 extent: [900, 600],
                             }),
+                            None,
                             None,
                         );
                     });
@@ -1831,7 +1881,7 @@ mod tests {
             input.events = events;
             let _ = ctx.run(input, |ctx| {
                 egui::CentralPanel::default()
-                    .show(ctx, |ui| viewport.navigator(ui, None, Some(&preview)));
+                    .show(ctx, |ui| viewport.navigator(ui, None, Some(&preview), None));
             });
         };
         run(&mut viewport, 0., vec![]);
@@ -1912,6 +1962,7 @@ mod tests {
                                                     id: Some(egui::TextureId::User(7)),
                                                     extent,
                                                 }),
+                                                None,
                                                 None,
                                             );
                                         } else {
@@ -2004,6 +2055,7 @@ mod tests {
                                             extent,
                                         }),
                                         None,
+                                        None,
                                     );
                                 });
                             },
@@ -2088,6 +2140,7 @@ mod tests {
                                     id: Some(egui::TextureId::User(7)),
                                     extent: [900, 600],
                                 }),
+                                None,
                                 None,
                             );
                         });

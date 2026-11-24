@@ -230,7 +230,17 @@ fn density_image(data: &Scopes, parade: bool) -> image::RgbaImage {
     }
     image
 }
-pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Option<&mut Images>) {
+/// Shown in the scope area while its photo's data is on the way.
+pub const WAITING: &str = "Waiting for image";
+
+/// Draw the scope, or `empty` in its place when there is no data.
+pub fn show(
+    ui: &mut egui::Ui,
+    mode: Scope,
+    data: Option<&Scopes>,
+    images: Option<&mut Images>,
+    empty: &str,
+) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), VIEWPORT_HEIGHT),
         egui::Sense::hover(),
@@ -242,7 +252,7 @@ pub fn show(ui: &mut egui::Ui, mode: Scope, data: Option<&Scopes>, images: Optio
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            "Waiting for image",
+            empty,
             egui::FontId::proportional(12.5),
             ui.visuals().weak_text_color(),
         );
@@ -466,7 +476,7 @@ mod tests {
         let mut height = 0.;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                show(ui, Scope::Histogram, data.as_ref(), None);
+                show(ui, Scope::Histogram, data.as_ref(), None, WAITING);
                 height = ui.min_rect().height();
             });
         });

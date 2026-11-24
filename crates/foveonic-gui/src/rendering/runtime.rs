@@ -4,7 +4,6 @@
 use super::coordinator::TaskId;
 use super::{
     coordinator::{Photos, RenderCoordinator, WorkPlan},
-    request::RenderRequest,
     view_plan::{ImageState, Planned},
     worker::{ColorPickRequest, MemoryTarget, Pending, PreparationConfig, ScopeRequest, Update},
 };
@@ -364,22 +363,17 @@ impl Runtime {
                 pending.clear_all |= all;
             }
             Command::Plan(photos, planned, queued_at) => {
-                // The progress pass follows the plan's tracked images; a pass
-                // starts when a tracked image has new work after the last one finished.
                 let mut tracked = Vec::new();
-                let mut new_work = false;
                 for planned in &planned {
                     let target = super::coordinator::Target::of(&planned.request);
                     if planned.state == ImageState::Render {
                         let origin = self.cache.source_origin(&planned.request.path);
-                        let started = self.desire(
-                            planned.request.clone(),
+                        self.coordinator.desire(
+                            Arc::new(planned.request.clone()),
                             origin,
                             queued_at,
                             planned.speculative,
                         );
-                        // Work the bar does not follow leaves its last time showing.
-                        new_work |= started && planned.tracked.is_some();
                     }
                     if let Some(place) = planned.tracked {
                         tracked.push((place, target, planned.request.id, planned.state));
@@ -390,12 +384,22 @@ impl Runtime {
                     .into_iter()
                     .map(|(_, target, id, state)| (target, id, state))
                     .collect();
-                if new_work && self.pass.is_none_or(|(_, finished)| finished.is_some()) {
-                    self.pass = Some((queued_at, None));
-                }
                 let in_use: Vec<_> = planned.into_iter().map(|planned| planned.request).collect();
                 self.coordinator.reconcile(&photos, &in_use);
                 self.coordinator.order_as(&in_use);
+                // The progress pass follows the plan's tracked images. A pass
+                // starts when one of them is rendering after the last pass
+                // finished, so other work leaves the last time showing.
+                let rendering = self.tracked.iter().any(|(target, _, state)| {
+                    *state == ImageState::Render
+                        && matches!(
+                            self.coordinator.target_progress(target),
+                            Some((_, false, false))
+                        )
+                });
+                if rendering && self.pass.is_none_or(|(_, finished)| finished.is_some()) {
+                    self.pass = Some((queued_at, None));
+                }
             }
             Command::Scopes(request) => self.coordinator.scopes(*request),
             Command::Pick(request, image_request_id, origin) => {
@@ -412,30 +416,6 @@ impl Runtime {
             Command::Stop => return false,
         }
         true
-    }
-
-    /// Want this request; whether it starts new work rather than joining work
-    /// already wanted for its target.
-    fn desire(
-        &mut self,
-        request: RenderRequest,
-        origin: Option<SourceOrigin>,
-        queued_at: Instant,
-        speculative: bool,
-    ) -> bool {
-        let target = super::coordinator::Target::of(&request);
-        let previous = self
-            .coordinator
-            .desired(&target)
-            .map(|task| task.stamp.clone());
-        self.coordinator
-            .desire(Arc::new(request), origin, queued_at, speculative);
-        // New work, rather than a request joining work already wanted.
-        let started = self
-            .coordinator
-            .desired(&target)
-            .is_some_and(|task| Some(&task.stamp) != previous.as_ref());
-        started
     }
 
     /// Settle the held result's work, dropping stale scope and pick replies.
@@ -496,7 +476,7 @@ impl Runtime {
                 SectionState::Ready | SectionState::Done | SectionState::Failed
             )
         });
-        if finished.is_none() && settled {
+        if settled {
             *finished = Some(Instant::now());
         }
         self.progress.publish(sections, *started, *finished);

@@ -730,6 +730,10 @@ impl Runtime {
         }
         runtime
     }
+    /// This photo as before its first render: settings without rendered values.
+    pub(crate) fn unrendered(&mut self, path: &Path) {
+        self.photos.get_mut(path).unwrap().numeric_settings = None;
+    }
 }
 
 #[cfg(test)]

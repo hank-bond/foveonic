@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::rendering::coordinator::Task;
-use crate::rendering::request::RequestId;
+use crate::rendering::request::{RenderRequest, RequestId};
 use crate::rendering::view_plan::ImageState;
 use crate::rendering::worker;
 use foveonic::render::ProcessingQuality;
@@ -388,14 +388,25 @@ fn work_the_bar_does_not_follow_leaves_the_finished_time_showing() {
     wait(|| !rig.progress.snapshot().unwrap().running());
     let finished = rig.progress.snapshot().unwrap().milliseconds();
     assert!(finished >= 40.);
-    // Zooming plans work the bar does not follow beside the current whole image.
-    let mut patch = planned_patch("a.x3f");
-    patch.tracked = None;
+    // The full-size image prepared in the background is not followed.
+    let mut request = request("a.x3f", 2, 0.);
+    request.preview_scale = foveonic::render::Scale::NATIVE;
+    let mut full = Planned {
+        request,
+        speculative: true,
+        state: ImageState::Render,
+        tracked: None,
+    };
     rig.handle.plan(
-        planned(photos),
-        vec![tracked_whole(ImageState::Ready), patch],
+        planned(photos.clone()),
+        vec![tracked_whole(ImageState::Ready), full.clone()],
         Instant::now(),
     );
     rig.applied();
     assert_eq!(rig.progress.snapshot().unwrap().milliseconds(), finished);
+    // Once the bar follows that image, its render in flight starts a pass.
+    full.tracked = Some(0);
+    rig.handle.plan(planned(photos), vec![full], Instant::now());
+    rig.applied();
+    assert!(rig.progress.snapshot().unwrap().running());
 }

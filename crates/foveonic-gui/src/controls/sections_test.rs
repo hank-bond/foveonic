@@ -34,6 +34,7 @@ fn frame(
                             prevent_color_clipping: true,
                             exposure_auto_compensation: Default::default(),
                             family: None,
+                            several_photos: false,
                             library: &Default::default(),
                             state: &mut Default::default()
                         },

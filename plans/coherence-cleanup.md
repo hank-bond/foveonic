@@ -27,6 +27,7 @@ Details are in the linked plans. Move each item here when its work starts.
 
 Record duplicated paths found after 2026-11-22 here, with where they are and what disagrees.
 
+- [ ] **Remove the selected photo as a source of edits and choices.** Owner, 2026-11-23: the last-selected path is not useful and is buggy. `App::selected` still drives crop and rotation edits (`edit_selected`), the Editing menu's camera family and preset list, the values shown for prevent clipping and auto compensation with several photos, the navigator source and paste normalisation. Copy settings, Save preset and Set as default are disabled with several photos in 0.9.0. Crop presets per photo are not built.
 - [ ] **One GPU wait per delivered image.** Delivery waits once per finished frame instead of once per tick, which may limit the gain from wide rendering. Not measured.
 
 ## Audit

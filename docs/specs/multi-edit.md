@@ -9,7 +9,7 @@ implementation: incomplete
 
 ## Selection and tools
 
-Browser selection determines which photographs appear in the viewport. It has no editing-count limit and remains the scope for processing, review/file operations and copying or pasting settings. Large selections use progressively smaller viewport tiles down to a minimum readable size, followed by an “N more” overflow indicator. Selection alone must not retain a complete editable processing session for every photograph.
+Browser selection determines which photographs appear in the viewport. It has no editing-count limit and remains the scope for processing, review/file operations and pasting settings. Large selections use progressively smaller viewport tiles down to a minimum readable size, followed by an “N more” overflow indicator. Selection alone must not retain a complete editable processing session for every photograph.
 
 Viewport selection determines which photographs receive editor changes. Selecting one photograph edits it individually. Selecting several enables multi-edit directly, without a separate editing mode or activation button. Browser selection initializes viewport selection to its first L photographs in browser order, where L is the configurable multi-edit limit. The default limit is eight. Additional browser-selected photographs remain outside the editing subset. Normal clicks replace viewport selection. Option-click toggles membership and Shift-click selects a range in displayed visual order, respecting the limit and the [layout contract](./viewport-workflows.md#layout-and-interaction). Editing targets must remain explicit. Each viewport tile has one outline: thick blue when editable, otherwise thin white. Do not add a separate most-recent-photo highlight or inset selection outline. Technical focus may still supply metadata and tool context without another visible selection state. Navigator and scopes controls and new preparation are disabled while multiple photographs are editing targets; late scope replies must not revive the disabled display.
 
@@ -38,7 +38,7 @@ Numeric sliders show the minimum and maximum values of the viewport-selected pho
 
 Dropdowns display “Multi” when their selected values differ. Choosing an option assigns it to every editing target. A mixed label is a display state and must not become a saved photographic value. Shared controls must preserve camera capabilities and valid per-photo settings. The implementation must not silently apply an active photograph’s unrelated settings to other targets.
 
-Import keeps edits in memory under its existing write policy. Browse persists each photograph’s requested settings through the existing asynchronous sidecar owner. Copy/paste remains scoped to browser selection.
+Import keeps edits in memory under its existing write policy. Browse persists each photograph’s requested settings through the existing asynchronous sidecar owner. Paste reaches every photograph in the browser selection. Copy settings, Save preset and Set as default read one photograph's recipe and are available only when one photograph is edited.
 
 ## Interactive latency
 

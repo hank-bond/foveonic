@@ -141,6 +141,7 @@ impl Panel {
                             prevent_color_clipping: true,
                             exposure_auto_compensation: Default::default(),
                             family: summary.family,
+                            several_photos: false,
                             library: &Default::default(),
                             state: &mut Default::default(),
                         },
@@ -365,4 +366,13 @@ fn drawing_a_stored_out_of_range_value_saves_nothing() {
         assert_eq!(&panel.settings(index), expected, "photo {index}");
         assert_eq!(panel.saved(index), None, "photo {index}");
     }
+}
+
+#[test]
+fn a_value_that_differs_between_photos_reads_multi() {
+    let [a, _] = photos();
+    let same = Panel::new([a.clone(), a]);
+    assert!(same.texts("Multi").is_empty());
+    let mixed = Panel::new(photos());
+    assert!(!mixed.texts("Multi").is_empty());
 }

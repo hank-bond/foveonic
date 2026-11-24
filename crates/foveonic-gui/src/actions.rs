@@ -140,6 +140,11 @@ impl App {
                     }
                 }
                 Edit::Before(target) => self.toggle_before(target),
+                // Several edited photos have no one recipe to copy.
+                Edit::CopySettings if self.multi_edit.multiple() => {
+                    self.activity
+                        .operation("Copy settings is available when editing one photo");
+                }
                 Edit::CopySettings => {
                     match sidecar::encode(
                         self.selected_settings()

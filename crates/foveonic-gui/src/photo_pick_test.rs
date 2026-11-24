@@ -61,11 +61,15 @@ impl Tiles {
         let paths: Vec<_> = (0..editing.len())
             .map(|index| PathBuf::from(format!("{index}.x3f")))
             .collect();
+        // The photo outside the editing selection is loaded too, as a displayed photo is.
+        let outside = PathBuf::from("outside.x3f");
         let runtime = Runtime::rendered(
             paths
                 .iter()
+                .cloned()
                 .zip(editing)
-                .map(|(path, settings)| (path.clone(), settings.clone(), settings, None)),
+                .chain([(outside.clone(), Settings::default())])
+                .map(|(path, settings)| (path, settings.clone(), settings, None)),
         );
         let mut tiles = Self {
             ctx,
@@ -74,7 +78,7 @@ impl Tiles {
                 sidecars,
                 editing: paths,
             },
-            outside: "outside.x3f".into(),
+            outside,
             hidden: Vec::new(),
             stale: Vec::new(),
             time: 0.,
@@ -145,7 +149,7 @@ impl Tiles {
                                     egui::Sense::click_and_drag(),
                                 ),
                                 uv: uv.filter(|_| !self.stale.contains(path)),
-                                allowed: self.photos.editing.contains(path),
+                                allowed: true,
                             }
                         })
                         .collect();
@@ -385,4 +389,75 @@ fn a_photo_leaving_mid_gesture_frees_the_tool_for_another_photo() {
     tiles.press(second, true);
     assert_eq!(tiles.requests.len(), 2);
     assert_eq!(tiles.requests[1].path, tiles.path(1));
+}
+
+#[test]
+fn a_pick_waits_until_every_editing_photo_is_rendered() {
+    let mut tiles = Tiles::new(vec![Settings::default(); 2]);
+    tiles.photos.runtime.unrendered(&tiles.path(1));
+    editor::white_balance::toggle(&tiles.ctx);
+    let pos = tiles.center(&tiles.path(0));
+    tiles.hover(pos);
+    assert_ne!(tiles.cursor, egui::CursorIcon::Crosshair);
+    tiles.press(pos, true);
+    tiles.press(pos, false);
+    assert!(tiles.requests.is_empty());
+    assert!(editor::white_balance::active(&tiles.ctx));
+}
+
+#[test]
+fn a_monochrome_photo_gets_no_white_balance_pick() {
+    let monochrome = Settings {
+        rendering: foveonic::render::Rendering::Monochrome,
+        ..Default::default()
+    };
+    let mut tiles = Tiles::new(vec![monochrome, Settings::default()]);
+    editor::white_balance::toggle(&tiles.ctx);
+    let pos = tiles.center(&tiles.path(0));
+    tiles.hover(pos);
+    tiles.press(pos, true);
+    tiles.press(pos, false);
+    assert!(tiles.requests.is_empty());
+    tiles.click(tiles.center(&tiles.path(1)));
+}
+
+#[test]
+fn a_pick_reaches_an_editing_photo_that_is_not_drawn() {
+    let mut tiles = Tiles::new(vec![Settings::default(); 2]);
+    tiles.hidden.push(tiles.path(1));
+    editor::dehaze::toggle(&tiles.ctx);
+    tiles.click(tiles.center(&tiles.path(0)));
+    let reply = tiles.reply(ColorRangeSample {
+        weights: [0.; 8],
+        color: [0.1, 0.2, 0.3, 1.],
+    });
+    editor::dehaze::receive(&tiles.ctx, &reply);
+    tiles.frame(vec![]);
+    assert_eq!(tiles.settings(1).dehaze.shadow, Some([0.1, 0.2, 0.3]));
+}
+
+#[test]
+fn an_advanced_pick_adds_its_range_to_every_photo_with_the_same_ranges() {
+    let mut tiles = Tiles::new(vec![Settings::default(); 2]);
+    editor::direct_color::toggle_advanced(&tiles.ctx);
+    let pos = tiles.center(&tiles.path(0));
+    tiles.hover(pos);
+    tiles.press(pos, true);
+    let mut reply = tiles.reply(ColorRangeSample {
+        color: [240., 0.7, 1., 0.],
+        weights: [1.; 8],
+    });
+    reply.tool = tiles.requests[0].tool;
+    editor::direct_color::receive(&tiles.ctx, reply);
+    tiles.hover(pos + egui::vec2(30., -30.));
+    tiles.press(pos + egui::vec2(30., -30.), false);
+    for index in 0..2 {
+        let advanced = tiles.settings(index).photographic.color_editor.advanced;
+        assert_eq!(advanced.count, 1, "photo {index}");
+        assert_eq!(advanced.ranges[0].hue, 240.);
+    }
+    assert_eq!(
+        tiles.settings(0).photographic.color_editor,
+        tiles.settings(1).photographic.color_editor
+    );
 }

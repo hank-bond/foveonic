@@ -483,6 +483,8 @@ pub struct Smoke {
     multi_pick_events: Option<Vec<Vec<egui::Event>>>,
     /// The current pick step and its evidence.
     multi_pick: Option<multi_edit::Pick>,
+    /// Where the Exposure row sat at the first compared step.
+    multi_exposure_top: Option<f32>,
 }
 impl Smoke {
     pub(crate) fn observe_admitted(
@@ -628,6 +630,7 @@ impl Smoke {
             multi_sweep_ms: Vec::new(),
             multi_pick_events: None,
             multi_pick: None,
+            multi_exposure_top: None,
         })
     }
     pub(super) fn configure_cache(&self, settings: &mut foveonic::decode_cache::Settings) {

@@ -90,7 +90,7 @@ pub struct PickTile {
     pub response: egui::Response,
     /// The pointer's position on the image, when the image shows the photo's current recipe.
     pub uv: Option<[f32; 2]>,
-    /// Tools may act on the photo: an editing photo showing its current final output.
+    /// The drawn image shows the photo's current final output.
     pub allowed: bool,
 }
 
@@ -138,7 +138,10 @@ pub fn pick_on_photo(
         .editing()
         .iter()
         .all(|target| ranges(target) == ranges(&path));
-    let allowed = editable && settings.is_some() && tile.is_some_and(|tile| tile.allowed);
+    let allowed = editable
+        && settings.is_some()
+        && photos.editing().contains(&path)
+        && tile.is_some_and(|tile| tile.allowed);
     let (edits, request) = pick(
         ui,
         tile.map_or(&ui.response(), |tile| &tile.response),

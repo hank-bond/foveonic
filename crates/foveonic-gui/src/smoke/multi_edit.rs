@@ -28,6 +28,16 @@ pub(super) const TARGETS: &[&str] = &[
 ];
 
 /// Steps that pick on an editing photo other than the active one.
+/// Steps with one, two and eight editing photos and an unscrolled panel. The
+/// editing controls must sit at the same height in all of them, although the
+/// navigator and scopes above are unavailable with several photos.
+const LAYOUT_TARGETS: [&str; 5] = [
+    "multi-eight",
+    "multi-replace",
+    "multi-option",
+    "multi-switch-b",
+    "multi-option-return",
+];
 const PICK_TARGETS: [&str; 3] = ["multi-white-balance", "multi-dehaze", "multi-color"];
 /// Image points tried in order until a pick's sample is usable, since a photo's
 /// centre can be neutral or dark.
@@ -254,6 +264,9 @@ impl App {
                 // Let injected input, layout and the last accepted image reach the screen.
                 smoke.settled_frames += 1;
                 if smoke.settled_frames >= 3 {
+                    if LAYOUT_TARGETS.contains(&target) {
+                        self.smoke_multi_check_layout(&mut smoke, target);
+                    }
                     smoke.awaiting = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
                 }
@@ -263,6 +276,23 @@ impl App {
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(25));
         self.smoke = Some(smoke);
+    }
+
+    fn smoke_multi_check_layout(&self, smoke: &mut Smoke, target: &str) {
+        let snapshot = crate::automation::snapshot().expect("multi smoke observes controls");
+        let top = snapshot
+            .controls
+            .iter()
+            .find(|control| control.label == "Exposure" && control.visible)
+            .unwrap_or_else(|| panic!("{target}: the Exposure row is not visible"))
+            .slider[1];
+        let first = *smoke.multi_exposure_top.get_or_insert(top);
+        assert_eq!(
+            top,
+            first,
+            "{target}: the editing controls moved with {} editing photos",
+            self.edit_selection.paths().len()
+        );
     }
 
     fn smoke_multi_ready(&mut self, smoke: &Smoke, target: &str) -> bool {
@@ -468,8 +498,8 @@ impl App {
             }
             "multi-eight" => {
                 self.preferences.multi_edit_limit = 8;
-                self.preferences.collapsed =
-                    [Section::Navigator, Section::Scopes, Section::Metadata].into();
+                // The navigator and scopes stay open: the layout check needs them.
+                self.preferences.collapsed = [Section::Metadata].into();
                 self.preferences
                     .editing_sections
                     .retain(|section| *section != crate::preferences::EditingSection::Tone);

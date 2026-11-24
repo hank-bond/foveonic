@@ -501,6 +501,7 @@ impl RenderCoordinator {
             .find(|entry| &entry.task.stamp.target == target)
             .map(|entry| (entry.task.stamp.request_id, entry.settled, entry.failed))
     }
+    #[cfg(test)]
     pub fn desired(&self, target: &Target) -> Option<&Arc<Task>> {
         self.desired
             .iter()
