@@ -11,6 +11,7 @@ mod gpu;
 pub mod priority;
 pub use gpu::instance_descriptor as gpu_instance_descriptor;
 pub use gpu::map_readback;
+pub use gpu::recent_stages as recent_gpu_stages;
 mod graph;
 pub mod image;
 pub mod importing;

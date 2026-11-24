@@ -65,7 +65,7 @@ pub fn selected_gpu(state: &eframe::egui_wgpu::RenderState) {
         if reason==eframe::wgpu::DeviceLostReason::Destroyed {return;}
         support::report_error("gpu.device_lost_callback",&std::io::Error::other(message),OperationContext {
             component:Some("GPU device".into()),phase:Some("device loss callback".into()),
-            settings:Some(json!({"reason":format!("{reason:?}"),"operation_attribution":"unavailable for asynchronous device loss"})),
+            settings:Some(json!({"reason":format!("{reason:?}"),"recent_stages":foveonic::recent_gpu_stages()})),
             ..Default::default()
         });
     });

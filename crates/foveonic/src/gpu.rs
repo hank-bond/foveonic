@@ -20,6 +20,32 @@ impl std::error::Error for DiagnosticError {
     }
 }
 
+/// How many recent stage names a device-loss report carries.
+const RECENT_STAGES: usize = 4;
+/// The stages most recently submitted, newest last. A lost device reports no
+/// operation, so its report names these instead.
+static RECENT: std::sync::Mutex<[&str; RECENT_STAGES]> = std::sync::Mutex::new([""; RECENT_STAGES]);
+
+pub(crate) fn submitted_stage(stage: &'static str) {
+    let mut recent = RECENT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    recent.rotate_left(1);
+    recent[RECENT_STAGES - 1] = stage;
+}
+
+/// The stages most recently submitted to the GPU, oldest first.
+pub fn recent_stages() -> Vec<&'static str> {
+    let recent = RECENT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    recent
+        .iter()
+        .copied()
+        .filter(|stage| !stage.is_empty())
+        .collect()
+}
+
 fn failure(
     phase: &str,
     error: Box<dyn std::error::Error + Send + Sync>,
@@ -253,9 +279,13 @@ impl Gpu {
         );
         device.set_device_lost_callback(|reason, message| {
             if reason != wgpu::DeviceLostReason::Destroyed {
-                let _ = failure("device-lost-callback", message.into(), serde_json::json!({
-                    "reason":format!("{reason:?}"),"operation_attribution":"unavailable for asynchronous device loss",
-                }));
+                let _ = failure(
+                    "device-lost-callback",
+                    message.into(),
+                    serde_json::json!({
+                        "reason":format!("{reason:?}"),"recent_stages":recent_stages(),
+                    }),
+                );
             }
         });
         Self::from_device(device, queue, adapter_name)
@@ -644,6 +674,7 @@ impl Gpu {
             })
             .collect();
         self.dispatch_entries(kernel, &entries, groups, trace);
+        submitted_stage(kernel.label());
         // Keep every guard borrowed until submission has put the commands in
         // queue order. A later writer must not get ahead of these reads.
         for (_, binding) in buffers {

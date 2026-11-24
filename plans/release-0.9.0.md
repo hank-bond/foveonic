@@ -10,6 +10,9 @@ On 2026-11-17 the owner held 0.9.0. The candidate's wide rendering runs only war
 
 - [ ] Complete the [render scheduler plan](./render-scheduler.md).
 - [ ] Freeze a new candidate and repeat every release check below, including the comparison with published 0.8.4.
+- [ ] **Fix the zoom crash on integrated graphics (found 2026-11-24).** On an Intel UHD 630 with 16 GB, the `v0.9.0` draft at `bf5123c` loses the GPU device at the zoom step of the packaged smoke check, in every run; 0.8.4 passes. Windows records a video engine timeout (live kernel event 141): one unit of GPU work ran past its two-second limit. Bisected to the wide-rendering integration (`88cf28d`). The old wait-every-step rule crashes the same way. The stages last submitted are full-resolution Merrill noise and resampling steps and differ between runs. Keep each unit of GPU work short on slow hardware.
+- [ ] Add the integrated-graphics Windows host to the packaged checks in the [release guide](../docs/releases.md).
+- [ ] Rebuild the draft from the fixed commit and repeat the packaged checks on both Windows hosts and the Mac.
 
 ### Scope (owner, 2026-11-22)
 

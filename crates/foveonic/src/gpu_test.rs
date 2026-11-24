@@ -5,6 +5,17 @@ use crate::gpu::{Gpu, Kernel};
 use crate::nodes::sensor::calibration::{CalibrationParams, EncodeParams};
 
 #[test]
+fn device_loss_reports_name_the_last_submitted_stages_oldest_first() {
+    for stage in ["one", "two", "three", "four", "five"] {
+        crate::gpu::submitted_stage(stage);
+    }
+    assert_eq!(
+        crate::gpu::recent_stages(),
+        ["two", "three", "four", "five"]
+    );
+}
+
+#[test]
 #[ignore = "requires a working GPU adapter"]
 fn activity_counts_engine_owned_transfers_and_not_device_copies_as_readbacks() {
     let gpu = Gpu::test_executor();

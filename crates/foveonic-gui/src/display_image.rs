@@ -28,6 +28,9 @@ pub(crate) fn install_upload_error_handler(device: &wgpu::Device) {
                 foveonic::support::OperationContext {
                     component: Some("shared GPU".into()),
                     phase: Some("uncaptured error callback".into()),
+                    settings: Some(
+                        serde_json::json!({"recent_stages": foveonic::recent_gpu_stages()}),
+                    ),
                     ..Default::default()
                 },
             );
