@@ -5,7 +5,7 @@ kind: how-to
 
 # Prepare an application release
 
-[Requirements](specs/releases.md) define the signed Apple Silicon release scope. The [signed-release plan](../plans/archived/signed-releases.md) tracks validation. Release CI signs the app but does not submit it for notarization. Ordinary local builds need no Apple credentials.
+[Requirements](specs/releases.md) define the signed Apple Silicon release scope. The [signed-release plan](../plans/archived/signed-releases.md) tracks validation. Release CI signs the app, submits it to Apple for notarization and staples the ticket. Ordinary local builds need no Apple credentials.
 
 ## Configure Apple credentials
 
@@ -17,6 +17,8 @@ In the GitHub repository's **Settings → Secrets and variables → Actions**, c
 | --- | --- |
 | `APPLE_CERTIFICATE_P12_BASE64` | Base64-encoded `.p12` containing the certificate and private key. |
 | `APPLE_CERTIFICATE_PASSWORD` | The `.p12` export password. |
+| `APPLE_ID` | The Apple Account email used for notarization. |
+| `APPLE_APP_SPECIFIC_PASSWORD` | An [app-specific password](https://support.apple.com/102654) for that account. |
 
 Copy the encoded export directly to the clipboard on macOS, then paste it into the secret field:
 
@@ -26,7 +28,7 @@ base64 -i "/path/to/DeveloperID.p12" | pbcopy
 
 Under the **Variables** tab, add `APPLE_TEAM_ID` using the ten-character Team ID from Apple Developer membership details. The export must contain exactly one valid Developer ID Application identity for that team.
 
-CI imports the identity into a temporary keychain and removes it and temporary certificate files even on failure or cancellation. It temporarily adds the signing keychain to the runner's search list, preserves the original entries and restores them during cleanup. The default keychain stays unchanged. Keep credentials out of source files and release assets. Replace the secrets when renewing the certificate or changing its export password. Apple Account and app-specific-password secrets are not used.
+CI imports the identity into a temporary keychain and removes it and temporary certificate files even on failure or cancellation. It temporarily adds the signing keychain to the runner's search list, preserves the original entries and restores them during cleanup. The default keychain stays unchanged. Keep credentials out of source files and release assets. Replace the secrets when renewing the certificate or changing its export password. Replace the app-specific password if it is revoked; a rejected credential fails the notarization step.
 
 ## Review locally
 
@@ -58,7 +60,7 @@ The [release workflow](../.github/workflows/release.yml) runs checks on an Apple
 - `Foveonic-v0.3.0-windows-x64.zip`, containing the unsigned app and its DirectX compiler DLLs and license notices.
 - `SHA256SUMS`, containing the two application archive hashes. Verify each archive using its corresponding checksum.
 
-Signing or signature-verification failures stop uploads, without an unsigned fallback. There is no notarization submission, ticket stapling or Gatekeeper-acceptance gate.
+Signing or signature-verification failures stop uploads, without an unsigned fallback. After signing, CI submits the app to Apple's notary service, waits up to 30 minutes, staples the ticket and requires Gatekeeper acceptance. A rejected or timed-out submission stops the upload.
 
 Matching dSYM and PDB archives remain developer CI artifacts. Public application downloads exclude these archives and the Windows PDB. Keep each symbol archive with the exact application build it describes, and preserve a developer copy before CI retention expires. The macOS packaging step compares the executable and dSYM UUIDs. The Windows symbol archive records hashes of the executable and PDB. Verify these identities before publication. User support reports retain structured errors and best-effort stacks, but production packages do not guarantee resolved function names or source lines. Native crash investigation may require a crash dump and matching retained symbols.
 
@@ -126,9 +128,9 @@ python3 scripts/verify_gui_release.py --binary path/to/Foveonic.app/Contents/Mac
 
 On Windows, use `--binary path/to/foveonic-gui.exe` from a desktop terminal or a task running with the logged-on user's interactive token. A noninteractive SSH session may fail surface creation even for working releases. Supply `--source path/to/blue-parking-sign.x3f` if the pinned [example photograph](testing-coverage.md) is elsewhere. The verifier copies it into an owned folder, isolates smoke settings, requires successful exit and all ten workspace checkpoints, and saves stdout, stderr, captures and `result.json`. It rejects an existing output directory. Confirm the report's executable hash matches the extracted release executable. Do not enlarge the application's stack for this check. This startup/rendering smoke supplements the complete acceptance suites and does not establish native file-dialog or every editing workflow's coverage.
 
-Review the draft notes and download the archive through a browser so macOS applies its normal download checks. Releases target macOS 15 Sequoia or later. Sequoia runtime testing remains pending user feedback. Verify the executable and bundle both target 15.0, and test the app on available supported systems before publishing. Downloads are Developer ID signed but not notarized, so Gatekeeper may block the first launch.
+Review the draft notes and download the archive through a browser so macOS applies its normal download checks. Releases target macOS 15 Sequoia or later. Sequoia runtime testing remains pending user feedback. Verify the executable and bundle both target 15.0, and test the app on available supported systems before publishing. Downloads are Developer ID signed and notarized, so the first launch shows only the ordinary confirmation for a downloaded app.
 
-For a build you trust, attempt to open the app, then use **System Settings → Privacy & Security → Open Anyway** for that app and confirm the prompt. Subsequent launches normally retain that approval. A newly downloaded version may be checked again. Do not disable Gatekeeper globally.
+Releases before 0.9.0 are not notarized and need **System Settings → Privacy & Security → Open Anyway** on first launch. Do not disable Gatekeeper globally.
 
 Previously published unsigned releases remain unchanged. The first signing-only release, [v0.2.0](https://github.com/hank-bond/foveonic/releases/tag/v0.2.0), passed hosted checks, checksum/signature verification and an isolated native GUI smoke test before owner-approved publication. The [plan](../plans/archived/signed-releases.md) records the evidence and testing limits.
 

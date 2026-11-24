@@ -33,6 +33,8 @@ Open and edit groups of photographs much faster, with every editing tool working
 - Open a photograph with defaults and a warning when its saved recipe cannot be read.
 - Restore browser thumbnails after reloading a folder.
 - Keep Shift-arrow selection in the browser extending from where it left off.
+- Zoom into and render Merrill photographs with noise reduction on Windows integrated graphics, where the app could previously stop or freeze.
+- Open the macOS download without the **Open Anyway** step. The app is now notarized by Apple.
 - Remove the `--wb` and `--mode` launch options.
 
 ## 0.8.4
