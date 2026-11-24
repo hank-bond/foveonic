@@ -19,24 +19,24 @@ Open and edit groups of photographs much faster, with every editing tool working
 
 Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps and the same eight photographs.
 
-| Time | 0.8.4 | 0.9.0 |
-| --- | --- | --- |
-| Open eight photographs | 7,758 ms | 2,814 ms |
-| Rapid edits across eight photographs settle | 2,949 ms | 253 ms |
-| Edit eight photographs while memory is tight | 2,705 ms | 182 ms |
-| Slowest 5% of edits across eight photographs | 2,908 ms | 129 ms |
-| Typical edit across eight photographs | 142 ms | 122 ms |
-| Remove a photograph while it renders | 385 ms | 49 ms |
-| Edit one photograph | 40 ms | 35 ms |
-| Open one photograph | 390 ms | 404 ms |
+| Time | 0.8.4 | 0.9.0 | Change |
+| --- | --- | --- | --- |
+| Open eight photographs | 7,758 ms | 2,814 ms | −64% |
+| Rapid edits across eight photographs settle | 2,949 ms | 253 ms | −91% |
+| Edit eight photographs while memory is tight | 2,705 ms | 182 ms | −93% |
+| Slowest 5% of edits across eight photographs | 2,908 ms | 129 ms | −96% |
+| Typical edit across eight photographs | 142 ms | 122 ms | −14% |
+| Remove a photograph while it renders | 385 ms | 49 ms | −87% |
+| Edit one photograph | 40 ms | 35 ms | −12% |
+| Open one photograph | 390 ms | 404 ms | +4% |
 
-| Peak memory | 0.8.4 | 0.9.0 |
-| --- | --- | --- |
-| Open eight photographs | 3.6 GB | 2.1 GB |
-| Edit eight photographs | 3.6 GB | 1.9 GB |
-| Rapid edits across eight photographs | 3.6 GB | 2.1 GB |
-| Open one photograph | 1.1 GB | 1.0 GB |
-| Edit one photograph | 1.2 GB | 0.95 GB |
+| Peak memory | 0.8.4 | 0.9.0 | Change |
+| --- | --- | --- | --- |
+| Open eight photographs | 3.6 GB | 2.1 GB | −41% |
+| Edit eight photographs | 3.6 GB | 1.9 GB | −46% |
+| Rapid edits across eight photographs | 3.6 GB | 2.1 GB | −43% |
+| Open one photograph | 1.1 GB | 1.0 GB | −11% |
+| Edit one photograph | 1.2 GB | 0.95 GB | −18% |
 
 ### New functionality
 
