@@ -15,29 +15,36 @@ const COLORS: [[u8; 3]; 8] = [
     [177, 76, 144],
 ];
 
-pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+/// The Color Range tool. `range_preview` is the viewed Advanced range, which
+/// only the Advanced list shows.
+pub(super) fn show(
+    ui: &mut egui::Ui,
+    settings: &Settings,
+    range_preview: &mut Option<usize>,
+) -> bool {
     let mut state = crate::editor::advanced_color::state(ui.ctx());
-    let mut changed = super::common::section_header_with(
+    let mut changed = super::common::section_switch_with(
         ui,
         EditingSection::ColorEditor,
         "Color Range",
-        Some(&mut settings.color_editor_enabled),
+        crate::multi_edit_controls::field::COLOR_EDITOR_ENABLED,
+        settings.color_editor_enabled,
         |ui, enabled| modes(ui, &mut state, enabled),
     );
     crate::editor::advanced_color::store(ui.ctx(), state.clone());
     ui.add_enabled_ui(settings.color_editor_enabled, |ui| {
         if state.advanced {
-            changed |= super::advanced_color::show(ui, settings);
+            changed |= super::advanced_color::show(ui, settings, range_preview);
             return;
         }
-        if settings.color_range_preview.take().is_some() {
+        if range_preview.take().is_some() {
             changed = true;
         }
 
         let (mut selected, picked) = crate::editor::direct_color::selection(ui.ctx());
         let picking =
             crate::editor::direct_color::dragging(ui.ctx()) && picked.iter().any(|w| *w > 0.);
-        let controls = &mut settings.photographic.color_editor;
+        let controls = settings.photographic.color_editor;
         let count = ColorEditorControls::LABELS.len() as f32;
         let gaps = (count - 1.) * ui.spacing().item_spacing.x;
         let padding = 2. * f32::from(crate::widgets::BUTTON_GROUP_MARGIN);
@@ -135,10 +142,10 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
         } else {
             format!("/photographic/color_editor/bands/{selected}")
         };
-        let adjustment = if selected == COLORS.len() {
-            &mut controls.master
+        let mut adjustment = if selected == COLORS.len() {
+            controls.master
         } else {
-            &mut controls.bands[selected]
+            controls.bands[selected]
         };
         let column = LabelColumn::new(ui);
         ui.add_enabled_ui(!mono, |ui| {

@@ -29,8 +29,6 @@ enum Command {
     WholeDelivered(RequestId),
     Memory(MemoryTarget),
     Preparation(Arc<PreparationConfig>),
-    #[cfg(test)]
-    RenderWidth(Option<usize>),
     Stop,
 }
 
@@ -54,8 +52,6 @@ pub(super) struct Handle {
     /// The last published planned photos and images in use, to skip unchanged publication.
     planned: RefCell<(Photos, Vec<Planned>)>,
     preparation: RefCell<Option<Arc<PreparationConfig>>>,
-    #[cfg(test)]
-    render_width: Cell<Option<usize>>,
 }
 
 impl Handle {
@@ -71,8 +67,6 @@ impl Handle {
         let (output, updates) = crossbeam_channel::bounded(2);
         let status = Arc::new(Mutex::new(Arc::new(Status::default())));
         let published = status.clone();
-        #[cfg(test)]
-        let render_width = slot.0.lock().unwrap().render_width;
         std::thread::Builder::new()
             .name("render-coordinator".into())
             .spawn(move || {
@@ -102,8 +96,6 @@ impl Handle {
                 ui_queue: updates.clone(),
                 planned: Default::default(),
                 preparation: Default::default(),
-                #[cfg(test)]
-                render_width: Cell::new(render_width),
             },
             updates,
         )
@@ -129,14 +121,6 @@ impl Handle {
     pub fn busy(&self) -> bool {
         let status = self.status();
         self.pending.get() > status.processed || status.busy || !self.ui_queue.is_empty()
-    }
-
-    #[cfg(test)]
-    pub fn set_render_width(&self, width: Option<usize>) {
-        let width = width.map(|value| value.clamp(1, 8));
-        if self.render_width.replace(width) != width {
-            self.send(Command::RenderWidth(width), false);
-        }
     }
 
     #[cfg(test)]
@@ -417,8 +401,6 @@ impl Runtime {
             }
             Command::WholeDelivered(request_id) => self.coordinator.whole_delivered(request_id),
             Command::Memory(target) => self.slot.0.lock().unwrap().memory = Some(target),
-            #[cfg(test)]
-            Command::RenderWidth(width) => self.slot.0.lock().unwrap().render_width = width,
             Command::Preparation(config) => {
                 let mut pending = self.slot.0.lock().unwrap();
                 if pending.preparation.as_deref() != Some(&config) {

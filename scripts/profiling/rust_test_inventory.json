@@ -633,6 +633,11 @@
         "render::driver::tests::estimates_exist_for_every_family_and_view_and_cover_measured_peaks",
         "render::scheduler::tests::one_job_per_photo_and_loading_waits_until_alone",
         "render::scheduler::tests::waiting_job_stays_queued_until_ready",
+        "render::scheduler::tests::lowering_the_target_retires_the_newest_submitted_job",
+        "render::scheduler::tests::exclusive_job_starts_after_admitted_jobs_finish",
+        "render::scheduler::tests::higher_tier_demand_retires_every_lower_tier_job",
+        "render::scheduler::tests::width_cap_limits_jobs_running_together",
+        "render::scheduler::tests::speculative_peer_never_drops_cached_images",
         "source::tests::capture_read_describes_every_fixture_as_full_decoding_does"
       ]
     },

@@ -210,6 +210,18 @@ impl Runtime {
     pub fn settings(&self, path: &Path) -> Option<&Settings> {
         self.photos.get(path)?.settings.as_ref()
     }
+    /// Start collecting the editing panel's edits, with what its controls need
+    /// to know about every editing photo.
+    pub fn begin_panel(&self, ctx: &eframe::egui::Context) {
+        multi_edit_controls::begin_with_numeric(ctx, self.snapshots(), self.numeric_snapshots());
+        multi_edit_controls::set_metadata(ctx, self.metadata_snapshots());
+        for (pointer, ready) in self.optional_readiness() {
+            multi_edit_controls::set_optional_ready(ctx, pointer, ready);
+        }
+        for (pointer, range) in self.control_ranges() {
+            multi_edit_controls::set_range(ctx, &pointer, range);
+        }
+    }
     pub fn optional_readiness(&self) -> [(&'static str, bool); 3] {
         ["/sharpen_amount", "/color_dq_gain", "/dehaze/shadow"].map(|pointer| {
             (
@@ -438,10 +450,13 @@ fn apply_fields(photo: &mut Photo, edits: &[multi_edit_controls::Edit]) {
         .or(photo.numeric_settings.as_ref());
     if let Some(numeric) = defaults {
         materialize_defaults(settings, numeric, edits);
-        let exposure_edited = edits.iter().any(|edit| {
+        // Leaving Auto, by turning it off or editing the value, starts from
+        // this photo's own calculated exposure.
+        let leaves_auto = edits.iter().any(|edit| {
             matches!(edit, multi_edit_controls::Edit::Number { pointer, .. } if pointer == "/exposure")
+                || *edit == multi_edit_controls::Edit::set(multi_edit_controls::field::EXPOSURE_AUTO, &false)
         });
-        if settings.exposure_auto && exposure_edited {
+        if settings.exposure_auto && leaves_auto {
             settings.exposure = photo
                 .metadata
                 .as_deref()
@@ -687,6 +702,39 @@ impl crate::App {
         );
     }
 }
+
+#[cfg(test)]
+impl Runtime {
+    /// Editing photos as after their first render: each with its metadata and
+    /// the `numeric` values the render produced.
+    pub(crate) fn rendered(
+        photos: impl IntoIterator<Item = (PathBuf, Settings, Settings, Option<Arc<Metadata>>)>,
+    ) -> Self {
+        let mut runtime = Self::default();
+        for (path, settings, numeric, metadata) in photos {
+            runtime.editing_paths.push(path.clone());
+            runtime.recent.push(path.clone());
+            runtime.photos.insert(
+                path,
+                Box::new(Photo {
+                    defaults_basis: Some(settings.clone()),
+                    settings: Some(settings),
+                    family: metadata
+                        .as_deref()
+                        .and_then(|metadata| metadata.processing_family().ok()),
+                    metadata,
+                    numeric_settings: Some(numeric),
+                    reset_settings: None,
+                }),
+            );
+        }
+        runtime
+    }
+}
+
+#[cfg(test)]
+#[path = "multi_edit_panel_test.rs"]
+mod panel_tests;
 
 #[cfg(test)]
 mod tests {

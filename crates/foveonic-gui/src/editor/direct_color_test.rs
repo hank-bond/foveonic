@@ -1,6 +1,22 @@
 //! Checks weighted gestures, delayed picks and stale-reply isolation through egui pointer events.
 
 use super::*;
+use foveonic::render::ColorEditorControls;
+
+/// The controls after the relative band edits for `amount` reach a photo.
+fn adjusted(
+    original: ColorEditorControls,
+    weights: [f32; 8],
+    channel: Channel,
+    amount: f32,
+) -> ColorEditorControls {
+    let mut settings = Settings::default();
+    settings.photographic.color_editor = original;
+    let edits: Vec<_> = band_edits(weights, channel, amount).collect();
+    crate::multi_edit_controls::apply(&mut settings, &edits);
+    settings.photographic.color_editor
+}
+
 #[test]
 fn weighted_drag_preserves_other_colors_and_clamps_existing_slider_values() {
     let mut original = ColorEditorControls::default();
@@ -38,7 +54,8 @@ fn outdated_picks_and_disabled_tools_cannot_replace_the_current_selection() {
         moved: false,
         released: false,
         amounts: [0.; 3],
-        original: Default::default(),
+        applied: None,
+        ranges: Default::default(),
         expected: settings,
         weights: None,
         feedback: None,
@@ -111,14 +128,19 @@ mod gesture_tests {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let (_, response) =
                         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
-                    result = photo(
+                    let (edits, request) = photo(
                         ui,
                         &response,
                         Some([0.4, 0.6]),
                         Path::new("a.x3f"),
                         settings,
                         true,
+                        true,
                     );
+                    // Apply the gesture's edits, as the store does.
+                    let changed = crate::multi_edit_controls::apply(settings, &edits);
+                    edited(ctx, settings);
+                    result = (changed, request);
                 });
             },
         );
@@ -516,7 +538,7 @@ fn advanced_drag_uses_both_axes_and_finishes_delayed_picks_without_touching_exis
 fn toolbar_release_arms_each_picker_until_a_photo_gesture_releases() {
     for advanced in [false, true] {
         let ctx = egui::Context::default();
-        let mut settings = Settings::default();
+        let settings = Settings::default();
         let mut button_center = egui::Pos2::ZERO;
         let mut frame = |time, events| {
             let _ = ctx.run(
@@ -554,7 +576,8 @@ fn toolbar_release_arms_each_picker_until_a_photo_gesture_releases() {
                             &response,
                             Some([0.4, 0.6]),
                             Path::new("a.x3f"),
-                            &mut settings,
+                            &settings,
+                            true,
                             true,
                         );
                     });

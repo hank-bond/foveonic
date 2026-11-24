@@ -46,35 +46,15 @@ impl App {
             Rendition::Current
         }
     }
-    /// The look a photo shows: its rendition, or Current while Camera or
-    /// Defaults cannot be resolved yet, as before capture metadata arrives with
-    /// a Current image.
-    pub(crate) fn photo_look(&self, path: &std::path::Path) -> Rendition {
-        self.shown_look(path).0
-    }
-    /// The settings a photo's view renders, for its look.
+    /// The settings a photo's view renders, for the look it shows.
     pub(crate) fn photo_view_settings(
         &self,
         path: &std::path::Path,
     ) -> Option<foveonic::render::Settings> {
-        self.shown_look(path).1
+        self.photo_looks(path).shown().1.cloned()
     }
-    fn shown_look(
-        &self,
-        path: &std::path::Path,
-    ) -> (Rendition, Option<foveonic::render::Settings>) {
-        let rendition = self.photo_rendition(path);
-        if rendition != Rendition::Current {
-            if let Some(settings) = self.look_settings(path, rendition) {
-                return (rendition, Some(settings));
-            }
-        }
-        (
-            Rendition::Current,
-            self.look_settings(path, Rendition::Current),
-        )
-    }
-    fn look_settings(
+    /// A look's settings with workspace settings applied, once they resolve.
+    pub(crate) fn look_settings(
         &self,
         path: &std::path::Path,
         look: Rendition,

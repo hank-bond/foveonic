@@ -479,6 +479,10 @@ pub struct Smoke {
     multi_sweep_groups: usize,
     multi_sweep_started: Option<std::time::Instant>,
     multi_sweep_ms: Vec<f64>,
+    /// A pick step's press and release, sent once the hover frame shows the pick cursor.
+    multi_pick_events: Option<Vec<Vec<egui::Event>>>,
+    /// The current pick step and its evidence.
+    multi_pick: Option<multi_edit::Pick>,
 }
 impl Smoke {
     pub(crate) fn observe_admitted(
@@ -622,6 +626,8 @@ impl Smoke {
                 .unwrap_or(0),
             multi_sweep_started: None,
             multi_sweep_ms: Vec::new(),
+            multi_pick_events: None,
+            multi_pick: None,
         })
     }
     pub(super) fn configure_cache(&self, settings: &mut foveonic::decode_cache::Settings) {
@@ -647,13 +653,15 @@ impl App {
     /// use across photos, so the newest id need not be this photo's, and a stored
     /// image the planner finds current keeps no coordinator task to admit it.
     fn shows_current_view(&self, frame: &crate::rendering::worker::RenderResult) -> bool {
-        self.views.get(&frame.request.path).is_some_and(|view| {
-            if frame.request.detail {
-                crate::rendering::view_plan::Rendered::matches(frame, &view.request)
-            } else {
-                crate::rendering::view_plan::whole_current(frame, &view.request)
-            }
-        })
+        self.view_images
+            .view(&frame.request.path)
+            .is_some_and(|view| {
+                if frame.request.detail {
+                    crate::rendering::view_plan::Rendered::matches(frame, &view.request)
+                } else {
+                    crate::rendering::view_plan::whole_current(frame, &view.request)
+                }
+            })
     }
     fn smoke_check_deadline(&mut self) {
         let Some(smoke) = &mut self.smoke else {
@@ -831,7 +839,7 @@ impl App {
             }
             let smoke = self.smoke.as_mut().unwrap();
             smoke.smart_scrub_checked = true;
-            std::fs::write(smoke.directory.join("smart-scrub-retained.json"), serde_json::to_vec_pretty(&serde_json::json!({"retained_revision":revision,"retained_content_revision":content_revision,"retained_exposure":0.5,"requested_exposure":0.75,"requested_revision":self.last_request_id,"retained_kind":if regional {"region"} else {"whole"}})).unwrap()).unwrap();
+            std::fs::write(smoke.directory.join("smart-scrub-retained.json"), serde_json::to_vec_pretty(&serde_json::json!({"retained_revision":revision,"retained_content_revision":content_revision,"retained_exposure":0.5,"requested_exposure":0.75,"requested_revision":self.view_images.last_request_id(),"retained_kind":if regional {"region"} else {"whole"}})).unwrap()).unwrap();
         }
         let current_native_feedback =
             self.active_patch()
@@ -1376,7 +1384,7 @@ impl App {
                     assert_eq!(progress.fraction, 1.);
                     assert!(!progress.running());
                     assert!(!progress.failed);
-                    assert!(progress.request_id <= self.last_request_id.0);
+                    assert!(progress.request_id <= self.view_images.last_request_id().0);
                     // Auxiliary previews and idle Whole completion do not own foreground progress.
                     if progress.request_id == frame.request.id.0 {
                         assert!(progress.milliseconds() >= frame.milliseconds);
@@ -1752,9 +1760,16 @@ impl App {
                         self.submit_photos();
                     }
                     "dehaze-freeze" => {
-                        self.smoke_edit(|recipe| {
-                            assert!(crate::editor::dehaze::set_auto(ctx, recipe, false))
-                        });
+                        // The edit the panel's Auto button pushes when turned off.
+                        let manual = crate::multi_edit_controls::Edit::Optional {
+                            pointer: "/dehaze/shadow".into(),
+                            enabled: true,
+                        };
+                        assert!(
+                            self.edit_selected(crate::multi_edit_runtime::Change::Fields(vec![
+                                manual
+                            ]))
+                        );
                         self.submit_photos();
                     }
                     "dehaze-reset" => {
@@ -1897,7 +1912,7 @@ impl App {
                             focus: true,
                         });
                         crate::editor::advanced_color::store(ctx, state);
-                        smoke.name_revision = Some(self.last_request_id.0);
+                        smoke.name_revision = Some(self.view_images.last_request_id().0);
                         smoke.direct_events.extend([
                             vec![egui::Event::PointerMoved(egui::pos2(6., 6.))],
                             vec![
@@ -2431,10 +2446,11 @@ impl App {
                         self.submit_photos();
                         self.smoke_edit(|recipe| recipe.exposure = 0.5);
                         self.submit_photos();
-                        let regional_revision = self.last_request_id;
+                        let regional_revision = self.view_images.last_request_id();
                         self.submit_photos();
                         assert_eq!(
-                            self.last_request_id, regional_revision,
+                            self.view_images.last_request_id(),
+                            regional_revision,
                             "ordinary demand started Full before regional delivery"
                         );
                     }
@@ -2502,10 +2518,11 @@ impl App {
                         });
                         let path = self.selected.clone().unwrap();
                         self.select(path, false);
-                        let selection_revision = self.last_request_id;
+                        let selection_revision = self.view_images.last_request_id();
                         self.submit_photos();
                         assert_eq!(
-                            self.last_request_id, selection_revision,
+                            self.view_images.last_request_id(),
+                            selection_revision,
                             "reselecting the same photo submitted new work"
                         );
                     }
@@ -2968,7 +2985,7 @@ impl App {
                 {
                     assert_eq!(
                         smoke.name_revision,
-                        Some(self.last_request_id.0),
+                        Some(self.view_images.last_request_id().0),
                         "renaming must not submit an image job"
                     );
                 }

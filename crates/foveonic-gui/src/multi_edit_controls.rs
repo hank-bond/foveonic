@@ -38,9 +38,6 @@ impl Mapping {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
-    Remove {
-        pointer: String,
-    },
     Optional {
         pointer: String,
         enabled: bool,
@@ -81,24 +78,37 @@ impl Edit {
         match self {
             Self::Number { pointer, .. }
             | Self::Assign { pointer, .. }
-            | Self::Optional { pointer, .. }
-            | Self::Remove { pointer } => pointer,
+            | Self::Optional { pointer, .. } => pointer,
         }
     }
 }
 
-/// Fields that tools and actions outside the panel set.
+/// Fields that writers set as a whole.
 pub mod field {
     use super::Field;
-    use foveonic::render::{AutoExposureCompensation, ColorEditorControls, WhiteBalanceBias};
+    use foveonic::render::{
+        AdvancedColorControls, AutoExposureCompensation, RepairThreshold, WhiteBalanceBias,
+    };
     pub const CROP: Field<foveonic::crop::Crop> = Field::new("/crop");
     pub const ROTATION: Field<foveonic::rotation::Rotation> = Field::new("/rotation");
     pub const WHITE_BALANCE_BIAS: Field<WhiteBalanceBias> = Field::new("/white_balance_bias");
     pub const DEHAZE_SHADOW: Field<Option<[f32; 3]>> = Field::new("/dehaze/shadow");
-    pub const COLOR_EDITOR: Field<ColorEditorControls> = Field::new("/photographic/color_editor");
+    pub const COLOR_RANGES: Field<AdvancedColorControls> =
+        Field::new("/photographic/color_editor/advanced");
     pub const PREVENT_COLOR_CLIPPING: Field<bool> = Field::new("/prevent_color_clipping");
+    pub const EXPOSURE_AUTO: Field<bool> = Field::new("/exposure_auto");
     pub const EXPOSURE_AUTO_COMPENSATION: Field<AutoExposureCompensation> =
         Field::new("/exposure_auto_compensation");
+    pub const TONE_ENABLED: Field<bool> = Field::new("/tone_enabled");
+    pub const SATURATION_ENABLED: Field<bool> = Field::new("/saturation_enabled");
+    pub const COLOR_EDITOR_ENABLED: Field<bool> = Field::new("/color_editor_enabled");
+    pub const SHARPENING_ENABLED: Field<bool> = Field::new("/sharpening_enabled");
+    pub const CORRECTIONS_ENABLED: Field<bool> = Field::new("/corrections_enabled");
+    pub const DESPECKLE: Field<bool> = Field::new("/despeckle");
+    pub const HIGHLIGHT_RESTORATION: Field<bool> = Field::new("/highlight_restoration");
+    pub const REPAIR: Field<Option<RepairThreshold>> = Field::new("/repair");
+    pub const ROW_CORRECTION: Field<bool> = Field::new("/row_correction");
+    pub const BANDING_ENABLED: Field<bool> = Field::new("/merrill_banding/enabled");
 }
 /// Each descriptor changes one authored property. Transient render policy stays on its owner.
 pub fn apply(settings: &mut Settings, edits: &[Edit]) -> bool {
@@ -110,16 +120,6 @@ pub fn apply(settings: &mut Settings, edits: &[Edit]) -> bool {
     };
     let mut changed = false;
     for edit in edits {
-        if let Edit::Remove { pointer } = edit {
-            if let Some((parent, key)) = pointer.rsplit_once('/') {
-                if let Some(object) = encoded.pointer_mut(parent).and_then(Value::as_object_mut) {
-                    changed |= object
-                        .remove(&key.replace("~1", "/").replace("~0", "~"))
-                        .is_some();
-                }
-            }
-            continue;
-        }
         if let Edit::Assign { pointer, value } = edit {
             if encoded.pointer(pointer).is_none() {
                 if let Some((parent, key)) = pointer.rsplit_once('/') {
@@ -135,7 +135,6 @@ pub fn apply(settings: &mut Settings, edits: &[Edit]) -> bool {
             continue;
         };
         let next = match edit {
-            Edit::Remove { .. } => unreachable!("removal handled above"),
             Edit::Optional { enabled: false, .. } => Value::Null,
             Edit::Optional { enabled: true, .. } => continue,
             Edit::Assign { value, .. } => value.clone(),
@@ -184,55 +183,6 @@ pub fn apply(settings: &mut Settings, edits: &[Edit]) -> bool {
     }
     *settings = result;
     true
-}
-
-/// Explicit widget descriptors own relative edits. Remaining changed editor fields are assignments.
-pub fn assignments(before: &Settings, after: &Settings, explicit: &[Edit]) -> Vec<Edit> {
-    fn visit(path: String, a: &Value, b: &Value, explicit: &[Edit], edits: &mut Vec<Edit>) {
-        if a == b
-            || explicit
-                .iter()
-                .any(|e| path == e.pointer() || path.starts_with(&format!("{}/", e.pointer())))
-        {
-            return;
-        }
-        match (a, b) {
-            (Value::Object(a), Value::Object(b)) => {
-                for key in a.keys().filter(|key| !b.contains_key(*key)) {
-                    let pointer = format!("{path}/{}", key.replace('~', "~0").replace('/', "~1"));
-                    if !explicit.iter().any(|e| e.pointer() == pointer) {
-                        edits.push(Edit::Remove { pointer });
-                    }
-                }
-                for (key, value) in b {
-                    visit(
-                        format!("{path}/{}", key.replace('~', "~0").replace('/', "~1")),
-                        a.get(key).unwrap_or(&Value::Null),
-                        value,
-                        explicit,
-                        edits,
-                    );
-                }
-            }
-            (Value::Array(a), Value::Array(b)) if a.len() == b.len() => {
-                for (index, (a, b)) in a.iter().zip(b).enumerate() {
-                    visit(format!("{path}/{index}"), a, b, explicit, edits);
-                }
-            }
-            _ if explicit
-                .iter()
-                .any(|edit| edit.pointer().starts_with(&format!("{path}/"))) => {}
-            _ => edits.push(Edit::Assign {
-                pointer: path,
-                value: b.clone(),
-            }),
-        }
-    }
-    let mut edits = Vec::new();
-    if let (Ok(a), Ok(b)) = (serde_json::to_value(before), serde_json::to_value(after)) {
-        visit(String::new(), &a, &b, explicit, &mut edits);
-    }
-    edits
 }
 
 #[derive(Clone)]
@@ -493,12 +443,14 @@ pub fn mapped_field<R>(
     }
     result
 }
+/// A choice drawn from `value`, the selected photo's. Choosing pushes the chosen value.
 pub fn choice<T: Serialize, R>(
     ui: &mut egui::Ui,
     pointer: impl Into<String>,
-    value: &mut T,
+    mut value: T,
     contents: impl FnOnce(&mut egui::Ui, &mut T) -> R,
 ) -> R {
+    let value = &mut value;
     if !active(ui.ctx()) {
         return contents(ui, value);
     }
@@ -563,6 +515,10 @@ pub fn optional(ctx: &egui::Context, pointer: impl Into<String>, enabled: bool) 
             enabled,
         },
     );
+}
+/// Set `field` to `value` on every editing photo.
+pub fn set<T: Serialize>(ctx: &egui::Context, field: Field<T>, value: &T) {
+    push(ctx, Edit::set(field, value));
 }
 pub fn assign(ctx: &egui::Context, pointer: impl Into<String>, value: impl Serialize) {
     if let Ok(value) = serde_json::to_value(value) {
@@ -791,7 +747,14 @@ mod tests {
         settings.rotation.turns = 1;
         settings.white_balance_bias.warmth = 0.3;
         settings.dehaze.shadow = Some([0.1, 0.2, 0.3]);
-        settings.photographic.color_editor.bands[0].saturation = -0.2;
+        settings
+            .photographic
+            .color_editor
+            .advanced
+            .push(foveonic::render::AdvancedColorRange {
+                hue: 40.,
+                ..Default::default()
+            });
         settings.prevent_color_clipping = !settings.prevent_color_clipping;
         settings.exposure_auto_compensation = foveonic::render::AutoExposureCompensation::Dial;
         let edits = [
@@ -799,7 +762,10 @@ mod tests {
             Edit::set(field::ROTATION, &settings.rotation),
             Edit::set(field::WHITE_BALANCE_BIAS, &settings.white_balance_bias),
             Edit::set(field::DEHAZE_SHADOW, &settings.dehaze.shadow),
-            Edit::set(field::COLOR_EDITOR, &settings.photographic.color_editor),
+            Edit::set(
+                field::COLOR_RANGES,
+                &settings.photographic.color_editor.advanced,
+            ),
             Edit::set(
                 field::PREVENT_COLOR_CLIPPING,
                 &settings.prevent_color_clipping,
@@ -1168,25 +1134,6 @@ mod tests {
         assert_eq!([photos[0].exposure, photos[1].exposure], [0., -1.]);
     }
     #[test]
-    fn explicit_numeric_child_survives_optional_parent_normalization() {
-        let mut before = Settings::new("Sunlight", "Standard");
-        before.reconstruction = Some(Default::default());
-        let mut after = before.clone();
-        after.reconstruction = None;
-        after.exposure_auto = true;
-        let edits = [Edit::Number {
-            pointer: "/reconstruction/chroma".into(),
-            change: NumberChange::Relative(1.),
-            range: [0., 10.],
-            mapping: Mapping::Identity,
-        }];
-        let fallback = assignments(&before, &after, &edits);
-        assert!(fallback
-            .iter()
-            .all(|e| !e.pointer().starts_with("/reconstruction")));
-        assert!(fallback.iter().any(|e| e.pointer() == "/exposure_auto"));
-    }
-    #[test]
     fn group_reset_and_explicit_assignment_share_values_without_overwriting_other_edits() {
         let mut a = Settings::new("Sunlight", "Standard");
         let mut b = a.clone();
@@ -1247,15 +1194,18 @@ mod tests {
                 .lightness,
             0.3
         );
-        let before = source.clone();
-        source.photographic.color_editor.advanced.ranges[0]
-            .name
-            .clear();
-        let clear = assignments(&before, &source, &[]);
-        assert!(clear
-            .iter()
-            .any(|e| matches!(e,Edit::Remove {pointer} if pointer==name)));
-        assert!(apply(&mut target, &clear));
+        // The name field pushes the cleared name, which saved recipes omit.
+        let clear = Edit::Assign {
+            pointer: name.into(),
+            value: Value::from(""),
+        };
+        assert!(apply(&mut target, std::slice::from_ref(&clear)));
+        let saved: Settings =
+            serde_json::from_value(serde_json::to_value(&target).unwrap()).unwrap();
+        assert_eq!(
+            saved.photographic.color_editor.advanced,
+            target.photographic.color_editor.advanced
+        );
         assert!(target.photographic.color_editor.advanced.ranges[0]
             .name
             .is_empty());

@@ -86,7 +86,7 @@ impl App {
                 let temporary_pan = ui.input(|input| input.key_down(egui::Key::Space));
                 let editing = crate::photo_tools::takes_pointer(ui.ctx()) && !temporary_pan;
                 if editing
-                    && !(self.photo_interaction_available(mapping) || self.framing_preview_active())
+                    && !(self.photo_interaction_available(path) || self.framing_preview_active())
                 {
                     child.disable();
                 }

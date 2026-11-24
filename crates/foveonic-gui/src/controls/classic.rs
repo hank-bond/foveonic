@@ -2,6 +2,7 @@
 
 use super::{common, sections};
 use crate::help;
+use crate::multi_edit_controls::field;
 use crate::preferences::EditingSection;
 use eframe::egui;
 use foveonic::{
@@ -11,12 +12,14 @@ use foveonic::{
 
 pub(super) fn show(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
+    range_preview: &mut Option<usize>,
     metadata: Option<&Metadata>,
-    exposure: Option<foveonic::source::CaptureExposureCompensation>,
+    summary: Option<&foveonic::source::MetadataSummary>,
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
+    let exposure = super::capture_exposure(summary);
     let mut changed = common::rendering(ui, settings);
     let capabilities = ControlCapabilities::from_family(ProcessingFamily::Classic);
     changed |= common::color_mode(
@@ -48,7 +51,9 @@ pub(super) fn show(
             ),
             EditingSection::Tone => common::tone(ui, settings, exposure),
             EditingSection::Saturation => super::saturation::show(ui, settings),
-            EditingSection::ColorEditor => super::color_editor::show(ui, settings),
+            EditingSection::ColorEditor => {
+                super::color_editor::show(ui, settings, &mut *range_preview)
+            }
             EditingSection::Noise => common::reconstruction(ui, settings),
             EditingSection::Sharpening => common::sharpening(ui, settings, metadata),
             EditingSection::Corrections => corrections(ui, settings, capabilities),
@@ -58,23 +63,25 @@ pub(super) fn show(
     changed
 }
 
-fn corrections(
-    ui: &mut egui::Ui,
-    settings: &mut Settings,
-    capabilities: ControlCapabilities,
-) -> bool {
-    let mut changed = common::section_header(
+fn corrections(ui: &mut egui::Ui, settings: &Settings, capabilities: ControlCapabilities) -> bool {
+    let mut changed = common::section_switch(
         ui,
         EditingSection::Corrections,
         "Corrections",
-        Some(&mut settings.corrections_enabled),
+        field::CORRECTIONS_ENABLED,
+        settings.corrections_enabled,
     );
     ui.add_enabled_ui(settings.corrections_enabled, |ui| {
         changed |= super::dehaze::show(ui, settings);
         changed |= ui
             .add_enabled_ui(capabilities.highlights_active(settings), |ui| {
-                crate::widgets::checkbox(ui, &mut settings.highlight_restoration, "Highlights")
-                    .changed()
+                common::checkbox(
+                    ui,
+                    "Highlights",
+                    field::HIGHLIGHT_RESTORATION,
+                    settings.highlight_restoration,
+                )
+                .changed()
             })
             .inner;
         let advanced = crate::widgets::disclosure(

@@ -140,11 +140,12 @@ impl App {
     }
 
     fn scale_for(&self, path: &Path, policy: ProcessingQuality, fit: bool) -> Option<Scale> {
+        let looks = self.photo_looks(path);
         Some(photo_scale(
             policy,
             self.browser.metadata_summary(path)?.extent,
-            &self.photo_view_settings(path)?,
-            self.image_key(path).framing,
+            looks.shown().1?,
+            looks.framing,
             self.viewports.photo(path),
             self.pixels_per_point,
             fit,

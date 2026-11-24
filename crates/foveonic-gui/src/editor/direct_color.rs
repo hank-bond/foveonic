@@ -1,11 +1,12 @@
 //! Routes on-image color gestures into existing range sliders using asynchronous guide picks.
 
 use crate::{
+    multi_edit_controls::{field, Edit, Mapping, NumberChange},
     photo_tools::{self, Tool},
     rendering::worker::{ColorPickReply, ColorPickRequest, ColorPickTool},
 };
 use eframe::egui;
-use foveonic::render::{ColorEditorControls, Settings};
+use foveonic::render::{AdvancedColorControls, PerceptualControls, Settings};
 use std::path::{Path, PathBuf};
 
 #[path = "direct_color_settings.rs"]
@@ -29,6 +30,19 @@ impl Channel {
             Self::Hue => 0,
             Self::Saturation => 1,
             Self::Lightness => 2,
+        }
+    }
+    /// The band field this channel edits, its control range and the mapping to that range.
+    fn control(self) -> (&'static str, [f64; 2], Mapping) {
+        let saturation = PerceptualControls::SATURATION_CONTROL_RANGE;
+        match self {
+            Self::Hue => ("hue", [-1., 1.], Mapping::Identity),
+            Self::Saturation => (
+                "saturation",
+                [f64::from(*saturation.start()), f64::from(*saturation.end())],
+                Mapping::Saturation,
+            ),
+            Self::Lightness => ("lightness", [-1., 1.], Mapping::Identity),
         }
     }
 }
@@ -60,7 +74,10 @@ struct Drag {
     moved: bool,
     released: bool,
     amounts: [f32; 3],
-    original: ColorEditorControls,
+    /// The amounts already sent as edits, once the first edit is sent.
+    applied: Option<[f32; 3]>,
+    /// The pressed photo's range list, which an Advanced pick adds its range to.
+    ranges: AdvancedColorControls,
     expected: Settings,
     weights: Option<[f32; 8]>,
     feedback: Option<crate::activity::Event>,
@@ -70,7 +87,8 @@ struct Drag {
 struct State {
     target: Target,
     configuration_menu: bool,
-    context_menu: bool,
+    /// The photo whose right-click settings menu is open.
+    context_menu: Option<PathBuf>,
     configuration: Configuration,
     generation: u64,
     selected: usize,
@@ -92,7 +110,7 @@ pub fn active(ctx: &egui::Context) -> bool {
 }
 pub fn menu_open(ctx: &egui::Context) -> bool {
     let s = state(ctx);
-    s.configuration_menu || s.context_menu
+    s.configuration_menu || s.context_menu.is_some()
 }
 pub fn toggle(ctx: &egui::Context) {
     toggle_target(ctx, Target::Basic);
@@ -117,7 +135,7 @@ pub(crate) fn cancel(ctx: &egui::Context) {
     let mut s = state(ctx);
     s.drag = None;
     s.configuration_menu = false;
-    s.context_menu = false;
+    s.context_menu = None;
     s.generation += 1;
     store(ctx, s);
 }
@@ -149,6 +167,20 @@ pub fn configure(ctx: &egui::Context, mut configuration: Configuration) {
 pub fn dragging(ctx: &egui::Context) -> bool {
     state(ctx).drag.is_some()
 }
+/// The photo whose drag or settings menu is in progress.
+pub fn held_photo(ctx: &egui::Context) -> Option<PathBuf> {
+    let s = state(ctx);
+    s.drag.map(|drag| drag.path).or(s.context_menu)
+}
+/// Record the dragged photo's recipe after the drag's edits, so later frames
+/// recognize it as the drag's own change.
+pub fn edited(ctx: &egui::Context, settings: &Settings) {
+    let mut s = state(ctx);
+    if let Some(drag) = &mut s.drag {
+        drag.expected = settings.clone();
+        store(ctx, s);
+    }
+}
 pub fn button(ui: &mut egui::Ui) {
     let mut s = state(ui.ctx());
     let (toggle, opened) = settings::tools(ui, active(ui.ctx()), &mut s.configuration);
@@ -179,7 +211,7 @@ pub fn receive(ctx: &egui::Context, reply: ColorPickReply) {
                                 ],
                                 ..Default::default()
                             };
-                            drag.range = drag.original.advanced.push(range);
+                            drag.range = drag.ranges.push(range);
                             if let Some(index) = drag.range {
                                 super::advanced_color::select(ctx, index);
                                 drag.feedback = Some(crate::activity::Event::Operation(
@@ -220,28 +252,20 @@ pub fn receive(ctx: &egui::Context, reply: ColorPickReply) {
     store(ctx, s);
 }
 
-fn adjusted(
-    original: ColorEditorControls,
-    weights: [f32; 8],
-    channel: Channel,
-    amount: f32,
-) -> ColorEditorControls {
-    if amount == 0. {
-        return original;
-    }
-    let mut result = original;
-    for (band, weight) in result.bands.iter_mut().zip(weights) {
-        if weight == 0. {
-            continue;
-        }
-        let value = match channel {
-            Channel::Hue => &mut band.hue,
-            Channel::Lightness => &mut band.lightness,
-            Channel::Saturation => &mut band.saturation,
-        };
-        *value = adjusted_amount(*value, channel, amount * weight);
-    }
-    result
+/// Relative edits that move each weighted band by its share of `amount`, so
+/// every photo moves by the same amount and clamps at its own limits.
+fn band_edits(weights: [f32; 8], channel: Channel, amount: f32) -> impl Iterator<Item = Edit> {
+    let (name, range, mapping) = channel.control();
+    weights
+        .into_iter()
+        .enumerate()
+        .filter(move |(_, weight)| *weight != 0. && amount != 0.)
+        .map(move |(band, weight)| Edit::Number {
+            pointer: format!("/photographic/color_editor/bands/{band}/{name}"),
+            change: NumberChange::Relative(f64::from(amount * weight)),
+            range,
+            mapping,
+        })
 }
 
 fn adjusted_amount(original: f32, channel: Channel, amount: f32) -> f32 {
@@ -249,7 +273,6 @@ fn adjusted_amount(original: f32, channel: Channel, amount: f32) -> f32 {
         return original;
     }
     if matches!(channel, Channel::Saturation) {
-        use foveonic::render::PerceptualControls;
         let range = PerceptualControls::SATURATION_CONTROL_RANGE;
         PerceptualControls::saturation_from_control(
             (PerceptualControls::saturation_to_control(original) + amount)
@@ -262,24 +285,23 @@ fn adjusted_amount(original: f32, channel: Channel, amount: f32) -> f32 {
 
 /// The pointer response and normalized position use the viewport's actual painted geometry.
 /// Pending picks retain the gesture baseline, including when the mouse is released first.
+/// Returns the gesture's edits for every editing photo. An Advanced pick adds
+/// a range only when every editing photo has the same range list (`shared_ranges`).
 pub fn photo(
     ui: &egui::Ui,
     response: &egui::Response,
     uv: Option<[f32; 2]>,
     path: &Path,
-    settings: &mut Settings,
+    settings: &Settings,
     allowed: bool,
-) -> (bool, Option<ColorPickRequest>) {
-    if !settings.color_editor_enabled {
-        exit(ui.ctx());
-        return (false, None);
-    }
+    shared_ranges: bool,
+) -> (Vec<Edit>, Option<ColorPickRequest>) {
     let mut s = state(ui.ctx());
-    if (!active(ui.ctx()) && s.drag.is_none()) || !allowed {
+    if (!active(ui.ctx()) && s.drag.is_none()) || !allowed || !settings.color_editor_enabled {
         s.drag = None;
-        s.context_menu = false;
+        s.context_menu = None;
         store(ui.ctx(), s);
-        return (false, None);
+        return (Vec::new(), None);
     }
     let (down, position, alt, pan) = ui.input(|i| {
         (
@@ -292,14 +314,14 @@ pub fn photo(
     if active(ui.ctx()) {
         response.context_menu(|ui| settings::controls(ui, &mut s.configuration));
     }
-    s.context_menu = active(ui.ctx()) && response.context_menu_opened();
+    s.context_menu = (active(ui.ctx()) && response.context_menu_opened()).then(|| path.to_owned());
     if active(ui.ctx()) && response.hovered() && !pan {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     if pan && active(ui.ctx()) {
         s.drag = None;
         store(ui.ctx(), s);
-        return (false, None);
+        return (Vec::new(), None);
     }
     let mut request = None;
     if s.drag
@@ -317,7 +339,15 @@ pub fn photo(
         s.drag = None;
     }
     if active(ui.ctx()) && pressed && response.is_pointer_button_down_on() && !pan {
-        if let (Some(uv), Some(anchor)) = (uv, position) {
+        if s.target == Target::Advanced && !shared_ranges {
+            crate::activity::communicate(
+                ui.ctx(),
+                crate::activity::Event::Error(
+                    "Pick a color range when the editing photographs have the same range list"
+                        .into(),
+                ),
+            );
+        } else if let (Some(uv), Some(anchor)) = (uv, position) {
             s.generation += 1;
             s.drag = Some(Drag {
                 token: s.generation,
@@ -330,7 +360,8 @@ pub fn photo(
                 moved: false,
                 released: false,
                 amounts: [0.; 3],
-                original: settings.photographic.color_editor,
+                applied: None,
+                ranges: settings.photographic.color_editor.advanced,
                 expected: settings.clone(),
                 weights: None,
                 feedback: None,
@@ -348,7 +379,7 @@ pub fn photo(
             });
         }
     }
-    let mut changed = false;
+    let mut edits = Vec::new();
     let mono = settings.is_monochrome();
     if let Some(drag) = &mut s.drag {
         let previous = drag.position;
@@ -378,19 +409,26 @@ pub fn photo(
             }
         }
         if let Some(weights) = drag.weights {
-            let mut controls = drag.original;
+            let applied = drag.applied.unwrap_or_default();
             match drag.target {
                 Target::Basic if drag.moved => {
                     for channel in Channel::ALL {
                         if !mono || matches!(channel, Channel::Lightness) {
-                            controls =
-                                adjusted(controls, weights, channel, drag.amounts[channel.index()]);
+                            let i = channel.index();
+                            edits.extend(band_edits(
+                                weights,
+                                channel,
+                                drag.amounts[i] - applied[i],
+                            ));
                         }
                     }
+                    drag.applied = Some(drag.amounts);
                 }
-                Target::Advanced => {
+                // The range list is shared, so the whole list is set on every photo.
+                Target::Advanced if drag.applied != Some(drag.amounts) => {
                     if let Some(index) = drag.range {
-                        let adjustment = &mut controls.advanced.ranges[index].adjustment;
+                        let mut ranges = drag.ranges;
+                        let adjustment = &mut ranges.ranges[index].adjustment;
                         for (channel, value) in [
                             (Channel::Hue, &mut adjustment.hue),
                             (Channel::Saturation, &mut adjustment.saturation),
@@ -401,13 +439,12 @@ pub fn photo(
                                     adjusted_amount(*value, channel, drag.amounts[channel.index()]);
                             }
                         }
+                        edits.push(Edit::set(field::COLOR_RANGES, &ranges));
+                        drag.applied = Some(drag.amounts);
                     }
                 }
                 _ => {}
             }
-            changed = settings.photographic.color_editor != controls;
-            settings.photographic.color_editor = controls;
-            drag.expected = settings.clone();
         }
         drag.released |= !down;
         if drag.released {
@@ -418,7 +455,7 @@ pub fn photo(
         }
     }
     store(ui.ctx(), s);
-    (changed, request)
+    (edits, request)
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@
       "flag": "MULTI",
       "terminal": "multi-choice",
       "minimum": 8,
-      "evidence": "Asserts selection, relative edits, retained textures and completion; also saves screenshots and JSON."
+      "evidence": "Asserts selection, relative edits, picks on a non-active editing photo reaching every editing photo, retained textures and completion; also saves screenshots and JSON."
     },
     {
       "id": "smoke-fast",

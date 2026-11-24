@@ -48,7 +48,7 @@ impl App {
     /// The drawn layers the lens can place: those with the view's geometry,
     /// quality and calibration. Older edits show while the current ones render.
     pub(crate) fn loupe_images(&self, path: &Path) -> [Option<&RenderResult>; 2] {
-        let Some(view) = self.views.get(path) else {
+        let Some(view) = self.view_images.view(path) else {
             return [None, None];
         };
         self.photo_layers(path)
@@ -57,7 +57,7 @@ impl App {
 
     /// The loupe layer that best covers `visible` with the current edits.
     pub(crate) fn loupe_image(&self, path: &Path, visible: [u32; 4]) -> Option<&RenderResult> {
-        let settings = &self.views.get(path)?.request.settings;
+        let settings = &self.view_images.view(path)?.request.settings;
         self.loupe_images(path)
             .into_iter()
             .flatten()

@@ -8,6 +8,7 @@ pub(crate) mod request;
 pub(crate) mod runtime;
 pub(crate) mod smart;
 mod source_loader;
+pub(crate) mod view_images;
 pub(crate) mod view_plan;
 pub(crate) mod viewport_plan;
 pub(crate) mod views;

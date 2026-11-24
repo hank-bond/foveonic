@@ -22,7 +22,8 @@ struct Estimate {
 }
 #[derive(Clone, Default)]
 struct State {
-    pressed: bool,
+    /// The photo pressed by the gesture that ends when the button is released.
+    pressed: Option<PathBuf>,
     generation: u64,
     pending: Option<Pending>,
     source: Option<PathBuf>,
@@ -72,26 +73,20 @@ pub fn auto_color(ctx: &egui::Context, settings: &Settings) -> Option<[f32; 3]> 
         .filter(|estimate| estimate.settings == estimate_settings(settings))
         .and_then(|estimate| estimate.color)
 }
-pub fn set_auto(ctx: &egui::Context, settings: &mut Settings, automatic: bool) -> bool {
-    let color = if automatic {
-        None
-    } else {
-        auto_color(ctx, settings).or(foveonic::render::DehazeControls::default().shadow)
-    };
-    let changed = settings.dehaze.shadow != color;
-    settings.dehaze.shadow = color;
-    exit(ctx);
-    changed
-}
 pub fn active(ctx: &egui::Context) -> bool {
     photo_tools::selected(ctx) == Tool::Dehaze
 }
 pub fn pending(ctx: &egui::Context) -> bool {
     state(ctx).pending.is_some()
 }
+/// The photo whose press or pick is still in progress.
+pub fn held_photo(ctx: &egui::Context) -> Option<PathBuf> {
+    let s = state(ctx);
+    s.pending.map(|pending| pending.path).or(s.pressed)
+}
 pub(crate) fn cancel(ctx: &egui::Context) {
     let mut s = state(ctx);
-    s.pressed = false;
+    s.pressed = None;
     s.pending = None;
     s.generation += 1;
     store(ctx, s);
@@ -129,23 +124,21 @@ pub fn receive(ctx: &egui::Context, reply: &ColorPickReply) -> bool {
     store(ctx, s);
     true
 }
+/// Returns the picked shadow color.
 pub fn photo(
     ui: &egui::Ui,
     response: &egui::Response,
     uv: Option<[f32; 2]>,
     path: &Path,
-    settings: &mut Settings,
+    settings: &Settings,
     allowed: bool,
-) -> (bool, Option<ColorPickRequest>) {
-    if !settings.corrections_enabled {
-        exit(ui.ctx());
-        return (false, None);
-    }
+) -> (Option<[f32; 3]>, Option<ColorPickRequest>) {
     let mut s = state(ui.ctx());
-    if !allowed {
+    if !allowed || !settings.corrections_enabled {
         s.pending = None;
+        s.pressed = None;
         store(ui.ctx(), s);
-        return (false, None);
+        return (None, None);
     }
     if s.pending
         .as_ref()
@@ -153,13 +146,12 @@ pub fn photo(
     {
         s.pending = None;
     }
-    let mut changed = false;
+    let mut picked = None;
     if let Some(result) = s.pending.as_mut().and_then(|p| p.result.take()) {
         s.pending = None;
         match result {
             Ok(rgb) => {
-                changed = settings.dehaze.shadow != Some(rgb);
-                settings.dehaze.shadow = Some(rgb);
+                picked = Some(rgb);
                 crate::activity::communicate(
                     ui.ctx(),
                     crate::activity::Event::Operation("Haze color selected.".into()),
@@ -175,17 +167,18 @@ pub fn photo(
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     let mut request = None;
-    if s.pressed && ui.input(|i| i.pointer.primary_released()) {
+    if s.pressed.is_some() && ui.input(|i| i.pointer.primary_released()) {
         photo_tools::release(ui.ctx(), Tool::Dehaze);
-        s.pressed = false;
+        s.pressed = None;
     }
     if active(ui.ctx())
         && !pan
         && response.is_pointer_button_down_on()
         && ui.input(|i| i.pointer.primary_pressed())
     {
-        s.pressed = true;
+        // Without a current image the press does nothing, so the tool stays armed.
         if let Some(uv) = uv {
+            s.pressed = Some(path.to_owned());
             s.generation += 1;
             s.pending = Some(Pending {
                 token: s.generation,
@@ -207,7 +200,7 @@ pub fn photo(
         }
     }
     store(ui.ctx(), s);
-    (changed, request)
+    (picked, request)
 }
 
 #[cfg(test)]
@@ -217,13 +210,13 @@ mod tests {
     fn pickers_disarm_on_release_and_finish_the_pending_selection() {
         for advanced in [false, true] {
             let ctx = egui::Context::default();
-            let mut settings = Settings::default();
+            let settings = Settings::default();
             if advanced {
                 crate::editor::direct_color::toggle_advanced(&ctx);
             } else {
                 toggle(&ctx);
             }
-            let frame = |settings: &mut Settings, events: Vec<egui::Event>, time| {
+            let frame = |settings: &Settings, events: Vec<egui::Event>, time| {
                 let mut result = (false, None);
                 let _ = ctx.run(
                     egui::RawInput {
@@ -242,23 +235,26 @@ mod tests {
                                 egui::Sense::click_and_drag(),
                             );
                             result = if advanced {
-                                crate::editor::direct_color::photo(
+                                let (edits, request) = crate::editor::direct_color::photo(
                                     ui,
                                     &response,
                                     Some([0.5, 0.5]),
                                     Path::new("photo.x3f"),
                                     settings,
                                     true,
-                                )
+                                    true,
+                                );
+                                (!edits.is_empty(), request)
                             } else {
-                                photo(
+                                let (picked, request) = photo(
                                     ui,
                                     &response,
                                     Some([0.5, 0.5]),
                                     Path::new("photo.x3f"),
                                     settings,
                                     true,
-                                )
+                                );
+                                (picked.is_some(), request)
                             };
                         });
                     },
@@ -272,9 +268,9 @@ mod tests {
                 pressed,
                 modifiers: egui::Modifiers::NONE,
             };
-            frame(&mut settings, vec![], 0.);
+            frame(&settings, vec![], 0.);
             let (_, request) = frame(
-                &mut settings,
+                &settings,
                 vec![egui::Event::PointerMoved(position), button(true)],
                 0.1,
             );
@@ -284,7 +280,7 @@ mod tests {
             } else {
                 active(&ctx)
             });
-            frame(&mut settings, vec![button(false)], 0.2);
+            frame(&settings, vec![button(false)], 0.2);
             assert!(!active(&ctx));
             assert!(!crate::editor::direct_color::active(&ctx));
             assert_eq!(photo_tools::selected(&ctx), Tool::Pointer);
@@ -306,46 +302,29 @@ mod tests {
             } else {
                 receive(&ctx, &reply);
             }
-            assert!(frame(&mut settings, vec![], 0.3).0);
+            assert!(frame(&settings, vec![], 0.3).0);
             assert!(!pending(&ctx));
             assert!(!crate::editor::direct_color::dragging(&ctx));
-            assert!(frame(&mut settings, vec![button(true)], 0.4).1.is_none());
+            assert!(frame(&settings, vec![button(true)], 0.4).1.is_none());
         }
     }
     #[test]
-    fn automatic_color_can_be_frozen_adjusted_and_reset_without_losing_precision() {
+    fn the_automatic_color_follows_the_estimated_photo_and_recipe() {
         let ctx = egui::Context::default();
         source(&ctx, Some(Path::new("first.x3f")));
         let mut settings = Settings::default();
         let rgb = [0.12345678, 0.2345679, 0.3456789];
         set_estimate(&ctx, &settings, Some(rgb));
         assert_eq!(auto_color(&ctx, &settings), Some(rgb));
-        assert!(set_auto(&ctx, &mut settings, false));
-        assert_eq!(settings.dehaze.shadow, Some(rgb));
-        settings.dehaze.shadow.as_mut().unwrap()[0] += 0.001;
-        assert_eq!(auto_color(&ctx, &settings), Some(rgb));
-        assert!(set_auto(&ctx, &mut settings, true));
-        assert_eq!(settings.dehaze.shadow, None);
-        assert_eq!(auto_color(&ctx, &settings), Some(rgb));
+        settings.dehaze.shadow = Some([0.5; 3]);
         settings.dehaze.amount = 45.;
         settings.working_scale = foveonic::render::Scale::new(2).unwrap();
         assert_eq!(auto_color(&ctx, &settings), Some(rgb));
         settings.white_balance = "Shade".into();
         assert_eq!(auto_color(&ctx, &settings), None);
-        assert!(set_auto(&ctx, &mut settings, false));
-        assert_eq!(
-            settings.dehaze.shadow,
-            foveonic::render::DehazeControls::default().shadow
-        );
         set_estimate(&ctx, &settings, Some(rgb));
         source(&ctx, Some(Path::new("second.x3f")));
         assert_eq!(auto_color(&ctx, &settings), None);
-        set_estimate(&ctx, &settings, None);
-        assert!(!set_auto(&ctx, &mut settings, false));
-        assert_eq!(
-            settings.dehaze.shadow,
-            foveonic::render::DehazeControls::default().shadow
-        );
     }
     #[test]
     fn changed_photos_and_recipes_cannot_receive_old_shadow_colors() {
@@ -382,7 +361,7 @@ mod tests {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let (_, response) = ui
                         .allocate_exact_size(egui::vec2(200., 200.), egui::Sense::click_and_drag());
-                    let (changed, request) = photo(
+                    let (picked, request) = photo(
                         ui,
                         &response,
                         None,
@@ -391,17 +370,13 @@ mod tests {
                         } else {
                             "first.x3f"
                         }),
-                        &mut current,
+                        &current,
                         true,
                     );
-                    assert_eq!(changed, !photo_changed && !recipe_changed);
+                    assert_eq!(picked.is_some(), !photo_changed && !recipe_changed);
                     assert!(request.is_none());
                 });
             });
-            assert_eq!(
-                current.dehaze.shadow.is_some(),
-                !photo_changed && !recipe_changed
-            );
             exit(&ctx);
             assert!(!active(&ctx));
         }

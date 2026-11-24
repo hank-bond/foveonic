@@ -1772,7 +1772,7 @@ impl Scenario {
                 if self.config.name != Case::PrefetchedSelection {
                     // Start cold: no work and no images to reuse.
                     app.worker.clear_all();
-                    app.images.clear();
+                    app.view_images.clear_images();
                 }
                 app.browser.set_actions(vec![(
                     crate::shortcuts::BrowserAction::SelectAll,
@@ -1869,9 +1869,9 @@ impl Scenario {
                 "expected_exposure":*initial + 0.25_f32,"old_presented_revision":frame.request.id,
                 "old_task_revision":frame.diagnostic_task.revision}));
         }
-        let before = app.last_request_id;
+        let before = app.view_images.last_request_id();
         apply_exposure(app, 0.25);
-        let after = app.last_request_id;
+        let after = app.view_images.last_request_id();
         if after <= before {
             return Err("shutdown edit did not advance the requested revision".into());
         }

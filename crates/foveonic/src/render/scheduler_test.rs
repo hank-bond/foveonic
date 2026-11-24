@@ -10,6 +10,9 @@ struct TestJob {
     key: PhotoKey,
     /// The photo is not resident until the job loads it alone.
     loads: bool,
+    purpose: Purpose,
+    exclusive: bool,
+    rank: usize,
 }
 
 impl Job for TestJob {
@@ -18,7 +21,13 @@ impl Job for TestJob {
         &self.target
     }
     fn purpose(&self) -> Purpose {
-        Purpose::Edit
+        self.purpose
+    }
+    fn exclusive(&self) -> bool {
+        self.exclusive
+    }
+    fn rank(&self) -> usize {
+        self.rank
     }
     fn photo(&self) -> Option<&Path> {
         Some(&self.photo)
@@ -30,6 +39,7 @@ struct RecordingHost {
     /// Each start attempt with whether the job would run alone.
     starts: Vec<(&'static str, bool)>,
     rendered: Vec<&'static str>,
+    yielded: Vec<&'static str>,
     waiting: Option<&'static str>,
 }
 
@@ -64,7 +74,9 @@ impl Host<TestJob> for RecordingHost {
         Interruption::Continue
     }
     fn progress(&self, _: &TestJob, _: RenderProgress) {}
-    fn yielded(&mut self, _: &TestJob) {}
+    fn yielded(&mut self, job: &TestJob) {
+        self.yielded.push(job.target);
+    }
     fn finish(&mut self, _: &mut Engine, job: TestJob, outcome: Outcome) {
         assert!(
             matches!(outcome, Outcome::Rendered(_)),
@@ -98,7 +110,18 @@ fn job(target: &'static str, photo: u64, loads: bool) -> TestJob {
             resolution: Resolution::Native,
         },
         loads,
+        purpose: Purpose::Edit,
+        exclusive: false,
+        rank: 0,
     }
+}
+
+fn admitted(scheduler: &Scheduler<TestJob>) -> Vec<&'static str> {
+    scheduler.admitted().map(|job| job.target).collect()
+}
+
+fn queued(scheduler: &Scheduler<TestJob>) -> Vec<&'static str> {
+    scheduler.queued().map(|job| job.target).collect()
 }
 
 #[test]
@@ -110,8 +133,7 @@ fn one_job_per_photo_and_loading_waits_until_alone() {
     scheduler.submit(job("same photo", 1, false));
     scheduler.submit(job("loads", 2, true));
     assert!(scheduler.tick(&mut host));
-    let admitted: Vec<_> = scheduler.admitted().map(|job| job.target).collect();
-    assert_eq!(admitted, ["first"]);
+    assert_eq!(admitted(&scheduler), ["first"]);
     assert_eq!(host.starts, [("first", true), ("loads", false)]);
     while scheduler.tick(&mut host) {}
     assert!(scheduler.is_idle());
@@ -139,4 +161,115 @@ fn waiting_job_stays_queued_until_ready() {
     assert!(!scheduler.tick(&mut host));
     assert_eq!(host.starts, [("waiting", true)]);
     assert_eq!(scheduler.queued().count(), 1);
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn lowering_the_target_retires_the_newest_submitted_job() {
+    let mut scheduler = scheduler();
+    let mut host = RecordingHost::default();
+    // The older job ranks lower, so it is admitted after the newer one.
+    scheduler.submit(TestJob {
+        rank: 1,
+        ..job("older", 1, false)
+    });
+    scheduler.submit(job("newer", 2, false));
+    assert!(scheduler.tick(&mut host));
+    assert_eq!(admitted(&scheduler), ["newer", "older"]);
+    scheduler.set_target(0);
+    assert!(scheduler.tick(&mut host));
+    assert_eq!(admitted(&scheduler), ["older"]);
+    assert_eq!(queued(&scheduler), ["newer"]);
+    while scheduler.tick(&mut host) {}
+    assert_eq!(host.rendered, ["older", "newer"]);
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn exclusive_job_starts_after_admitted_jobs_finish() {
+    let mut scheduler = scheduler();
+    let mut host = RecordingHost::default();
+    scheduler.submit(job("first", 1, false));
+    scheduler.submit(TestJob {
+        exclusive: true,
+        ..job("exclusive", 2, false)
+    });
+    assert!(scheduler.tick(&mut host));
+    assert_eq!(admitted(&scheduler), ["first"]);
+    while scheduler.tick(&mut host) {}
+    assert_eq!(host.starts, [("first", true), ("exclusive", true)]);
+    assert_eq!(host.rendered, ["first", "exclusive"]);
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn higher_tier_demand_retires_every_lower_tier_job() {
+    let mut scheduler = scheduler();
+    let mut host = RecordingHost::default();
+    for (target, photo) in [("thumbnail 1", 1), ("thumbnail 2", 2)] {
+        scheduler.submit(TestJob {
+            purpose: Purpose::Thumbnail,
+            ..job(target, photo, false)
+        });
+    }
+    assert!(scheduler.tick(&mut host));
+    assert_eq!(admitted(&scheduler), ["thumbnail 1", "thumbnail 2"]);
+    scheduler.submit(job("edit", 1, false));
+    assert!(scheduler.tick(&mut host));
+    assert_eq!(admitted(&scheduler), ["edit"]);
+    let mut retired = queued(&scheduler);
+    retired.sort();
+    assert_eq!(retired, ["thumbnail 1", "thumbnail 2"]);
+    host.yielded.sort();
+    assert_eq!(host.yielded, ["thumbnail 1", "thumbnail 2"]);
+    while scheduler.tick(&mut host) {}
+    assert_eq!(host.rendered[0], "edit");
+    assert_eq!(host.rendered.len(), 3);
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn width_cap_limits_jobs_running_together() {
+    let mut scheduler = scheduler();
+    let mut host = RecordingHost::default();
+    scheduler.set_width_cap(Some(1));
+    scheduler.submit(job("first", 1, false));
+    scheduler.submit(job("second", 2, false));
+    while scheduler.tick(&mut host) {}
+    assert_eq!(host.rendered, ["first", "second"]);
+    assert_eq!(scheduler.widest(), 1);
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn speculative_peer_never_drops_cached_images() {
+    const CACHED_BYTES: u64 = 1 << 50;
+    // An edit peer in the same state drops the cached image to run, which shows
+    // the peer fits only without it.
+    for (purpose, peer_runs) in [(Purpose::Speculative, false), (Purpose::Edit, true)] {
+        let mut scheduler = scheduler();
+        let mut host = RecordingHost::default();
+        let peer = |target, photo| TestJob {
+            purpose,
+            ..job(target, photo, false)
+        };
+        scheduler.submit(peer("first", 1));
+        assert!(scheduler.tick(&mut host));
+        assert_eq!(admitted(&scheduler), ["first"]);
+        scheduler.set_target(CACHED_BYTES / 2);
+        let mut reservation = MemoryReservation::default();
+        reservation.exclusive_bytes = CACHED_BYTES;
+        let _cached = scheduler.image_cache.insert((), reservation);
+        scheduler.submit(peer("second", 2));
+        assert!(scheduler.tick(&mut host));
+        assert_eq!(host.starts, [("first", true), ("second", false)]);
+        let cached = scheduler.image_cache.reservation().exclusive_bytes;
+        if peer_runs {
+            assert_eq!(admitted(&scheduler), ["first", "second"]);
+            assert_eq!(cached, 0);
+        } else {
+            assert_eq!(queued(&scheduler), ["second"]);
+            assert_eq!(cached, CACHED_BYTES);
+        }
+    }
 }

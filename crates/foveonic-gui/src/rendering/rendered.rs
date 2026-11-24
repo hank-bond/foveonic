@@ -2,6 +2,7 @@
 
 use super::{matching::same_delivery_request, request::RenderRequest, view_plan::Rendered};
 use crate::editor::Rendition;
+use foveonic::{render::Settings, source::SourceOrigin};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -36,6 +37,12 @@ impl ImageKey {
 pub(crate) trait Stored: Rendered {
     fn key(&self) -> ImageKey;
     fn patch(&self) -> bool;
+    /// The source version it was rendered from.
+    fn origin(&self) -> &SourceOrigin;
+    /// The native window of the image, which visible pixels are measured in.
+    fn window(&self) -> [u32; 4];
+    /// Whether the photo supports regional patches with these settings.
+    fn supports_regions(&self, settings: &Settings) -> bool;
 }
 
 /// One key's whole image and patch.
@@ -143,6 +150,15 @@ impl Stored for super::worker::RenderResult {
     }
     fn patch(&self) -> bool {
         self.request.detail
+    }
+    fn origin(&self) -> &SourceOrigin {
+        &self.origin
+    }
+    fn window(&self) -> [u32; 4] {
+        self.display_window(false)
+    }
+    fn supports_regions(&self, settings: &Settings) -> bool {
+        settings.regional_preview_available(&self.artifact.metadata)
     }
 }
 

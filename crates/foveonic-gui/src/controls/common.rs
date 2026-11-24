@@ -480,6 +480,8 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                                 let mut response = ui.add(
                                     crate::widgets::mixed_drag_value(value, mixed && !focused)
                                         .range(range.clone())
+                                        // Drawing a stored value must never change it.
+                                        .clamp_existing_to_range(false)
                                         .speed(if T::INTEGRAL { 1. } else { 0.01 })
                                         // Shift-drags add a decimal; keep them to the shown ones.
                                         .max_decimals(crate::widgets::VALUE_DECIMAL_PLACES),
@@ -498,20 +500,19 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
                         *auto.active = false;
                     }
                 }
-                // Refresh the cached text after clamping so the value box does not show
-                // the overshoot even though the stored setting is already in range.
-                let mut accepted = value.to_f64();
-                if let Some(step) = step {
-                    accepted = ((accepted - step_origin) / step).round() * step + step_origin;
-                }
-                let accepted = accepted.clamp(range.start().to_f64(), range.end().to_f64());
-                let accepted = T::from_f64(accepted);
-                if !unresolved && value.to_f64() != accepted.to_f64() {
-                    *value = accepted;
-                    ui.data_mut(|data| data.remove::<String>(response.id));
-                    ui.ctx().request_repaint();
-                }
                 if response.changed() {
+                    // Refresh the cached text after snapping so the value box does not
+                    // show the typed overshoot.
+                    let mut accepted = value.to_f64();
+                    if let Some(step) = step {
+                        accepted = ((accepted - step_origin) / step).round() * step + step_origin;
+                    }
+                    let accepted = accepted.clamp(range.start().to_f64(), range.end().to_f64());
+                    if value.to_f64() != accepted {
+                        *value = T::from_f64(accepted);
+                        ui.data_mut(|data| data.remove::<String>(response.id));
+                        ui.ctx().request_repaint();
+                    }
                     crate::multi_edit_controls::number(
                         ui.ctx(),
                         crate::multi_edit_controls::NumberChange::Set(value.to_f64()),
@@ -547,45 +548,40 @@ pub(super) fn adjustment_row<T: egui::emath::Numeric>(
     toggled || before != value.to_f64()
 }
 
-pub(super) fn rendering(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    crate::multi_edit_controls::choice(
-        ui,
-        "/rendering",
-        &mut settings.rendering,
-        |ui, rendering| {
-            let mut changed = false;
-            ui.horizontal(|ui| {
-                help::control(label(ui, "Rendering"), "Rendering");
-                let mixed = crate::multi_edit_controls::mixed(ui.ctx());
-                for (value, label) in [
-                    (Rendering::Color, "Color"),
-                    (Rendering::Monochrome, "Monochrome"),
-                ] {
-                    if help::control(
-                        crate::widgets::button(
-                            ui,
-                            label,
-                            !mixed && *rendering == value,
-                            egui::vec2(if value == Rendering::Color { 55. } else { 100. }, 22.),
-                        ),
-                        "Rendering",
-                    )
-                    .clicked()
-                    {
-                        crate::multi_edit_controls::choice_clicked(ui.ctx());
-                        changed |= *rendering != value || mixed;
-                        *rendering = value;
-                    }
+pub(super) fn rendering(ui: &mut egui::Ui, settings: &Settings) -> bool {
+    crate::multi_edit_controls::choice(ui, "/rendering", settings.rendering, |ui, rendering| {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            help::control(label(ui, "Rendering"), "Rendering");
+            let mixed = crate::multi_edit_controls::mixed(ui.ctx());
+            for (value, label) in [
+                (Rendering::Color, "Color"),
+                (Rendering::Monochrome, "Monochrome"),
+            ] {
+                if help::control(
+                    crate::widgets::button(
+                        ui,
+                        label,
+                        !mixed && *rendering == value,
+                        egui::vec2(if value == Rendering::Color { 55. } else { 100. }, 22.),
+                    ),
+                    "Rendering",
+                )
+                .clicked()
+                {
+                    crate::multi_edit_controls::choice_clicked(ui.ctx());
+                    changed |= *rendering != value || mixed;
+                    *rendering = value;
                 }
-            });
-            changed
-        },
-    )
+            }
+        });
+        changed
+    })
 }
 
 pub(super) fn color_mode(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
     metadata: Option<&Metadata>,
     active: bool,
 ) -> bool {
@@ -597,20 +593,20 @@ pub(super) fn color_mode(
             metadata,
             "ColorModeCompensations",
             ("Color mode", "Color mode", false),
-            &mut settings.color_mode,
+            settings.color_mode.clone(),
             true,
         )
 }
 
 pub(super) fn white_balance(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
     metadata: Option<&Metadata>,
     enabled: bool,
 ) -> bool {
     section_header(ui, EditingSection::WhiteBalance, "White Balance", None);
     let column = LabelColumn::new(ui);
-    let mut choice = if settings.white_balance_bias.neutral.is_some() {
+    let choice = if settings.white_balance_bias.neutral.is_some() {
         "Custom".to_owned()
     } else {
         settings.white_balance.clone()
@@ -621,32 +617,24 @@ pub(super) fn white_balance(
         metadata,
         "WhiteBalanceGains",
         ("Mode", "White balance", !settings.is_monochrome()),
-        &mut choice,
+        choice,
         enabled,
     );
     if changed {
-        settings.white_balance = choice;
-        settings.white_balance_bias = Default::default();
+        crate::multi_edit_controls::set(
+            ui.ctx(),
+            crate::multi_edit_controls::field::WHITE_BALANCE_BIAS,
+            &Default::default(),
+        );
         crate::editor::white_balance::exit(ui.ctx());
     }
+    let mut bias = settings.white_balance_bias;
     ui.add_enabled_ui(!settings.is_monochrome(), |ui| {
         changed |= crate::multi_edit_controls::field(ui, "/white_balance_bias/warmth", |ui| {
-            column.adjustment(
-                ui,
-                ("Warmth", "Warmth"),
-                &mut settings.white_balance_bias.warmth,
-                -1. ..=1.,
-                0.,
-            )
+            column.adjustment(ui, ("Warmth", "Warmth"), &mut bias.warmth, -1. ..=1., 0.)
         });
         changed |= crate::multi_edit_controls::field(ui, "/white_balance_bias/tint", |ui| {
-            column.adjustment(
-                ui,
-                ("Tint", "Tint"),
-                &mut settings.white_balance_bias.tint,
-                -1. ..=1.,
-                0.,
-            )
+            column.adjustment(ui, ("Tint", "Tint"), &mut bias.tint, -1. ..=1., 0.)
         });
     });
     changed
@@ -658,7 +646,7 @@ fn camera_choice(
     metadata: Option<&Metadata>,
     key: &str,
     labels: (&str, &str, bool),
-    value: &mut String,
+    value: String,
     enabled: bool,
 ) -> bool {
     let pointer = if key == "WhiteBalanceGains" {
@@ -755,7 +743,7 @@ fn camera_choice_widget(
 
 pub(super) fn tone(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
     compensation: Option<foveonic::source::CaptureExposureCompensation>,
 ) -> bool {
     tone_with_exposure_range(ui, settings, -4. ..=4., compensation)
@@ -763,23 +751,80 @@ pub(super) fn tone(
 
 pub(super) fn tone_with_exposure_range(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
     exposure_range: RangeInclusive<f32>,
     compensation: Option<foveonic::source::CaptureExposureCompensation>,
 ) -> bool {
     tone_rows(ui, settings, exposure_range, compensation)
 }
 
+/// Draw a section's bypass switch and push its change.
+pub(super) fn section_switch(
+    ui: &mut egui::Ui,
+    section: EditingSection,
+    title: &str,
+    field: crate::multi_edit_controls::Field<bool>,
+    enabled: bool,
+) -> bool {
+    section_switch_with(ui, section, title, field, enabled, |_, _| {})
+}
+
+pub(super) fn section_switch_with(
+    ui: &mut egui::Ui,
+    section: EditingSection,
+    title: &str,
+    field: crate::multi_edit_controls::Field<bool>,
+    mut enabled: bool,
+    contents: impl FnOnce(&mut egui::Ui, bool),
+) -> bool {
+    let changed = section_header_with(ui, section, title, Some(&mut enabled), contents);
+    if changed {
+        crate::multi_edit_controls::set(ui.ctx(), field, &enabled);
+    }
+    changed
+}
+
+/// Draw a checkbox for `field` and push its change.
+pub(super) fn checkbox(
+    ui: &mut egui::Ui,
+    label: &str,
+    field: crate::multi_edit_controls::Field<bool>,
+    mut value: bool,
+) -> egui::Response {
+    let response = crate::widgets::checkbox(ui, &mut value, label);
+    if response.changed() {
+        crate::multi_edit_controls::set(ui.ctx(), field, &value);
+    }
+    response
+}
+
+impl LabelColumn {
+    /// A checkbox in the label column for `field`, which pushes its change.
+    pub(super) fn switch(
+        self,
+        ui: &mut egui::Ui,
+        label: &str,
+        field: crate::multi_edit_controls::Field<bool>,
+        mut value: bool,
+    ) -> egui::Response {
+        let response = self.toggle(ui, label, &mut value);
+        if response.changed() {
+            crate::multi_edit_controls::set(ui.ctx(), field, &value);
+        }
+        response
+    }
+}
+
 fn exposure_row(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
     column: LabelColumn,
     range: RangeInclusive<f32>,
     compensation: Option<foveonic::source::CaptureExposureCompensation>,
 ) -> bool {
     let calculated = compensation.and_then(|c| settings.exposure_auto_compensation.inverse(c));
-    let was_auto = settings.exposure_auto;
-    let mut value = if was_auto {
+    let mut automatic = settings.exposure_auto;
+    let mut value = if automatic {
         calculated.unwrap_or(0.)
     } else {
         settings.exposure
@@ -795,31 +840,37 @@ fn exposure_row(
             0.,
             RowControls {
                 automatic: Some(Automatic {
-                    active: &mut settings.exposure_auto,
+                    active: &mut automatic,
                     calculated: calculated.map(f64::from),
                 }),
                 ..column.row_controls("Exposure")
             },
         )
     });
-    if !settings.exposure_auto {
-        settings.exposure = value;
+    // The store gives each photo leaving Auto its own calculated exposure.
+    let toggled = automatic != settings.exposure_auto;
+    if toggled {
+        crate::multi_edit_controls::set(
+            ui.ctx(),
+            crate::multi_edit_controls::field::EXPOSURE_AUTO,
+            &automatic,
+        );
     }
-    changed || was_auto != settings.exposure_auto
+    changed || toggled
 }
 
 fn tone_rows(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
     exposure_range: RangeInclusive<f32>,
     compensation: Option<foveonic::source::CaptureExposureCompensation>,
 ) -> bool {
-    let mut changed = false;
-    changed |= section_header(
+    let mut changed = section_switch(
         ui,
         EditingSection::Tone,
         "Tone",
-        Some(&mut settings.tone_enabled),
+        crate::multi_edit_controls::field::TONE_ENABLED,
+        settings.tone_enabled,
     );
     ui.add_enabled_ui(settings.tone_enabled, |ui| {
         let column = LabelColumn::new(ui);
@@ -827,7 +878,7 @@ fn tone_rows(
             ui,
             "Tone method",
             "Method",
-            &mut settings.photographic.tone_method,
+            settings.photographic.tone_method,
         );
         let universal =
             settings.photographic.tone_method == foveonic::render::PhotographicMethod::Universal;
@@ -836,7 +887,7 @@ fn tone_rows(
             crate::multi_edit_controls::choice(
                 ui,
                 "/photographic/base_response",
-                &mut settings.photographic.base_response,
+                settings.photographic.base_response,
                 |ui, selected| {
                     ui.horizontal(|ui| {
                         help::control(
@@ -864,29 +915,24 @@ fn tone_rows(
             );
         }
         changed |= exposure_row(ui, settings, column, exposure_range, compensation);
+        let mut photographic = settings.photographic;
+        let mut tone = settings.tone;
         if universal {
             ui.weak("Dynamic range");
+            let mut tonal_ranges = settings.tonal_ranges;
             for (label, pointer, value) in [
                 (
                     "Shadows",
                     "/tonal_ranges/shadows",
-                    &mut settings.tonal_ranges.shadows,
+                    &mut tonal_ranges.shadows,
                 ),
                 (
                     "Highlights",
                     "/tonal_ranges/highlights",
-                    &mut settings.tonal_ranges.highlights,
+                    &mut tonal_ranges.highlights,
                 ),
-                (
-                    "Blacks",
-                    "/tonal_ranges/blacks",
-                    &mut settings.tonal_ranges.blacks,
-                ),
-                (
-                    "Whites",
-                    "/tonal_ranges/whites",
-                    &mut settings.tonal_ranges.whites,
-                ),
+                ("Blacks", "/tonal_ranges/blacks", &mut tonal_ranges.blacks),
+                ("Whites", "/tonal_ranges/whites", &mut tonal_ranges.whites),
             ] {
                 changed |= ui
                     .push_id(("tonal-ranges", label), |ui| {
@@ -907,7 +953,7 @@ fn tone_rows(
                 column.adjustment(
                     ui,
                     ("Brightness", "Brightness"),
-                    &mut settings.photographic.brightness,
+                    &mut photographic.brightness,
                     -1. ..=1.,
                     0.,
                 )
@@ -917,7 +963,7 @@ fn tone_rows(
             column.adjustment(
                 ui,
                 ("Contrast", "Contrast"),
-                &mut settings.tone.contrast,
+                &mut tone.contrast,
                 -2. ..=2.,
                 0.,
             )
@@ -928,7 +974,7 @@ fn tone_rows(
                     column.adjustment(
                         ui,
                         ("Local contrast", "Clarity"),
-                        &mut settings.photographic.local_contrast,
+                        &mut photographic.local_contrast,
                         -1. ..=1.,
                         0.,
                     )
@@ -936,12 +982,8 @@ fn tone_rows(
         }
         if !universal {
             for (label, pointer, value) in [
-                ("Shadows", "/tone/shadows", &mut settings.tone.shadows),
-                (
-                    "Highlights",
-                    "/tone/highlights",
-                    &mut settings.tone.highlights,
-                ),
+                ("Shadows", "/tone/shadows", &mut tone.shadows),
+                ("Highlights", "/tone/highlights", &mut tone.highlights),
             ] {
                 changed |= column.parameter(ui, pointer, (label, label), value, -2. ..=2., 0.);
             }
@@ -952,7 +994,7 @@ fn tone_rows(
 
 pub(super) fn sharpening(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
     metadata: Option<&Metadata>,
 ) -> bool {
     sharpening_with_range(ui, settings, metadata, 0. ..=2.)
@@ -960,16 +1002,16 @@ pub(super) fn sharpening(
 
 pub(super) fn sharpening_with_range(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
     metadata: Option<&Metadata>,
     reference_range: RangeInclusive<f32>,
 ) -> bool {
-    let mut changed = false;
-    changed |= section_header(
+    let mut changed = section_switch(
         ui,
         EditingSection::Sharpening,
         "Sharpening",
-        Some(&mut settings.sharpening_enabled),
+        crate::multi_edit_controls::field::SHARPENING_ENABLED,
+        settings.sharpening_enabled,
     );
     let calculated = metadata.and_then(|metadata| {
         let mut automatic = settings.clone();
@@ -982,12 +1024,12 @@ pub(super) fn sharpening_with_range(
             ui,
             "Sharpening method",
             "Method",
-            &mut settings.photographic.sharpening.method,
+            settings.photographic.sharpening.method,
         );
         if settings.photographic.sharpening.method
             == foveonic::render::PhotographicMethod::Universal
         {
-            let sharp = &mut settings.photographic.sharpening;
+            let mut sharp = settings.photographic.sharpening;
             let column = LabelColumn::new(ui);
             changed |=
                 crate::multi_edit_controls::field(ui, "/photographic/sharpening/amount", |ui| {
@@ -1046,11 +1088,12 @@ pub(super) fn sharpening_with_range(
             return;
         }
         let column = LabelColumn::new(ui);
+        let mut amount = settings.sharpen_amount;
         changed |= crate::multi_edit_controls::field(ui, "/sharpen_amount", |ui| {
             automatic_adjustment(
                 ui,
                 "Sharpen",
-                &mut settings.sharpen_amount,
+                &mut amount,
                 *reference_range.start()..=reference_range.end().max(calculated.unwrap_or(0.)),
                 0.,
                 calculated,
@@ -1061,43 +1104,47 @@ pub(super) fn sharpening_with_range(
     changed
 }
 
-pub(super) fn pixel_corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let mut changed = false;
-    changed |= help::control(
-        crate::widgets::checkbox(ui, &mut settings.despeckle, "Speckles"),
+pub(super) fn pixel_corrections(ui: &mut egui::Ui, settings: &Settings) -> bool {
+    let changed = help::control(
+        checkbox(
+            ui,
+            "Speckles",
+            crate::multi_edit_controls::field::DESPECKLE,
+            settings.despeckle,
+        ),
         "Speckles",
     )
     .changed();
     changed | bad_pixels(ui, settings)
 }
 
-pub(super) fn bad_pixels(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let mut changed = false;
+pub(super) fn bad_pixels(ui: &mut egui::Ui, settings: &Settings) -> bool {
     let mut repair = settings.repair.is_some();
-    if help::control(
+    let changed = help::control(
         crate::widgets::checkbox(ui, &mut repair, "Bad pixels"),
         "Bad pixels",
     )
-    .changed()
-    {
-        settings.repair = repair.then_some(RepairThreshold::Camera);
-        changed = true;
+    .changed();
+    if changed {
+        crate::multi_edit_controls::set(
+            ui.ctx(),
+            crate::multi_edit_controls::field::REPAIR,
+            &repair.then_some(RepairThreshold::Camera),
+        );
     }
     changed
 }
 
-pub(super) fn reconstruction(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let mut changed = false;
+pub(super) fn reconstruction(ui: &mut egui::Ui, settings: &Settings) -> bool {
     let mut reconstruction = settings.reconstruction.is_some();
-    if section_header(
+    let changed = section_header(
         ui,
         EditingSection::Noise,
         "Noise and Detail",
         Some(&mut reconstruction),
-    ) {
-        settings.reconstruction = reconstruction.then(Default::default);
+    );
+    if changed {
         crate::multi_edit_controls::optional(ui.ctx(), "/reconstruction", reconstruction);
-        changed = true;
     }
     changed
 }
@@ -1107,7 +1154,7 @@ pub(super) fn method_choice(
     ui: &mut egui::Ui,
     key: &str,
     label: &str,
-    value: &mut foveonic::render::PhotographicMethod,
+    value: foveonic::render::PhotographicMethod,
 ) -> bool {
     LabelColumn::new(ui).method_choice(ui, key, label, value)
 }
@@ -1118,7 +1165,7 @@ impl LabelColumn {
         ui: &mut egui::Ui,
         key: &str,
         label: &str,
-        value: &mut foveonic::render::PhotographicMethod,
+        value: foveonic::render::PhotographicMethod,
     ) -> bool {
         let pointer = match key {
             "Tone method" => "/photographic/tone_method",

@@ -7,6 +7,7 @@ struct Image {
     key: ImageKey,
     revision: u64,
     patch: bool,
+    origin: SourceOrigin,
 }
 impl Stored for Image {
     fn key(&self) -> ImageKey {
@@ -14,6 +15,15 @@ impl Stored for Image {
     }
     fn patch(&self) -> bool {
         self.patch
+    }
+    fn origin(&self) -> &SourceOrigin {
+        &self.origin
+    }
+    fn window(&self) -> [u32; 4] {
+        [0, 0, 1, 1]
+    }
+    fn supports_regions(&self, _: &Settings) -> bool {
+        true
     }
 }
 impl Rendered for Image {
@@ -50,6 +60,7 @@ fn image(look: Rendition, revision: u64, patch: bool) -> Image {
         key: key(look),
         revision,
         patch,
+        origin: SourceOrigin::default(),
     }
 }
 

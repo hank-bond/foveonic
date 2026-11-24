@@ -125,18 +125,18 @@ class InventoryTests(unittest.TestCase):
 
     def test_literal_variants_replace_inherited_controls_after_environment_removal(self):
         document = manifest()
-        document['environments']['original']['FOVEONIC_WIDE_RENDER_WIDTH'] = {'value': '2'}
+        document['environments']['original']['FOVEONIC_SAMPLE_CONTROL'] = {'value': '2'}
         plan = command_plan(document, discovered(),
                             {'standard': {'directory': '/owned/all'},
                              'merrill_high_only': {'directory': '/owned/merrill'}},
-                            {'FOVEONIC_WIDE_RENDER_WIDTH': 'serial'})
+                            {'FOVEONIC_SAMPLE_CONTROL': 'serial'})
         command = plan['commands'][0]
-        self.assertIn('FOVEONIC_WIDE_RENDER_WIDTH', command['unset_environment'])
-        self.assertEqual(command['environment']['FOVEONIC_WIDE_RENDER_WIDTH'], '2')
+        self.assertIn('FOVEONIC_SAMPLE_CONTROL', command['unset_environment'])
+        self.assertEqual(command['environment']['FOVEONIC_SAMPLE_CONTROL'], '2')
         self.assertEqual(command['environment']['SOURCE'], '/owned/all/a.x3f')
         for value in ['', 2, None, {'file': 'a.x3f'}]:
             with self.subTest(value=value):
-                document['environments']['original']['FOVEONIC_WIDE_RENDER_WIDTH'] = {'value': value}
+                document['environments']['original']['FOVEONIC_SAMPLE_CONTROL'] = {'value': value}
                 with self.assertRaises(ValueError):
                     validate_inventory(document)
 
@@ -210,7 +210,7 @@ class InventoryTests(unittest.TestCase):
 
     def test_maintained_inventory_keeps_release_selection_and_corrected_variants(self):
         document = json.loads(MANIFEST.read_text()); validate_inventory(document)
-        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 488)
+        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 493)
         self.assertEqual(len(document['excluded']), 155)
         self.assertEqual(len(document['input_sets']['standard']), 27)
         groups = {name: g for g in document['groups'] for name in g['tests']}

@@ -21,8 +21,59 @@ pub(super) const TARGETS: &[&str] = &[
     "multi-option-return",
     "multi-shift",
     "multi-space",
+    "multi-white-balance",
+    "multi-dehaze",
+    "multi-color",
     "multi-choice",
 ];
+
+/// Steps that pick on an editing photo other than the active one.
+const PICK_TARGETS: [&str; 3] = ["multi-white-balance", "multi-dehaze", "multi-color"];
+/// Image points tried in order until a pick's sample is usable, since a photo's
+/// centre can be neutral or dark.
+const PICK_POINTS: [[f32; 2]; 5] = [[0.5, 0.5], [0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]];
+/// Frames a finished gesture waits so its last input has been drawn.
+const PICK_QUIET_FRAMES: u32 = 2;
+const PICK_TOLERANCE: f32 = 1e-4;
+
+/// A pick step's sample point, starting values and evidence.
+pub(super) struct Pick {
+    point: usize,
+    photo: std::path::PathBuf,
+    before: Vec<foveonic::render::Settings>,
+    error_before: Option<String>,
+    quiet_frames: u32,
+    reached: bool,
+    attempts: Vec<serde_json::Value>,
+}
+
+/// The value a pick step sets.
+fn pick_field(target: &str, settings: &foveonic::render::Settings) -> serde_json::Value {
+    match target {
+        "multi-white-balance" => serde_json::json!(settings.white_balance_bias),
+        "multi-dehaze" => serde_json::json!(settings.dehaze.shadow),
+        _ => serde_json::json!(settings.photographic.color_editor.bands),
+    }
+}
+
+/// Each band's hue, saturation and lightness change.
+fn band_offsets(
+    before: &foveonic::render::Settings,
+    after: &foveonic::render::Settings,
+) -> Vec<f32> {
+    let [before, after] = [before, after].map(|settings| settings.photographic.color_editor.bands);
+    before
+        .iter()
+        .zip(after)
+        .flat_map(|(before, after)| {
+            [
+                after.hue - before.hue,
+                after.saturation - before.saturation,
+                after.lightness - before.lightness,
+            ]
+        })
+        .collect()
+}
 
 impl App {
     /// The existing screenshot driver also exercises bounded multi-photo delivery.
@@ -59,6 +110,9 @@ impl App {
         {
             // Check while work may still be pending, as well as at the settled screenshot.
             self.smoke_multi_assert(&smoke, target);
+        }
+        if PICK_TARGETS.contains(&target) && !smoke.awaiting {
+            self.smoke_multi_pick_outcome(ctx, &mut smoke, target);
         }
         let screenshot = ctx.input(|input| {
             input.events.iter().find_map(|event| {
@@ -144,10 +198,11 @@ impl App {
             std::fs::write(smoke.directory.join(format!("{target}.json")),
                 serde_json::to_vec_pretty(&serde_json::json!({"target":target,
                     "process_id":std::process::id(),"browser_count":self.browser.processing_selection(self.selected.as_deref()).len(),
-                    "active":self.selected,"request_revision":self.last_request_id,"worker_busy":self.worker.busy(),
+                    "active":self.selected,"request_revision":self.view_images.last_request_id(),"worker_busy":self.worker.busy(),
                     "progress_running":progress.map(|progress| progress.running()),"progress_fraction":progress.map(|progress| progress.fraction),
                     "photos":photos,"retained":memory.resources,
-                    "over_target_bytes":memory.over_target_bytes,"sweep_group_ms":smoke.multi_sweep_ms})).unwrap()).unwrap();
+                    "over_target_bytes":memory.over_target_bytes,"sweep_group_ms":smoke.multi_sweep_ms,
+                    "pick":PICK_TARGETS.contains(&target).then(|| smoke.multi_pick.as_ref().map(|pick| &pick.attempts))})).unwrap()).unwrap();
             smoke.diagnostic_checked(self.active_image(), self.worker.busy());
             smoke.index += 1;
             smoke.awaiting = false;
@@ -226,6 +281,11 @@ impl App {
         if !smoke.direct_events.is_empty() || self.worker.busy() {
             return false;
         }
+        if PICK_TARGETS.contains(&target)
+            && !smoke.multi_pick.as_ref().is_some_and(|pick| pick.reached)
+        {
+            return false;
+        }
         if target == "final" {
             return self
                 .active_image()
@@ -256,11 +316,15 @@ impl App {
                         && frame.request.rendition == crate::editor::Rendition::Current
                 })
                 .or_else(|| self.photo_layers(path)[0]);
-            let expected = smoke
-                .multi_paths
-                .iter()
-                .position(|candidate| candidate == path)
-                .map(|index| &smoke.multi_expected[index]);
+            let expected = if PICK_TARGETS.contains(&target) {
+                self.multi_edit.settings(path)
+            } else {
+                smoke
+                    .multi_paths
+                    .iter()
+                    .position(|candidate| candidate == path)
+                    .map(|index| &smoke.multi_expected[index])
+            };
             frame.is_some_and(|frame| {
                 expected.is_none_or(|expected| {
                     crate::rendering::matching::same_authored_edits(
@@ -358,7 +422,7 @@ impl App {
                     frame.diagnostic_task.id,
                     frame.diagnostic_task.revision,
                     frame.diagnostic_task.purpose,
-                    self.last_request_id,
+                    self.view_images.last_request_id(),
                     frame.request.settings.working_scale,
                 );
                 assert!(
@@ -367,8 +431,16 @@ impl App {
                 );
             }
         }
-        if matches!(target, "multi-shift" | "multi-space" | "multi-choice") {
+        if matches!(target, "multi-shift" | "multi-space" | "multi-choice")
+            || PICK_TARGETS.contains(&target)
+        {
             assert_eq!(self.edit_selection.paths(), smoke.multi_paths);
+        }
+        if PICK_TARGETS.contains(&target) {
+            assert!(
+                smoke.multi_pick.as_ref().is_some_and(|pick| pick.reached),
+                "{target} did not reach every editing photo"
+            );
         }
         if matches!(target, "multi-remove" | "multi-before" | "multi-current") {
             assert_eq!(
@@ -478,6 +550,9 @@ impl App {
                 self.smoke_multi_click(ctx, smoke, 1, egui::Modifiers::NONE);
                 smoke.direct_events.push_back(vec![space_key(false)]);
             }
+            "multi-white-balance" | "multi-dehaze" | "multi-color" => {
+                self.smoke_multi_pick(ctx, smoke, target, 0)
+            }
             "multi-choice" => {
                 crate::photo_tools::pointer(ctx);
                 let edit = Edit::Assign {
@@ -500,6 +575,188 @@ impl App {
             }
             _ => unreachable!("unknown multi-edit smoke step"),
         }
+    }
+
+    /// Arm the step's pick tool and hover a displayed editing photo that is not
+    /// the active one at the `point`th sample point. The press and release follow
+    /// once the cursor is checked.
+    fn smoke_multi_pick(
+        &mut self,
+        ctx: &egui::Context,
+        smoke: &mut Smoke,
+        target: &str,
+        point: usize,
+    ) {
+        crate::photo_tools::pointer(ctx);
+        match target {
+            "multi-white-balance" => crate::editor::white_balance::toggle(ctx),
+            "multi-dehaze" => crate::editor::dehaze::toggle(ctx),
+            _ => crate::editor::direct_color::toggle(ctx),
+        }
+        let path = self
+            .viewport_selection
+            .iter()
+            .find(|path| {
+                self.edit_selection.contains(path) && self.selected.as_ref() != Some(*path)
+            })
+            .expect("a pick step needs a displayed editing photo besides the active one")
+            .clone();
+        let position = self
+            .viewports
+            .view(Some(&path))
+            .position_at_uv(PICK_POINTS[point])
+            .unwrap();
+        let attempts = smoke
+            .multi_pick
+            .take()
+            .map(|pick| pick.attempts)
+            .unwrap_or_default();
+        smoke.multi_pick = Some(Pick {
+            point,
+            photo: path,
+            before: smoke
+                .multi_paths
+                .iter()
+                .map(|path| self.multi_edit.settings(path).unwrap().clone())
+                .collect(),
+            error_before: self.activity.last_error().map(ToOwned::to_owned),
+            quiet_frames: 0,
+            reached: false,
+            attempts,
+        });
+        let button = |pos, pressed| {
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }]
+        };
+        smoke
+            .direct_events
+            .push_back(vec![egui::Event::PointerMoved(position)]);
+        smoke.multi_pick_events = Some(if target == "multi-color" {
+            let end = position + egui::vec2(60., -60.);
+            vec![
+                button(position, true),
+                vec![egui::Event::PointerMoved(end)],
+                button(end, false),
+            ]
+        } else {
+            vec![button(position, true), button(position, false)]
+        });
+    }
+
+    /// After the hover frame draws, check it shows the pick cursor over the
+    /// photo, then send the press and release.
+    pub(crate) fn smoke_multi_check_pick_cursor(&mut self, ctx: &egui::Context) {
+        let Some(smoke) = self.smoke.as_mut() else {
+            return;
+        };
+        if !smoke.direct_events.is_empty() {
+            return;
+        }
+        let Some(events) = smoke.multi_pick_events.take() else {
+            return;
+        };
+        assert_eq!(
+            ctx.output(|output| output.cursor_icon),
+            egui::CursorIcon::Crosshair,
+            "an armed pick tool shows its cursor over an editing photo that is not active"
+        );
+        smoke.direct_events.extend(events);
+    }
+
+    /// Once a pick's gesture and sample have finished, decide its outcome: it
+    /// reached every editing photo, or its sample was unusable and the next
+    /// sample point is tried, or it failed with its evidence.
+    fn smoke_multi_pick_outcome(&mut self, ctx: &egui::Context, smoke: &mut Smoke, target: &str) {
+        let busy = crate::editor::white_balance::pending(ctx)
+            || crate::editor::dehaze::pending(ctx)
+            || crate::editor::direct_color::dragging(ctx);
+        let Some(pick) = smoke.multi_pick.as_mut() else {
+            return;
+        };
+        if pick.reached
+            || smoke.multi_pick_events.is_some()
+            || !smoke.direct_events.is_empty()
+            || busy
+        {
+            pick.quiet_frames = 0;
+            return;
+        }
+        // The last event arrives in this frame's input and is drawn after this check.
+        pick.quiet_frames += 1;
+        if pick.quiet_frames < PICK_QUIET_FRAMES {
+            return;
+        }
+        let after: Vec<_> = smoke
+            .multi_paths
+            .iter()
+            .map(|path| self.multi_edit.settings(path).unwrap().clone())
+            .collect();
+        let clicked = smoke
+            .multi_paths
+            .iter()
+            .position(|path| *path == pick.photo)
+            .unwrap();
+        let error = self
+            .activity
+            .last_error()
+            .filter(|error| Some(*error) != pick.error_before.as_deref());
+        let evidence = serde_json::json!({
+            "point": PICK_POINTS[pick.point],
+            "photo": pick.photo,
+            "error": error,
+            "tool": format!("{:?}", crate::photo_tools::selected(ctx)),
+            "weights": (target == "multi-color")
+                .then(|| crate::editor::direct_color::selection(ctx).1),
+            "photos": smoke.multi_paths.iter().zip(&pick.before).zip(&after)
+                .map(|((path, before), after)| serde_json::json!({
+                    "path": path,
+                    "before": pick_field(target, before),
+                    "after": pick_field(target, after),
+                }))
+                .collect::<Vec<_>>(),
+        });
+        pick.attempts.push(evidence.clone());
+        if pick_field(target, &pick.before[clicked]) == pick_field(target, &after[clicked]) {
+            let next = pick.point + 1;
+            assert!(
+                next < PICK_POINTS.len(),
+                "{target}: no sample point changed the clicked photo, so the samples were unusable. Attempts: {:#}",
+                serde_json::Value::from(pick.attempts.clone())
+            );
+            self.smoke_multi_pick(ctx, smoke, target, next);
+            return;
+        }
+        let reached = if target == "multi-color" {
+            // A short drag from these photos' values stays inside the limits, so
+            // each photo moves by the clicked photo's offset.
+            let offset = |index: usize| band_offsets(&pick.before[index], &after[index]);
+            (0..after.len()).all(|index| {
+                offset(index)
+                    .iter()
+                    .zip(offset(clicked))
+                    .all(|(value, clicked)| (value - clicked).abs() < PICK_TOLERANCE)
+            })
+        } else {
+            let picked = pick_field(target, &after[clicked]);
+            after
+                .iter()
+                .all(|settings| pick_field(target, settings) == picked)
+        };
+        assert!(
+            reached,
+            "{target}: the pick changed {} but not every editing photo by the same amount: {evidence:#}",
+            pick.photo.display()
+        );
+        assert_eq!(
+            crate::photo_tools::selected(ctx),
+            crate::photo_tools::Tool::Pointer,
+            "{target}: the tool stays armed after its pick: {evidence:#}"
+        );
+        pick.reached = true;
     }
 
     pub(super) fn smoke_visual_range(&self, paths: &[std::path::PathBuf]) -> (usize, usize) {

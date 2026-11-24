@@ -132,7 +132,7 @@ impl Driver {
 
     fn begin(&mut self, name: &str, app: &App) {
         self.action_started = Instant::now();
-        self.minimum_revision = app.last_request_id.next().0;
+        self.minimum_revision = app.view_images.last_request_id().next().0;
         self.first.fill(false);
         self.regional.fill(false);
         self.foreground_ready = false;

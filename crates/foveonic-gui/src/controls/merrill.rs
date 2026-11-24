@@ -4,7 +4,7 @@
 mod noise;
 
 use super::common::{self, adjustment_row, automatic_adjustment};
-use crate::{help, preferences::EditingSection};
+use crate::{help, multi_edit_controls::field, preferences::EditingSection};
 use eframe::egui;
 use foveonic::{
     render::{ColorFieldApproach, HighlightMode, Settings},
@@ -37,23 +37,21 @@ pub(super) fn highlight_choice(settings: &Settings) -> (HighlightMode, ColorFiel
     )
 }
 
-pub(super) fn select_highlight(
-    settings: &mut Settings,
+/// The fields and values that select a highlight method.
+pub(super) fn highlight_assignments(
     choice: (HighlightMode, ColorFieldApproach),
-) -> bool {
-    let before = (settings.highlight_mode, settings.color_field);
-    settings.highlight_mode = choice.0;
-    if choice.0 == HighlightMode::ColorField {
-        settings.color_field.approach = choice.1;
-    }
-    before != (settings.highlight_mode, settings.color_field)
+) -> [(&'static str, serde_json::Value); 2] {
+    [
+        ("/highlight_mode", serde_json::json!(choice.0)),
+        ("/color_field/approach", serde_json::json!(choice.1)),
+    ]
 }
 
 fn detail(
     ui: &mut egui::Ui,
     pointer: &str,
-    enabled: &mut bool,
-    texture: &mut foveonic::noise::TextureControls,
+    enabled: bool,
+    mut texture: foveonic::noise::TextureControls,
 ) -> bool {
     let mut changed = false;
     changed |= crate::multi_edit_controls::choice(
@@ -62,7 +60,7 @@ fn detail(
         enabled,
         |ui, enabled| common::section_header(ui, EditingSection::Detail, "Detail", Some(enabled)),
     );
-    ui.add_enabled_ui(*enabled, |ui| {
+    ui.add_enabled_ui(enabled, |ui| {
         let column = common::LabelColumn::new(ui);
         crate::widgets::parameter_group(ui, |ui| {
             changed |=
@@ -120,13 +118,18 @@ fn detail(
 
 pub(super) fn show(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
+    range_preview: &mut Option<usize>,
     metadata: Option<&Metadata>,
-    exposure: Option<foveonic::source::CaptureExposureCompensation>,
-    rotation: u32,
+    summary: Option<&foveonic::source::MetadataSummary>,
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
+    let exposure = super::capture_exposure(summary);
+    let rotation = metadata
+        .map(|m| m.rotation)
+        .or_else(|| summary?.properties.get("ROTATION")?.parse().ok())
+        .unwrap_or(0);
     let mut changed = common::rendering(ui, settings);
     let mono = settings.is_monochrome();
     changed |= common::color_mode(ui, settings, metadata, !mono);
@@ -154,10 +157,13 @@ pub(super) fn show(
             )
             .white_balance_active(settings),
         ),
-        EditingSection::Mix => crate::mixer::show(ui, &mut settings.monochrome.mix),
+        EditingSection::Mix => {
+            let mut mix = settings.monochrome.mix;
+            crate::mixer::show(ui, &mut mix)
+        }
         EditingSection::Tone => common::tone(ui, settings, exposure),
         EditingSection::Saturation => super::saturation::show(ui, settings),
-        EditingSection::ColorEditor => super::color_editor::show(ui, settings),
+        EditingSection::ColorEditor => super::color_editor::show(ui, settings, &mut *range_preview),
         EditingSection::Noise => {
             if mono {
                 noise::monochrome(ui, settings, rotation)
@@ -170,11 +176,23 @@ pub(super) fn show(
                 detail(
                     ui,
                     "/monochrome",
-                    &mut settings.monochrome.detail_enabled,
-                    &mut settings.monochrome.texture,
+                    settings.monochrome.detail_enabled,
+                    settings.monochrome.texture,
                 )
             } else {
-                color_detail(ui, settings)
+                let controls = settings
+                    .reconstruction
+                    .unwrap_or(foveonic::noise::Controls {
+                        noise_enabled: false,
+                        detail_enabled: false,
+                        ..Default::default()
+                    });
+                detail(
+                    ui,
+                    "/reconstruction",
+                    controls.detail_enabled,
+                    controls.texture,
+                )
             }
         }
         EditingSection::Sharpening => common::sharpening(ui, settings, metadata),
@@ -183,31 +201,13 @@ pub(super) fn show(
     changed
 }
 
-fn color_detail(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let before = settings.reconstruction;
-    let mut controls = before.unwrap_or(foveonic::noise::Controls {
-        noise_enabled: false,
-        detail_enabled: false,
-        ..Default::default()
-    });
-    let changed = detail(
-        ui,
-        "/reconstruction",
-        &mut controls.detail_enabled,
-        &mut controls.texture,
-    );
-    if before.is_some() || controls.noise_enabled || controls.detail_enabled {
-        settings.reconstruction = Some(controls);
-    }
-    changed
-}
-
-fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let mut changed = common::section_header(
+fn corrections(ui: &mut egui::Ui, settings: &Settings) -> bool {
+    let mut changed = common::section_switch(
         ui,
         EditingSection::Corrections,
         "Corrections",
-        Some(&mut settings.corrections_enabled),
+        field::CORRECTIONS_ENABLED,
+        settings.corrections_enabled,
     );
     ui.add_enabled_ui(settings.corrections_enabled, |ui| {
         changed |= super::dehaze::show(ui, settings);
@@ -215,7 +215,12 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             let column = common::LabelColumn::new(ui);
             ui.horizontal(|ui| {
                 changed |= help::control(
-                    column.toggle(ui, "Highlights", &mut settings.highlight_restoration),
+                    column.switch(
+                        ui,
+                        "Highlights",
+                        field::HIGHLIGHT_RESTORATION,
+                        settings.highlight_restoration,
+                    ),
                     "Highlight correction",
                 )
                 .changed();
@@ -243,17 +248,14 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                                 if crate::widgets::menu_value(ui, &mut choice, value, label)
                                     .clicked()
                                 {
-                                    changed |= select_highlight(settings, choice);
-                                    crate::multi_edit_controls::assign(
-                                        ui.ctx(),
-                                        "/highlight_mode",
-                                        choice.0,
-                                    );
-                                    crate::multi_edit_controls::assign(
-                                        ui.ctx(),
-                                        "/color_field/approach",
-                                        choice.1,
-                                    );
+                                    changed |= choice != highlight_choice(settings);
+                                    for (pointer, value) in highlight_assignments(choice) {
+                                        crate::multi_edit_controls::assign(
+                                            ui.ctx(),
+                                            pointer,
+                                            value,
+                                        );
+                                    }
                                 }
                             }
                         })
@@ -263,12 +265,13 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
             });
             ui.add_enabled_ui(settings.highlight_restoration, |ui| {
                 if settings.highlight_mode == HighlightMode::Classic {
+                    let mut threshold = settings.highlight_threshold_ev;
                     changed |=
                         crate::multi_edit_controls::field(ui, "/highlight_threshold_ev", |ui| {
                             automatic_adjustment(
                                 ui,
                                 "Highlight correction",
-                                &mut settings.highlight_threshold_ev,
+                                &mut threshold,
                                 -2. ..=2.,
                                 0.,
                                 Some(0.),
@@ -276,12 +279,13 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                             )
                         });
                 } else {
+                    let mut selectivity = settings.color_field.selectivity;
                     changed |=
                         crate::multi_edit_controls::field(ui, "/color_field/selectivity", |ui| {
                             adjustment_row(
                                 ui,
                                 "Color-field highlights",
-                                &mut settings.color_field.selectivity,
+                                &mut selectivity,
                                 0. ..=1.,
                                 0.,
                                 column.row_controls("Threshold"),
@@ -316,7 +320,7 @@ mod mixed_tests {
             }
             let mut b = a.clone();
             b.color_field.approach = ColorFieldApproach::LocalGradient;
-            let mut active = a.clone();
+            let active = a.clone();
             crate::multi_edit_controls::begin_with_numeric(
                 &ctx,
                 vec![a.clone(), b.clone()],
@@ -332,7 +336,7 @@ mod mixed_tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        corrections(ui, &mut active);
+                        corrections(ui, &active);
                     });
                 },
             );

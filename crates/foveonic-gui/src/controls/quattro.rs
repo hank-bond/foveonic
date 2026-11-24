@@ -8,13 +8,14 @@ use foveonic::source::{Metadata, ProcessingFamily};
 
 pub(super) fn show(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
+    range_preview: &mut Option<usize>,
     metadata: Option<&Metadata>,
     summary: Option<&foveonic::source::MetadataSummary>,
-    exposure: Option<foveonic::source::CaptureExposureCompensation>,
     order: &mut Vec<EditingSection>,
     menus: &mut crate::editor::Menus<'_>,
 ) -> bool {
+    let exposure = super::capture_exposure(summary);
     let early = summary
         .filter(|_| metadata.is_none())
         .map(|summary| crate::metadata::processing_metadata(summary.properties.clone()));
@@ -67,17 +68,17 @@ pub(super) fn show(
                     foveonic::render::ControlCapabilities::from_family(ProcessingFamily::Quattro)
                         .white_balance_active(settings),
                 ),
-                EditingSection::Mix => crate::mixer::show_with_help(
-                    ui,
-                    &mut settings.monochrome.mix,
-                    defaults.monochrome.mix,
-                    "RGB Mix",
-                ),
+                EditingSection::Mix => {
+                    let mut mix = settings.monochrome.mix;
+                    crate::mixer::show_with_help(ui, &mut mix, defaults.monochrome.mix, "RGB Mix")
+                }
                 EditingSection::Tone => {
                     common::tone_with_exposure_range(ui, settings, -2. ..=2., exposure)
                 }
                 EditingSection::Saturation => super::saturation::show(ui, settings),
-                EditingSection::ColorEditor => super::color_editor::show(ui, settings),
+                EditingSection::ColorEditor => {
+                    super::color_editor::show(ui, settings, &mut *range_preview)
+                }
                 EditingSection::Noise => noise_and_detail(ui, settings, &defaults, capabilities),
                 EditingSection::Sharpening => {
                     common::sharpening_with_range(ui, settings, Some(source), -2. ..=2.)
@@ -95,7 +96,7 @@ pub(super) fn show(
 
 fn noise_and_detail(
     ui: &mut egui::Ui,
-    settings: &mut Settings,
+    settings: &Settings,
     defaults: &Settings,
     capabilities: ControlCapabilities,
 ) -> bool {
@@ -106,9 +107,8 @@ fn noise_and_detail(
         .reconstruction
         .unwrap_or_else(|| capabilities.default_noise_controls());
     let mut noise = settings.reconstruction.unwrap_or(noise_defaults);
-    let mut noise_changed = false;
     if !mono {
-        noise_changed |= crate::multi_edit_controls::field(ui, "/reconstruction/chroma", |ui| {
+        changed |= crate::multi_edit_controls::field(ui, "/reconstruction/chroma", |ui| {
             common::adjustment(
                 ui,
                 "Chroma noise",
@@ -117,7 +117,7 @@ fn noise_and_detail(
                 noise_defaults.chroma,
             )
         });
-        noise_changed |= crate::multi_edit_controls::field(ui, "/reconstruction/luminance", |ui| {
+        changed |= crate::multi_edit_controls::field(ui, "/reconstruction/luminance", |ui| {
             common::adjustment(
                 ui,
                 "Luma noise",
@@ -127,11 +127,12 @@ fn noise_and_detail(
             )
         });
     } else {
+        let mut mono_noise = settings.monochrome.noise;
         changed |= crate::multi_edit_controls::field(ui, "/monochrome/noise", |ui| {
             common::adjustment(
                 ui,
                 "Mono noise",
-                &mut settings.monochrome.noise,
+                &mut mono_noise,
                 0..=4,
                 defaults.monochrome.noise,
             )
@@ -145,7 +146,7 @@ fn noise_and_detail(
     } else {
         noise_defaults.detail
     };
-    noise_changed |= crate::multi_edit_controls::field(
+    changed |= crate::multi_edit_controls::field(
         ui,
         if mono {
             "/monochrome_smoothness"
@@ -163,33 +164,22 @@ fn noise_and_detail(
             )
         },
     );
-    if noise_changed {
-        if mono {
-            settings.monochrome_smoothness =
-                (noise.detail != detail_default).then_some(noise.detail);
-        } else {
-            settings.reconstruction = if noise == noise_defaults {
-                None
-            } else {
-                Some(noise)
-            };
-        }
-    }
-    changed || noise_changed
+    changed
 }
 
-fn corrections(ui: &mut egui::Ui, settings: &mut Settings, defaults: &Settings) -> bool {
-    let mut changed = common::section_header(
+fn corrections(ui: &mut egui::Ui, settings: &Settings, defaults: &Settings) -> bool {
+    let mut changed = common::section_switch(
         ui,
         EditingSection::Corrections,
         "Corrections",
-        Some(&mut settings.corrections_enabled),
+        crate::multi_edit_controls::field::CORRECTIONS_ENABLED,
+        settings.corrections_enabled,
     );
     ui.add_enabled_ui(settings.corrections_enabled, |ui| {
         changed |= super::dehaze::show(ui, settings);
         let highlight_default = defaults.highlight_amount.unwrap_or(1.);
         let mut highlight = settings.highlight_amount.unwrap_or(highlight_default);
-        if crate::multi_edit_controls::field(ui, "/highlight_amount", |ui| {
+        changed |= crate::multi_edit_controls::field(ui, "/highlight_amount", |ui| {
             common::stepped_adjustment(
                 ui,
                 "Highlight recovery",
@@ -198,14 +188,7 @@ fn corrections(ui: &mut egui::Ui, settings: &mut Settings, defaults: &Settings) 
                 highlight_default,
                 0.1,
             )
-        }) {
-            settings.highlight_amount = if highlight == highlight_default {
-                None
-            } else {
-                Some(highlight)
-            };
-            changed = true;
-        }
+        });
     });
     changed
 }

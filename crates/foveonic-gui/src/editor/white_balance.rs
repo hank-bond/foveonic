@@ -35,6 +35,10 @@ pub fn active(ctx: &egui::Context) -> bool {
 pub fn pending(ctx: &egui::Context) -> bool {
     state(ctx).pending.is_some()
 }
+/// The photo whose pick is waiting for its sample.
+pub fn held_photo(ctx: &egui::Context) -> Option<PathBuf> {
+    state(ctx).pending.map(|pending| pending.path)
+}
 pub(crate) fn cancel(ctx: &egui::Context) {
     let s = state(ctx);
     store(
@@ -107,14 +111,15 @@ pub fn receive(ctx: &egui::Context, reply: &ColorPickReply) -> bool {
     store(ctx, s);
     true
 }
+/// Returns the picked bias.
 pub fn photo(
     ui: &egui::Ui,
     response: &egui::Response,
     uv: Option<[f32; 2]>,
     path: &Path,
-    settings: &mut Settings,
+    settings: &Settings,
     allowed: bool,
-) -> (bool, Option<ColorPickRequest>) {
+) -> (Option<WhiteBalanceBias>, Option<ColorPickRequest>) {
     let mut s = state(ui.ctx());
     if !allowed
         || settings.is_monochrome()
@@ -124,13 +129,12 @@ pub fn photo(
     {
         s.pending = None;
     }
-    let mut changed = false;
+    let mut picked = None;
     if let Some(result) = s.pending.as_mut().and_then(|p| p.result.take()) {
         s.pending = None;
         match result {
             Ok(balance) => {
-                changed = settings.white_balance_bias != balance;
-                settings.white_balance_bias = balance;
+                picked = Some(balance);
                 crate::activity::communicate(
                     ui.ctx(),
                     crate::activity::Event::Operation("White balance selected.".into()),
@@ -142,7 +146,7 @@ pub fn photo(
         }
     }
     let pan = ui.input(|i| i.key_down(egui::Key::Space));
-    if active(ui.ctx()) && response.hovered() && !pan {
+    if active(ui.ctx()) && allowed && response.hovered() && !pan {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     let mut request = None;
@@ -170,7 +174,7 @@ pub fn photo(
         }
     }
     store(ui.ctx(), s);
-    (changed, request)
+    (picked, request)
 }
 
 #[cfg(test)]
@@ -231,7 +235,7 @@ mod tests {
                                 ui.available_size(),
                                 egui::Sense::click_and_drag(),
                             );
-                            result = photo(
+                            let (picked, request) = photo(
                                 ui,
                                 &response,
                                 Some([0.5, 0.5]),
@@ -239,6 +243,11 @@ mod tests {
                                 settings,
                                 true,
                             );
+                            // Apply the picked bias, as the store does.
+                            if let Some(bias) = picked {
+                                settings.white_balance_bias = bias;
+                            }
+                            result = (picked.is_some(), request);
                         });
                     },
                 );

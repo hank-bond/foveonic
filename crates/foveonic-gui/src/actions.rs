@@ -132,11 +132,11 @@ impl App {
                 }
                 Edit::QuarterTurn(clockwise) => {
                     self.exit_before();
-                    changed |=
-                        self.edit_selected(crate::multi_edit_runtime::Change::Turn { clockwise });
-                    if let Some(path) = &self.selected {
-                        self.previews.invalidate_path(path);
-                        self.browser.rotate_cached(path, clockwise);
+                    if self.edit_editing(&crate::multi_edit_runtime::Change::Turn { clockwise }) {
+                        for path in self.edit_selection.paths() {
+                            self.browser.rotate_cached(path, clockwise);
+                        }
+                        changed = true;
                     }
                 }
                 Edit::Before(target) => self.toggle_before(target),
@@ -161,6 +161,9 @@ impl App {
                         let paths = self.browser.processing_selection(self.selected.as_deref());
                         let count = paths.len();
                         changed |= self.multi_edit.replace(&paths, &copied, &mut self.sidecars);
+                        for path in &paths {
+                            self.previews.invalidate_path(path);
+                        }
                         if let Some(settings) = self.selected_settings().cloned() {
                             let family = self
                                 .selected

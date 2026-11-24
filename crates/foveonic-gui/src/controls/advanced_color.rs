@@ -3,16 +3,21 @@
 use super::common::LabelColumn;
 use crate::{
     editor::{advanced_color as tool, direct_color},
+    multi_edit_controls::field,
     widgets,
 };
 use eframe::egui;
 use foveonic::render::{AdvancedColorRange, Settings, MAX_COLOR_RANGES};
 
-pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+pub(super) fn show(
+    ui: &mut egui::Ui,
+    settings: &Settings,
+    range_preview: &mut Option<usize>,
+) -> bool {
     let mut s = tool::state(ui.ctx());
     let mut changed = false;
     let mono = settings.is_monochrome();
-    let ranges = &mut settings.photographic.color_editor.advanced;
+    let mut ranges = settings.photographic.color_editor.advanced;
     s.selected = s.selected.min(ranges.count.saturating_sub(1));
     let selected = ranges.count > 0;
     let pointer = format!("/photographic/color_editor/advanced/{}", s.selected);
@@ -125,7 +130,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                                     crate::multi_edit_controls::choice(
                                         ui,
                                         format!("/photographic/color_editor/advanced/{i}/enabled"),
-                                        &mut ranges.ranges[i].enabled,
+                                        ranges.ranges[i].enabled,
                                         |ui, enabled| {
                                             widgets::checkbox_sized(
                                                 ui,
@@ -142,7 +147,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                             .inner
                         },
                     );
-                    let eye = preview_eye(ui, &mut settings.color_range_preview, i);
+                    let eye = preview_eye(ui, range_preview, i);
                     changed |= eye.changed();
                     if eye.clicked() {
                         s.selected = i;
@@ -209,7 +214,8 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 direct_color::exit(ui.ctx());
                 let removed = s.selected;
                 ranges.remove(removed);
-                settings.color_range_preview = settings.color_range_preview.and_then(|i| {
+                crate::multi_edit_controls::set(ui.ctx(), field::COLOR_RANGES, &ranges);
+                *range_preview = range_preview.and_then(|i| {
                     if i == removed {
                         None
                     } else {
@@ -237,13 +243,14 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 direct_color::exit(ui.ctx());
                 s.rename = None;
                 s.selected = ranges.push(AdvancedColorRange::default()).unwrap();
+                crate::multi_edit_controls::set(ui.ctx(), field::COLOR_RANGES, &ranges);
                 changed = true;
             }
         });
     });
-    let preview = settings.color_range_preview.filter(|i| *i < ranges.count);
-    changed |= preview != settings.color_range_preview;
-    settings.color_range_preview = preview;
+    let preview = range_preview.filter(|i| *i < ranges.count);
+    changed |= preview != *range_preview;
+    *range_preview = preview;
 
     tool::store(ui.ctx(), s);
     changed

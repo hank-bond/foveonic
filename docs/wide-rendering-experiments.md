@@ -5,6 +5,8 @@ kind: explanation
 
 # Wide-rendering experiments
 
+This is a historical record. The [render scheduler](../plans/render-scheduler.md) replaced the experimental worker, its feature flags and its width environment variable.
+
 ## Scope
 
 The owner approved the width-one extraction and isolated overnight experiments starting from `fa4a09c`. The functional branch is `design/wide-rendering`. The opt-in engine probe is on `experiment/wide-rendering-current`, behind the `wide-probe` feature. Default application execution remains serial. The later real-worker experiment below is explicitly enabled with `wide-experiment`. No commits or publication are part of this investigation.

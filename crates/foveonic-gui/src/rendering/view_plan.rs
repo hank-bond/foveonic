@@ -194,21 +194,33 @@ pub(crate) fn plan<T: Rendered>(
     }
 }
 
+/// An image rendered for `rendered` at `quality` has the same source, rendition,
+/// policy, calibration and authored edits as `request`.
+pub(crate) fn answers(
+    rendered: &RenderRequest,
+    quality: foveonic::render::ProcessingQuality,
+    request: &RenderRequest,
+) -> bool {
+    fn signature(request: &RenderRequest) -> Option<&str> {
+        request
+            .calibration
+            .as_deref()
+            .map(|profile| profile.signature())
+    }
+    rendered.path == request.path
+        && rendered.rendition == request.rendition
+        && rendered.output == request.output
+        && quality == request.processing_quality
+        && rendered.framing_preview == request.framing_preview
+        && rendered.comparison == request.comparison
+        && signature(rendered) == signature(request)
+        && super::matching::same_image_geometry(&rendered.settings, &request.settings)
+        && super::matching::same_authored_edits(&rendered.settings, &request.settings)
+}
+
 impl Rendered for super::worker::RenderResult {
     fn matches(&self, request: &RenderRequest) -> bool {
-        self.request.path == request.path
-            && self.request.rendition == request.rendition
-            && self.request.output == request.output
-            && self.processing_quality() == request.processing_quality
-            && self.request.framing_preview == request.framing_preview
-            && self.request.comparison == request.comparison
-            && self.calibration_signature()
-                == request
-                    .calibration
-                    .as_ref()
-                    .map(|profile| profile.signature())
-            && super::matching::same_image_geometry(&self.request.settings, &request.settings)
-            && super::matching::same_authored_edits(&self.request.settings, &request.settings)
+        answers(&self.request, self.processing_quality(), request)
     }
     fn same_edits(&self, other: &Self) -> bool {
         super::matching::same_authored_edits(&self.request.settings, &other.request.settings)

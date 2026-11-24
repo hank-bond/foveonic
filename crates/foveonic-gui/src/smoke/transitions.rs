@@ -975,7 +975,10 @@ impl TransitionJourney {
                 if app.multi_edit.metadata(path).is_some()
                     || app.multi_edit.settings(path).is_some()
                     || app.current_image(path).is_some()
-                    || app.images.images().any(|frame| frame.request.path == *path)
+                    || app
+                        .view_images
+                        .images()
+                        .any(|frame| frame.request.path == *path)
                     || app.multi_edit.loaded(path)
                 {
                     return Err("retention did not evict the cold target's application metadata/pixels/demand".into());
@@ -2047,7 +2050,7 @@ impl TransitionJourney {
             Step::SmartGroupEdit => {
                 self.smart_observed.clear();
                 self.smart_began = Some(std::time::Instant::now());
-                let event = serde_json::json!({"phase":"begin","zoomed":self.smart_zoomed,"editing_count":app.edit_selection.paths().len(),"minimum_revision":app.last_request_id.next().0});
+                let event = serde_json::json!({"phase":"begin","zoomed":self.smart_zoomed,"editing_count":app.edit_selection.paths().len(),"minimum_revision":app.view_images.last_request_id().next().0});
                 crate::timing::emit("scenario.smart_edit", || event.clone());
                 self.events.push(event);
                 self.model.adjust_exposure(0.125);
@@ -2060,10 +2063,10 @@ impl TransitionJourney {
                     .and_then(|path| paths.iter().position(|candidate| candidate == path))
                     .ok_or("no active Smart photo for held selection")?;
                 self.smart_active = Some((active + 1) % paths.len());
-                self.hold = Some(
-                    app.worker
-                        .hold_delivery(paths[active].clone(), app.last_request_id.next().0),
-                );
+                self.hold = Some(app.worker.hold_delivery(
+                    paths[active].clone(),
+                    app.view_images.last_request_id().next().0,
+                ));
                 self.model.adjust_exposure(0.125);
                 super::scenarios::apply_exposure(app, 0.125);
             }
@@ -2238,7 +2241,7 @@ impl TransitionJourney {
             Step::WholeScopes => app.preferences.scope_viewport = false,
             Step::HeldSupersession => {
                 let index = self.single.ok_or("no single photo for delivery hold")?;
-                let revision = app.last_request_id.next().0;
+                let revision = app.view_images.last_request_id().next().0;
                 self.hold = Some(app.worker.hold_delivery(paths[index].clone(), revision));
                 self.held_delta = if self.model.exposures()[index] > 3.5 {
                     -0.125

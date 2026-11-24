@@ -295,8 +295,9 @@ pub(super) struct Pending {
     // Paths queued, loading or awaiting consumption of their source handoff.
     pub(super) source_requests: std::collections::HashSet<PathBuf>,
     pub(super) memory: Option<MemoryTarget>,
-    /// Performance tests cap how many jobs run together. None leaves width to memory.
-    pub(super) render_width: Option<usize>,
+    /// Tests cap how many jobs run together. None leaves width to memory.
+    #[cfg(test)]
+    pub(super) width_cap: Option<usize>,
     pub(super) preparation: Option<Arc<PreparationConfig>>,
     pub(super) plan: Arc<crate::rendering::coordinator::WorkPlan>,
     pub(super) activity: Option<foveonic::priority::Demand>,
@@ -415,7 +416,8 @@ impl Worker {
                 source: None,
                 source_requests: Default::default(),
                 memory: None,
-                render_width: None,
+                #[cfg(test)]
+                width_cap: None,
                 preparation: None,
                 plan: Arc::default(),
                 activity: None,
@@ -466,11 +468,13 @@ impl Worker {
                 observations,
             );
             loop {
-                let (stop, clear, memory, width) = {
+                let (stop, clear, memory) = {
                     let mut state = slot.0.lock().unwrap();
+                    #[cfg(test)]
+                    scheduler.set_width_cap(state.width_cap);
                     let clear = std::mem::take(&mut state.clear)
                         .then(|| std::mem::take(&mut state.clear_all));
-                    (state.stop, clear, state.memory.take(), state.render_width)
+                    (state.stop, clear, state.memory.take())
                 };
                 if stop {
                     break;
@@ -493,7 +497,6 @@ impl Worker {
                     host.target = target;
                     host.trim(&mut scheduler);
                 }
-                scheduler.set_width_cap(width);
                 host.sync(&mut scheduler);
                 let worked = scheduler.tick(&mut host);
                 #[cfg(test)]
@@ -582,10 +585,6 @@ impl Worker {
     }
     pub fn set_memory_target(&self, target: u64, frontend: crate::memory::Inventory) {
         self.runtime.memory(target, frontend);
-    }
-    #[cfg(test)]
-    pub fn set_render_width(&self, maximum: usize) {
-        self.runtime.set_render_width(Some(maximum));
     }
     pub fn memory_status(&self) -> MemoryStatus {
         if let Ok(status) = self.memory.try_lock() {
@@ -865,6 +864,10 @@ pub(crate) mod tests {
                 wanted: Default::default(),
                 history: Default::default(),
             }
+        }
+        /// Cap how many jobs run together. Set it before submitting work.
+        pub fn set_width_cap(&self, cap: usize) {
+            self.worker.test_pending.0.lock().unwrap().width_cap = Some(cap);
         }
         /// Want this image too, replacing the image wanted for the same target.
         pub fn submit(&self, request: super::RenderRequest) {
@@ -2075,13 +2078,17 @@ pub(crate) mod tests {
         std::fs::read(path).unwrap()
     }
 
-    /// Render warm reduced edits and native regions for every family at one width cap.
-    fn family_renders(width: usize) -> (std::collections::BTreeMap<(String, bool), Vec<u8>>, u64) {
+    /// Render warm reduced edits and native regions for every family at one width
+    /// cap and processing quality.
+    fn family_renders(
+        width: usize,
+        quality: ProcessingQuality,
+    ) -> (std::collections::BTreeMap<(String, bool), Vec<u8>>, u64) {
         use std::sync::atomic::Ordering;
         let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
         let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
         worker.set_memory_target(8 * 1024 * 1024 * 1024, Default::default());
-        worker.set_render_width(width);
+        worker.set_width_cap(width);
         let request = |name: &str, revision: u64, detail: bool| {
             let mut settings = foveonic::render::Settings::new("Sunlight", "Standard");
             settings.exposure = revision as f32 * 0.1;
@@ -2101,7 +2108,7 @@ pub(crate) mod tests {
                 } else {
                     Scale::new(8).unwrap()
                 },
-                processing_quality: ProcessingQuality::Quality,
+                processing_quality: quality,
                 output: "final".into(),
                 comparison: false,
             }
@@ -2150,7 +2157,7 @@ pub(crate) mod tests {
         let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
         let worker = TestWorker::new(foveonic::render::Engine::new().unwrap(), Default::default());
         worker.set_memory_target(8 * 1024 * 1024 * 1024, Default::default());
-        worker.set_render_width(width);
+        worker.set_width_cap(width);
         let requests = |revision: u64| -> Vec<super::RenderRequest> {
             FAMILY_FIXTURES
                 .iter()
@@ -2221,15 +2228,20 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with Classic, Merrill, Quattro and Quattro H originals"]
     fn every_family_renders_identically_at_every_width() {
-        let (serial, widest) = family_renders(1);
-        assert_eq!(widest, 1);
-        for width in [2, 4, 8] {
-            let (wide, widest) = family_renders(width);
-            assert!(widest > 1, "width {width} never ran jobs together");
-            assert!(widest <= width as u64);
-            assert_eq!(wide.len(), serial.len());
-            for (key, pixels) in &serial {
-                assert!(wide[key] == *pixels, "{key:?} differs at width {width}");
+        for quality in [ProcessingQuality::Quality, ProcessingQuality::Speed] {
+            let (serial, widest) = family_renders(1, quality);
+            assert_eq!(widest, 1);
+            for width in [2, 4, 8] {
+                let (wide, widest) = family_renders(width, quality);
+                assert!(widest > 1, "width {width} never ran jobs together");
+                assert!(widest <= width as u64);
+                assert_eq!(wide.len(), serial.len());
+                for (key, pixels) in &serial {
+                    assert!(
+                        wide[key] == *pixels,
+                        "{key:?} differs at width {width} in {quality:?}"
+                    );
+                }
             }
         }
     }

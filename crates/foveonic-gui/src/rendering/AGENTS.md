@@ -27,8 +27,9 @@ Authored edits remain with the application, multi-edit runtime and sidecar sessi
 - **[runtime.rs](./runtime.rs)** Owns render coordination on a dedicated thread and publishes bounded UI updates.
 - **[smart.rs](./smart.rs)** Sizes native patches around the visible region and compares image regions.
 - **[source_loader.rs](./source_loader.rs)** Acquires decoded sources off the renderer and hands bounded results through coordination.
+- **[view_images.rs](./view_images.rs)** Holds every viewport photo's view, its rendered images and the planning state carried between frames, without a GPU.
 - **[view_plan.rs](./view_plan.rs)** Derives each viewport photo's render requests and drawn layers from its view, current request and rendered images.
 - **[viewport_plan.rs](./viewport_plan.rs)** Plans every viewport photo's images from inputs read off the app, without a GPU.
-- **[views.rs](./views.rs)** Decides what each viewport photo shows, plans the images its view uses and selects what is drawn.
+- **[views.rs](./views.rs)** Reads what each viewport photo shows off the app, plans its view through the view owner and selects what is drawn.
 
 <!-- INDEX:END -->

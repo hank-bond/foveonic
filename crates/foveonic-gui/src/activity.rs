@@ -115,6 +115,14 @@ impl Log {
     pub fn unread_errors(&self) -> bool {
         self.unread_errors
     }
+    /// The most recent error message still in the log.
+    pub fn last_error(&self) -> Option<&str> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.error)
+            .map(|entry| entry.message.as_str())
+    }
     fn push(&mut self, error: bool, message: String, reported: bool) {
         if !reported {
             support::event(

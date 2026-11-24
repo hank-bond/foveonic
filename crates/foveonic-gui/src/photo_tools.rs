@@ -4,8 +4,13 @@ use crate::{
     crop_tool, editor, loupe_tool, rotate_tool, toolbar,
     widgets::{self, ControlSize},
 };
+use crate::{
+    multi_edit_controls::{field, Edit},
+    rendering::worker::ColorPickRequest,
+};
 use eframe::egui;
-use foveonic::crop::Crop;
+use foveonic::{crop::Crop, render::Settings};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tool {
@@ -79,36 +84,100 @@ pub fn takes_pointer(ctx: &egui::Context) -> bool {
         Tool::Crop | Tool::ColorRange | Tool::Dehaze | Tool::WhiteBalance => true,
     }
 }
+/// A drawn photo as the pick tools see it this frame.
+pub struct PickTile {
+    pub path: PathBuf,
+    pub response: egui::Response,
+    /// The pointer's position on the image, when the image shows the photo's current recipe.
+    pub uv: Option<[f32; 2]>,
+    /// Tools may act on the photo: an editing photo showing its current final output.
+    pub allowed: bool,
+}
+
+/// The editing photos a pick reads and edits.
+pub trait PickPhotos {
+    fn settings(&self, path: &Path) -> Option<&Settings>;
+    fn editing(&self) -> &[PathBuf];
+    /// Every editing photo can take edits, the rule the panel uses.
+    fn editable(&self) -> bool;
+    /// Apply `edits` to every editing photo and report whether rendering changed.
+    fn edit(&mut self, edits: Vec<Edit>) -> bool;
+}
+
+/// Run the pick tools once, after the viewport draws, on the gesture's photo:
+/// the photo holding a press, drag, menu or pending sample, otherwise the
+/// editing photo under the pointer. The pick samples that photo and edits every
+/// editing photo. A held photo that is no longer drawn, editable or loaded runs
+/// as not allowed, which ends its gesture. Returns whether rendering changed and
+/// the sample to request.
+pub fn pick_on_photo(
+    ui: &egui::Ui,
+    tiles: &[PickTile],
+    photos: &mut impl PickPhotos,
+) -> (bool, Option<ColorPickRequest>) {
+    let ctx = ui.ctx();
+    let under_pointer = tiles
+        .iter()
+        .find(|tile| photos.editing().contains(&tile.path) && tile.response.hovered())
+        .map(|tile| tile.path.clone());
+    let held = editor::white_balance::held_photo(ctx)
+        .or_else(|| editor::dehaze::held_photo(ctx))
+        .or_else(|| editor::direct_color::held_photo(ctx));
+    let Some(path) = held.or(under_pointer) else {
+        return (false, None);
+    };
+    let tile = tiles.iter().find(|tile| tile.path == path);
+    let settings = photos.settings(&path).cloned();
+    let editable = photos.editable();
+    let ranges = |path| {
+        photos
+            .settings(path)
+            .map(|settings| settings.photographic.color_editor.advanced)
+    };
+    let shared_ranges = photos
+        .editing()
+        .iter()
+        .all(|target| ranges(target) == ranges(&path));
+    let allowed = editable && settings.is_some() && tile.is_some_and(|tile| tile.allowed);
+    let (edits, request) = pick(
+        ui,
+        tile.map_or(&ui.response(), |tile| &tile.response),
+        tile.and_then(|tile| tile.uv),
+        &path,
+        &settings.unwrap_or_default(),
+        allowed,
+        shared_ranges,
+    );
+    if edits.is_empty() {
+        return (false, request);
+    }
+    let changed = photos.edit(edits);
+    if let Some(settings) = photos.settings(&path) {
+        editor::direct_color::edited(ctx, settings);
+    }
+    (changed, request)
+}
 /// Released pickers still consume their pending reply. Selecting another tool cancels that reply.
-/// Each picker returns the edit to the one field it sets.
-pub fn pick(
+fn pick(
     ui: &egui::Ui,
     response: &egui::Response,
     uv: Option<[f32; 2]>,
-    path: &std::path::Path,
-    settings: &foveonic::render::Settings,
+    path: &Path,
+    settings: &Settings,
     allowed: bool,
-) -> (
-    Option<crate::multi_edit_controls::Edit>,
-    Option<crate::rendering::worker::ColorPickRequest>,
-) {
-    use crate::multi_edit_controls::{field, Edit};
-    let mut picked = settings.clone();
+    shared_ranges: bool,
+) -> (Vec<Edit>, Option<ColorPickRequest>) {
     if editor::white_balance::active(ui.ctx()) || editor::white_balance::pending(ui.ctx()) {
-        let (changed, request) =
-            editor::white_balance::photo(ui, response, uv, path, &mut picked, allowed);
-        let edit = Edit::set(field::WHITE_BALANCE_BIAS, &picked.white_balance_bias);
-        (changed.then_some(edit), request)
+        let (bias, request) =
+            editor::white_balance::photo(ui, response, uv, path, settings, allowed);
+        let edits = bias.map(|bias| Edit::set(field::WHITE_BALANCE_BIAS, &bias));
+        (edits.into_iter().collect(), request)
     } else if editor::dehaze::active(ui.ctx()) || editor::dehaze::pending(ui.ctx()) {
-        let (changed, request) =
-            editor::dehaze::photo(ui, response, uv, path, &mut picked, allowed);
-        let edit = Edit::set(field::DEHAZE_SHADOW, &picked.dehaze.shadow);
-        (changed.then_some(edit), request)
+        let (shadow, request) = editor::dehaze::photo(ui, response, uv, path, settings, allowed);
+        let edits = shadow.map(|shadow| Edit::set(field::DEHAZE_SHADOW, &Some(shadow)));
+        (edits.into_iter().collect(), request)
     } else {
-        let (changed, request) =
-            editor::direct_color::photo(ui, response, uv, path, &mut picked, allowed);
-        let edit = Edit::set(field::COLOR_EDITOR, &picked.photographic.color_editor);
-        (changed.then_some(edit), request)
+        editor::direct_color::photo(ui, response, uv, path, settings, allowed, shared_ranges)
     }
 }
 pub fn framing(ctx: &egui::Context) -> bool {
@@ -252,6 +321,10 @@ fn pointer_icon(ui: &egui::Ui, response: &egui::Response, on: bool) {
         egui::Stroke::new(1.15_f32, widgets::visuals(ui, response, on).text_color()),
     ));
 }
+
+#[cfg(test)]
+#[path = "photo_pick_test.rs"]
+mod pick_tests;
 
 #[cfg(test)]
 mod tests {
@@ -410,6 +483,7 @@ mod tests {
                                 Some([0.5, 0.5]),
                                 std::path::Path::new("photo.x3f"),
                                 &settings,
+                                true,
                                 true,
                             );
                             requests += usize::from(request.is_some());

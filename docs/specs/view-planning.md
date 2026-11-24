@@ -45,13 +45,14 @@ Agreed terms. Code and prose use these names only.
 
 | Source | Scope | With Shift |
 |---|---|---|
-| A pointer action on a photo: zoom, pan, double-click fit, crop or rotation drag, color pick, the bar under a photo | That photo | The editing selection, applied or sampled from that photo |
+| A pointer action on a photo: zoom, pan, double-click fit, crop or rotation drag, the bar under a photo | That photo | The editing selection, applied or sampled from that photo |
+| A pick on an editing photo: white balance, haze color, color range | The editing selection, sampled from that photo | — |
 | Shared controls: panel sliders and buttons, keyboard shortcuts | The editing selection | — |
 | View switches: tool choice, inspection output, comparison, Before | All viewport photos | — |
 
 With the Pointer tool, clicking is itself the selection action: a click selects the photo and Shift-click extends the selection to a range. One function returns an action's scope, and every tool applies its edit to that scope through one path that writes each photo's settings.
 
-There is no active photo. Tools used by pointing act on the photo pointed at, whether or not it is in the editing selection. The crop and rotation plane, inspection outputs and comparison apply to every viewport photo. Scopes, the navigator and the information bar show only when the viewport selection is one photo.
+There is no active photo. Other tools used by pointing act on the photo pointed at, whether or not it is in the editing selection. Pick tools do nothing on a photo outside the editing selection; see [multi-photo editing](./multi-edit.md#selection-and-tools). The crop and rotation plane, inspection outputs and comparison apply to every viewport photo. Scopes, the navigator and the information bar show only when the viewport selection is one photo.
 
 ## Model
 
@@ -105,7 +106,7 @@ A render that fails is recorded with its request. The request counts as done unt
 
 ### Clearing and freshness
 
-An image is current when it was rendered for the view's look and output and after the last worker clear. Clearing the worker therefore re-renders displayed images, which stay as placeholders meanwhile. Republishing is never needed, because the planner publishes the complete set.
+An image is current when it was rendered for the view's request: its look, output, processing quality, calibration, geometry and authored edits. When displayed work is invalidated, by a calibration, quality, defaults or workspace change or by an edit, each displayed photo must keep showing its previous image until the new one arrives, so no tile goes blank. Requests then stop matching the stored images, so the planner renders them again while the stored images stay drawn as placeholders. Images are emptied, with the worker cleared, only when nothing remains displayed, as when an opened folder has no photos. Republishing is never needed, because the planner publishes the complete set.
 
 ### Settling and up to date
 

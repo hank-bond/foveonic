@@ -93,8 +93,9 @@ struct App {
     comparison_layout: comparison_view::State,
     browser_selection: Arc<[PathBuf]>,
     viewport_selection: Vec<PathBuf>,
-    /// Each viewport photo's view as last planned.
-    views: std::collections::HashMap<PathBuf, rendering::views::PhotoView>,
+    /// Each viewport photo's view, the rendered images the app holds and what
+    /// planning carries between frames.
+    view_images: rendering::view_images::ViewImages<worker::RenderResult>,
     browser_selection_key: Option<(u64, Option<PathBuf>)>,
     browser_selection_limit: usize,
     editor_ui: editor::State,
@@ -115,24 +116,14 @@ struct App {
     output: String,
     channel: i32,
     comparison: inspect::Comparison,
-    /// Every rendered image the app holds, keyed by photo, look and output.
-    images: rendering::rendered::RenderedImages<worker::RenderResult>,
     /// Screen pixels per UI point this frame, which photo scales follow.
     pixels_per_point: f32,
-    /// The last plan had photos whose settings or metadata summaries were
-    /// still being read.
-    photos_loading: bool,
-    /// Zoomed photos' moving regions. Planning reads views, so motion uses interior mutability.
-    view_motion:
-        std::cell::RefCell<std::collections::BTreeMap<PathBuf, rendering::view_plan::Motion>>,
     scope_images: Option<scopes::Images>,
     scope_snapshot: Option<worker::ScopeSnapshot>,
     scope_key: Option<worker::ScopeKey>,
     viewports: photo_views::PhotoViews,
     navigator: navigator::Navigator,
     previews: previews::Previews,
-    /// The last request id issued.
-    last_request_id: RequestId,
     busy: bool,
     memory_key: Vec<u64>,
     memory_reply_epoch: u64,
@@ -320,7 +311,7 @@ impl App {
             comparison_layout: Default::default(),
             browser_selection: Arc::default(),
             viewport_selection: Vec::new(),
-            views: Default::default(),
+            view_images: Default::default(),
             browser_selection_key: None,
             browser_selection_limit: 0,
             editor_ui: Default::default(),
@@ -345,16 +336,12 @@ impl App {
             output: "final".into(),
             channel: -1,
             comparison: Default::default(),
-            images: Default::default(),
             pixels_per_point: 1.,
-            photos_loading: false,
-            view_motion: Default::default(),
             scope_images: None,
             scope_snapshot: None,
             scope_key: None,
             viewports: Default::default(),
             navigator,
-            last_request_id: RequestId::default(),
             busy: false,
             memory_key: Vec::new(),
             memory_reply_epoch: 0,
@@ -437,7 +424,7 @@ impl App {
     fn clear_selection(&mut self) {
         self.before = Default::default();
         self.browser.invalidate_prefetch();
-        self.last_request_id = self.last_request_id.next();
+        self.view_images.issue_request_id();
         self.selected = None;
         self.edit_selection
             .sync_browser(&[], self.preferences.multi_edit_limit);
@@ -449,7 +436,7 @@ impl App {
         self.scope_key = None;
         self.busy = false;
         self.worker.clear_all();
-        self.images.clear();
+        self.view_images.clear_images();
         self.viewport_mut().reset();
         viewport::clear(&self.render_state);
     }
@@ -495,7 +482,7 @@ impl App {
             self.before.active = editor::Rendition::Current;
         }
         self.browser.invalidate_prefetch();
-        timing::selected(self.last_request_id.next().0, &path);
+        timing::selected(self.view_images.issue_request_id().0, &path);
         let began = std::time::Instant::now();
         self.opening = Some(Opening {
             _priority: self.worker.cache.priority().demand(Priority::Viewport),
@@ -504,7 +491,6 @@ impl App {
         });
         self.selected = Some(path);
         self.range_preview = None;
-        self.last_request_id = self.last_request_id.next();
         self.output = "final".into();
         self.channel = -1;
         self.scope_key = None;
@@ -522,12 +508,31 @@ impl App {
     pub(crate) fn selected_metadata(&self) -> Option<Arc<Metadata>> {
         self.multi_edit.metadata(self.selected.as_deref()?)
     }
-    /// Apply `change` to the selected photo and report whether rendering changed.
+    /// Apply a change to these photos and drop their previews when it shows.
+    pub(crate) fn edit_paths(
+        &mut self,
+        paths: &[PathBuf],
+        change: &multi_edit_runtime::Change,
+    ) -> bool {
+        let changed = self.multi_edit.edit(paths, change, &mut self.sidecars);
+        if changed {
+            for path in paths {
+                self.previews.invalidate_path(path);
+            }
+        }
+        changed
+    }
+    /// Shared controls and shortcuts edit every photo in the editing selection.
+    pub(crate) fn edit_editing(&mut self, change: &multi_edit_runtime::Change) -> bool {
+        let paths = self.edit_selection.paths().to_vec();
+        self.edit_paths(&paths, change)
+    }
+    /// Tools used by pointing edit the selected photo.
     pub(crate) fn edit_selected(&mut self, change: multi_edit_runtime::Change) -> bool {
         let Some(path) = self.selected.clone() else {
             return false;
         };
-        self.multi_edit.edit(&[path], &change, &mut self.sidecars)
+        self.edit_paths(&[path], &change)
     }
     /// Save a framing tool's crop and rotation for the selected photo.
     fn edit_framing(
@@ -548,7 +553,7 @@ impl App {
         };
         if let Some(opening) = self.opening.as_mut().filter(|opening| !opening.ready) {
             opening.ready = true;
-            timing::selection_ready(self.last_request_id.0, &path, opening.began);
+            timing::selection_ready(self.view_images.last_request_id().0, &path, opening.began);
         }
     }
     pub(crate) fn navigator_source(&self) -> Option<&worker::RenderResult> {
@@ -558,11 +563,11 @@ impl App {
     /// held, not what arrives, restores thumbnails after the browser forgets them,
     /// as when a folder is reopened while its images stay current.
     fn sync_browser_thumbnails(&mut self) {
-        for frame in self.images.images().filter(|frame| {
-            let origin = self.worker.cache.source_origin(&frame.request.path);
-            frame.is_photographic()
-                && rendering::views::usable(Some(*frame), origin.as_ref()).is_some()
-        }) {
+        for frame in self
+            .view_images
+            .usable_images(|path| self.worker.cache.source_origin(path))
+            .filter(|frame| frame.is_photographic())
+        {
             let revision = frame.request.id.0;
             if !self.browser.needs_rendered(&frame.request.path, revision) {
                 continue;
@@ -696,7 +701,7 @@ impl App {
                 }
                 let active = self.selected.as_ref() == Some(&frame.request.path);
                 let whole = !frame.request.detail;
-                if self.images.accept(*frame) && active {
+                if self.view_images.accept(*frame) && active {
                     if whole {
                         self.worker.whole_delivered(reply.request.id);
                     }
@@ -713,7 +718,7 @@ impl App {
                     "native smoke processing failed: {error}"
                 );
                 if handling.accepted {
-                    self.images.fail(reply.request.clone());
+                    self.view_images.fail(reply.request.clone());
                 }
                 if handling.current {
                     self.activity.error_reported(error);
@@ -1005,9 +1010,9 @@ impl App {
         );
         framed && self.edit_framing(crop, rotation)
     }
-    /// Draw `section`; the Editing section edits `draft`, a copy of the
-    /// selected photo's settings.
-    fn section_body(&mut self, ui: &mut egui::Ui, section: Section, draft: &mut Settings) -> bool {
+    /// Draw `section`. The Editing section draws the selected photo's settings
+    /// and pushes its edits for the editing selection.
+    fn section_body(&mut self, ui: &mut egui::Ui, section: Section) -> bool {
         if self.multi_edit.multiple() && matches!(section, Section::Navigator | Section::Scopes) {
             ui.add_enabled(false, egui::Label::new("Available when editing one photo."));
             return false;
@@ -1049,12 +1054,20 @@ impl App {
                         && !self.edit_selection.paths().is_empty()
                         && self.multi_edit.editable_ready(),
                     |ui| {
-                        let exposure_auto_compensation = draft.exposure_auto_compensation;
-                        let prevent_color_clipping = draft.prevent_color_clipping;
+                        let metadata = self.selected_metadata();
+                        let placeholder = Settings::default();
+                        let settings = self
+                            .selected
+                            .as_deref()
+                            .and_then(|path| self.multi_edit.settings(path))
+                            .unwrap_or(&placeholder);
+                        let exposure_auto_compensation = settings.exposure_auto_compensation;
+                        let prevent_color_clipping = settings.prevent_color_clipping;
                         changed = controls::processing(
                             ui,
-                            draft,
-                            self.selected_metadata().as_deref(),
+                            settings,
+                            &mut self.range_preview,
+                            metadata.as_deref(),
                             self.selected
                                 .as_deref()
                                 .and_then(|path| self.browser.metadata_summary(path)),
@@ -1081,7 +1094,7 @@ impl App {
             }
         }
     }
-    fn tools(&mut self, ui: &mut egui::Ui, draft: &mut Settings) -> bool {
+    fn tools(&mut self, ui: &mut egui::Ui) -> bool {
         let _scope = foveonic::diagnostics::scope(foveonic::diagnostics::Category::Ui, "ui.editor");
         let mut changed = false;
         let mut movement = None;
@@ -1127,7 +1140,7 @@ impl App {
                                     sections::CONTENT_HORIZONTAL_PADDING,
                                     0,
                                 ))
-                                .show(ui, |ui| self.section_body(ui, section, draft))
+                                .show(ui, |ui| self.section_body(ui, section))
                                 .inner;
                         }
                         if let Some((source, after)) = sections::drop(ui, header) {
@@ -1324,6 +1337,7 @@ impl App {
                     changed |= self.show_photo(ui, mapping);
                     self.before_badge(ui, canvas);
                 }
+                changed |= self.pick_on_photo(ui);
                 self.show_loupe(ui, mapping);
             },
         );
@@ -1342,21 +1356,58 @@ impl App {
         changed
     }
 
-    fn photo_interaction_available(&self, mapping: viewport::Mapping) -> bool {
-        self.selected
-            .as_deref()
-            .is_some_and(|path| self.edit_selection.contains(path))
-            && self.selection_loaded()
+    /// Whether tools may act on this displayed editing photo: it shows its
+    /// current final output, without inspection or comparison.
+    fn photo_interaction_available(&self, path: &std::path::Path) -> bool {
+        let image = self.photo_layers(path)[0];
+        let mapping = self.mapping_for(image);
+        self.edit_selection.contains(path)
+            && self.viewport_selection.iter().any(|shown| shown == path)
+            && self.multi_edit.settings(path).is_some()
             && self.before.active == editor::Rendition::Current
             && self.output == "final"
             && !mapping.input
             && mapping.difference_gain == 0.
-            && self.active_image().is_some_and(|f| {
+            && image.is_some_and(|f| {
                 !f.request.framing_preview
-                    && self.selected.as_ref() == Some(&f.request.path)
+                    && f.request.path == path
                     && f.request.output == "final"
                     && f.request.rendition == editor::Rendition::Current
             })
+    }
+
+    /// Run the pick tools on the photos drawn this frame.
+    fn pick_on_photo(&mut self, ui: &egui::Ui) -> bool {
+        let pointer = ui.input(|i| i.pointer.interact_pos());
+        let tiles: Vec<_> = self
+            .viewport_selection
+            .iter()
+            .filter_map(|path| {
+                let (response, uv) = self.viewports.view(Some(path)).pointer(pointer)?;
+                // Existing gestures can continue while their render catches up. Start a
+                // new pick only from an image that represents the current authored recipe.
+                let current = self.photo_layers(path)[0]
+                    .zip(self.multi_edit.settings(path))
+                    .is_some_and(|(image, settings)| {
+                        self.preferences
+                            .renders_edits(&image.request.settings, settings)
+                    });
+                Some(photo_tools::PickTile {
+                    path: path.clone(),
+                    response,
+                    uv: uv.filter(|_| current),
+                    allowed: self.photo_interaction_available(path),
+                })
+            })
+            .collect();
+        let (changed, request) = photo_tools::pick_on_photo(ui, &tiles, self);
+        if let Some(request) = request {
+            if let Some(image) = self.photo_layers(&request.path)[0] {
+                let (id, origin) = (image.request.id, image.origin.clone());
+                self.worker.pick_color(request, id, Some(origin));
+            }
+        }
+        changed
     }
 
     fn show_photo(&mut self, ui: &mut egui::Ui, mapping: viewport::Mapping) -> bool {
@@ -1366,7 +1417,10 @@ impl App {
                 .as_ref()
                 .is_some_and(|path| self.edit_selection.contains(path));
         self.viewport_mut().group_target = group_target;
-        let allowed = self.photo_interaction_available(mapping);
+        let allowed = self
+            .selected
+            .as_deref()
+            .is_some_and(|path| self.photo_interaction_available(path));
         let framing_active = self.framing_preview_active() && self.selection_loaded();
         let crop_active = framing_active && crop_tool::active(ui.ctx());
         self.viewport_mut().framing = self
@@ -1449,58 +1503,51 @@ impl App {
                 ));
             });
         }
-        if let (Some(path), Some((response, uv))) = (
-            &self.selected,
-            self.viewport()
-                .pointer(ui.input(|i| i.pointer.interact_pos())),
-        ) {
-            if framing_active {
-                if let (Some(frame), Some((canvas, image))) = (
-                    self.active_image()
-                        .filter(|f| f.request.framing_preview && &f.request.path == path),
-                    self.viewport().image_rectangles(),
-                ) {
-                    let native = frame.camera_extent();
-                    let (mut crop, mut rotation) = self
-                        .selected_settings()
-                        .map(|settings| (settings.crop, settings.rotation))
-                        .unwrap_or_default();
-                    let framed = framing::photo(
-                        ui,
-                        &response,
-                        canvas,
-                        image,
-                        native,
-                        &mut crop,
-                        &mut rotation,
-                    );
-                    return framed && self.edit_framing(crop, rotation);
-                }
-                return false;
-            }
-            // Existing gestures can continue while their render catches up. Start a new
-            // selection only from a frame that represents the current authored recipe.
-            let Some(settings) = self.selected_settings() else {
-                return false;
-            };
-            let uv = uv.filter(|_| {
-                self.active_image().is_some_and(|image| {
-                    self.preferences
-                        .renders_edits(&image.request.settings, settings)
-                })
-            });
-            let (edit, request) = photo_tools::pick(ui, &response, uv, path, settings, allowed);
-            if let Some(request) = request {
-                if let Some(frame) = self.active_image() {
-                    self.worker
-                        .pick_color(request, frame.request.id, Some(frame.origin.clone()));
-                }
-            }
-            return edit.is_some_and(|edit| {
-                self.edit_selected(multi_edit_runtime::Change::Fields(vec![edit]))
-            });
-        }
-        false
+        let Some(path) = self.selected.as_ref().filter(|_| framing_active) else {
+            return false;
+        };
+        let Some((response, _)) = self
+            .viewport()
+            .pointer(ui.input(|i| i.pointer.interact_pos()))
+        else {
+            return false;
+        };
+        let (Some(frame), Some((canvas, image))) = (
+            self.active_image()
+                .filter(|f| f.request.framing_preview && &f.request.path == path),
+            self.viewport().image_rectangles(),
+        ) else {
+            return false;
+        };
+        let native = frame.camera_extent();
+        let (mut crop, mut rotation) = self
+            .selected_settings()
+            .map(|settings| (settings.crop, settings.rotation))
+            .unwrap_or_default();
+        let framed = framing::photo(
+            ui,
+            &response,
+            canvas,
+            image,
+            native,
+            &mut crop,
+            &mut rotation,
+        );
+        framed && self.edit_framing(crop, rotation)
+    }
+}
+impl photo_tools::PickPhotos for App {
+    fn settings(&self, path: &std::path::Path) -> Option<&Settings> {
+        self.multi_edit.settings(path)
+    }
+    fn editing(&self) -> &[PathBuf] {
+        self.edit_selection.paths()
+    }
+    fn editable(&self) -> bool {
+        self.multi_edit.editable_ready()
+    }
+    fn edit(&mut self, edits: Vec<multi_edit_controls::Edit>) -> bool {
+        self.edit_editing(&multi_edit_runtime::Change::Fields(edits))
     }
 }
 impl eframe::App for App {
@@ -1518,7 +1565,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.pixels_per_point = ctx.pixels_per_point();
         self.diagnostics.poll(ctx);
-        let _update = timing::Span::new(self.last_request_id.0, "ui_update");
+        let _update = timing::Span::new(self.view_images.last_request_id().0, "ui_update");
         if let Some(ready) = self.startup_ready.take() {
             foveonic::support::event(
                 foveonic::support::Level::Info,
@@ -1612,7 +1659,7 @@ impl eframe::App for App {
                 diagnostics::Action::Mark(label) => {
                     self.diagnostics.mark(
                         &label,
-                        serde_json::json!({"source":self.selected,"revision":self.last_request_id}),
+                        serde_json::json!({"source":self.selected,"revision":self.view_images.last_request_id()}),
                     );
                     Ok(())
                 }
@@ -1711,21 +1758,7 @@ impl eframe::App for App {
         };
         self.sync_multi_edit();
         self.note_selection_ready();
-        let mut draft = self.selected_settings().cloned().unwrap_or_default();
-        draft.color_range_preview = self.range_preview;
-        let editor_before = draft.clone();
-        multi_edit_controls::begin_with_numeric(
-            ctx,
-            self.multi_edit.snapshots(),
-            self.multi_edit.numeric_snapshots(),
-        );
-        multi_edit_controls::set_metadata(ctx, self.multi_edit.metadata_snapshots());
-        for (pointer, ready) in self.multi_edit.optional_readiness() {
-            multi_edit_controls::set_optional_ready(ctx, pointer, ready);
-        }
-        for (pointer, range) in self.multi_edit.control_ranges() {
-            multi_edit_controls::set_range(ctx, &pointer, range);
-        }
+        self.multi_edit.begin_panel(ctx);
         let tools_limit = (ctx.available_rect().width() - 240.).clamp(TOOLS_MIN_WIDTH, 600.);
         let settings_panel = egui::SidePanel::right("settings")
             .default_width(
@@ -1736,22 +1769,16 @@ impl eframe::App for App {
             .width_range(TOOLS_MIN_WIDTH..=tools_limit)
             .resizable(true)
             .show(ctx, |ui| {
-                changed |= self.tools(ui, &mut draft);
+                changed |= self.tools(ui);
             });
         automation::panel(settings_panel.response.rect);
-        let mut edits = multi_edit_controls::finish(ctx);
-        self.range_preview = draft.color_range_preview;
+        let edits = multi_edit_controls::finish(ctx);
+        if !edits.is_empty() {
+            // Controls drew the settings before these edits.
+            ctx.request_repaint();
+        }
         if self.multi_edit.editable_ready() {
-            let assignments = multi_edit_controls::assignments(&editor_before, &draft, &edits);
-            edits.extend(assignments);
-            let paths = self.edit_selection.paths().to_vec();
-            let change = multi_edit_runtime::Change::Fields(edits);
-            if self.multi_edit.edit(&paths, &change, &mut self.sidecars) {
-                for path in &paths {
-                    self.previews.invalidate_path(path);
-                }
-                changed = true;
-            }
+            changed |= self.edit_editing(&multi_edit_runtime::Change::Fields(edits));
         }
         let mut viewport_frame = egui::Frame::central_panel(&ctx.style());
         // The information row owns its vertical spacing down to the window edge.
@@ -1788,7 +1815,7 @@ impl eframe::App for App {
                     .selected(self.preferences.noise_profile),
             });
         self.editor_ui.dialog(ctx, &mut self.preferences.editor);
-        let support_photo = (self.selected.clone(), self.last_request_id);
+        let support_photo = (self.selected.clone(), self.view_images.last_request_id());
         let source_changed = self
             .support_photo
             .as_ref()
@@ -1813,7 +1840,7 @@ impl eframe::App for App {
             foveonic::support::update_context(
                 "requested_workspace",
                 serde_json::json!({
-                    "source":self.selected.as_deref().map(crate::support::path),"revision":self.last_request_id,
+                    "source":self.selected.as_deref().map(crate::support::path),"revision":self.view_images.last_request_id(),
                     "settings":self.selected_settings().map(foveonic::support::settings_snapshot),"range_preview":self.range_preview,"quality":self.preferences.processing_quality,"output":self.output,
                 }),
             );
@@ -1823,13 +1850,14 @@ impl eframe::App for App {
         self.activity.show(ctx);
         self.update_scopes();
         self.smoke_check_scope_retention();
+        self.smoke_multi_check_pick_cursor(ctx);
         self.sync_busy();
         self.sync_browser_thumbnails();
         let mapping = self.displayed_mapping();
         let active = self.active_key();
-        let frame = active.as_ref().and_then(|(key, origin)| {
-            rendering::views::whole_image(&self.images, key, origin.as_ref())
-        });
+        let frame = active
+            .as_ref()
+            .and_then(|(key, origin)| self.view_images.whole(key, origin.as_ref()));
         self.previews.update(frame, self.busy, ctx);
         let navigator_source = frame.filter(|_| !self.multi_edit.multiple());
         self.navigator

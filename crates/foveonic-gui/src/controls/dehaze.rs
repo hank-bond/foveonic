@@ -5,18 +5,13 @@ use crate::{editor, help, widgets};
 use eframe::egui;
 use foveonic::render::Settings;
 
-pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+pub(super) fn show(ui: &mut egui::Ui, settings: &Settings) -> bool {
     let mut changed = false;
     widgets::parameter_group(ui, |ui| {
         let column = common::LabelColumn::new(ui);
+        let mut amount = settings.dehaze.amount;
         changed |= crate::multi_edit_controls::field(ui, "/dehaze/amount", |ui| {
-            column.adjustment(
-                ui,
-                ("Dehaze", "Dehaze"),
-                &mut settings.dehaze.amount,
-                -100. ..=100.,
-                0.,
-            )
+            column.adjustment(ui, ("Dehaze", "Dehaze"), &mut amount, -100. ..=100., 0.)
         });
         ui.horizontal(|ui| {
             column.label(ui, "Shadow tone");
@@ -27,13 +22,17 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 .on_hover_text("Estimate the haze color from the whole photograph. Turn off to adjust this color manually.")
                 .clicked()
             {
-                let next_auto = !automatic;
-                changed |= editor::dehaze::set_auto(ui.ctx(), settings, next_auto);
-                crate::multi_edit_controls::optional(ui.ctx(), "/dehaze/shadow", !next_auto);
+                // Each photo leaving Auto keeps its own estimated color.
+                crate::multi_edit_controls::optional(ui.ctx(), "/dehaze/shadow", automatic);
+                editor::dehaze::exit(ui.ctx());
+                changed = true;
             }
             if let Some(color) = color_swatch(ui, settings.dehaze.shadow.or(estimated)) {
-                settings.dehaze.shadow = Some(color);
-                crate::multi_edit_controls::assign(ui.ctx(), "/dehaze/shadow", settings.dehaze.shadow);
+                crate::multi_edit_controls::set(
+                    ui.ctx(),
+                    crate::multi_edit_controls::field::DEHAZE_SHADOW,
+                    &Some(color),
+                );
                 changed = true;
                 editor::dehaze::exit(ui.ctx());
             }

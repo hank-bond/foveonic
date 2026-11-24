@@ -15,7 +15,7 @@ Details are in the linked plans. Move each item here when its work starts.
 - [ ] **Ratings in the photo's sidecar.** [Persisted stores](./view-planning.md#persisted-stores-owner-direction-replaces-step-2-pieces-24) slice 3. Breaking change: `ratings.json` is not carried over.
 - [ ] **`AppSettings`.** Slice 4. One file per key and one atomic JSON writer. Breaking change: preferences leave `app.ron`.
 - [ ] **Import history edits.** Slice 5.
-- [ ] **Automatic values only from renders, and editor actions on the whole editing selection.** The two pieces that follow on the store.
+- [ ] **Automatic values only from renders.** Follows on the store. Editor actions on the whole editing selection landed in 0.9.0.
 - [ ] **One readiness state per photo.** [Release-gate items](./view-planning.md#follow-ups), item 1.
 - [ ] **Two jobs called "normalize".** Item 2.
 - [ ] **One source for the camera family in render requests.** Item 3.

@@ -58,10 +58,10 @@ Each slice ends with an independent review, owner testing and the checks listed 
   - Remove `Worker`, `Cursor`, `Wide` and `admission.rs`.
   - Behavior should match slice 5.
 - [ ] **7. Wider admission.**
-  - Admit jobs within the budget, dropping only unguarded results.
-  - Add the test-only width cap and remove the width command and environment variable.
-  - Check exact output at widths one, two, four and eight for every family.
-  - Measure latency and memory for single-photo and multi-photo editing, including Speed and Quality and zoomed regions.
+  - [x] Admit jobs within the budget, dropping only unguarded results.
+  - [x] Add the test-only width cap and remove the width command and environment variable.
+  - [x] Check exact output at widths one, two, four and eight for every family.
+  - [ ] Measure latency and memory for single-photo and multi-photo editing, including Speed and Quality and zoomed regions. These run with the release performance comparison.
 - [ ] **8. Documentation and release.** Update the [implemented map](../docs/interactive-rendering-architecture.md), [profiling guide](../docs/profiling.md), conformance status and remaining plans. Return to the [0.9.0 plan](./release-0.9.0.md) for the full release lanes and the comparison with published 0.8.4.
 
 - [ ] **9. Memory target and protection.**
@@ -175,3 +175,8 @@ Each slice ends with an independent review, owner testing and the checks listed 
   - Export releases a photo it loaded on every error path.
   - Kept results are freed after the store unlocks, and a taken handle removes its entry once.
   - Unit tests, the GUI correctness group and the added GPU group pass.
+- **Slice 7 completion.** Admission already admitted jobs while they fit, so this pass changed no admission logic.
+  - The UI width command and its 1–8 clamp are gone. The worker reads a test-only cap that `TestWorker::set_width_cap` writes, so `Scheduler::set_width_cap` is the only production setter. The inventory planner test uses a neutral sample variable, and the wide-rendering experiments document is marked as a historical record.
+  - `every_family_renders_identically_at_every_width` now covers Speed as well as Quality.
+  - Scheduler GPU tests now cover a lowered target retiring the most recently submitted job while the older one keeps running, an exclusive job starting only after admitted jobs finish, higher-tier demand retiring every lower-tier job, the width cap and a speculative peer leaving cached images in place where an edit peer drops them. The scheduler has no eviction path, so retirement cannot evict a working photo. This closes the budget-reduction gap left when the wide worker was removed.
+  - The owner decided that latency and memory measurements for this slice run with the release performance comparison.

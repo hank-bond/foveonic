@@ -291,26 +291,6 @@ fn idle_preparation_mode_changes_replace_the_config_while_identical_values_coale
     assert!(!Arc::ptr_eq(&original, &changed));
 }
 
-#[test]
-fn render_width_updates_are_deduplicated_without_starting_work() {
-    let rig = Rig::new();
-    rig.handle.set_render_width(Some(4));
-    rig.applied();
-    assert_eq!(rig.slot.0.lock().unwrap().render_width, Some(4));
-    let sequence = rig.handle.sequence.get();
-    rig.handle.set_render_width(Some(4));
-    assert_eq!(rig.handle.sequence.get(), sequence);
-    assert!(!rig.handle.busy());
-    rig.handle.set_render_width(Some(usize::MAX));
-    rig.applied();
-    assert_eq!(rig.slot.0.lock().unwrap().render_width, Some(8));
-    rig.handle.set_render_width(None);
-    rig.applied();
-    assert_eq!(rig.slot.0.lock().unwrap().render_width, None);
-    assert!(rig.tasks().is_empty());
-    assert!(!rig.handle.busy());
-}
-
 fn planned_patch(path: &str) -> Planned {
     let mut patch = request(path, 2, 0.);
     patch.detail = true;

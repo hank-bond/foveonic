@@ -193,7 +193,7 @@ impl Drag {
         if let Some(snapshot) = automation::snapshot() {
             self.frames.push(Frame {
                 time_seconds: snapshot.time_seconds,
-                revision: app.last_request_id.0,
+                revision: app.view_images.last_request_id().0,
                 worker_busy: app.view_busy(),
                 panel: snapshot.panel,
                 control: snapshot

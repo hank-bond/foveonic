@@ -8,12 +8,13 @@ use foveonic::render::{PhotographicMethod, Settings};
 /// Reference saturation's amount, which multiplies chroma.
 pub(crate) const REFERENCE_SATURATION_RANGE: std::ops::RangeInclusive<f32> = 0. ..=2.;
 
-pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
-    let mut changed = common::section_header(
+pub(super) fn show(ui: &mut egui::Ui, settings: &Settings) -> bool {
+    let mut changed = common::section_switch(
         ui,
         EditingSection::Saturation,
         "Saturation",
-        Some(&mut settings.saturation_enabled),
+        crate::multi_edit_controls::field::SATURATION_ENABLED,
+        settings.saturation_enabled,
     );
     ui.add_enabled_ui(
         settings.saturation_enabled && !settings.is_monochrome(),
@@ -23,19 +24,20 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
                 ui,
                 "Saturation method",
                 "Method",
-                &mut settings.photographic.saturation_method,
+                settings.photographic.saturation_method,
             );
             if settings.photographic.saturation_method == PhotographicMethod::Reference {
+                let mut amount = settings.saturation;
                 changed |= column.parameter(
                     ui,
                     "/saturation",
                     ("Reference saturation", "Amount"),
-                    &mut settings.saturation,
+                    &mut amount,
                     REFERENCE_SATURATION_RANGE,
                     1.,
                 );
             } else {
-                let c = &mut settings.photographic.perceptual;
+                let mut c = settings.photographic.perceptual;
                 changed |= column.saturation_parameter(
                     ui,
                     "/photographic/perceptual/saturation",

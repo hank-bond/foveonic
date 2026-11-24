@@ -1,37 +1,124 @@
 //! Checks family panel composition, shared widgets, and editing interactions.
 
 use super::common::{adjustment, automatic_adjustment};
-use super::merrill::{highlight_choice, select_highlight, HIGHLIGHT_METHODS};
+use super::merrill::{highlight_assignments, highlight_choice, HIGHLIGHT_METHODS};
 use super::*;
 use crate::help;
+use crate::multi_edit_runtime::Runtime;
 use foveonic::render::{
     HighlightMode, MerrillBandingMethod, MerrillNoiseMethod, Rendering, RepairThreshold,
 };
 use std::ops::RangeInclusive;
 
-// The summary comes from the fixture's metadata, as in the app; fixtures that
-// name no camera exercise the Merrill panel. Summary-only and unidentified
-// states are checked separately.
+thread_local! {
+    static SIDECARS: std::cell::RefCell<crate::sidecars::Session> = {
+        let mut session = crate::sidecars::Session::new(
+            egui::Context::default(),
+            false,
+            std::sync::Arc::new(foveonic::decode_cache::Cache::new()),
+        );
+        session.set_memory_only(true);
+        std::cell::RefCell::new(session)
+    };
+}
+
+const PHOTO: &str = "photo.x3f";
+
+/// The store holding `settings` as one editing photo after its render, with
+/// the panel's collector started. Fixtures that name no camera are a Merrill
+/// photo.
+pub(super) fn begin(
+    ctx: &egui::Context,
+    settings: &Settings,
+    metadata: Option<&Metadata>,
+) -> Runtime {
+    let rendered = metadata.cloned().unwrap_or_else(|| {
+        crate::metadata::processing_metadata(
+            [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into(),
+        )
+    });
+    let numeric = foveonic::render::numeric_settings(settings, &rendered).map_or_else(
+        // Without camera tables, a render's generic values.
+        |_| Settings {
+            reconstruction: settings.reconstruction.or(Some(foveonic::noise::Controls {
+                noise_enabled: false,
+                detail_enabled: false,
+                ..Default::default()
+            })),
+            highlight_threshold_ev: settings.highlight_threshold_ev.or(Some(0.)),
+            highlight_amount: settings.highlight_amount.or(Some(1.)),
+            monochrome_smoothness: settings.monochrome_smoothness.or(Some(0.5)),
+            ..settings.clone()
+        },
+        |(numeric, _)| numeric,
+    );
+    let runtime = Runtime::rendered([(
+        PHOTO.into(),
+        settings.clone(),
+        numeric,
+        metadata.cloned().map(std::sync::Arc::new),
+    )]);
+    runtime.begin_panel(ctx);
+    runtime
+}
+
+/// Draw controls for `settings` and apply their edits to it as the app does.
+fn edited<R>(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    metadata: Option<&Metadata>,
+    draw: impl FnOnce(&mut egui::Ui, &Settings) -> R,
+) -> R {
+    let mut runtime = begin(ui.ctx(), settings, metadata);
+    let result = draw(ui, settings);
+    let edits = crate::multi_edit_controls::finish(ui.ctx());
+    let change = crate::multi_edit_runtime::Change::Fields(edits);
+    let path = std::path::PathBuf::from(PHOTO);
+    SIDECARS
+        .with_borrow_mut(|sidecars| runtime.edit(std::slice::from_ref(&path), &change, sidecars));
+    *settings = runtime.settings(&path).unwrap().clone();
+    result
+}
+
+/// Draw controls for `settings` and check that drawing pushes no edit.
+pub(super) fn unedited<R>(
+    ui: &mut egui::Ui,
+    settings: &Settings,
+    metadata: Option<&Metadata>,
+    draw: impl FnOnce(&mut egui::Ui, &Settings) -> R,
+) -> R {
+    begin(ui.ctx(), settings, metadata);
+    let result = draw(ui, settings);
+    let edits = crate::multi_edit_controls::finish(ui.ctx());
+    assert!(edits.is_empty(), "drawing pushed {edits:?}");
+    result
+}
+
+// The summary comes from the fixture's metadata, as in the app. Summary-only
+// and unidentified states are checked separately.
 fn processing(ui: &mut egui::Ui, settings: &mut Settings, metadata: Option<&Metadata>) -> bool {
     let mut properties = metadata.map_or_else(Default::default, |m| m.properties.clone());
     properties
         .entry("CAMMODEL".into())
         .or_insert_with(|| "SIGMA DP2 Merrill".into());
     let summary = foveonic::source::MetadataSummary::from_properties(properties);
-    super::processing(
-        ui,
-        settings,
-        metadata,
-        Some(&summary),
-        &mut EditingSection::ALL.to_vec(),
-        &mut crate::editor::Menus {
-            prevent_color_clipping: true,
-            exposure_auto_compensation: Default::default(),
-            family: None,
-            library: &Default::default(),
-            state: &mut Default::default(),
-        },
-    )
+    edited(ui, settings, metadata, |ui, settings| {
+        super::processing(
+            ui,
+            settings,
+            &mut None,
+            metadata,
+            Some(&summary),
+            &mut EditingSection::ALL.to_vec(),
+            &mut crate::editor::Menus {
+                prevent_color_clipping: true,
+                exposure_auto_compensation: Default::default(),
+                family: None,
+                library: &Default::default(),
+                state: &mut Default::default(),
+            },
+        )
+    })
 }
 
 fn processing_expanded(
@@ -108,20 +195,23 @@ fn directional_band_groups_follow_capture_orientation_and_preserve_saved_values(
             |ctx| {
                 ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(!super::processing(
-                        ui,
-                        &mut settings,
-                        None,
-                        Some(&capture),
-                        &mut EditingSection::ALL.to_vec(),
-                        &mut crate::editor::Menus {
-                            prevent_color_clipping: true,
-                            exposure_auto_compensation: Default::default(),
-                            family: None,
-                            library: &Default::default(),
-                            state: &mut Default::default()
-                        }
-                    ));
+                    assert!(!unedited(ui, &settings, None, |ui, settings| {
+                        super::processing(
+                            ui,
+                            settings,
+                            &mut None,
+                            None,
+                            Some(&capture),
+                            &mut EditingSection::ALL.to_vec(),
+                            &mut crate::editor::Menus {
+                                prevent_color_clipping: true,
+                                exposure_auto_compensation: Default::default(),
+                                family: None,
+                                library: &Default::default(),
+                                state: &mut Default::default(),
+                            },
+                        )
+                    }));
                 });
             },
         );
@@ -413,7 +503,9 @@ fn rendering_toggle_keeps_both_modes_and_hides_irrelevant_controls() {
             pointer_button(color, true),
         ],
     );
-    let (_, output, after) = frame(5.1, vec![pointer_button(color, false)]);
+    frame(5.1, vec![pointer_button(color, false)]);
+    // The click's frame drew the settings before its edit.
+    let (_, output, after) = frame(5.2, vec![]);
     assert!(!after.is_monochrome());
     assert_eq!(text_centers(&output, "Saturation").len(), 2);
     for label in ["Color mode", "Noise", "Detail"] {
@@ -736,7 +828,8 @@ fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() 
         width: 1,
         height: 1,
         rotation: 0,
-        properties: Default::default(),
+        // A render's metadata names the camera.
+        properties: [("CAMMODEL".into(), "SIGMA DP2 Merrill".into())].into(),
         matrices: Default::default(),
         lists: [
             (
@@ -964,9 +1057,18 @@ fn three_highlight_choices_preserve_selectivity_threshold_and_enable_state() {
     settings.highlight_restoration = false;
     settings.highlight_threshold_ev = Some(1.25);
     settings.color_field.selectivity = 0.5;
+    // The edits the highlight menu pushes.
+    let highlight_edits = |choice| {
+        highlight_assignments(choice).map(|(pointer, value)| {
+            crate::multi_edit_controls::Edit::Assign {
+                pointer: pointer.into(),
+                value,
+            }
+        })
+    };
     for index in [2, 1, 0, 1, 2] {
         let choice = HIGHLIGHT_METHODS[index].0;
-        select_highlight(&mut settings, choice);
+        crate::multi_edit_controls::apply(&mut settings, &highlight_edits(choice));
         assert_eq!(highlight_choice(&settings), choice);
         assert_eq!(settings.highlight_threshold_ev, Some(1.25));
         assert!(!settings.highlight_restoration);
@@ -974,7 +1076,10 @@ fn three_highlight_choices_preserve_selectivity_threshold_and_enable_state() {
         if choice.0 == HighlightMode::ColorField {
             assert_eq!(settings.color_field.approach, choice.1);
         }
-        assert!(!select_highlight(&mut settings, choice));
+        assert!(!crate::multi_edit_controls::apply(
+            &mut settings,
+            &highlight_edits(choice)
+        ));
     }
 }
 
@@ -1650,7 +1755,9 @@ fn tone_methods_show_only_their_active_controls_and_preserve_edits() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(!common::tone(ui, &mut settings, None));
+                    assert!(!unedited(ui, &settings, None, |ui, s| common::tone(
+                        ui, s, None
+                    )));
                 });
             },
         );
@@ -1690,11 +1797,13 @@ fn tone_and_saturation_have_separate_rows_and_visible_tonal_group() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let changed = if saturation {
-                        super::saturation::show(ui, settings)
-                    } else {
-                        common::tone(ui, settings, None)
-                    };
+                    let changed = unedited(ui, settings, None, |ui, settings| {
+                        if saturation {
+                            super::saturation::show(ui, settings)
+                        } else {
+                            common::tone(ui, settings, None)
+                        }
+                    });
                     assert!(!changed);
                 });
             },
@@ -2963,20 +3072,23 @@ fn capture_properties_select_classic_before_a_render_completes() {
         let ctx = egui::Context::default();
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!super::processing(
-                    ui,
-                    &mut settings,
-                    None,
-                    capture,
-                    &mut EditingSection::ALL.to_vec(),
-                    &mut crate::editor::Menus {
-                        prevent_color_clipping: true,
-                        exposure_auto_compensation: Default::default(),
-                        family: None,
-                        library: &Default::default(),
-                        state: &mut Default::default()
-                    }
-                ));
+                assert!(!unedited(ui, &settings, None, |ui, settings| {
+                    super::processing(
+                        ui,
+                        settings,
+                        &mut None,
+                        None,
+                        capture,
+                        &mut EditingSection::ALL.to_vec(),
+                        &mut crate::editor::Menus {
+                            prevent_color_clipping: true,
+                            exposure_auto_compensation: Default::default(),
+                            family: None,
+                            library: &Default::default(),
+                            state: &mut Default::default(),
+                        },
+                    )
+                }));
             });
         });
         assert_eq!(
@@ -3079,7 +3191,7 @@ fn classic_monochrome_keeps_color_modes_and_preserves_disabled_preferences() {
 #[test]
 fn unsupported_tiger_geometry_keeps_inspection_without_photographic_controls() {
     let ctx = egui::Context::default();
-    let mut settings = Settings::new("Sunlight", "Standard");
+    let settings = Settings::new("Sunlight", "Standard");
     let expected = settings.clone();
     let capture: std::collections::BTreeMap<String, String> =
         [("CAMMODEL".into(), "SIGMA sd Quattro H".into())].into();
@@ -3094,22 +3206,25 @@ fn unsupported_tiger_geometry_keeps_inspection_without_photographic_controls() {
     };
     let output = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            assert!(!super::processing(
-                ui,
-                &mut settings,
-                Some(&metadata),
-                Some(&foveonic::source::MetadataSummary::from_properties(
-                    capture.clone()
-                )),
-                &mut EditingSection::ALL.to_vec(),
-                &mut crate::editor::Menus {
-                    prevent_color_clipping: true,
-                    exposure_auto_compensation: Default::default(),
-                    family: None,
-                    library: &Default::default(),
-                    state: &mut Default::default()
-                }
-            ));
+            assert!(!unedited(ui, &settings, Some(&metadata), |ui, settings| {
+                super::processing(
+                    ui,
+                    settings,
+                    &mut None,
+                    Some(&metadata),
+                    Some(&foveonic::source::MetadataSummary::from_properties(
+                        capture.clone(),
+                    )),
+                    &mut EditingSection::ALL.to_vec(),
+                    &mut crate::editor::Menus {
+                        prevent_color_clipping: true,
+                        exposure_auto_compensation: Default::default(),
+                        family: None,
+                        library: &Default::default(),
+                        state: &mut Default::default(),
+                    },
+                )
+            }));
         });
     });
     assert_eq!(settings, expected);
@@ -3156,20 +3271,23 @@ fn ordinary_quattro_controls_arrive_with_capture_before_processing_metadata() {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        assert!(!super::processing(
-                            ui,
-                            &mut settings,
-                            None,
-                            Some(&capture),
-                            &mut EditingSection::ALL.to_vec(),
-                            &mut crate::editor::Menus {
-                                prevent_color_clipping: true,
-                                exposure_auto_compensation: Default::default(),
-                                family: None,
-                                library: &Default::default(),
-                                state: &mut Default::default()
-                            }
-                        ));
+                        assert!(!unedited(ui, &settings, None, |ui, settings| {
+                            super::processing(
+                                ui,
+                                settings,
+                                &mut None,
+                                None,
+                                Some(&capture),
+                                &mut EditingSection::ALL.to_vec(),
+                                &mut crate::editor::Menus {
+                                    prevent_color_clipping: true,
+                                    exposure_auto_compensation: Default::default(),
+                                    family: None,
+                                    library: &Default::default(),
+                                    state: &mut Default::default(),
+                                },
+                            )
+                        }));
                     });
                 },
             );
@@ -3240,22 +3358,25 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!super::processing(
-                    ui,
-                    &mut settings,
-                    Some(&metadata),
-                    Some(&foveonic::source::MetadataSummary::from_properties(
-                        metadata.properties.clone()
-                    )),
-                    &mut EditingSection::ALL.to_vec(),
-                    &mut crate::editor::Menus {
-                        prevent_color_clipping: true,
-                        exposure_auto_compensation: Default::default(),
-                        family: None,
-                        library: &Default::default(),
-                        state: &mut Default::default()
-                    }
-                ));
+                assert!(!unedited(ui, &settings, Some(&metadata), |ui, settings| {
+                    super::processing(
+                        ui,
+                        settings,
+                        &mut None,
+                        Some(&metadata),
+                        Some(&foveonic::source::MetadataSummary::from_properties(
+                            metadata.properties.clone(),
+                        )),
+                        &mut EditingSection::ALL.to_vec(),
+                        &mut crate::editor::Menus {
+                            prevent_color_clipping: true,
+                            exposure_auto_compensation: Default::default(),
+                            family: None,
+                            library: &Default::default(),
+                            state: &mut Default::default(),
+                        },
+                    )
+                }));
             });
         },
     );
@@ -3298,22 +3419,25 @@ fn quattro_panel_shows_white_balance_and_tone_without_unsupported_controls() {
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!super::processing(
-                    ui,
-                    &mut settings,
-                    Some(&metadata),
-                    Some(&foveonic::source::MetadataSummary::from_properties(
-                        metadata.properties.clone()
-                    )),
-                    &mut EditingSection::ALL.to_vec(),
-                    &mut crate::editor::Menus {
-                        prevent_color_clipping: true,
-                        exposure_auto_compensation: Default::default(),
-                        family: None,
-                        library: &Default::default(),
-                        state: &mut Default::default()
-                    }
-                ));
+                assert!(!unedited(ui, &settings, Some(&metadata), |ui, settings| {
+                    super::processing(
+                        ui,
+                        settings,
+                        &mut None,
+                        Some(&metadata),
+                        Some(&foveonic::source::MetadataSummary::from_properties(
+                            metadata.properties.clone(),
+                        )),
+                        &mut EditingSection::ALL.to_vec(),
+                        &mut crate::editor::Menus {
+                            prevent_color_clipping: true,
+                            exposure_auto_compensation: Default::default(),
+                            family: None,
+                            library: &Default::default(),
+                            state: &mut Default::default(),
+                        },
+                    )
+                }));
             });
         },
     );
@@ -3361,6 +3485,8 @@ fn quattro_saved_slider_values_are_stable_when_full_metadata_arrives() {
         let mut settings = Settings::new("Sunlight", "Standard");
         settings.rendering = rendering;
         settings.sharpen_amount = None;
+        // Beyond Quattro's exposure range, so drawing must not clamp it.
+        settings.exposure = 3.;
         let before = settings.clone();
         let mut values = Vec::new();
         for full in [None, Some(&metadata)] {
@@ -3375,22 +3501,25 @@ fn quattro_saved_slider_values_are_stable_when_full_metadata_arrives() {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        assert!(!super::processing(
-                            ui,
-                            &mut settings,
-                            full,
-                            Some(&foveonic::source::MetadataSummary::from_properties(
-                                capture.clone()
-                            )),
-                            &mut EditingSection::ALL.to_vec(),
-                            &mut crate::editor::Menus {
-                                prevent_color_clipping: true,
-                                exposure_auto_compensation: Default::default(),
-                                family: None,
-                                library: &Default::default(),
-                                state: &mut Default::default()
-                            }
-                        ));
+                        assert!(!unedited(ui, &settings, full, |ui, settings| {
+                            super::processing(
+                                ui,
+                                settings,
+                                &mut None,
+                                full,
+                                Some(&foveonic::source::MetadataSummary::from_properties(
+                                    capture.clone(),
+                                )),
+                                &mut EditingSection::ALL.to_vec(),
+                                &mut crate::editor::Menus {
+                                    prevent_color_clipping: true,
+                                    exposure_auto_compensation: Default::default(),
+                                    family: None,
+                                    library: &Default::default(),
+                                    state: &mut Default::default(),
+                                },
+                            )
+                        }));
                     });
                 },
             );
@@ -3927,7 +4056,7 @@ fn universal_sharpening_values_fit_the_reserved_field_and_keep_panel_width_stabl
                     .default_width(330.)
                     .width_range(300. ..=600.)
                     .show(ctx, |ui| {
-                        common::sharpening(ui, &mut settings, None);
+                        unedited(ui, &settings, None, |ui, s| common::sharpening(ui, s, None));
                     })
                     .response
                     .rect
@@ -4134,7 +4263,9 @@ fn sensitivity_readouts_and_slider_tooltips_share_three_significant_digits() {
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                super::color_editor::show(ui, &mut settings);
+                unedited(ui, &settings, None, |ui, s| {
+                    super::color_editor::show(ui, s, &mut None)
+                });
             });
         },
     );
@@ -4160,7 +4291,7 @@ fn color_swatch_selection_changes_visible_values_without_editing_or_rendering() 
     settings.photographic.color_editor.bands[0].lightness = 0.11;
     settings.photographic.color_editor.bands[5].lightness = 0.22;
     let saved = settings.clone();
-    let mut frame = |events| {
+    let frame = |events| {
         ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -4172,7 +4303,9 @@ fn color_swatch_selection_changes_visible_values_without_editing_or_rendering() 
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(!super::color_editor::show(ui, &mut settings));
+                    assert!(!unedited(ui, &settings, None, |ui, s| {
+                        super::color_editor::show(ui, s, &mut None)
+                    }));
                 });
             },
         )
@@ -4263,7 +4396,9 @@ fn saturation_panel_leaves_shared_clipping_policy_to_the_editing_menu() {
         let before = settings.clone();
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!super::saturation::show(ui, &mut settings));
+                assert!(!unedited(ui, &settings, None, |ui, s| {
+                    super::saturation::show(ui, s)
+                }));
             });
         });
         assert!(text_centers(&output, "Prevent color clipping").is_empty());
@@ -4295,16 +4430,28 @@ fn exposure_auto_is_editable_and_leaving_it_keeps_the_shown_value() {
                     ..Default::default()
                 },
                 |ctx| {
+                    // The capture's compensation, which the store's calculation reads.
+                    let capture = calculated.map(|v| {
+                        crate::metadata::processing_metadata(
+                            [
+                                ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
+                                ("EXPCOMP".into(), (-v).to_string()),
+                            ]
+                            .into(),
+                        )
+                    });
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        changed = common::tone(
-                            ui,
-                            &mut settings,
-                            calculated.map(|v| foveonic::source::CaptureExposureCompensation {
-                                dial: Some(-v),
-                                bracket: Some(0.),
-                                net: Some(-v),
-                            }),
-                        );
+                        changed = edited(ui, &mut settings, capture.as_ref(), |ui, settings| {
+                            common::tone(
+                                ui,
+                                settings,
+                                calculated.map(|v| foveonic::source::CaptureExposureCompensation {
+                                    dial: Some(-v),
+                                    bracket: Some(0.),
+                                    net: Some(-v),
+                                }),
+                            )
+                        });
                     });
                 },
             );
@@ -4459,7 +4606,9 @@ fn tone_menu_selects_auto_exposure_source_without_an_a_context_menu() {
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
                             let response = ui.scope(|ui| {
-                                assert!(!common::tone(ui, settings, Some(compensation)));
+                                assert!(!unedited(ui, settings, None, |ui, s| {
+                                    common::tone(ui, s, Some(compensation))
+                                }));
                             });
                             menu_position = egui::pos2(
                                 response.response.rect.right() - 38.,
@@ -4575,11 +4724,13 @@ fn perceptual_saturation_panels_show_balanced_values_without_rewriting_saved_loo
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let changed = if panel == 0 {
-                        super::saturation::show(ui, &mut settings)
-                    } else {
-                        super::color_editor::show(ui, &mut settings)
-                    };
+                    let changed = unedited(ui, &settings, None, |ui, settings| {
+                        if panel == 0 {
+                            super::saturation::show(ui, settings)
+                        } else {
+                            super::color_editor::show(ui, settings, &mut None)
+                        }
+                    });
                     assert!(!changed);
                 });
             },
@@ -4612,7 +4763,9 @@ fn empty_advanced_panel_keeps_wheel_and_right_aligned_actions_without_authoring_
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!color_editor::show(ui, &mut settings));
+                assert!(!unedited(ui, &settings, None, |ui, s| color_editor::show(
+                    ui, s, &mut None
+                )));
             });
         },
     );
@@ -4682,7 +4835,9 @@ fn empty_advanced_panel_keeps_wheel_and_right_aligned_actions_without_authoring_
         },
         |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!color_editor::show(ui, &mut settings));
+                assert!(!unedited(ui, &settings, None, |ui, s| color_editor::show(
+                    ui, s, &mut None
+                )));
             });
         },
     );
@@ -4712,7 +4867,7 @@ fn form_rows_use_a_responsive_column_and_keep_dropdowns_inside_the_pane() {
                     .insert(egui::TextStyle::Body, egui::FontId::proportional(em));
             });
             let mut values = [0_f32; 4];
-            let mut method = foveonic::render::PhotographicMethod::Universal;
+            let method = foveonic::render::PhotographicMethod::Universal;
             let mut right = 0.;
             let mut widths = Vec::new();
             let _ = ctx.run(
@@ -4743,7 +4898,7 @@ fn form_rows_use_a_responsive_column_and_keep_dropdowns_inside_the_pane() {
                             );
                             widths.push(width);
                             common::adjustment(ui, label, value, -1. ..=1., 0.);
-                            common::method_choice(ui, label, label, &mut method);
+                            common::method_choice(ui, label, label, method);
                         }
                         assert!(ui.min_rect().right() <= right + 1., "form widened the pane");
                     });
@@ -4839,12 +4994,9 @@ fn every_family_tone_panel_offers_adaptive_only_for_universal() {
                     } else {
                         -4. ..=4.
                     };
-                    assert!(!common::tone_with_exposure_range(
-                        ui,
-                        &mut settings,
-                        range,
-                        None
-                    ));
+                    assert!(!unedited(ui, &settings, None, |ui, settings| {
+                        common::tone_with_exposure_range(ui, settings, range, None)
+                    }));
                 });
             });
             assert_eq!(

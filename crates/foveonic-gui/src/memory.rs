@@ -148,7 +148,7 @@ impl crate::App {
             self.navigator.resource_revision(),
             self.previews.resource_revision(),
         ];
-        for frame in self.images.images() {
+        for frame in self.view_images.images() {
             frame_key(frame, &mut key);
         }
         if let Some(metadata) = self.selected_metadata() {
@@ -167,7 +167,7 @@ impl crate::App {
         }
         self.memory_key = key;
         let mut inventory = Inventory::default();
-        for frame in self.images.images() {
+        for frame in self.view_images.images() {
             inventory.frame(frame);
         }
         if let Some(metadata) = self.selected_metadata() {

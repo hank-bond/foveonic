@@ -347,10 +347,10 @@ impl Driver {
     }
     fn hold_next(&mut self, app: &App) {
         self.held_reply_epoch = app.memory_reply_epoch;
-        self.hold = Some(
-            app.worker
-                .hold_delivery(self.target().to_owned(), app.last_request_id.next().0),
-        );
+        self.hold = Some(app.worker.hold_delivery(
+            self.target().to_owned(),
+            app.view_images.last_request_id().next().0,
+        ));
     }
     fn held(&self) -> Result<bool, String> {
         match self

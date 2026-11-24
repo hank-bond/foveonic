@@ -30,6 +30,7 @@ enum Phase {
     DefaultReset,
     Paste,
     PasteHighlighted,
+    ResetHighlighted,
     MenuActions,
     MenuApplied,
     InvalidPaste,
@@ -434,6 +435,65 @@ impl LifecycleJourney {
                     }),
                     json!({"photos":photos}),
                 )?;
+                self.phase = Phase::ResetHighlighted;
+            }
+            Phase::ResetHighlighted => {
+                if app.edit_selection.paths() != paths
+                    || !app.multi_edit.editable_ready()
+                    || app.view_busy()
+                {
+                    return Ok(false);
+                }
+                // A menu reset reaches every editing photo, each to its own camera values.
+                let mut expected = Vec::new();
+                for path in paths {
+                    let settings = app
+                        .multi_edit
+                        .settings(path)
+                        .ok_or("reset needs settings")?;
+                    let metadata = app
+                        .multi_edit
+                        .metadata(path)
+                        .ok_or("reset needs metadata")?;
+                    let camera =
+                        foveonic::render::camera_settings(&metadata, Some(settings.rendering))
+                            .map_err(|e| e.to_string())?;
+                    if (settings.exposure, settings.exposure_auto)
+                        == (camera.exposure, camera.exposure_auto)
+                    {
+                        return Err(
+                            "reset step needs exposure edited away from camera values".into()
+                        );
+                    }
+                    expected.push((camera.exposure, camera.exposure_auto, settings.saturation));
+                }
+                let scope = crate::editor::Scope::Tool(crate::editor::Section::Tone);
+                app.editor_ui
+                    .actions
+                    .push(crate::editor::Action::Reset(scope, true));
+                app.apply_editor_actions(ctx);
+                let photos = paths
+                    .iter()
+                    .zip(&expected)
+                    .map(|(path, (exposure, auto, saturation))| {
+                        let settings = app.multi_edit.settings(path);
+                        json!({"source":path,"camera_exposure":exposure,
+                            "exposure":settings.map(|settings| settings.exposure),
+                            "reset":settings.is_some_and(|settings| settings.exposure == *exposure
+                                && settings.exposure_auto == *auto
+                                && settings.saturation == *saturation)})
+                    })
+                    .collect::<Vec<_>>();
+                self.check(
+                    "reset-reaches-every-editing-photo",
+                    photos.iter().all(|photo| photo["reset"] == true),
+                    json!({"photos":photos}),
+                )?;
+                // Later steps expect the review recipe on every photo.
+                app.actions.push(crate::actions::Edit::PasteSettings(
+                    self.clipboard.clone().unwrap(),
+                ));
+                app.dispatch_actions(ctx);
                 app.browser.highlight_paths(std::slice::from_ref(first));
                 self.phase = Phase::MenuActions;
             }
@@ -781,7 +841,7 @@ impl LifecycleJourney {
         }
     }
     pub(super) fn evidence(&self) -> Value {
-        json!({"checks":self.checks,"damaged":self.damaged.evidence(),"actions":["open-browse","edit-exposure:+0.125","switch-away","switch-back","read-sidecar","open-import","edit-exposure:+0.25","switch-away","switch-back","process-without-destination","copy-settings","save-tone-default","reset-camera-tone","reset-user-tone","edit-and-paste","paste-to-highlighted","menu-actions-during-before","paste-invalid","acknowledge-log","read-sidecar","pick-and-copy-original","edit-after-submission","verify-copy-and-frozen-recipe","open-damaged-raw","recover-valid-raw","open-missing-folder","acknowledge-log","open-browse","select-all"],"scope":"recipe persistence, import review, clipboard handlers, scoped resets, copied originals and file error recovery; processed image encoding is not exercised"})
+        json!({"checks":self.checks,"damaged":self.damaged.evidence(),"actions":["open-browse","edit-exposure:+0.125","switch-away","switch-back","read-sidecar","open-import","edit-exposure:+0.25","switch-away","switch-back","process-without-destination","copy-settings","save-tone-default","reset-camera-tone","reset-user-tone","edit-and-paste","paste-to-highlighted","reset-highlighted-to-camera","menu-actions-during-before","paste-invalid","acknowledge-log","read-sidecar","pick-and-copy-original","edit-after-submission","verify-copy-and-frozen-recipe","open-damaged-raw","recover-valid-raw","open-missing-folder","acknowledge-log","open-browse","select-all"],"scope":"recipe persistence, import review, clipboard handlers, scoped resets, copied originals and file error recovery; processed image encoding is not exercised"})
     }
 }
 
