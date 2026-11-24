@@ -34,6 +34,7 @@ Record duplicated paths found after 2026-11-22 here, with where they are and wha
   - The 18 benchmarks and timing experiments leave the test flag for the [comparable runs](./comparable-runs.md) tool or are deleted.
   - The four remaining exclusions (missing originals, capture-specific values) are decided one by one.
   - A renamed test must fail a local check. In 0.9.0 a rename left a stale inventory name that only the test machine found.
+- [ ] **Warm one-photo edits are 4 to 5 ms faster when every step waits for itself.** Measured 2026-11-24, interleaved on one tree, 40 edits each: waiting every step 34.5 ms, one step in flight 36 to 40 ms, 0.8.4 39 to 40 ms. Fresh renders go the other way (35 s against 30 s over the 144 render cases), so 0.9.0 keeps one step in flight. Find why a short warm edit loses time to the in-flight step before choosing a rule by workload.
 - [ ] **One GPU wait per delivered image.** Delivery waits once per finished frame instead of once per tick, which may limit the gain from wide rendering. Not measured.
 
 ## Audit
