@@ -814,14 +814,16 @@
       "source": "blue-parking-sign.x3f",
       "settings": {
         "exposure": -0.15,
-        "exposure_auto": false
+        "exposure_auto": false,
+        "reconstruction": {}
       }
     },
     {
       "source": "merrill-hazy-coast.x3f",
       "settings": {
         "exposure": 0.15,
-        "exposure_auto": false
+        "exposure_auto": false,
+        "reconstruction": {}
       }
     },
     {
