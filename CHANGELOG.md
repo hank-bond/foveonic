@@ -16,8 +16,9 @@ Open and edit groups of photographs much faster, with every editing tool working
 - Reuse fitted-image output for browser previews and refresh previews behind active editing.
 - Prioritize visible images, navigator and scopes, then browser thumbnails. Make full-image completion while idle optional.
 - Preserve useful native detail while a new zoomed area renders, and keep each photograph's image on screen while it renders again.
+- Merrill: Skip a noise reduction step when the camera's settings make it a no-op.
 
-Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps and the same eight photographs.
+Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps.
 
 | Time | 0.8.4 | 0.9.0 | Change |
 | --- | --- | --- | --- |
@@ -38,6 +39,8 @@ Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps and the same
 | Open one photograph | 1.1 GB | 1.0 GB | −11% |
 | Edit one photograph | 1.2 GB | 0.95 GB | −18% |
 
+The eight photographs are a mix of cameras: two Merrill, two Quattro, one Quattro H and three from the SD9, SD10 and SD14. Merrill noise reduction is on, as it is by default.
+
 ### New functionality
 
 - Apply Before/After to every actively edited photograph, using its own Camera or Defaults settings.
@@ -52,7 +55,7 @@ Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps and the same
 
 ### Behavior changes
 
-- **Breaking:** Follow the original Merrill sharpening by default. Merrill photographs set to automatic sharpening, including ones already edited, render sharper than before.
+- **Breaking:** Merrill: Follow the original sharpening by default. Photographs set to automatic sharpening, including ones already edited, render sharper than before.
 - **Breaking:** Open a photograph with defaults and a warning when its saved recipe is damaged or was written by a newer version. The next edit replaces that recipe. Earlier versions left it untouched.
 - **Breaking:** Remove the `--wb` and `--mode` launch options.
 - Keep automatic values editable. Editing an automatic value makes it manual, and turning Auto off keeps the value shown.
@@ -63,7 +66,7 @@ Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps and the same
 ### Bug fixes
 
 - Keep group zoom anchored within each photograph's displayed view and group panning at the same on-screen distance across different aspect ratios.
-- Zoom into and render Merrill photographs with noise reduction on Windows integrated graphics, where the app could previously stop or freeze.
+- Merrill: Zoom into and render photographs with noise reduction on Windows integrated graphics, where the app could previously stop or freeze.
 - Restore browser thumbnails after reloading a folder.
 - Keep Shift-arrow selection in the browser extending from where it left off.
 
