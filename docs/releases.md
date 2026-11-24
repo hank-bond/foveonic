@@ -33,7 +33,7 @@ CI imports the identity into a temporary keychain and removes it and temporary c
 ## Review locally
 
 1. Set the application version in `[workspace.package]` in `Cargo.toml`. Both application crates inherit it. The examples below use `0.3.0`.
-2. Review the matching `## 0.3.0` section in [CHANGELOG.md](../CHANGELOG.md). Replace its introductory placeholder with your own prose, or add the introduction to the GitHub draft later. Keep the change list below it.
+2. Review the matching `## 0.3.0` section in [CHANGELOG.md](../CHANGELOG.md). Replace its introductory placeholder with your own prose, or add the introduction to the GitHub draft later. Keep the change list below it. Group entries under Performance improvements, New functionality, Behavior changes and Bug fixes. Mark a behavior change that alters saved work, output or scripts with **Breaking:**. Start an entry about one camera architecture's processing with its name, such as `Merrill:`; scheduling and application changes that serve every camera carry no label. State times in milliseconds.
 3. Run the [workspace checks](contributing.md#run-checks), then validate the notes and build the bundle:
 
    ```sh
