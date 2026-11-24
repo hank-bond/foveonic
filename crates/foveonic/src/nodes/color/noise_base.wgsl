@@ -97,7 +97,9 @@ fn radius_map(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 @compute @workgroup_size(32, 8)
-fn bilateral(@builtin(global_invocation_id) id: vec3<u32>) {
+fn bilateral(@builtin(global_invocation_id) dispatched: vec3<u32>) {
+    // One dispatch covers a band of rows, so no single dispatch runs for long.
+    let id = vec3(dispatched.x, dispatched.y + params.sampling.z, dispatched.z);
     if id.x >= params.tile.x || id.y >= params.tile.y * tile_count(params) { return; }
     let p = atlas_position(id.xy, params);
     let pixel = tile_pixel(p, params);

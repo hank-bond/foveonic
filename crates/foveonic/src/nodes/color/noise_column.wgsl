@@ -15,7 +15,9 @@ fn cuts(tile:u32)->vec2<u32>{
     return vec2(start,end);
 }
 @compute @workgroup_size(8,8)
-fn horizontal(@builtin(global_invocation_id)id:vec3<u32>){
+fn horizontal(@builtin(global_invocation_id)dispatched:vec3<u32>){
+    // One dispatch covers a band of rows, so no single dispatch runs for long.
+    let id=vec3(dispatched.x,dispatched.y+params.sampling.z,dispatched.z);
     if id.x>=params.tile.x || id.y>=params.tile.y*tile_count(params){return;}
     let p=atlas_position(id.xy,params);let index=tile_pixel(p,params);var result=vec3(0.0);
     let half=u32(params.column.y)/2u;

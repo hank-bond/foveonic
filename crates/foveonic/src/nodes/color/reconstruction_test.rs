@@ -75,20 +75,8 @@ fn reduced_local_and_global_bases_match_native_filters_restore_and_transposed_se
         .unwrap();
     let radii = gpu.upload("Unused global radii", &[0_u32]).unwrap();
     let lookup = gpu.upload("Global lookup", &tables(p)).unwrap();
-    let uniform = gpu.uniform(&p);
     let mut trace = gpu.trace(false, 1);
-    gpu.dispatch(
-        Kernel::NoiseBilateral,
-        &mut [
-            (0, Read(&input)),
-            (1, Read(&uniform)),
-            (2, Write(bilateral.write())),
-            (6, Read(&lookup)),
-            (7, Read(&radii)),
-        ],
-        bilateral_groups(p),
-        &mut trace,
-    );
+    filter_bilateral(&gpu, p, &input, &mut bilateral, &lookup, &radii, &mut trace);
     gpu.finish_trace(&trace, &mut Profile::default()).unwrap();
     check(
         floats(&gpu, &bilateral),
@@ -416,18 +404,7 @@ fn noise_base_and_luminance_conditioning_match_synthetic_fixtures() {
         &mut trace,
     );
     let mut filtered = gpu.storage("Bilateral fixture", 80 * 72 * 12).unwrap();
-    gpu.dispatch(
-        Kernel::NoiseBilateral,
-        &mut [
-            (0, Read(&input)),
-            (1, Read(&uniform)),
-            (2, Write(filtered.write())),
-            (6, Read(&lookup)),
-            (7, Read(&radii)),
-        ],
-        bilateral_groups(p),
-        &mut trace,
-    );
+    filter_bilateral(&gpu, p, &input, &mut filtered, &lookup, &radii, &mut trace);
     gpu.finish_trace(&trace, &mut profile).unwrap();
     let fixture: Value =
         serde_json::from_str(include_str!("../../../tests/data/noise-reference.json")).unwrap();

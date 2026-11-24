@@ -30,9 +30,57 @@ pub(super) fn tables(params: Parameters) -> Vec<f32> {
 fn groups(params: Parameters) -> [u32; 2] {
     params.atlas_extent().map(|v| v.div_ceil(8))
 }
-fn bilateral_groups(params: Parameters) -> [u32; 2] {
+/// Rows of the atlas one dispatch of a neighborhood filter covers. The
+/// bilateral reads up to 190 neighbors per pixel, and a slow GPU that spends
+/// two seconds in one dispatch is reset by Windows. A full Merrill atlas takes
+/// about a dozen bands.
+const BAND_ROWS: u32 = 1024;
+fn bands(params: Parameters) -> u32 {
+    params.atlas_extent()[1].div_ceil(BAND_ROWS)
+}
+/// Run a kernel over the atlas one band of rows at a time. `dispatch` gets
+/// each band's parameters and its groups for a workgroup `across` by eight.
+fn in_bands(
+    gpu: &Gpu,
+    params: Parameters,
+    across: u32,
+    mut dispatch: impl FnMut(&crate::gpu::ReadGuard, [u32; 2]),
+) {
     let [width, height] = params.atlas_extent();
-    [width.div_ceil(32), height.div_ceil(8)]
+    for first in (0..height).step_by(BAND_ROWS as usize) {
+        let mut band = params;
+        band.sampling[2] = first;
+        let rows = BAND_ROWS.min(height - first);
+        dispatch(
+            &gpu.uniform(&band),
+            [width.div_ceil(across), rows.div_ceil(8)],
+        );
+    }
+}
+/// Filter the atlas into `filtered`.
+fn filter_bilateral(
+    gpu: &Gpu,
+    params: Parameters,
+    raw: &crate::gpu::ReadGuard,
+    filtered: &mut crate::gpu::ReadGuard,
+    tables: &crate::gpu::ReadGuard,
+    radii: &crate::gpu::ReadGuard,
+    trace: &mut crate::gpu::GpuTrace,
+) {
+    in_bands(gpu, params, 32, |band, groups| {
+        gpu.dispatch(
+            Kernel::NoiseBilateral,
+            &mut [
+                (0, Read(raw)),
+                (1, Read(band)),
+                (2, Write(filtered.write())),
+                (6, Read(tables)),
+                (7, Read(radii)),
+            ],
+            groups,
+            trace,
+        );
+    });
 }
 
 /// Whole-frame contracts use checked geometry before calling the ordinary
@@ -358,7 +406,7 @@ fn filter(
     let mut radii = gpu.storage("Adaptive noise radii", block_mean.size())?;
     let tables = gpu.upload("Reference noise lookup tables", &tables(params))?;
     let uniform = gpu.uniform(&params);
-    let mut trace = gpu.trace(profile.mode.gpu(), 9);
+    let mut trace = gpu.trace(profile.mode.gpu(), 8 + bands(params));
     if params.geometry[3] == 0 {
         gpu.dispatch(
             Kernel::NoiseBlock,
@@ -381,16 +429,13 @@ fn filter(
             &mut trace,
         );
     }
-    gpu.dispatch(
-        Kernel::NoiseBilateral,
-        &mut [
-            (0, Read(&raw)),
-            (1, Read(&uniform)),
-            (2, Write(filtered.write())),
-            (6, Read(&tables)),
-            (7, Read(&radii)),
-        ],
-        bilateral_groups(params),
+    filter_bilateral(
+        gpu,
+        params,
+        &raw,
+        &mut filtered,
+        &tables,
+        &radii,
         &mut trace,
     );
     // Median values are reused across neighboring gradients, then this buffer
@@ -514,7 +559,7 @@ pub(crate) fn column(
     )?;
     let uniform = gpu.uniform(&params);
     let table = gpu.upload("Column bilateral lookup", &tables(params)[..2048])?;
-    let mut trace = gpu.trace(profile.mode.gpu(), 4);
+    let mut trace = gpu.trace(profile.mode.gpu(), 3 + bands(params));
     gpu.dispatch(
         Kernel::NoiseTile,
         &mut [
@@ -525,17 +570,19 @@ pub(crate) fn column(
         groups(params),
         &mut trace,
     );
-    gpu.dispatch(
-        Kernel::ColumnHorizontal,
-        &mut [
-            (0, Read(&raw)),
-            (1, Read(&uniform)),
-            (2, Write(smoothed.write())),
-            (5, Read(&table)),
-        ],
-        groups(params),
-        &mut trace,
-    );
+    in_bands(gpu, params, 8, |band, groups| {
+        gpu.dispatch(
+            Kernel::ColumnHorizontal,
+            &mut [
+                (0, Read(&raw)),
+                (1, Read(band)),
+                (2, Write(smoothed.write())),
+                (5, Read(&table)),
+            ],
+            groups,
+            &mut trace,
+        );
+    });
     gpu.dispatch(
         Kernel::ColumnDeltas,
         &mut [

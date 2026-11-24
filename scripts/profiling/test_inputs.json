@@ -669,6 +669,144 @@
         },
         "working_scale": 1
       }
+    },
+    {
+      "label": "blue-parking-sign-noise",
+      "source": "blue-parking-sign.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--reconstruction"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "merrill-hazy-coast-noise",
+      "source": "merrill-hazy-coast.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--reconstruction"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "low-light-speaker-and-desk-noise",
+      "source": "low-light-speaker-and-desk.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--reconstruction"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "dp3-merrill-medium-noise",
+      "source": "dp3-merrill-medium.x3f",
+      "family": "merrill",
+      "raw_size": "medium",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--reconstruction"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "dp3-merrill-low-noise",
+      "source": "dp3-merrill-low.x3f",
+      "family": "merrill",
+      "raw_size": "low",
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--reconstruction"
+      ],
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ]
+    },
+    {
+      "label": "sunlit-red-flower-noise",
+      "source": "sunlit-red-flower.x3f",
+      "family": "merrill",
+      "raw_size": "high",
+      "resolutions": [
+        "full",
+        "fast",
+        "draft",
+        "thumb"
+      ],
+      "processing_qualities": [
+        "quality",
+        "speed"
+      ],
+      "options": [
+        "--wb",
+        "Sunlight",
+        "--mode",
+        "Standard",
+        "--reconstruction"
+      ]
     }
   ],
   "scenario_cases": [

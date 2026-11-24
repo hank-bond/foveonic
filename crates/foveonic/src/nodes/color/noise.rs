@@ -41,7 +41,7 @@ pub(crate) struct Parameters {
     pub geometry: [u32; 4], // LocalMean margin, edge LUT margin, fixed bilateral size, global branch.
     pub window: [u32; 4],   // First native tile column/row and compact atlas columns/rows.
     pub region: [u32; 4],   // Half-open physical rectangle projected from the compact atlas.
-    pub sampling: [u32; 4], // Native pixels per sample, adaptive intensity block span, reserved.
+    pub sampling: [u32; 4], // Native pixels per sample, adaptive intensity block span, first row of a banded dispatch, reserved.
     pub input_bounds: [u32; 4], // Physical sensor rectangle stored in the input buffer.
 }
 impl Parameters {
