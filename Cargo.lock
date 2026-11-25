@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "foveonic"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "foveonic-gui"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "bytemuck",
  "crossbeam-channel",

@@ -8,7 +8,7 @@ egui-wgpu = { path = "vendor/egui-wgpu" }
 tiff = { path = "vendor/tiff" }
 
 [workspace.package]
-version = "0.9.0"
+version = "0.9.1"
 
 [profile.release.package.foveonic]
 debug = 1
