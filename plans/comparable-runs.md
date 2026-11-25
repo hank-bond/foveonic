@@ -61,6 +61,19 @@ The scenarios currently run through several drivers with their own step bookkeep
 - [ ] **6. Step timing.** Record action-to-settled time for every named step in the one driver.
 - [ ] **7. Compare behavioral reports** with the same comparer and retire the latency jobs.
 
+## Release measurement (0.10.0)
+
+The 0.9.0 tables were produced by hand-run scripts on the test hosts. Make each of these a maintained part of the release check.
+
+- [ ] **Declared groups.** Track the mixed set and one group of eight per camera family in the [test inputs](../scripts/profiling/test_inputs.json), with Merrill noise reduction on. Add Quattro H photographs so it can have a group, and enough Quattro and Classic photographs that none repeats.
+- [ ] **One command for the app comparison.** Run the timing trials and the separate memory pass for both apps and every group, and write one report.
+- [ ] **Tables from the report.** Generate the release tables from that report: milliseconds, percentage change, and a camera family's row only where the families differ by more than ten percentage points (owner, 2026-11-24).
+- [ ] **A full-size row.** Every 0.9.0 row renders at fitted size, so node savings at full size, such as the skipped Merrill pattern step (68 ms of 471 ms), do not appear.
+- [ ] **Keep a trial that differs.** The runner stops a job and discards the trial when its workload differs from earlier trials. Record it and continue, so the difference can be read and one launch does not cost the rest.
+- [ ] **Windows hosts.** Script the packaged check for the RTX 3090 and the Intel UHD 630 hosts; it was driven through hand-made scheduled tasks. The integrated host has no Python, so the check there ran the app directly. Measure latency and memory on Windows once the runner no longer needs POSIX process monitoring.
+- [ ] **Stage names from the render tool.** The app reports the last GPU stages when a device is lost; the headless tool does not.
+- [ ] **Render report with the release.** Record the previous tag and the candidate with the current cases and upload the comparison, as [designed](#render-runs). 0.9.0 shipped without it.
+
 ## Open
 
 - How long a full render run takes for one revision. Not measured. If it is too long, recipes run at fewer sizes than defaults.

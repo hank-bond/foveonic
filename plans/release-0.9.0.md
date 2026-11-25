@@ -4,15 +4,25 @@ summary: "0.9.0 is held until the render scheduler replaces the serial and Merri
 
 # Release 0.9.0
 
+## Published
+
+Published as Latest on 2026-11-25 from tag `v0.9.0` at `842a395`. The macOS app is signed and notarized. The [release notes](../CHANGELOG.md) carry the measured tables.
+
+- **Checks on the published archives.** Both match `SHA256SUMS`. The test Mac accepted the signature, stapled ticket and Gatekeeper assessment and passed the packaged check. The packaged check also passed on an RTX 3090 and, with default settings, on an Intel UHD 630, where the earlier draft lost the GPU device.
+- **Checks on the same source before notarization (`0d2a5f4`).** 495 required ignored checks and the native suite of 46 jobs passed on the test Mac. Every render case was bit-identical before and after the banded noise filters.
+- **Performance against published 0.8.4.** Measured on the test Mac with the packaged apps, Merrill noise reduction on, five timing trials and a separate memory pass of three. The mixed set and Merrill, Quattro and Classic groups of eight were measured.
+- **Not done.** Windows latency and memory are unmeasured, because the latency runner needs POSIX process monitoring. Quattro H has no group of its own, with one photograph in the test set. The Quattro and Classic groups repeat files to reach eight. The 0.8.4 app had mismatching trials in two Classic jobs and one mixed job, which the runner discards. The render-run comparison with `v0.8.4` was not repeated after every Merrill case gained noise reduction, so no render report was uploaded. The tagged source's changelog predates the final wording of the notes.
+- **After the tag.** `main` carries the regrouped changelog, the Merrill render cases with noise reduction and the plans below.
+
 ## Held
 
 On 2026-11-17 the owner held 0.9.0. The candidate's wide rendering runs only warm Merrill work beside a separate serial path, and the GUI decides memory admission with Merrill-specific constants. 0.9.0 will ship its current features, including group Before/After and linked Shift gestures, on the architecture in the [render scheduler plan](./render-scheduler.md). The candidate evidence below describes the held build and must be repeated for the new candidate.
 
-- [ ] Complete the [render scheduler plan](./render-scheduler.md).
-- [ ] Freeze a new candidate and repeat every release check below, including the comparison with published 0.8.4.
-- [ ] **Fix the zoom crash on integrated graphics (found 2026-11-24).** On an Intel UHD 630 with 16 GB, the `v0.9.0` draft at `bf5123c` loses the GPU device at the zoom step of the packaged smoke check, in every run; 0.8.4 passes. Windows records a video engine timeout (live kernel event 141): one unit of GPU work ran past its two-second limit. Bisected to the wide-rendering integration (`88cf28d`). The old wait-every-step rule crashes the same way. The stages last submitted are full-resolution Merrill noise and resampling steps and differ between runs. Keep each unit of GPU work short on slow hardware.
+- [ ] Complete the [render scheduler plan](./render-scheduler.md). Its remaining steps moved to the [coherence cleanup](./coherence-cleanup.md) for 0.10.0.
+- [x] Freeze a new candidate and repeat every release check below, including the comparison with published 0.8.4.
+- [x] **Fix the zoom crash on integrated graphics (found 2026-11-24).** On an Intel UHD 630 with 16 GB, the `v0.9.0` draft at `bf5123c` loses the GPU device at the zoom step of the packaged smoke check, in every run; 0.8.4 passes. Windows records a video engine timeout (live kernel event 141): one unit of GPU work ran past its two-second limit. Bisected to the wide-rendering integration (`88cf28d`). The old wait-every-step rule crashes the same way. The stages last submitted are full-resolution Merrill noise and resampling steps and differ between runs. Keep each unit of GPU work short on slow hardware.
 - [ ] Add the integrated-graphics Windows host to the packaged checks in the [release guide](../docs/releases.md).
-- [ ] Rebuild the draft from the fixed commit and repeat the packaged checks on both Windows hosts and the Mac.
+- [x] Rebuild the draft from the fixed commit and repeat the packaged checks on both Windows hosts and the Mac.
 
 ### Scope (owner, 2026-11-22)
 
