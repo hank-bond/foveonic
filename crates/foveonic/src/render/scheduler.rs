@@ -3,7 +3,7 @@
 use super::{
     image_cache::ImageCache,
     queue::{Queue, Queued},
-    Engine, MemoryReservation, PhotoKey, PhotoRender, Purpose, RenderExecution,
+    Engine, MemoryReservation, MemoryTrim, PhotoKey, PhotoRender, Purpose, RenderExecution,
     RenderExecutionStart, RenderProgress, Settings, WorkingSet,
 };
 use crate::{
@@ -136,24 +136,32 @@ impl<J: Job> Scheduler<J> {
     }
 
     /// Host memory plus cached images.
-    fn with_cached_images(&self, mut retained: MemoryReservation) -> MemoryReservation {
+    pub fn with_cached_images(&self, mut retained: MemoryReservation) -> MemoryReservation {
         retained.merge(&self.image_cache.reservation());
         retained
     }
 
-    /// Drop cached images, oldest first, until retained memory fits the target.
-    /// Returns the host memory plus whatever cached images remain.
-    pub fn release_cached_images(&self, retained: &MemoryReservation) -> MemoryReservation {
-        loop {
-            let total = self.with_cached_images(retained.clone());
-            let used = self
+    /// The one way memory is released. Cached images go first, oldest first,
+    /// then the working set in its trimming order, until held memory is at most
+    /// `limit` or only what jobs and eviction-protected photos need is left.
+    /// Returns host memory plus the cached images that remain, and the trim.
+    pub fn release_cache(
+        &mut self,
+        retained: &MemoryReservation,
+        limit: u64,
+    ) -> (MemoryReservation, MemoryTrim) {
+        let held = loop {
+            let held = self.with_cached_images(retained.clone());
+            let total = self
                 .engine
-                .memory_resources(&self.working, &total)
+                .memory_resources(&self.working, &held)
                 .total_bytes;
-            if used <= self.target_bytes || !self.image_cache.drop_oldest() {
-                return total;
+            if total <= limit || !self.image_cache.drop_oldest() {
+                break held;
             }
-        }
+        };
+        let trim = self.engine.trim_memory(&mut self.working, limit, &held);
+        (held, trim)
     }
 
     pub fn set_target(&mut self, target_bytes: u64) {
@@ -193,14 +201,12 @@ impl<J: Job> Scheduler<J> {
         self.queue.jobs()
     }
 
-    /// A newer job for a queued or running target replaces it and keeps its place in line.
+    /// A newer job for a queued target replaces it and keeps its place in line.
+    /// A newer job for a running target waits behind the targets still queued.
+    /// Otherwise, when edits arrive faster than every target can run, the
+    /// targets served first would be served every time and the rest never.
     pub fn submit(&mut self, job: J) {
-        let running = self
-            .admitted
-            .iter()
-            .find(|admitted| admitted.job.target() == job.target())
-            .map(|admitted| admitted.order);
-        self.queue.submit(job, running);
+        self.queue.submit(job);
     }
 
     /// Change queued jobs in place, such as their rank, keeping whether each is
@@ -383,12 +389,8 @@ impl<J: Job> Scheduler<J> {
             // in free memory, so it never forces an eviction. The target describes
             // the steady state, so its transient peak is not counted.
             !speculative || self.result_fits(&self.with_cached_images(retained), &execution)
-        } else if speculative {
-            // The same test `retire_overflow` applies, without dropping cached images.
-            self.fits(&self.with_cached_images(retained), Some(&execution))
         } else {
-            // Running wider never evicts a working photo, but may drop cached images.
-            self.fits_after_dropping_cached_images(&retained, Some(&execution))
+            self.group_fits(priority, &retained, Some(&execution))
         };
         if !fits {
             self.abandon(execution, queued, render.profile);
@@ -405,43 +407,69 @@ impl<J: Job> Scheduler<J> {
         true
     }
 
-    /// Whether admitted jobs and the candidate fit, dropping cached images oldest
-    /// first. Nothing is dropped when they would not fit even without cached images.
-    fn fits_after_dropping_cached_images(
-        &self,
+    /// Whether admitted jobs and the candidate fit. Viewport jobs release cache
+    /// down to the room they leave: cache has room only beside one render of
+    /// every editing target together, so a group that still cannot fit leaves
+    /// it none, and takes turns. Other work runs wider only in free memory.
+    fn group_fits(
+        &mut self,
+        priority: Priority,
         retained: &MemoryReservation,
         candidate: Option<&RenderExecution>,
     ) -> bool {
-        if !self.fits(retained, candidate) {
+        let held = self.with_cached_images(retained.clone());
+        if priority != Priority::Viewport {
+            return self.fits(&held, candidate);
+        }
+        let Some(needed) = self.needed(&held, candidate) else {
+            return false;
+        };
+        let excess = needed.saturating_sub(self.target_bytes);
+        if excess == 0 {
+            return true;
+        }
+        // Cache that could not make the room stays: releasing it would cost
+        // its next use and the group would take turns all the same.
+        let cache =
+            self.image_cache.reservation().bytes() + self.engine.releasable_bytes(&self.working);
+        if excess > cache {
             return false;
         }
-        while !self.fits(&self.with_cached_images(retained.clone()), candidate) {
-            self.image_cache.drop_oldest();
-        }
-        true
+        let total = self
+            .engine
+            .memory_resources(&self.working, &held)
+            .total_bytes;
+        let (held, _) = self.release_cache(retained, total.saturating_sub(excess));
+        self.fits(&held, candidate)
     }
 
     /// Whether every admitted execution, and the candidate, fit the target
     /// alongside retained memory without evicting anything.
     fn fits(&self, retained: &MemoryReservation, candidate: Option<&RenderExecution>) -> bool {
+        self.needed(retained, candidate)
+            .is_some_and(|needed| needed <= self.target_bytes)
+    }
+
+    /// What retained memory, every admitted execution and the candidate need
+    /// at their peak. `None` when a job has no estimate.
+    fn needed(
+        &self,
+        retained: &MemoryReservation,
+        candidate: Option<&RenderExecution>,
+    ) -> Option<u64> {
         let executions: Vec<&RenderExecution> = self
             .admitted
             .iter()
             .map(|admitted| &admitted.execution)
             .chain(candidate)
             .collect();
-        let Some(future) = executions.iter().try_fold(0_u64, |total, execution| {
+        let future = executions.iter().try_fold(0_u64, |total, execution| {
             total.checked_add(execution.future_bytes()?)
-        }) else {
-            return false;
-        };
-        let current = self
-            .engine
+        })?;
+        self.engine
             .execution_memory_resources(&self.working, retained, &executions)
-            .total_bytes;
-        current
+            .total_bytes
             .checked_add(future)
-            .is_some_and(|total| total <= self.target_bytes)
     }
 
     /// Whether retained memory plus the execution's delivered image fit the target.
@@ -460,13 +488,22 @@ impl<J: Job> Scheduler<J> {
     }
 
     /// Return the latest-submitted jobs to the queue while the admitted set no
-    /// longer fits, rather than evicting working photos.
+    /// longer fits even after releasing cache.
     fn retire_overflow(&mut self, host: &mut impl Host<J>) {
         if self.admitted.len() <= 1 {
             return;
         }
         let retained = host.retained();
-        while self.admitted.len() > 1 && !self.fits_after_dropping_cached_images(&retained, None) {
+        while self.admitted.len() > 1 {
+            let priority = self
+                .admitted
+                .iter()
+                .map(|admitted| admitted.job.purpose().priority())
+                .min()
+                .unwrap();
+            if self.group_fits(priority, &retained, None) {
+                break;
+            }
             let newest = self
                 .admitted
                 .iter()

@@ -240,6 +240,113 @@ fn width_cap_limits_jobs_running_together() {
     assert_eq!(scheduler.widest(), 1);
 }
 
+/// What two edits of photos 1 and 2 need when nothing else is held.
+fn needed_by_two_edits() -> u64 {
+    let mut scheduler = scheduler();
+    scheduler.submit(job("first", 1, false));
+    scheduler.submit(job("second", 2, false));
+    assert!(scheduler.tick(&mut RecordingHost::default()));
+    assert_eq!(admitted(&scheduler), ["first", "second"]);
+    scheduler
+        .needed(&MemoryReservation::default(), None)
+        .unwrap()
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn admission_releases_working_photos_nothing_needs_to_render_together() {
+    let needed = needed_by_two_edits();
+    let mut scheduler = scheduler();
+    let mut host = RecordingHost::default();
+    // Three photos that were rendered earlier and are no longer needed hold
+    // their stages, as full-size copies do after zooming back out.
+    let leftovers = [3, 4, 5];
+    for photo in leftovers {
+        let (engine, working) = scheduler.engine_and_working();
+        working
+            .insert_native(photo, NativePhoto::new(fixture()), engine, Purpose::View)
+            .unwrap();
+    }
+    for (target, photo) in ["third", "fourth", "fifth"].into_iter().zip(leftovers) {
+        scheduler.submit(job(target, photo, false));
+    }
+    while scheduler.tick(&mut host) {}
+    scheduler.set_eviction_protected([1, 2].map(|photo| PhotoKey {
+        photo,
+        resolution: Resolution::Native,
+    }));
+    // The two edits fit only once leftovers go: the margin is less than the
+    // leftovers hold.
+    let held = scheduler
+        .engine()
+        .memory_resources(&scheduler.working, &MemoryReservation::default())
+        .total_bytes;
+    scheduler.set_target(needed + held / 2);
+    scheduler.submit(job("first", 1, false));
+    scheduler.submit(job("second", 2, false));
+    assert!(scheduler.tick(&mut host));
+    assert_eq!(admitted(&scheduler), ["first", "second"]);
+    assert!(
+        leftovers
+            .iter()
+            .any(|photo| !scheduler.working.contains(PhotoKey {
+                photo: *photo,
+                resolution: Resolution::Native,
+            })),
+        "a leftover was released to make room"
+    );
+    while scheduler.tick(&mut host) {}
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn admission_keeps_cache_that_could_not_make_room() {
+    let needed = needed_by_two_edits();
+    let mut scheduler = scheduler();
+    let mut host = RecordingHost::default();
+    let leftover = PhotoKey {
+        photo: 3,
+        resolution: Resolution::Native,
+    };
+    let (engine, working) = scheduler.engine_and_working();
+    working
+        .insert_native(
+            leftover.photo,
+            NativePhoto::new(fixture()),
+            engine,
+            Purpose::View,
+        )
+        .unwrap();
+    scheduler.submit(job("third", leftover.photo, false));
+    while scheduler.tick(&mut host) {}
+    // The two edits need more than the target on their own, so they take
+    // turns whether or not the leftover goes.
+    scheduler.set_target(needed / 2);
+    scheduler.submit(job("first", 1, false));
+    scheduler.submit(job("second", 2, false));
+    assert!(scheduler.tick(&mut host));
+    assert_eq!(admitted(&scheduler), ["first"]);
+    assert!(scheduler.working.contains(leftover));
+    while scheduler.tick(&mut host) {}
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn newer_job_for_a_running_target_waits_behind_queued_targets() {
+    let mut scheduler = scheduler();
+    let mut host = RecordingHost::default();
+    scheduler.set_width_cap(Some(1));
+    scheduler.submit(job("first", 1, false));
+    scheduler.submit(job("second", 2, false));
+    assert!(scheduler.tick(&mut host));
+    assert_eq!(admitted(&scheduler), ["first"]);
+    // A slider keeps moving: the running target's next edit arrives before
+    // the second target has run at all.
+    scheduler.submit(job("first", 1, false));
+    while scheduler.tick(&mut host) {}
+    assert_eq!(host.rendered, ["first", "second", "first"]);
+}
+
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
 fn speculative_peer_never_drops_cached_images() {

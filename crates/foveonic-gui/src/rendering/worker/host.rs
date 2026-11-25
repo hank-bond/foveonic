@@ -42,6 +42,12 @@ pub(super) enum Work {
 
 /// Picks, scopes and idle preparation follow the planned renders of their tier.
 const AFTER_PLAN: usize = usize::MAX;
+/// A planned task's rank: patches before whole images. Tasks of one kind share
+/// a rank, so the queue serves a group's photos in turn. A rank per photo
+/// would render the first photos on every edit and the rest only once edits stop.
+fn plan_rank(task: &Task) -> usize {
+    usize::from(!task.request.detail)
+}
 
 pub(super) struct WorkJob {
     target: JobTarget,
@@ -192,6 +198,7 @@ impl WorkerHost {
         let photos = &self.photos;
         self.rendered_from
             .retain(|target, _| photos.id(&target.path).is_some());
+        self.protect(scheduler, &plan);
         self.served
             .retain(|stamp| plan.tasks.iter().any(|task| task.stamp == *stamp));
         let served = &self.served;
@@ -217,16 +224,16 @@ impl WorkerHost {
         // whether they wait for an original or were deferred.
         scheduler.update_queued(|job| {
             if let Work::Render(render) = &job.work {
-                if let Some(rank) = plan
+                if let Some(task) = plan
                     .tasks
                     .iter()
-                    .position(|task| task.stamp == render.task.stamp)
+                    .find(|task| task.stamp == render.task.stamp)
                 {
-                    job.rank = rank;
+                    job.rank = plan_rank(task);
                 }
             }
         });
-        for (rank, task) in plan.tasks.iter().enumerate() {
+        for task in &plan.tasks {
             if self.served.contains(&task.stamp) {
                 continue;
             }
@@ -241,7 +248,7 @@ impl WorkerHost {
                 scheduler.submit(WorkJob {
                     target: JobTarget::Render(task.stamp.target.clone()),
                     purpose,
-                    rank,
+                    rank: plan_rank(task),
                     work: Work::Render(RenderWork {
                         task: task.clone(),
                         refresh: false,
@@ -316,6 +323,22 @@ impl WorkerHost {
             || state.source.as_ref().map(|source| &source.path) != self.observed.1.as_ref()
     }
 
+    /// Protect the working photos the plan's editing targets render from.
+    /// Admission and trimming both release unprotected working photos, so
+    /// this runs before either can act on a new plan.
+    fn protect(
+        &self,
+        scheduler: &mut Scheduler<WorkJob>,
+        plan: &crate::rendering::coordinator::WorkPlan,
+    ) {
+        scheduler.set_eviction_protected(
+            self.rendered_from
+                .iter()
+                .filter(|(target, _)| plan.eviction_protected.contains(target))
+                .map(|(_, key)| *key),
+        );
+    }
+
     /// Trim to the target and publish memory status after a job finishes or while
     /// nothing is admitted. Protection is refreshed first, so a photo loaded during
     /// this tick is already protected.
@@ -324,12 +347,7 @@ impl WorkerHost {
             return;
         }
         let plan = self.slot.0.lock().unwrap().plan.clone();
-        scheduler.set_eviction_protected(
-            self.rendered_from
-                .iter()
-                .filter(|(target, _)| plan.eviction_protected.contains(target))
-                .map(|(_, key)| *key),
-        );
+        self.protect(scheduler, &plan);
         let target = self.target.bytes;
         let inventory = memory_inventory(
             &self.presented,
@@ -337,15 +355,15 @@ impl WorkerHost {
             &mut self.pending_images,
             &self.slot,
         );
-        let reservation = scheduler.release_cached_images(inventory.reservation());
-        let (engine, working) = scheduler.engine_and_working();
         if foveonic::diagnostics::enabled() {
-            let resources = engine.memory_resources(working, &reservation);
+            let held = scheduler.with_cached_images(inventory.reservation().clone());
+            let (engine, working) = scheduler.engine_and_working();
+            let resources = engine.memory_resources(working, &held);
             memory_snapshot("before_trim", resources, target, working);
         }
-        let trim = self
-            .photos
-            .trim_memory(working, engine, target, &reservation);
+        let (_, trim) = scheduler.release_cache(inventory.reservation(), target);
+        let (_, working) = scheduler.engine_and_working();
+        self.photos.prune(working);
         memory_snapshot("after_trim", trim.resources, target, working);
         let status = MemoryStatus {
             resources: trim.resources,

@@ -24,6 +24,22 @@ impl MemoryReservation {
             self.buffers.push(buffer.clone());
         }
     }
+    /// An upper estimate of the memory described: storage shared with other
+    /// owners is counted in full.
+    pub(super) fn bytes(&self) -> u64 {
+        let buffers: u64 = self.buffers.iter().map(|buffer| buffer.size()).sum();
+        let metadata: u64 = self
+            .metadata
+            .iter()
+            .map(|metadata| metadata.retained_bytes())
+            .sum();
+        let sources: u64 = self
+            .sources
+            .iter()
+            .map(|source| source.retained_source_bytes() + source.metadata.retained_bytes())
+            .sum();
+        buffers + metadata + sources + self.exclusive_bytes
+    }
     /// Merge shared owners from another current snapshot. Exclusive pools need
     /// their caller's own identity-based inventory and are deliberately omitted.
     pub fn extend_shared(&mut self, other: &Self) {
@@ -139,7 +155,13 @@ impl Engine {
         }
     }
 
-    /// Trim obsolete, then optional checkpoints and preparation no retained photo
+    /// An upper estimate of what `trim_memory` could release, to within
+    /// bookkeeping bytes. Storage with several owners is counted for each.
+    pub(super) fn releasable_bytes(&self, working: &WorkingSet) -> u64 {
+        working.releasable_bytes() + self.cached_preparation_bytes() as u64
+    }
+
+    /// Trim optional checkpoints, then preparation no retained photo
     /// owns. Then drop whatever was used longest ago: one edit's restart inputs or a
     /// whole working photo. Eviction-protected and guarded photos are never evicted. When they
     /// alone exceed the target, the overage is reported instead of rebuilding them
@@ -162,13 +184,8 @@ impl Engine {
     ) -> MemoryTrim {
         let _scope = crate::diagnostics::scope(crate::diagnostics::Category::Memory, "memory.trim");
         let mut resources = self.memory_resources_with(working, reservation, &account);
-        for obsolete_only in [true, false] {
-            while resources.total_bytes > target_bytes {
-                if !working.trim_optional(obsolete_only) {
-                    break;
-                }
-                resources = self.memory_resources_with(working, reservation, &account);
-            }
+        while resources.total_bytes > target_bytes && working.trim_optional() {
+            resources = self.memory_resources_with(working, reservation, &account);
         }
         let mut evicted_photos = Vec::new();
         while resources.total_bytes > target_bytes {

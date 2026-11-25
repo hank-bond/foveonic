@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 impl App {
     /// How the photo is shown: its looks, the chosen output and what its camera
-    /// offers, comparison and, for the active photo, the crop and rotation plane.
+    /// offers, comparison and, with a framing tool armed, the crop and rotation plane.
     pub(crate) fn photo_looks(&self, path: &Path) -> PhotoLooks {
         let look = self.photo_rendition(path);
         let selected = self.selected.as_deref() == Some(path);
@@ -63,7 +63,7 @@ impl App {
                     )
                     .is_some()
                 }),
-            framing: selected && self.framing_preview_active(),
+            framing: self.frames(path),
         }
     }
 

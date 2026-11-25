@@ -337,7 +337,7 @@ fn the_progress_pass_follows_every_edited_photos_first_image_selected_first() {
 }
 
 #[test]
-fn the_viewed_photo_and_the_editing_selection_are_eviction_protected() {
+fn only_the_editing_selection_is_eviction_protected() {
     let publication = run_editing(
         vec![photo("a.x3f", 0.), photo("b.x3f", 0.), photo("c.x3f", 0.)],
         Some("a.x3f"),
@@ -345,8 +345,5 @@ fn the_viewed_photo_and_the_editing_selection_are_eviction_protected() {
         HashMap::new(),
         |_| false,
     );
-    assert_eq!(
-        paths(&publication.photos.eviction_protected),
-        ["a.x3f", "b.x3f"]
-    );
+    assert_eq!(paths(&publication.photos.eviction_protected), ["b.x3f"]);
 }

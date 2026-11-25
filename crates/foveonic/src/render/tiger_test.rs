@@ -185,29 +185,30 @@ fn tiger_fast_edits_and_regional_full_preserve_geometry_samples_and_reuse() {
         );
         drop(restored);
 
-        let checkpoints = session.checkpoints();
-        for role in ["highlight-restoration.rgb", "noise.rgb", "sector-color.rgb"] {
-            assert!(
-                checkpoints
-                    .entries
-                    .iter()
-                    .any(|entry| entry.working_scale == 1 && entry.role == role),
-                "native checkpoint {role} was not retained before detail"
-            );
-        }
+        // The Fast image shares native highlight restoration. Its later native
+        // stages replaced the warm render's, so the first tile rebuilds them
+        // once and the tiles after it reuse them.
+        assert!(
+            session.checkpoints().entries.iter().any(|entry| {
+                entry.working_scale == 1 && entry.role == "highlight-restoration.rgb"
+            }),
+            "native highlight restoration was not retained before detail"
+        );
         settings.working_scale = Scale::NATIVE;
-        for [x, y] in [[0, 0], [width / 2, height / 2], [width - 480, height - 320]] {
+        let tiles = [[0, 0], [width / 2, height / 2], [width - 480, height - 320]];
+        for (index, [x, y]) in tiles.into_iter().enumerate() {
             settings.preview_region = Some([x, y, x + 480, y + 320]);
             let started = Instant::now();
             let mut profile = Profile::new(crate::profile::Mode::Wall);
             let tile = session_image(&engine, &mut session, &settings, &mut profile);
-            for stage in [
+            let reused = [
                 "restore directional highlights",
                 "filter RGB at two scales",
                 "apply adaptive raw color",
-            ] {
+            ];
+            for stage in &reused[..if index == 0 { 1 } else { reused.len() }] {
                 assert!(
-                    !profile.host.iter().any(|timing| timing.stage == stage),
+                    !profile.host.iter().any(|timing| timing.stage == *stage),
                     "detail repeated {stage}"
                 );
             }

@@ -700,14 +700,18 @@ impl RenderExecution {
             WorkingPhoto::Native(session) => {
                 profile.measure("finish session cache", || {
                     if result.is_ok() {
-                        session.cache.commit(edit_use);
+                        session
+                            .cache
+                            .commit(requested.preview_region.is_some(), edit_use);
                     }
                     session.cache.finish();
                 });
             }
             WorkingPhoto::Reduced(session) => {
                 if result.is_ok() {
-                    session.cache.commit(edit_use);
+                    session
+                        .cache
+                        .commit(requested.preview_region.is_some(), edit_use);
                     session.scale = requested.working_scale;
                     session.last_settings = Some(requested);
                 }

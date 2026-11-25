@@ -78,38 +78,97 @@ fn existing_version_admission_keeps_its_original_buffer() {
     assert_eq!(cache.entries[0].used, 1);
 }
 
-/// A cache holding one restart input per name, stamped with its edit's use.
-pub(crate) fn restart_inputs(gpu: &crate::gpu::Gpu, uses: &[(&str, u64)]) -> Cache {
+/// A cache holding these restart inputs of one edit, stamped with its use.
+pub(crate) fn restart_inputs(gpu: &crate::gpu::Gpu, names: &[&str], edit_use: u64) -> Cache {
     let mut cache = admission_cache();
-    for (name, edit_use) in uses {
+    for name in names {
         retain_admission_value(&mut cache, name, &admission_value(gpu, 32), 1);
         let generation = cache.planned.versions[*name].generation;
-        cache.restart_uses.insert(generation, *edit_use);
+        let image = cache.produced.entry(WHOLE_EDIT).or_default();
+        image.versions.insert(generation);
+        image.restart.insert(generation);
     }
+    cache.restart_use = edit_use;
     cache
 }
 
 #[test]
 #[ignore = "requires GPU"]
-fn restart_inputs_leave_by_edit_recency() {
+fn restart_inputs_are_not_optional_and_carry_their_edits_use() {
     let gpu = crate::gpu::Gpu::test_executor();
-    let mut cache = restart_inputs(&gpu, &[("old", 5), ("newer", 9)]);
+    let mut cache = restart_inputs(&gpu, &["old", "newer"], 5);
 
+    assert!(!cache.trim_optional(), "restart inputs are not optional");
+    assert_eq!(cache.restart_use(), Some(5));
+    assert!(cache.drop_restart_input());
+    assert_eq!(cache.restart_use(), Some(5));
+    assert!(cache.drop_restart_input());
+    assert_eq!(cache.restart_use(), None);
+    assert!(!cache.drop_restart_input());
+}
+
+#[test]
+#[ignore = "requires GPU"]
+fn each_image_keeps_one_version_and_its_own_restart_stages() {
+    let gpu = crate::gpu::Gpu::test_executor();
+    let mut cache = admission_cache();
+    for name in ["old", "newer", "higher"] {
+        retain_admission_value(&mut cache, name, &admission_value(&gpu, 32), 1);
+    }
+    let generation = |cache: &Cache, name: &str| cache.planned.versions[name].generation;
+    let held = |cache: &Cache, generation: u64| {
+        let mut entries = cache.entries.iter();
+        entries.any(|entry| entry.version.generation == generation)
+    };
+    let (old, newer, higher) = (
+        generation(&cache, "old"),
+        generation(&cache, "newer"),
+        generation(&cache, "higher"),
+    );
+    // A detail patch's edit, then its whole image's, restart from other stages.
+    cache.planned.restart = [old].into();
+    cache.commit(true, Some(1));
+    cache.planned.restart = [newer].into();
+    cache.commit(false, Some(2));
+    assert!(cache.is_restart_input(old) && cache.is_restart_input(newer));
+    // A render that is not an edit displaces neither.
+    cache.planned.restart = [higher].into();
+    cache.commit(false, None);
+    assert!(cache.is_restart_input(old) && cache.is_restart_input(newer));
+    assert!(!cache.is_restart_input(higher));
+    assert!(cache.trim_optional(), "the stage no edit restarts from");
+    assert!(!cache.trim_optional());
+    assert!(held(&cache, old) && held(&cache, newer) && !held(&cache, higher));
+
+    // A new version of a stage stays beside the old one only until every
+    // image that planned the old one has rendered again.
+    let replacement = cache.intern(
+        Recipe {
+            operation: std::mem::discriminant(&Operation::Source),
+            parameters: Key::pod(&1_u32),
+            data: DataType::SensorLayers,
+            role: "old",
+            view: None,
+            inputs: Vec::new(),
+        },
+        Vec::new(),
+    );
+    cache.planned.versions.insert("old".into(), replacement);
+    for (detail, edit_use) in [(true, Some(3)), (false, None)] {
+        cache.commit(detail, edit_use);
+        assert!(held(&cache, old), "the whole image's edit still plans it");
+    }
+    cache.commit(false, Some(4));
+    assert!(!held(&cache, old) && held(&cache, newer));
+
+    cache
+        .plan_for(&source_graph("sensor", 16).0, &[], true)
+        .unwrap();
+    cache.finish_sensor_data();
     assert!(
-        !cache.trim_optional(false),
-        "restart inputs are not optional"
+        cache.produced.is_empty(),
+        "new sensor data starts every image over"
     );
-    assert_eq!(cache.oldest_restart_use(true), Some(5));
-    assert_eq!(cache.oldest_restart_use(false), Some(5));
-    assert!(cache.drop_oldest_restart_input(false));
-    assert!(cache.get("old").is_none());
-    assert!(cache.get("newer").is_some());
-    assert_eq!(
-        cache.oldest_restart_use(true),
-        None,
-        "a visible photo keeps its latest edit's inputs"
-    );
-    assert_eq!(cache.oldest_restart_use(false), Some(9));
 }
 
 #[test]
@@ -174,12 +233,12 @@ fn pressure_discards_old_cuts_and_uncached_descriptors_before_current_inputs() {
     }
     assert_eq!(cache.entries.len(), 2);
     assert!(
-        cache.trim_optional(true),
+        cache.trim_optional(),
         "previous grid is optional under pressure"
     );
     assert_eq!(cache.entries.len(), 1);
     assert!(
-        !cache.trim_optional(false),
+        !cache.trim_optional(),
         "the latest committed sensor data is protected"
     );
     let (graph, source, sensor, target) = source_graph("new-scope", 15);

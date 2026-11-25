@@ -49,9 +49,9 @@ fn next(queue: &Queue<Work>) -> Option<(&'static str, u32)> {
 #[test]
 fn higher_tiers_come_first_then_submission_order() {
     let mut queue = Queue::new();
-    queue.submit(work("thumb", Priority::Thumbnail, 1), None);
-    queue.submit(work("b", Priority::Viewport, 1), None);
-    queue.submit(work("a", Priority::Viewport, 1), None);
+    queue.submit(work("thumb", Priority::Thumbnail, 1));
+    queue.submit(work("b", Priority::Viewport, 1));
+    queue.submit(work("a", Priority::Viewport, 1));
     assert_eq!(next(&queue), Some(("b", 1)));
     queue.take(&"b");
     assert_eq!(next(&queue), Some(("a", 1)));
@@ -66,15 +66,15 @@ fn rank_orders_a_tier_before_submission_and_follows_replacement() {
         ..work(target, Priority::Viewport, revision)
     };
     let mut queue = Queue::new();
-    queue.submit(ranked("whole", 1, 1), None);
-    queue.submit(ranked("patch", 1, 0), None);
+    queue.submit(ranked("whole", 1, 1));
+    queue.submit(ranked("patch", 1, 0));
     assert_eq!(
         next(&queue),
         Some(("patch", 1)),
         "the better rank starts first"
     );
-    queue.submit(ranked("whole", 2, 0), None);
-    queue.submit(ranked("patch", 2, 1), None);
+    queue.submit(ranked("whole", 2, 0));
+    queue.submit(ranked("patch", 2, 1));
     assert_eq!(
         next(&queue),
         Some(("whole", 2)),
@@ -85,8 +85,8 @@ fn rank_orders_a_tier_before_submission_and_follows_replacement() {
 #[test]
 fn reranking_in_place_keeps_a_waiting_job_waiting() {
     let mut queue = Queue::new();
-    queue.submit(work("a", Priority::Viewport, 1), None);
-    queue.submit(work("b", Priority::Viewport, 1), None);
+    queue.submit(work("a", Priority::Viewport, 1));
+    queue.submit(work("b", Priority::Viewport, 1));
     let mut a = queue.take(&"a").unwrap();
     a.waiting = true;
     queue.put_back(a);
@@ -97,34 +97,39 @@ fn reranking_in_place_keeps_a_waiting_job_waiting() {
 #[test]
 fn replacement_keeps_its_place_and_takes_the_new_priority() {
     let mut queue = Queue::new();
-    queue.submit(work("a", Priority::Viewport, 1), None);
-    queue.submit(work("b", Priority::Viewport, 1), None);
-    queue.submit(work("a", Priority::Viewport, 2), None);
+    queue.submit(work("a", Priority::Viewport, 1));
+    queue.submit(work("b", Priority::Viewport, 1));
+    queue.submit(work("a", Priority::Viewport, 2));
     assert_eq!(next(&queue), Some(("a", 2)), "a slider drag keeps its turn");
-    queue.submit(work("a", Priority::Speculative, 3), None);
+    queue.submit(work("a", Priority::Speculative, 3));
     assert_eq!(next(&queue), Some(("b", 1)));
     assert_eq!(queue.jobs().count(), 2);
 }
 
 #[test]
-fn a_running_target_keeps_its_place_and_put_back_never_overwrites_newer_work() {
+fn a_running_target_rejoins_at_the_back_and_put_back_never_overwrites_newer_work() {
     let mut queue = Queue::new();
-    queue.submit(work("a", Priority::Viewport, 1), None);
-    queue.submit(work("b", Priority::Viewport, 1), None);
+    queue.submit(work("a", Priority::Viewport, 1));
+    queue.submit(work("b", Priority::Viewport, 1));
     let running = queue.take(&"a").unwrap();
-    queue.submit(work("a", Priority::Viewport, 2), Some(running.order));
-    assert_eq!(next(&queue), Some(("a", 2)));
+    queue.submit(work("a", Priority::Viewport, 2));
+    assert_eq!(
+        next(&queue),
+        Some(("b", 1)),
+        "the waiting target goes first"
+    );
     queue.put_back(running);
+    queue.take(&"b").unwrap();
     assert_eq!(next(&queue), Some(("a", 2)), "the newer job stays");
-    assert_eq!(queue.jobs().count(), 2);
+    assert_eq!(queue.jobs().count(), 1);
 }
 
 #[test]
 fn waiting_jobs_hold_back_lower_tiers_but_not_ready_peers() {
     let mut queue = Queue::new();
-    queue.submit(work("loading", Priority::Viewport, 1), None);
-    queue.submit(work("ready", Priority::Viewport, 1), None);
-    queue.submit(work("thumb", Priority::Thumbnail, 1), None);
+    queue.submit(work("loading", Priority::Viewport, 1));
+    queue.submit(work("ready", Priority::Viewport, 1));
+    queue.submit(work("thumb", Priority::Thumbnail, 1));
     let mut loading = queue.take(&"loading").unwrap();
     loading.waiting = true;
     queue.put_back(loading);
@@ -141,7 +146,7 @@ fn waiting_jobs_hold_back_lower_tiers_but_not_ready_peers() {
 #[test]
 fn deferred_speculative_work_neither_runs_nor_holds_a_tier_until_memory_changes() {
     let mut queue = Queue::new();
-    queue.submit(work("whole", Priority::Speculative, 1), None);
+    queue.submit(work("whole", Priority::Speculative, 1));
     let mut queued = queue.take(&"whole").unwrap();
     queued.deferred = true;
     queue.put_back(queued);

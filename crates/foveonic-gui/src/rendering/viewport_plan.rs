@@ -170,9 +170,9 @@ pub(crate) fn plan_photos<T: Rendered>(
     }
     // A photo that zooms in again starts without motion, so its first patch is immediate.
     motion.retain(|path, _| keep_motion.contains(path));
-    // The executor starts images in this order within a priority tier, and
-    // passes over one waiting for its original, so a read holds back nothing.
-    patches.sort_by_key(|patch| planning.selected != Some(patch.request.path.as_path()));
+    // The executor starts patches before whole images within a priority tier,
+    // serves images of one kind in turn, and passes over one waiting for its
+    // original, so a read holds back nothing.
     let planned = patches
         .into_iter()
         .chain(wholes)
@@ -194,12 +194,7 @@ pub(crate) fn plan_photos<T: Rendered>(
             planned: viewport,
             loading,
             history: Vec::new(),
-            eviction_protected: planning
-                .selected
-                .map(Path::to_path_buf)
-                .into_iter()
-                .chain(planning.editing.iter().cloned())
-                .collect(),
+            eviction_protected: planning.editing.to_vec(),
         },
         planned,
         views,

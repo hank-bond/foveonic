@@ -210,6 +210,134 @@ fn same_photo_is_rejected_before_validation_profile_or_session_mutation() {
 
 #[test]
 #[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn an_edit_replaces_its_stages_and_keeps_no_earlier_values() {
+    let engine = Engine::new().unwrap();
+    let source = fixture();
+    let mut settings = settings();
+    settings.reconstruction = Some(Default::default());
+    let mut working = working(&engine, &source, &settings);
+    let mut held = Vec::new();
+    // Each noise value gives the stages downstream of it a new version.
+    for chroma in [1, 3, 0, 4] {
+        settings.reconstruction.as_mut().unwrap().chroma = chroma;
+        working
+            .render_reduced_with_progress(
+                &engine,
+                1,
+                &settings,
+                Purpose::Edit,
+                || false,
+                &mut profile(),
+                |_| {},
+            )
+            .unwrap()
+            .unwrap();
+        held.push(working.reduced_bytes(1).unwrap().0);
+    }
+    assert!(
+        held.windows(2).all(|pair| pair[0] == pair[1]),
+        "held bytes grew with each value: {held:?}"
+    );
+}
+
+/// Stages a whole-image exposure edit runs on a full-size working photo,
+/// optionally after a detail patch was edited from the same working photo.
+fn stages_for_a_whole_image_edit(patch_between: bool) -> usize {
+    let engine = Engine::new().unwrap();
+    let mut whole = settings();
+    whole.working_scale = Scale::NATIVE;
+    let mut working = WorkingSet::new();
+    working
+        .insert_native(
+            1,
+            super::super::NativePhoto::new(fixture()),
+            &engine,
+            Purpose::Edit,
+        )
+        .unwrap();
+    let render = |working: &mut WorkingSet, settings: &Settings| {
+        let total = std::cell::Cell::new(0);
+        engine
+            .render_native(
+                working,
+                1,
+                settings,
+                &["final"],
+                Purpose::Edit,
+                || false,
+                &mut profile(),
+                |event| total.set(progress(event).1),
+            )
+            .unwrap()
+            .unwrap();
+        total.get()
+    };
+    render(&mut working, &whole);
+    if patch_between {
+        let mut patch = whole.clone();
+        patch.preview_region = Some([600, 600, 800, 800]);
+        render(&mut working, &patch);
+    }
+    whole.exposure = 0.25;
+    render(&mut working, &whole)
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn an_edited_patch_keeps_the_stages_its_whole_image_restarts_from() {
+    assert_eq!(
+        stages_for_a_whole_image_edit(true),
+        stages_for_a_whole_image_edit(false)
+    );
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
+fn editing_a_patch_and_its_whole_image_keeps_no_earlier_values() {
+    let engine = Engine::new().unwrap();
+    let mut whole = settings();
+    whole.working_scale = Scale::NATIVE;
+    whole.reconstruction = Some(Default::default());
+    let mut working = WorkingSet::new();
+    working
+        .insert_native(
+            1,
+            super::super::NativePhoto::new(fixture()),
+            &engine,
+            Purpose::Edit,
+        )
+        .unwrap();
+    let mut held = Vec::new();
+    // Each noise value gives the stages downstream of it a new version.
+    for chroma in [1, 3, 0, 4] {
+        whole.reconstruction.as_mut().unwrap().chroma = chroma;
+        let mut patch = whole.clone();
+        patch.preview_region = Some([600, 600, 800, 800]);
+        for settings in [&patch, &whole] {
+            engine
+                .render_native(
+                    &mut working,
+                    1,
+                    settings,
+                    &["final"],
+                    Purpose::Edit,
+                    || false,
+                    &mut profile(),
+                    |_| {},
+                )
+                .unwrap()
+                .unwrap();
+        }
+        held.push(working.native(1).unwrap().cached_bytes());
+    }
+    assert!(
+        held.windows(2).all(|pair| pair[0] == pair[1]),
+        "held bytes grew with each value: {held:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires GPU and FOVEONIC_FIXTURE_DIR with the pinned Merrill example"]
 fn job_stopped_between_steps_retires_the_step_it_left_in_flight() {
     let engine = Engine::new().unwrap();
     let source = fixture();

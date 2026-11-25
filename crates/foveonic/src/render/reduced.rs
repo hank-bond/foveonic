@@ -378,7 +378,9 @@ impl Engine {
             &mut execution,
         );
         if result.is_ok() {
-            session.cache.commit(None);
+            session
+                .cache
+                .commit(settings.preview_region.is_some(), None);
         }
         session.cache.finish();
         match result {

@@ -338,6 +338,31 @@ struct RepairSlot {
     bytes: usize,
 }
 
+/// One of the images a working photo produces. Each restarts from its own
+/// stages: a detail patch computes its own at full size, and renders
+/// that are not edits, such as a Before image, a navigator image or an
+/// export, use other settings or outputs. Those share one record, since only
+/// one of them is wanted at a time.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Image {
+    detail: bool,
+    edit: bool,
+}
+
+/// What an image's latest completed recipe planned, and the stages it
+/// restarts from when that render was an edit.
+#[derive(Default)]
+struct Produced {
+    versions: HashSet<u64>,
+    restart: HashSet<u64>,
+}
+
+#[cfg(test)]
+const WHOLE_EDIT: Image = Image {
+    detail: false,
+    edit: true,
+};
+
 #[derive(Default)]
 struct PlannedRecipe {
     versions: HashMap<String, Arc<Version>>,
@@ -358,8 +383,11 @@ pub(crate) struct Cache {
     frame: u64,
     entries: Vec<Entry>,
     sensor_data: HashSet<u64>,
-    /// Each retained restart input's latest edit use, comparable across photos.
-    restart_uses: HashMap<u64, u64>,
+    /// The latest recipe of each image this photo produces.
+    produced: HashMap<Image, Produced>,
+    /// The latest edit's use, which is comparable across photos and is the
+    /// age of every stage an edit restarts from.
+    restart_use: u64,
 }
 impl Cache {
     pub(crate) fn diagnostic_id(&self) -> u64 {
@@ -582,8 +610,13 @@ impl Cache {
     }
     pub(crate) fn account_keys(&self, retained: &mut crate::recipe::RetainedBytes) -> usize {
         let mut bytes = self.entries.capacity() * std::mem::size_of::<Entry>()
-            + self.restart_uses.capacity() * std::mem::size_of::<(u64, u64)>()
+            + self.produced.capacity() * std::mem::size_of::<(Image, Produced)>()
             + (self.sensor_data.capacity()
+                + self
+                    .produced
+                    .values()
+                    .map(|image| image.versions.capacity() + image.restart.capacity())
+                    .sum::<usize>()
                 + self.planned.sensor_data.capacity()
                 + self.planned.restart.capacity())
                 * std::mem::size_of::<u64>()
@@ -1019,37 +1052,64 @@ impl Cache {
     }
     /// Commit the immutable inputs of a completed recipe. An unsuccessful
     /// request must not make the previous valid recipe's inputs expendable.
-    /// A render that counts as an edit stamps the inputs it restarts from.
-    pub(crate) fn commit(&mut self, edit_use: Option<u64>) {
+    /// `detail` is whether the recipe rendered a detail patch. Every version
+    /// that no image's latest recipe planned is released, so each image holds
+    /// a stage in one version and earlier values of a control are never kept.
+    /// Only a render that counts as an edit records the stages its image
+    /// restarts from, so a Before image cannot displace the current edit's.
+    pub(crate) fn commit(&mut self, detail: bool, edit_use: Option<u64>) {
         self.sensor_data.clone_from(&self.planned.sensor_data);
+        let planned = self.planned.versions.values();
+        let mut produced = Produced {
+            versions: planned.map(|version| version.generation).collect(),
+            restart: HashSet::new(),
+        };
         if let Some(edit_use) = edit_use {
-            for generation in &self.planned.restart {
-                self.restart_uses.insert(*generation, edit_use);
+            produced.restart.clone_from(&self.planned.restart);
+            self.restart_use = edit_use;
+        }
+        let image = Image {
+            detail,
+            edit: edit_use.is_some(),
+        };
+        self.produced.insert(image, produced);
+        for index in (0..self.entries.len()).rev() {
+            let generation = self.entries[index].version.generation;
+            if !self.sensor_data.contains(&generation)
+                && !self
+                    .produced
+                    .values()
+                    .any(|image| image.versions.contains(&generation))
+            {
+                self.remove_entry(index, "superseded-version");
             }
         }
-        let entries = &self.entries;
-        self.restart_uses.retain(|generation, _| {
-            entries
-                .iter()
-                .any(|entry| entry.version.generation == *generation)
-        });
+        self.prune_identities();
+    }
+    fn optional(&self) -> impl Iterator<Item = (usize, &Entry)> {
+        self.entries.iter().enumerate().filter(|(_, entry)| {
+            let generation = entry.version.generation;
+            !self.sensor_data.contains(&generation) && !self.is_restart_input(generation)
+        })
+    }
+    /// What the optional versions hold, counting shared storage more than once.
+    pub(crate) fn optional_bytes(&self) -> u64 {
+        self.optional()
+            .map(|(_, entry)| entry.value.buffer.size())
+            .sum()
     }
     fn is_restart_input(&self, generation: u64) -> bool {
-        self.restart_uses.contains_key(&generation)
+        self.produced
+            .values()
+            .any(|image| image.restart.contains(&generation))
     }
-    /// Drop one optional version that is not a restart input. Older unselected
-    /// versions go first. Sensor data is never removed, so pressure cannot
-    /// silently turn a photo into a source miss.
-    pub(crate) fn trim_optional(&mut self, obsolete_only: bool) -> bool {
+    /// Drop one optional version: one that is neither sensor data nor a restart
+    /// input. Versions the current recipe does not use go first, then its least
+    /// useful and least recently used. Sensor data is never removed, so
+    /// pressure cannot silently turn a photo into a source miss.
+    pub(crate) fn trim_optional(&mut self) -> bool {
         let candidate = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| !self.sensor_data.contains(&entry.version.generation))
-            .filter(|(_, entry)| !self.is_restart_input(entry.version.generation))
-            .filter(|(_, entry)| {
-                !obsolete_only || self.current_priority(entry.version.generation).is_none()
-            })
+            .optional()
             .max_by_key(|(_, entry)| {
                 (
                     self.current_priority(entry.version.generation)
@@ -1059,46 +1119,29 @@ impl Cache {
             })
             .map(|(index, _)| index);
         let Some(index) = candidate else { return false };
-        self.remove_entry(
-            index,
-            if obsolete_only {
-                "shared-obsolete-history"
-            } else {
-                "shared-optional-frontier"
-            },
-        );
+        self.remove_entry(index, "optional-version");
         self.prune_identities();
         true
     }
-    fn oldest_restart_input(&self, keep_latest: bool) -> Option<(usize, u64)> {
-        let inputs = || {
-            self.entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| !self.sensor_data.contains(&entry.version.generation))
-                .filter_map(|(index, entry)| {
-                    Some((index, *self.restart_uses.get(&entry.version.generation)?))
-                })
-        };
-        let latest = inputs().map(|(_, edit_use)| edit_use).max();
-        inputs()
-            .filter(|(_, edit_use)| !keep_latest || Some(*edit_use) != latest)
-            .min_by_key(|(_, edit_use)| *edit_use)
+    fn restart_input(&self) -> Option<usize> {
+        self.entries.iter().position(|entry| {
+            let generation = entry.version.generation;
+            !self.sensor_data.contains(&generation) && self.is_restart_input(generation)
+        })
     }
-    /// The edit use of this photo's least recently used restart input.
-    /// `keep_latest` leaves out the latest edit's inputs, which an eviction-protected photo
-    /// keeps so the edit in progress never restarts from the file.
-    pub(crate) fn oldest_restart_use(&self, keep_latest: bool) -> Option<u64> {
-        self.oldest_restart_input(keep_latest)
-            .map(|(_, edit_use)| edit_use)
+    /// The use of the edit whose restart inputs this photo holds, if it holds any.
+    pub(crate) fn restart_use(&self) -> Option<u64> {
+        self.restart_input().map(|_| self.restart_use)
     }
-    pub(crate) fn drop_oldest_restart_input(&mut self, keep_latest: bool) -> bool {
-        let Some((index, _)) = self.oldest_restart_input(keep_latest) else {
+    pub(crate) fn drop_restart_input(&mut self) -> bool {
+        let Some(index) = self.restart_input() else {
             return false;
         };
         let generation = self.entries[index].version.generation;
         self.remove_entry(index, "shared-restart-recency");
-        self.restart_uses.remove(&generation);
+        for image in self.produced.values_mut() {
+            image.restart.remove(&generation);
+        }
         self.prune_identities();
         true
     }
@@ -1119,7 +1162,7 @@ impl Cache {
         });
         if retained {
             self.sensor_data = required;
-            self.restart_uses.clear();
+            self.produced.clear();
         }
         retained
     }
@@ -1525,15 +1568,15 @@ mod tests {
                     .current_priority(cache.planned.versions[&finishing_name].generation)
                     .unwrap()
         );
-        assert!(cache.restart_uses.is_empty());
-        cache.commit(Some(1));
-        let completed = cache.restart_uses.clone();
+        assert!(cache.produced.is_empty());
+        cache.commit(false, Some(1));
+        let completed = cache.produced[&WHOLE_EDIT].restart.clone();
         // Planning another root does not commit an interrupted request's cut.
         let mut other = Graph::default();
         let other_root = other.add(crate::graph::Operation::Source, &[]).unwrap();
         cache.plan(&other, &[other_root]).unwrap();
         assert!(cache.planned.restart.is_empty());
-        assert_eq!(cache.restart_uses, completed);
+        assert_eq!(cache.produced[&WHOLE_EDIT].restart, completed);
     }
     #[test]
     #[ignore = "requires a GPU"]
@@ -1554,15 +1597,15 @@ mod tests {
         for id in checkpoints {
             cache.put(&graph.outputs[id].cache_name(), &value);
         }
-        cache.commit(Some(1));
+        cache.commit(false, Some(1));
         let identities = cache.planned.versions.len();
         let restart = cache.planned.restart.clone();
         assert_eq!(cache.entries.len(), 4);
-        assert!(cache.trim_optional(false), "the session hint is optional");
+        assert!(cache.trim_optional(), "the session hint is optional");
         assert_eq!(cache.entries.len(), 3);
         assert!(
-            !cache.trim_optional(false),
-            "restart inputs leave only by edit recency"
+            !cache.trim_optional(),
+            "restart inputs leave only through the recency pass"
         );
         assert_eq!(cache.planned.versions.len(), identities);
         let (next, root) = graph_for_detail(1.2);

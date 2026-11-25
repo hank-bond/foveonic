@@ -379,40 +379,46 @@ impl WorkingSet {
             .iter()
             .map(|entry| (entry.session.metadata(), entry.session.origin()))
     }
-    pub(super) fn trim_optional(&mut self, obsolete_only: bool) -> bool {
-        self.entries.iter_mut().any(|entry| {
-            !entry.executing() && entry.session.cache_mut().trim_optional(obsolete_only)
-        })
+    /// An upper estimate of what trimming could release here: the optional
+    /// versions of an idle photo, and all of one that is not eviction
+    /// protected. Shared storage is counted more than once.
+    pub(super) fn releasable_bytes(&self) -> u64 {
+        self.entries
+            .iter()
+            .filter(|entry| !entry.executing())
+            .map(|entry| {
+                if self.eviction_protected.contains(&entry.key) {
+                    entry.session.cache().optional_bytes()
+                } else {
+                    entry.session.cached_bytes() + entry.session.retained_cpu_bytes()
+                }
+            })
+            .sum()
     }
-    /// Drop whatever was used longest ago: one edit's restart input or a whole
-    /// working photo. Eviction-protected photos are never evicted and keep their latest
-    /// edit's inputs.
+    pub(super) fn trim_optional(&mut self) -> bool {
+        self.entries
+            .iter_mut()
+            .any(|entry| !entry.executing() && entry.session.cache_mut().trim_optional())
+    }
+    /// Drop whatever was used longest ago: a restart input of a photo's latest
+    /// edit or a whole working photo. Eviction-protected photos keep both.
     pub(super) fn trim_least_recent(&mut self) -> Option<Trimmed> {
         let idle = || {
             self.entries
                 .iter()
                 .enumerate()
                 .filter(|(_, entry)| !entry.executing())
+                .filter(|(_, entry)| !self.eviction_protected.contains(&entry.key))
         };
         let input = idle()
-            .filter_map(|(index, entry)| {
-                let protected = self.eviction_protected.contains(&entry.key);
-                Some((entry.session.cache().oldest_restart_use(protected)?, index))
-            })
+            .filter_map(|(index, entry)| Some((entry.session.cache().restart_use()?, index)))
             .min();
-        let photo = idle()
-            .filter(|(_, entry)| !self.eviction_protected.contains(&entry.key))
-            .map(|(index, entry)| (entry.last_use, index))
-            .min();
+        let photo = idle().map(|(index, entry)| (entry.last_use, index)).min();
         if let Some((edit_use, index)) = input {
             // A photo is never older than its own inputs, so on a tie its inputs
             // go first and its sensor data, which needs a decode to rebuild, last.
             if photo.is_none_or(|(last_use, _)| edit_use <= last_use) {
-                let protected = self.eviction_protected.contains(&self.entries[index].key);
-                self.entries[index]
-                    .session
-                    .cache_mut()
-                    .drop_oldest_restart_input(protected);
+                self.entries[index].session.cache_mut().drop_restart_input();
                 return Some(Trimmed::RestartInput);
             }
         }
@@ -631,13 +637,13 @@ mod tests {
         working
     }
 
-    /// Two photos whose last uses and restart inputs carry explicit stamps.
+    /// Two photos whose last uses carry explicit stamps. Photo 1 was edited
+    /// before photo 2 was last used and viewed after it.
     fn stamped_photos(gpu: &crate::gpu::Gpu, protected: bool) -> WorkingSet {
         let mut working = WorkingSet::new();
-        for (photo, last_use, inputs) in [(1, 4, &[("old", 1), ("newer", 4)][..]), (2, 2, &[][..])]
-        {
+        for (photo, last_use, inputs) in [(1, 4, &["old", "newer"][..]), (2, 2, &[][..])] {
             let mut session = NativePhoto::new(source());
-            session.cache = crate::interactive::cache_tests::restart_inputs(gpu, inputs);
+            session.cache = crate::interactive::cache_tests::restart_inputs(gpu, inputs, 1);
             working
                 .insert(
                     native(photo),
@@ -658,17 +664,15 @@ mod tests {
     fn one_recency_pass_orders_restart_inputs_and_photos() {
         let gpu = crate::gpu::Gpu::test_executor();
         let mut working = stamped_photos(&gpu, false);
-        assert!(
-            matches!(working.trim_least_recent(), Some(Trimmed::RestartInput)),
-            "photo 1's old edit predates photo 2"
-        );
+        for _ in 0..2 {
+            assert!(
+                matches!(working.trim_least_recent(), Some(Trimmed::RestartInput)),
+                "photo 1's edit predates photo 2's last use"
+            );
+        }
         assert!(
             matches!(working.trim_least_recent(), Some(Trimmed::Photo(key)) if key == native(2)),
-            "photo 2 predates photo 1's newer edit"
-        );
-        assert!(
-            matches!(working.trim_least_recent(), Some(Trimmed::RestartInput)),
-            "a photo's inputs leave before its sensor data"
+            "photo 2 predates photo 1's last use"
         );
         assert!(
             matches!(working.trim_least_recent(), Some(Trimmed::Photo(key)) if key == native(1))
@@ -676,10 +680,6 @@ mod tests {
         assert!(working.trim_least_recent().is_none());
 
         let mut working = stamped_photos(&gpu, true);
-        assert!(matches!(
-            working.trim_least_recent(),
-            Some(Trimmed::RestartInput)
-        ));
         assert!(
             matches!(working.trim_least_recent(), Some(Trimmed::Photo(key)) if key == native(2))
         );
@@ -687,10 +687,7 @@ mod tests {
             working.trim_least_recent().is_none(),
             "an eviction-protected photo keeps its latest edit's inputs"
         );
-        assert_eq!(
-            working.native(1).unwrap().cache.oldest_restart_use(false),
-            Some(4)
-        );
+        assert_eq!(working.native(1).unwrap().cache.restart_use(), Some(1));
     }
 
     #[test]

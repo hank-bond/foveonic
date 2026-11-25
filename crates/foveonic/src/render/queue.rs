@@ -1,11 +1,11 @@
-//! Orders submitted jobs by priority tier, then by rank, then by when each target was first submitted.
+//! Orders submitted jobs by priority tier, then by rank, then by when each target joined the line.
 
 use super::scheduler::Job;
 use crate::priority::Priority;
 
 pub(super) struct Queued<J> {
     pub job: J,
-    /// When the target was first submitted. Replacement keeps it.
+    /// When the target joined the line. Replacing a queued job keeps it.
     pub order: u64,
     /// Waiting for an input the host is acquiring.
     pub waiting: bool,
@@ -36,8 +36,9 @@ impl<J: Job> Queue<J> {
     }
 
     /// A newer job for a queued target replaces it and keeps its place in line.
-    /// `order` keeps the place of a target that is currently running.
-    pub fn submit(&mut self, job: J, order: Option<u64>) {
+    /// Any other job joins the back, including one for a target that is running,
+    /// so targets still waiting are served before that target runs again.
+    pub fn submit(&mut self, job: J) {
         if let Some(queued) = self
             .entries
             .iter_mut()
@@ -48,13 +49,10 @@ impl<J: Job> Queue<J> {
             queued.deferred = false;
             return;
         }
-        let order = order.unwrap_or_else(|| {
-            self.next_order += 1;
-            self.next_order
-        });
+        self.next_order += 1;
         self.entries.push(Queued {
             job,
-            order,
+            order: self.next_order,
             waiting: false,
             deferred: false,
         });

@@ -873,7 +873,10 @@ fn neutralize_shadows_cached_switches_and_neutral_bypass_match_fresh() {
     }
     selected.neutralize_shadows.strength = 0.8;
     cached(&engine, &mut session, &selected);
+    // The first tolerance edit keeps the prepared color it restarts from.
     selected.neutralize_shadows.color_tolerance = 0.4;
+    cached(&engine, &mut session, &selected);
+    selected.neutralize_shadows.color_tolerance = 0.6;
     let mut profile = Profile::new(crate::profile::Mode::Wall);
     engine
         .render_native_photo(&mut session, &selected, &["final"], || false, &mut profile)

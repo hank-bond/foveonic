@@ -70,7 +70,8 @@ impl Photos {
     pub fn key(&self, path: &Path, resolution: Resolution) -> Option<PhotoKey> {
         Some(key(self.id(path)?, resolution))
     }
-    fn prune(&mut self, working: &WorkingSet) {
+    /// Forget photos whose working photos were all released.
+    pub(super) fn prune(&mut self, working: &WorkingSet) {
         self.photos.retain(|photo| {
             working.contains(key(photo.id, Resolution::Native))
                 || working.contains(key(photo.id, Resolution::Reduced))
@@ -286,17 +287,6 @@ impl Photos {
         }
         self.prune(working);
         Ok(admitted)
-    }
-    pub fn trim_memory(
-        &mut self,
-        working: &mut WorkingSet,
-        engine: &Engine,
-        target: u64,
-        reservation: &foveonic::render::MemoryReservation,
-    ) -> foveonic::render::MemoryTrim {
-        let result = engine.trim_memory(working, target, reservation);
-        self.prune(working);
-        result
     }
     pub fn clear(&mut self, working: &mut WorkingSet, engine: &Engine) -> Result<()> {
         working.clear()?;
@@ -556,8 +546,9 @@ mod tests {
             target: u64,
             reservation: &foveonic::render::MemoryReservation,
         ) -> foveonic::render::MemoryTrim {
-            self.photos
-                .trim_memory(&mut self.working, engine, target, reservation)
+            let trim = engine.trim_memory(&mut self.working, target, reservation);
+            self.photos.prune(&self.working);
+            trim
         }
         #[allow(clippy::too_many_arguments)]
         fn prefetch(
