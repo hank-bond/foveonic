@@ -55,6 +55,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[regional-preview-completion](./regional-preview-completion.md)** Complete native visible-region rendering for adaptive tone, monochrome and authored rotation, with whole-image comparisons and measured app latency.
 - **[release-0.8.4](./release-0.8.4.md)** Prepare and validate 0.8.4 with reviewed capture-metadata and TIFF interoperability fixes.
 - **[release-0.9.0](./release-0.9.0.md)** 0.9.0 is held until the render scheduler replaces the serial and Merrill-only wide paths. Its viewing features and release lanes remain in scope.
+- **[release-0.9.1](./release-0.9.1.md)** Remove the last-selected photograph from editing and display, and release 0.9.1.
 - **[release-test-efficiency](./release-test-efficiency.md)** Reduce healthy release validation toward thirty minutes with bounded correctness workers, reusable verification and explicit isolation.
 - **[render-coordination-consistency](./render-coordination-consistency.md)** Inventory coordination, scheduling and cache inconsistencies before choosing small current-architecture cleanup slices.
 - **[render-runtime](./render-runtime.md)** Clarify render ownership and responsibilities through one owner-reviewed concept at a time. Execution now belongs to the render scheduler plan.
