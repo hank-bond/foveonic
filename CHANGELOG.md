@@ -23,9 +23,9 @@ Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps.
 | Time | 0.8.4 | 0.9.0 | Change |
 | --- | --- | --- | --- |
 | Open eight photographs | 8,379 ms | 2,923 ms | −65% |
-|   ├─ Merrill | 4,606 ms | 2,300 ms | −50% |
-|   ├─ Quattro | 12,395 ms | 4,302 ms | −65% |
-|   └─ Classic | 2,394 ms | 2,428 ms | +1% |
+|   ├ Merrill | 4,606 ms | 2,300 ms | −50% |
+|   ├ Quattro | 12,395 ms | 4,302 ms | −65% |
+|   └ Classic | 2,394 ms | 2,428 ms | +1% |
 | Rapid edits across eight photographs settle | 3,032 ms | 250 ms | −92% |
 | Edit eight photographs while memory is tight | 2,836 ms | 184 ms | −94% |
 | Slowest 5% of edits across eight photographs | 2,979 ms | 130 ms | −96% |
@@ -37,13 +37,13 @@ Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps.
 | Peak memory | 0.8.4 | 0.9.0 | Change |
 | --- | --- | --- | --- |
 | Open eight photographs | 3.7 GB | 2.0 GB | −47% |
-|   ├─ Merrill | 3.3 GB | 1.5 GB | −53% |
-|   ├─ Quattro | 3.8 GB | 2.5 GB | −34% |
-|   └─ Classic | 1.4 GB | 1.1 GB | −24% |
+|   ├ Merrill | 3.3 GB | 1.5 GB | −53% |
+|   ├ Quattro | 3.8 GB | 2.5 GB | −34% |
+|   └ Classic | 1.4 GB | 1.1 GB | −24% |
 | Edit eight photographs | 4.0 GB | 2.0 GB | −51% |
-|   ├─ Merrill | 3.4 GB | 1.4 GB | −58% |
-|   ├─ Quattro | 3.8 GB | 2.5 GB | −34% |
-|   └─ Classic | 1.5 GB | 1.1 GB | −25% |
+|   ├ Merrill | 3.4 GB | 1.4 GB | −58% |
+|   ├ Quattro | 3.8 GB | 2.5 GB | −34% |
+|   └ Classic | 1.5 GB | 1.1 GB | −25% |
 | Rapid edits across eight photographs | 3.7 GB | 2.1 GB | −44% |
 | Open one photograph | 1.2 GB | 1.0 GB | −15% |
 | Edit one photograph | 1.2 GB | 1.0 GB | −11% |
