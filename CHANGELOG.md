@@ -5,6 +5,41 @@ kind: reference
 
 # Changelog
 
+## 0.9.1
+
+Treat every photograph in a group alike: update them together, and crop or rotate any of them.
+
+### Performance improvements
+
+- Update every photograph of a group in step while a slider is dragged. One photograph no longer takes most of the updates while the others wait for the drag to end.
+- Keep one version of each processing stage in memory instead of one for every slider value visited, and release cached data to render a group together.
+
+Measured on an Apple M1 Pro with the published 0.9.0 app and 0.9.1: six Merrill photographs, a 3,000 ms white-balance drag and a 768 MiB cache. Each figure is the median of seven drags.
+
+| Updates shown during the drag | 0.9.0 | 0.9.1 |
+| --- | --- | --- |
+| Photograph 1 | 51 | 16 |
+| Photograph 2 | 17 | 13 |
+| Photograph 3 | 3 | 15 |
+| Photograph 4 | 3 | 14 |
+| Photograph 5 | 2 | 14 |
+| Photograph 6 | 2 | 14 |
+
+### New functionality
+
+- Arrange several photographs as an equal grid with a switch beside the viewport's background switch.
+
+### Behavior changes
+
+- Show Crop and Rotate on every displayed photograph, selected or not. A drag edits the photograph it starts on. The tool bar's crop ratio, orientation switch and reset, and Reset rotation, apply to every selected photograph.
+- Size each row or column of photographs separately so that the smallest photograph is as large as it can be, and keep the browser's order unless another shows it clearly larger.
+- Hold the arrangement of photographs still while Crop or Rotate is in use.
+
+### Bug fixes
+
+- Stop thumbnails and photographs from blanking for a frame when they update.
+- Mark no crop ratio in the Crop menu when the selected photographs' ratios differ.
+
 ## 0.9.0
 
 Open and edit groups of photographs much faster, with every editing tool working across the group.
