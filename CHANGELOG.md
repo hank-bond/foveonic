@@ -22,24 +22,30 @@ Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps.
 
 | Time | 0.8.4 | 0.9.0 | Change |
 | --- | --- | --- | --- |
-| Open eight photographs | 7,758 ms | 2,814 ms | −64% |
-| Rapid edits across eight photographs settle | 2,949 ms | 253 ms | −91% |
-| Edit eight photographs while memory is tight | 2,705 ms | 182 ms | −93% |
-| Slowest 5% of edits across eight photographs | 2,908 ms | 129 ms | −96% |
-| Typical edit across eight photographs | 142 ms | 122 ms | −14% |
-| Remove a photograph while it renders | 385 ms | 49 ms | −87% |
-| Edit one photograph | 40 ms | 35 ms | −12% |
-| Open one photograph | 390 ms | 404 ms | +4% |
+| Open eight photographs | 8,379 ms | 2,923 ms | −65% |
+| Open eight Merrill photographs | 4,606 ms | 2,300 ms | −50% |
+| Rapid edits across eight photographs settle | 3,032 ms | 250 ms | −92% |
+| Rapid edits across eight Merrill photographs settle | 2,980 ms | 232 ms | −92% |
+| Edit eight photographs while memory is tight | 2,836 ms | 184 ms | −94% |
+| Slowest 5% of edits across eight photographs | 2,979 ms | 130 ms | −96% |
+| Slowest 5% of edits across eight Merrill photographs | 3,022 ms | 119 ms | −96% |
+| Typical edit across eight photographs | 135 ms | 123 ms | −9% |
+| Typical edit across eight Merrill photographs | 135 ms | 116 ms | −14% |
+| Remove a photograph while it renders | 423 ms | 33 ms | −92% |
+| Edit one photograph | 37 ms | 39 ms | +5% |
+| Open one photograph | 587 ms | 575 ms | −2% |
 
 | Peak memory | 0.8.4 | 0.9.0 | Change |
 | --- | --- | --- | --- |
-| Open eight photographs | 3.6 GB | 2.1 GB | −41% |
-| Edit eight photographs | 3.6 GB | 1.9 GB | −46% |
-| Rapid edits across eight photographs | 3.6 GB | 2.1 GB | −43% |
-| Open one photograph | 1.1 GB | 1.0 GB | −11% |
-| Edit one photograph | 1.2 GB | 0.95 GB | −18% |
+| Open eight photographs | 3.7 GB | 2.0 GB | −47% |
+| Open eight Merrill photographs | 3.3 GB | 1.5 GB | −53% |
+| Edit eight photographs | 4.0 GB | 2.0 GB | −51% |
+| Edit eight Merrill photographs | 3.4 GB | 1.4 GB | −58% |
+| Rapid edits across eight photographs | 3.7 GB | 2.1 GB | −44% |
+| Open one photograph | 1.2 GB | 1.0 GB | −15% |
+| Edit one photograph | 1.2 GB | 1.0 GB | −11% |
 
-The eight photographs are a mix of cameras: two Merrill, two Quattro, one Quattro H and three from the SD9, SD10 and SD14. Merrill noise reduction is on, as it is by default.
+Rows that do not name a camera use eight photographs from a mix of cameras: two Merrill, two Quattro, one Quattro H and three from the SD9, SD10 and SD14. The single photograph is a Merrill. Merrill noise reduction is on, as it is by default. 0.9.0 also sharpens Merrill photographs by default, which 0.8.4 did not.
 
 ### New functionality
 
