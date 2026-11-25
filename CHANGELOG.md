@@ -23,14 +23,13 @@ Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps.
 | Time | 0.8.4 | 0.9.0 | Change |
 | --- | --- | --- | --- |
 | Open eight photographs | 8,379 ms | 2,923 ms | −65% |
-|   └─ Merrill | 4,606 ms | 2,300 ms | −50% |
+|   ├─ Merrill | 4,606 ms | 2,300 ms | −50% |
+|   ├─ Quattro | 12,395 ms | 4,302 ms | −65% |
+|   └─ Classic | 2,394 ms | 2,428 ms | +1% |
 | Rapid edits across eight photographs settle | 3,032 ms | 250 ms | −92% |
-|   └─ Merrill | 2,980 ms | 232 ms | −92% |
 | Edit eight photographs while memory is tight | 2,836 ms | 184 ms | −94% |
 | Slowest 5% of edits across eight photographs | 2,979 ms | 130 ms | −96% |
-|   └─ Merrill | 3,022 ms | 119 ms | −96% |
 | Typical edit across eight photographs | 135 ms | 123 ms | −9% |
-|   └─ Merrill | 135 ms | 116 ms | −14% |
 | Remove a photograph while it renders | 423 ms | 33 ms | −92% |
 | Edit one photograph | 37 ms | 39 ms | +5% |
 | Open one photograph | 587 ms | 575 ms | −2% |
@@ -38,14 +37,18 @@ Measured on an Apple M1 Pro with the published 0.8.4 and 0.9.0 apps.
 | Peak memory | 0.8.4 | 0.9.0 | Change |
 | --- | --- | --- | --- |
 | Open eight photographs | 3.7 GB | 2.0 GB | −47% |
-|   └─ Merrill | 3.3 GB | 1.5 GB | −53% |
+|   ├─ Merrill | 3.3 GB | 1.5 GB | −53% |
+|   ├─ Quattro | 3.8 GB | 2.5 GB | −34% |
+|   └─ Classic | 1.4 GB | 1.1 GB | −24% |
 | Edit eight photographs | 4.0 GB | 2.0 GB | −51% |
-|   └─ Merrill | 3.4 GB | 1.4 GB | −58% |
+|   ├─ Merrill | 3.4 GB | 1.4 GB | −58% |
+|   ├─ Quattro | 3.8 GB | 2.5 GB | −34% |
+|   └─ Classic | 1.5 GB | 1.1 GB | −25% |
 | Rapid edits across eight photographs | 3.7 GB | 2.1 GB | −44% |
 | Open one photograph | 1.2 GB | 1.0 GB | −15% |
 | Edit one photograph | 1.2 GB | 1.0 GB | −11% |
 
-Each row uses eight photographs from a mix of cameras: two Merrill, two Quattro, one Quattro H and three from the SD9, SD10 and SD14. An indented row repeats the measurement with eight photographs from that camera alone. The single photograph is a Merrill. Merrill noise reduction is on, as it is by default. 0.9.0 also sharpens Merrill photographs by default, which 0.8.4 did not.
+Each row uses eight photographs from a mix of cameras: two Merrill, two Quattro, one Quattro H and three from the SD9, SD10 and SD14. Where the cameras differ by more than ten percentage points, indented rows repeat the measurement with eight photographs from one camera family alone. Classic covers the SD9 to SD15 and the first DP cameras. The single photograph is a Merrill. Merrill noise reduction is on, as it is by default. 0.9.0 also sharpens Merrill photographs by default, which 0.8.4 did not.
 
 ### New functionality
 
