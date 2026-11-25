@@ -474,6 +474,8 @@ pub struct Smoke {
     current_texture: Option<std::sync::Arc<foveonic::image::ImageTexture>>,
     multi_paths: Vec<PathBuf>,
     multi_expected: Vec<foveonic::render::Settings>,
+    /// The multi-photo arrangement before a crop made with the tool armed.
+    multi_tiles: Vec<egui::Rect>,
     multi_cached_textures: Vec<std::sync::Weak<foveonic::image::ImageTexture>>,
     multi_cached_scales: Vec<foveonic::render::Scale>,
     multi_sweep_groups: usize,
@@ -616,6 +618,7 @@ impl Smoke {
             current_texture: None,
             multi_paths: Vec::new(),
             multi_expected: Vec::new(),
+            multi_tiles: Vec::new(),
             multi_cached_textures: Vec::new(),
             multi_cached_scales: Vec::new(),
             multi_sweep_groups: std::env::var("FOVEONIC_GUI_SMOKE_MULTI_SWEEP")

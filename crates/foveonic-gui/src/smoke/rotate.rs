@@ -44,7 +44,7 @@ pub(super) fn check(
                 "draft must not render or save"
             );
             assert_eq!(
-                crate::rotate_tool::displayed(ctx, settings.rotation),
+                crate::rotate_tool::displayed(ctx, &frame.request.path, settings.rotation),
                 settings.rotation
             );
         }
@@ -55,7 +55,7 @@ pub(super) fn check(
         "rotate-first-click" | "rotate-click-line" => {
             assert_eq!(settings.rotation, smoke.authored.as_ref().unwrap().rotation);
             assert_eq!(
-                crate::rotate_tool::displayed(ctx, settings.rotation),
+                crate::rotate_tool::displayed(ctx, &frame.request.path, settings.rotation),
                 settings.rotation
             );
         }
@@ -279,9 +279,10 @@ pub(super) fn ready(
         || (smoke.direct_events.is_empty()
             && match smoke.targets[smoke.index] {
                 "rotate-draft" => ctx.input(|i| i.pointer.primary_down()),
-                "rotate-freehand-draft" => {
-                    crate::rotate_tool::displayed(ctx, settings.rotation) != settings.rotation
-                }
+                "rotate-freehand-draft" => current_frame.is_some_and(|frame| {
+                    crate::rotate_tool::displayed(ctx, &frame.request.path, settings.rotation)
+                        != settings.rotation
+                }),
                 "rotate-straight" => settings.rotation.degrees < -1.,
                 "rotate-click-applied" => {
                     settings.rotation.degrees

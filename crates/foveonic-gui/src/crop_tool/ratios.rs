@@ -28,15 +28,19 @@ pub(super) enum Dialog {
     Add(NamedRatio),
     Remove(Vec<bool>),
 }
-pub(super) enum Action {
+/// A choice from the crop menu, applied to each photo with its own frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Action {
     Aspect(Aspect),
     Flip,
     Reset,
 }
 
+/// `marked` is the ratio every editing target has, or `None` when they differ,
+/// in which case no ratio is marked.
 pub(super) fn menu(
     ui: &mut egui::Ui,
-    crop: Crop,
+    marked: Option<Aspect>,
     custom: &[NamedRatio],
     dialog: &mut Option<Dialog>,
 ) -> Option<Action> {
@@ -46,7 +50,7 @@ pub(super) fn menu(
         ui.close_kind(egui::UiKind::Menu);
     }
     if ui
-        .add_enabled_ui(crop.aspect != Aspect::Unconstrained, |ui| {
+        .add_enabled_ui(marked != Some(Aspect::Unconstrained), |ui| {
             widgets::menu_row(ui, "Switch crop orientation", false)
         })
         .inner
@@ -56,12 +60,12 @@ pub(super) fn menu(
         ui.close_kind(egui::UiKind::Menu);
     }
     ui.separator();
-    let mut selected = crop.aspect;
+    let mut selected = marked;
     for (aspect, label) in [
         (Aspect::Unconstrained, "Unconstrained"),
         (Aspect::Original, "Original"),
     ] {
-        if widgets::menu_value(ui, &mut selected, aspect, label).changed() {
+        if widgets::menu_value(ui, &mut selected, Some(aspect), label).changed() {
             action = Some(Action::Aspect(aspect));
             ui.close_kind(egui::UiKind::Menu);
         }
@@ -80,7 +84,7 @@ pub(super) fn menu(
         ("21 × 9 Cinema", 21., 9.),
     ] {
         let aspect = Aspect::Ratio([w, h]);
-        if widgets::menu_value(ui, &mut selected, aspect, label).changed() {
+        if widgets::menu_value(ui, &mut selected, Some(aspect), label).changed() {
             action = Some(Action::Aspect(aspect));
             ui.close_kind(egui::UiKind::Menu);
         }
@@ -89,7 +93,7 @@ pub(super) fn menu(
         ui.separator();
         for ratio in custom {
             let aspect = Aspect::Ratio(ratio.dimensions);
-            if widgets::menu_value(ui, &mut selected, aspect, &ratio.name).changed() {
+            if widgets::menu_value(ui, &mut selected, Some(aspect), &ratio.name).changed() {
                 action = Some(Action::Aspect(aspect));
                 ui.close_kind(egui::UiKind::Menu);
             }

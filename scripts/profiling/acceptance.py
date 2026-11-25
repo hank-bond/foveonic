@@ -20,6 +20,10 @@ HERE = Path(__file__).resolve().parent
 CATALOG = HERE / 'acceptance_cases.json'
 
 
+# The renderer's warning when a frame names a texture that no longer exists.
+FREED_TEXTURE = 'Missing texture'
+
+
 def contract_identity():
     """Pin the maintained top-level drivers and declarations, excluding tests/baselines."""
     files = sorted(p for p in HERE.iterdir() if p.is_file()
@@ -309,6 +313,8 @@ def execute(job, args, root):
                     result['outcome'] = 'passed' if decision is True else 'observed'
         elif 'completion_sha256' in result:
             result['outcome'] = 'passed'
+        if result['outcome'] == 'passed' and drew_freed_texture(out):
+            result.update(outcome='failed', reason='a frame drew a texture that was already freed')
         if job['driver'] == 'behavioral' and required.is_file():
             coverage = json.loads(required.read_text()).get('coverage', {})
             result['coverage'] = coverage
@@ -317,6 +323,12 @@ def execute(job, args, root):
     except (OSError, ValueError, RuntimeError, KeyError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
         result['reason'] = str(error)
     return result
+
+
+def drew_freed_texture(out):
+    """Whether the app logged painting a texture it had freed, which shows as a blank flicker."""
+    return any(FREED_TEXTURE in log.read_text(errors='replace')
+               for log in (out/'evidence'/'support-logs').glob('*.jsonl'))
 
 
 def inventory(paths, results):

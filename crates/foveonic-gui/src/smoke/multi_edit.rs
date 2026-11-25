@@ -19,6 +19,9 @@ pub(super) const TARGETS: &[&str] = &[
     "multi-before",
     "multi-current",
     "multi-option-return",
+    "multi-crop",
+    "multi-crop-one",
+    "multi-crop-done",
     "multi-shift",
     "multi-space",
     "multi-white-balance",
@@ -38,6 +41,14 @@ const LAYOUT_TARGETS: [&str; 5] = [
     "multi-switch-b",
     "multi-option-return",
 ];
+/// Steps with Crop armed while two photos are editing targets and eight are
+/// displayed. Every displayed photo shows the tool, and a crop made on one
+/// that is not an editing target changes that photo alone.
+const CROP_TARGETS: [&str; 3] = ["multi-crop", "multi-crop-one", "multi-crop-done"];
+/// The crop the step makes on a photo outside the editing selection. It turns
+/// a landscape photograph into a portrait one, which would re-arrange the
+/// view if the arrangement did not hold while the tool is armed.
+const CROPPED_BOUNDS: [f64; 4] = [0.1, 0.1, 0.5, 0.9];
 const PICK_TARGETS: [&str; 3] = ["multi-white-balance", "multi-dehaze", "multi-color"];
 /// Image points tried in order until a pick's sample is usable, since a photo's
 /// centre can be neutral or dark.
@@ -321,6 +332,18 @@ impl App {
                 .active_image()
                 .is_some_and(|frame| self.selected.as_ref() == Some(&frame.request.path));
         }
+        if CROP_TARGETS.contains(&target) {
+            let framed = target != "multi-crop-done";
+            return self.edit_selection.paths().len() == 2
+                && self.viewport_selection.iter().all(|path| {
+                    self.photo_layers(path)[0].is_some_and(|frame| {
+                        frame.request.framing_preview == framed
+                            && self.multi_edit.settings(path).is_some_and(|settings| {
+                                frame.request.settings.crop == settings.crop
+                            })
+                    })
+                });
+        }
         let count = match target {
             "multi-replace" | "multi-switch-a" | "multi-switch-b" | "multi-remove"
             | "multi-before" | "multi-current" => 1,
@@ -370,6 +393,15 @@ impl App {
         })
     }
 
+    /// A displayed photo that is not an editing target.
+    fn smoke_multi_outside_editing(&self) -> std::path::PathBuf {
+        self.viewport_selection
+            .iter()
+            .find(|path| !self.edit_selection.contains(path))
+            .expect("a displayed photo outside the editing selection")
+            .clone()
+    }
+
     fn smoke_multi_assert(&self, smoke: &Smoke, target: &str) {
         if target == "multi-eight" {
             for path in &smoke.multi_paths {
@@ -392,6 +424,32 @@ impl App {
                 assert!(
                     frame.artifact.settings.working_scale.divisor() <= bound.divisor(),
                     "multi-photo preview is coarser than physical display demand"
+                );
+            }
+        }
+        if target == "multi-crop-one" {
+            assert_eq!(
+                self.comparison_layout.tile_rects(),
+                smoke.multi_tiles,
+                "the arrangement holds while a framing tool is armed"
+            );
+        }
+        if CROP_TARGETS.contains(&target) {
+            assert_eq!(self.viewport_selection.len(), 8);
+            let outside = self.smoke_multi_outside_editing();
+            for path in &self.viewport_selection {
+                assert_eq!(
+                    self.frames(path),
+                    target != "multi-crop-done",
+                    "every displayed photo shows the armed tool: {}",
+                    path.display()
+                );
+                let cropped = target == "multi-crop-one" && *path == outside;
+                assert_eq!(
+                    self.multi_edit.settings(path).unwrap().crop.bounds == CROPPED_BOUNDS,
+                    cropped,
+                    "only the photo that was cropped changed: {}",
+                    path.display()
                 );
             }
         }
@@ -554,6 +612,35 @@ impl App {
                 } else {
                     self.smoke_multi_click(ctx, smoke, 1, egui::Modifiers::ALT);
                 }
+            }
+            "multi-crop" => crate::photo_tools::select(ctx, crate::photo_tools::Tool::Crop),
+            "multi-crop-one" => {
+                let outside = self.smoke_multi_outside_editing();
+                let settings = self.multi_edit.settings(&outside).unwrap();
+                let crop = foveonic::crop::Crop {
+                    bounds: CROPPED_BOUNDS,
+                    aspect: foveonic::crop::Aspect::Unconstrained,
+                    ..settings.crop
+                };
+                smoke.multi_tiles = self.comparison_layout.tile_rects();
+                assert!(self.edit_framing(&outside, crop, settings.rotation));
+            }
+            "multi-crop-done" => {
+                // Later steps compare every photo with its expected settings.
+                let outside = self
+                    .viewport_selection
+                    .iter()
+                    .find(|path| {
+                        self.multi_edit
+                            .settings(path)
+                            .is_some_and(|settings| settings.crop.bounds == CROPPED_BOUNDS)
+                    })
+                    .expect("the cropped photo")
+                    .clone();
+                let settings = self.multi_edit.settings(&outside).unwrap();
+                let rotation = settings.rotation;
+                assert!(self.edit_framing(&outside, Default::default(), rotation));
+                crate::photo_tools::pointer(ctx);
             }
             "multi-before" => self.toggle_before(crate::editor::Rendition::Camera),
             "multi-current" => self.toggle_before(crate::editor::Rendition::Camera),

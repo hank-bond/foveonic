@@ -21,29 +21,30 @@ impl Presentation {
 pub fn photo(
     ui: &mut egui::Ui,
     response: &egui::Response,
-    canvas: Rect,
-    image: Rect,
+    path: &std::path::Path,
+    (canvas, image): (Rect, Rect),
     native: [u32; 2],
     crop: &mut Crop,
     rotation: &mut Rotation,
 ) -> bool {
     let selected = crate::photo_tools::selected(ui.ctx());
-    let shown = crate::rotate_tool::displayed(ui.ctx(), *rotation);
+    let shown = crate::rotate_tool::displayed(ui.ctx(), path, *rotation);
     let changed = match selected {
         crate::photo_tools::Tool::Crop => crate::crop_tool::photo(
             ui,
             response,
+            path,
             interior(image, native, shown),
             shown.extent(native),
             crop,
         ),
         crate::photo_tools::Tool::Rotate => {
-            crate::rotate_tool::photo(ui, response, image, rotation, crop)
+            crate::rotate_tool::photo(ui, response, path, image, rotation, crop)
         }
         _ => return false,
     };
-    let shown = crate::rotate_tool::displayed(ui.ctx(), *rotation);
-    let (crop, dragging) = crate::crop_tool::displayed(ui.ctx(), *crop);
+    let shown = crate::rotate_tool::displayed(ui.ctx(), path, *rotation);
+    let (crop, dragging) = crate::crop_tool::displayed(ui.ctx(), path, *crop);
     paint(
         ui,
         canvas,
@@ -53,7 +54,7 @@ pub fn photo(
         dragging,
     );
     if selected == crate::photo_tools::Tool::Rotate {
-        crate::rotate_tool::paint_guides(ui, canvas, *rotation);
+        crate::rotate_tool::paint_guides(ui, path, canvas, *rotation);
     }
     changed
 }

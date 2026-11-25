@@ -534,17 +534,21 @@ impl App {
         };
         self.edit_paths(&[path], &change)
     }
-    /// Save a framing tool's crop and rotation for the selected photo.
+    /// Save a framing tool's crop and rotation for the photo it was used on.
     fn edit_framing(
         &mut self,
+        path: &std::path::Path,
         crop: foveonic::crop::Crop,
         rotation: foveonic::rotation::Rotation,
     ) -> bool {
         use multi_edit_controls::{field, Edit};
-        self.edit_selected(multi_edit_runtime::Change::Fields(vec![
-            Edit::set(field::CROP, &crop),
-            Edit::set(field::ROTATION, &rotation),
-        ]))
+        self.edit_paths(
+            &[path.to_owned()],
+            &multi_edit_runtime::Change::Fields(vec![
+                Edit::set(field::CROP, &crop),
+                Edit::set(field::ROTATION, &rotation),
+            ]),
+        )
     }
     /// Record when the selected photo's settings load.
     fn note_selection_ready(&mut self) {
@@ -970,45 +974,79 @@ impl App {
         }
         true
     }
+    /// Whether an armed framing tool can work: photos show their current
+    /// final photograph. It needs no selection, since Crop and Rotate are
+    /// worked directly on one photo at a time.
     fn framing_preview_active(&self) -> bool {
-        photo_tools::framing(&self.context)
-            && self
-                .selected
-                .as_deref()
-                .is_some_and(|path| self.edit_selection.contains(path))
-            && self.output == "final"
+        photo_tools::framing(&self.context) && self.framing_condition()
+    }
+    /// Photos show their current final photograph, which is what gets framed.
+    fn framing_condition(&self) -> bool {
+        self.output == "final"
             && self.before.active == editor::Rendition::Current
             && !self.comparison.requested()
     }
+    /// Whether this displayed photo shows the armed framing tool.
+    pub(crate) fn frames(&self, path: &std::path::Path) -> bool {
+        self.framing_preview_active()
+            && self.viewport_selection.iter().any(|shown| shown == path)
+            && self.multi_edit.settings(path).is_some()
+    }
 
+    /// A photo's unrotated frame, from its drawn image or its metadata.
+    fn camera_extent(&self, path: &std::path::Path) -> Option<[u32; 2]> {
+        self.photo_layers(path)[0]
+            .map(worker::RenderResult::camera_extent)
+            .or_else(|| foveonic::render::native_extent(&*self.multi_edit.metadata(path)?).ok())
+    }
+
+    /// The tool bar's Crop and Rotate menus act on the editing selection, as
+    /// every control outside the photo does. Each photo keeps its own ratio and
+    /// is fitted within its own frame.
     fn photo_toolbar(&mut self, ui: &mut egui::Ui) -> bool {
-        let extent = self
-            .active_image()
-            .filter(|f| {
-                self.selected.as_ref() == Some(&f.request.path)
-                    && f.request.output == "final"
-                    && f.request.rendition == editor::Rendition::Current
-                    && self.output == "final"
-                    && self.before.active == editor::Rendition::Current
-                    && !self.comparison.requested()
-                    && self.selection_loaded()
-                    && self.edit_selection.contains(&f.request.path)
+        let framing = self.framing_condition();
+        let targets: Vec<_> = self
+            .edit_selection
+            .paths()
+            .iter()
+            .filter_map(|path| {
+                let settings = self.multi_edit.settings(path)?;
+                Some((
+                    path.clone(),
+                    settings.crop,
+                    settings.rotation,
+                    self.camera_extent(path)?,
+                ))
             })
-            .zip(self.selected_settings())
-            .map(|(frame, settings)| settings.rotation.extent(frame.camera_extent()));
-        let (mut crop, mut rotation) = self
-            .selected_settings()
-            .map(|settings| (settings.crop, settings.rotation))
-            .unwrap_or_default();
-        let framed = photo_tools::show(
+            .collect();
+        let marked = targets
+            .first()
+            .map(|(_, crop, ..)| crop.aspect)
+            .filter(|aspect| targets.iter().all(|(_, crop, ..)| crop.aspect == *aspect));
+        let Some(chosen) = photo_tools::show(
             ui,
-            &mut crop,
-            &mut rotation,
-            extent,
+            marked,
+            // A menu choice reaches every editing target or none, so it waits
+            // until all of them have loaded.
+            framing
+                && !self.viewport_selection.is_empty()
+                && targets.len() == self.edit_selection.paths().len(),
             &mut self.preferences.crop_ratios,
             &mut self.preferences.loupe,
-        );
-        framed && self.edit_framing(crop, rotation)
+        ) else {
+            return false;
+        };
+        let mut changed = false;
+        for (path, mut crop, mut rotation, camera) in targets {
+            match chosen {
+                photo_tools::Framing::Crop(action) => {
+                    crop_tool::apply(action, &mut crop, rotation.extent(camera));
+                }
+                photo_tools::Framing::ResetRotation => rotation.reset(&mut crop),
+            }
+            changed |= self.edit_framing(&path, crop, rotation);
+        }
+        changed
     }
     /// Draw `section`. The Editing section draws the selected photo's settings
     /// and pushes its edits for the editing selection.
@@ -1196,9 +1234,17 @@ impl App {
         let _scope =
             foveonic::diagnostics::scope(foveonic::diagnostics::Category::Ui, "ui.viewport");
         let mut changed = false;
-        let background_width = 2. * widgets::ControlSize::Medium.side()
+        let pair_width = 2. * widgets::ControlSize::Medium.side()
             + widgets::MEDIUM_CONTROL_GAP
             + 2. * f32::from(widgets::BUTTON_GROUP_MARGIN);
+        // The arrangement switch appears beside the background switch while
+        // several photographs are displayed.
+        let arranged = self.multi_photo_overview();
+        let trailing_width = if arranged {
+            2. * pair_width + ui.spacing().item_spacing.x
+        } else {
+            pair_width
+        };
         let placeholder = Settings::default();
         let settings = self
             .selected
@@ -1208,7 +1254,7 @@ impl App {
         let metadata = self.selected_metadata();
         toolbar::row_with_trailing(
             ui,
-            background_width,
+            trailing_width,
             |ui| {
                 changed |=
                     inspect::processing_quality(ui, &mut self.preferences.processing_quality);
@@ -1244,6 +1290,9 @@ impl App {
                 });
             },
             |ui| {
+                if arranged {
+                    inspect::arrangement(ui, &mut self.preferences.equal_viewport_grid);
+                }
                 inspect::background(ui, &mut self.preferences.white_viewport_background);
             },
         );
@@ -1346,8 +1395,12 @@ impl App {
                 } else {
                     self.viewport_selection
                         .extend(self.selected.iter().cloned());
-                    changed |= self.show_photo(ui, mapping);
-                    self.before_badge(ui, canvas);
+                    if let Some(path) = self.selected.clone() {
+                        changed |= self.show_photo(&path, ui);
+                        self.before_badge(&path, ui, canvas);
+                    } else {
+                        self.show_no_photo(ui);
+                    }
                 }
                 changed |= self.pick_on_photo(ui);
                 self.show_loupe(ui, mapping);
@@ -1422,38 +1475,43 @@ impl App {
         changed
     }
 
-    fn show_photo(&mut self, ui: &mut egui::Ui, mapping: viewport::Mapping) -> bool {
-        let group_target = self.edit_selection.paths().len() > 1
-            && self
-                .selected
-                .as_ref()
-                .is_some_and(|path| self.edit_selection.contains(path));
-        self.viewport_mut().group_target = group_target;
-        let allowed = self
-            .selected
-            .as_deref()
-            .is_some_and(|path| self.photo_interaction_available(path));
-        let framing_active = self.framing_preview_active() && self.selection_loaded();
-        let crop_active = framing_active && crop_tool::active(ui.ctx());
-        self.viewport_mut().framing = self
-            .active_image()
-            .filter(|f| framing_active && f.request.framing_preview)
-            .map(|frame| framing::Presentation {
-                rotation: rotate_tool::displayed(
-                    ui.ctx(),
-                    self.selected_settings()
-                        .map(|settings| settings.rotation)
-                        .unwrap_or_default(),
-                ),
-                native_extent: frame.camera_extent(),
-            });
-        self.viewport_mut().editing = photo_tools::takes_pointer(ui.ctx())
-            && if photo_tools::framing(ui.ctx()) {
-                framing_active
+    fn show_no_photo(&mut self, ui: &mut egui::Ui) {
+        ui.centered_and_justified(|ui| {
+            let message = if self.browser.files.is_empty() {
+                "Open a folder of X3F photographs"
             } else {
-                allowed
+                "No visible photographs"
             };
-        let content = self.active_image().map(|frame| {
+            ui.label(egui::RichText::new(message).color(
+                if self.preferences.white_viewport_background {
+                    egui::Color32::DARK_GRAY
+                } else {
+                    egui::Color32::LIGHT_GRAY
+                },
+            ));
+        });
+    }
+    /// Draw one displayed photo and take the armed framing tool's gesture on
+    /// it. Every displayed photo is drawn here, so none is treated differently
+    /// for having been selected.
+    fn show_photo(&mut self, path: &std::path::Path, ui: &mut egui::Ui) -> bool {
+        let target = self.edit_selection.contains(path);
+        let framing_active = self.frames(path);
+        let crop_active = framing_active && crop_tool::active(ui.ctx());
+        let (crop, rotation) = self
+            .multi_edit
+            .settings(path)
+            .map(|settings| (settings.crop, settings.rotation))
+            .unwrap_or_default();
+        let [image, patch] = self.photo_layers(path);
+        let mapping = self.mapping_for(image);
+        let framed = image.filter(|frame| framing_active && frame.request.framing_preview);
+        let framing = framed.map(|frame| framing::Presentation {
+            rotation: rotate_tool::displayed(ui.ctx(), path, rotation),
+            native_extent: frame.camera_extent(),
+        });
+        let native = framed.map(worker::RenderResult::camera_extent);
+        let content = image.map(|frame| {
             (
                 frame.view(mapping.input).clone(),
                 frame.display_extent(mapping.input),
@@ -1462,90 +1520,71 @@ impl App {
                 frame.display_window(false),
             )
         });
+        let detail = patch.map(|detail| viewport::ImageLayer {
+            texture: detail.texture.clone(),
+            coverage: detail.detail_region(),
+            identity: detail.diagnostic_identity(false),
+        });
+        let preview = if content.is_some() {
+            None
+        } else if target {
+            self.browser.preview(path)
+        } else {
+            self.browser.thumbnail(path)
+        }
+        .map(|preview| (preview.texture.clone(), preview.native_extent));
+        let editing = photo_tools::takes_pointer(ui.ctx());
+        let group_target = target && self.edit_selection.paths().len() > 1;
+        let (zoom_snap, srgb_target) = (self.preferences.zoom_snap, self.srgb_target);
+        let viewport = self.viewports.view_mut(Some(path));
+        viewport.group_target = group_target;
+        viewport.framing = framing;
+        viewport.editing = editing;
+        viewport.zoom_snap = zoom_snap;
         if let Some((texture, extent, comparison, identity, window)) = content {
-            let detail = self.active_patch().map(|detail| viewport::ImageLayer {
-                texture: detail.texture.clone(),
-                coverage: detail.detail_region(),
-                identity: detail.diagnostic_identity(false),
-            });
-            let viewport = self.viewports.view_mut(self.selected.as_deref());
-            viewport.zoom_snap = self.preferences.zoom_snap;
             viewport.show(
                 ui,
                 texture,
-                viewport
-                    .framing
-                    .map_or(extent, framing::Presentation::extent),
+                framing.map_or(extent, framing::Presentation::extent),
                 comparison,
                 mapping,
-                self.srgb_target,
+                srgb_target,
                 identity,
             );
             if let Some(layer) = detail {
-                viewport.show_region(ui, layer, window, mapping, self.srgb_target);
+                viewport.show_region(ui, layer, window, mapping, srgb_target);
             }
-        } else if let Some(path) = &self.selected {
-            if let Some(preview) = self.browser.preview(path) {
-                let crop = if crop_active {
-                    Default::default()
-                } else {
-                    self.selected_settings()
-                        .map(|settings| settings.crop)
-                        .unwrap_or_default()
-                };
-                let viewport = self.viewports.view_mut(Some(path));
-                viewport.zoom_snap = self.preferences.zoom_snap;
-                viewport.show_preview(ui, &preview.texture, preview.native_extent, crop);
+        } else if let Some((texture, native_extent)) = preview {
+            let crop = if crop_active {
+                Default::default()
             } else {
-                self.viewport_mut().show_empty(ui);
-            }
+                crop
+            };
+            viewport.show_preview(ui, &texture, native_extent, crop);
         } else {
-            ui.centered_and_justified(|ui| {
-                let message = if self.browser.files.is_empty() {
-                    "Open a folder of X3F photographs"
-                } else {
-                    "No visible photographs"
-                };
-                ui.label(egui::RichText::new(message).color(
-                    if self.preferences.white_viewport_background {
-                        egui::Color32::DARK_GRAY
-                    } else {
-                        egui::Color32::LIGHT_GRAY
-                    },
-                ));
-            });
+            viewport.show_empty(ui);
         }
-        let Some(path) = self.selected.as_ref().filter(|_| framing_active) else {
+        let Some(native) = native else {
             return false;
         };
-        let Some((response, _)) = self
-            .viewport()
-            .pointer(ui.input(|i| i.pointer.interact_pos()))
-        else {
+        let viewport = self.viewports.view(Some(path));
+        let Some((response, _)) = viewport.pointer(ui.input(|i| i.pointer.interact_pos())) else {
             return false;
         };
-        let (Some(frame), Some((canvas, image))) = (
-            self.active_image()
-                .filter(|f| f.request.framing_preview && &f.request.path == path),
-            self.viewport().image_rectangles(),
-        ) else {
+        let Some(rectangles) = viewport.image_rectangles() else {
             return false;
         };
-        let native = frame.camera_extent();
-        let (mut crop, mut rotation) = self
-            .selected_settings()
-            .map(|settings| (settings.crop, settings.rotation))
-            .unwrap_or_default();
+        let (mut crop, mut rotation) = (crop, rotation);
         let framed = framing::photo(
             ui,
             &response,
-            canvas,
-            image,
+            path,
+            rectangles,
             native,
             &mut crop,
             &mut rotation,
         );
-        framed && self.edit_framing(crop, rotation)
+        framed && self.edit_framing(path, crop, rotation)
     }
 }
 impl photo_tools::PickPhotos for App {
@@ -1575,6 +1614,7 @@ impl eframe::App for App {
         self.preferences.save(storage);
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        display_image::free_retired(&self.render_state);
         self.pixels_per_point = ctx.pixels_per_point();
         self.diagnostics.poll(ctx);
         let _update = timing::Span::new(self.view_images.last_request_id().0, "ui_update");
@@ -1617,6 +1657,7 @@ impl eframe::App for App {
             });
         }
         photo_tools::source(ctx, self.selected.as_deref());
+        photo_tools::displayed(ctx, &self.viewport_selection);
         self.sidecars.receive();
         if self
             .smoke

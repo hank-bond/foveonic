@@ -147,6 +147,9 @@ pub struct Preferences {
     pub loupe: crate::loupe_tool::Options,
     pub processing_quality: ProcessingQuality,
     pub white_viewport_background: bool,
+    /// Several displayed photographs share equal tiles instead of the
+    /// arrangement that shows them largest.
+    pub equal_viewport_grid: bool,
     pub decode_cache: foveonic::decode_cache::Settings,
     pub memory_cache_bytes: u64,
     pub background_full_image_completion: bool,
@@ -178,6 +181,7 @@ impl Default for Preferences {
             loupe: Default::default(),
             processing_quality: ProcessingQuality::Quality,
             white_viewport_background: false,
+            equal_viewport_grid: false,
             decode_cache: Default::default(),
             memory_cache_bytes: DEFAULT_MEMORY_CACHE_BYTES,
             background_full_image_completion: true,

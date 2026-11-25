@@ -249,10 +249,31 @@ enum Storage {
     #[cfg(test)]
     Headless(egui::TextureHandle),
 }
+/// Display textures nothing owns any more. A shape drawn earlier in the frame
+/// may still name one, and painting a freed texture draws nothing, so they
+/// are freed when the next frame starts.
+static RETIRED: std::sync::Mutex<Vec<egui::TextureId>> = std::sync::Mutex::new(Vec::new());
+
+/// Free `id` once the frame that may still draw it has been painted.
+pub(crate) fn retire(id: egui::TextureId) {
+    RETIRED.lock().unwrap().push(id);
+}
+
+/// Free retired textures. Called before a frame draws anything.
+pub(crate) fn free_retired(rs: &egui_wgpu::RenderState) {
+    let retired = std::mem::take(&mut *RETIRED.lock().unwrap());
+    if !retired.is_empty() {
+        let mut renderer = rs.renderer.write();
+        for id in &retired {
+            renderer.free_texture(id);
+        }
+    }
+}
+
 impl Drop for Storage {
     fn drop(&mut self) {
         match self {
-            Self::Native { id, rs, .. } => rs.renderer.write().free_texture(id),
+            Self::Native { id, .. } => retire(*id),
             #[cfg(test)]
             Self::Headless(_) => {}
         }

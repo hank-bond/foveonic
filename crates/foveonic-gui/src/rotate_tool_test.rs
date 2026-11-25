@@ -1,6 +1,7 @@
 //! Checks rotation gestures, two-click alignment, cancellation and relative tool selection.
 
 use super::*;
+const PHOTO: &str = "photo.x3f";
 fn pointer_frame(
     ctx: &egui::Context,
     rotation: &mut Rotation,
@@ -32,7 +33,7 @@ fn pointer_frame_with_crop(
             egui::CentralPanel::default().show(ctx, |ui| {
                 let (image, response) =
                     ui.allocate_exact_size(egui::vec2(300., 300.), egui::Sense::click_and_drag());
-                changed |= photo(ui, &response, image, rotation, crop);
+                changed |= photo(ui, &response, Path::new(PHOTO), image, rotation, crop);
             });
         },
     );
@@ -87,7 +88,7 @@ fn straighten_accepts_drag_and_two_click_lines_and_commits_only_the_final_releas
                 vec![egui::Event::PointerMoved(end)]
             ));
             assert!(rotation.is_neutral());
-            assert_eq!(displayed(&ctx, rotation), rotation);
+            assert_eq!(displayed(&ctx, Path::new(PHOTO), rotation), rotation);
             assert_eq!(state(&ctx).gesture.as_ref().unwrap().start, start);
             if two_click {
                 assert!(!pointer_frame(
@@ -196,6 +197,7 @@ fn straighten_leaves_the_photograph_still_while_freehand_previews_the_draft() {
             ..original
         };
         let mut s = state(&ctx);
+        s.owner = Some(PHOTO.into());
         s.gesture = Some(Gesture {
             phase: Phase::FirstPress,
             original,
@@ -205,7 +207,7 @@ fn straighten_leaves_the_photograph_still_while_freehand_previews_the_draft() {
         });
         store(&ctx, s);
         assert_eq!(
-            displayed(&ctx, original),
+            displayed(&ctx, Path::new(PHOTO), original),
             if mode == Mode::Straighten {
                 original
             } else {
@@ -233,7 +235,10 @@ fn escape_discards_only_the_draft_before_leaving_the_tool() {
     store(&ctx, s);
     escape(&ctx);
     assert!(active(&ctx));
-    assert_eq!(displayed(&ctx, Rotation::default()), Rotation::default());
+    assert_eq!(
+        displayed(&ctx, Path::new(PHOTO), Rotation::default()),
+        Rotation::default()
+    );
     assert!(!crate::photo_tools::take_view_change(&ctx));
     escape(&ctx);
     assert!(!active(&ctx));
@@ -310,4 +315,81 @@ fn double_click_resets_both_rotation_components_and_preserves_crop_content() {
         assert!(rotation.is_neutral(), "{mode:?}");
         assert_eq!(crop, expected_crop);
     }
+}
+
+/// Two displayed photos run the tool in one frame, as tiles do.
+fn two_photo_frame(
+    ctx: &egui::Context,
+    rotations: &mut [Rotation; 2],
+    time: &mut f64,
+    events: Vec<egui::Event>,
+) -> [bool; 2] {
+    *time += 0.05;
+    let mut changed = [false; 2];
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(700., 400.),
+            )),
+            time: Some(*time),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    for (index, name) in ["a.x3f", "b.x3f"].into_iter().enumerate() {
+                        let (image, response) = ui.allocate_exact_size(
+                            egui::vec2(300., 300.),
+                            egui::Sense::click_and_drag(),
+                        );
+                        changed[index] = photo(
+                            ui,
+                            &response,
+                            Path::new(name),
+                            image,
+                            &mut rotations[index],
+                            &mut Crop::default(),
+                        );
+                    }
+                });
+            });
+        },
+    );
+    changed
+}
+
+#[test]
+fn a_gesture_turns_only_the_photo_it_started_on() {
+    let ctx = egui::Context::default();
+    activate(&ctx, Mode::Freehand);
+    // The first photo already differs, which must not cancel the other's gesture.
+    let mut rotations = [
+        Rotation {
+            degrees: 3.,
+            ..Default::default()
+        },
+        Rotation::default(),
+    ];
+    let before = rotations[0];
+    let mut time = 0.;
+    two_photo_frame(&ctx, &mut rotations, &mut time, vec![]);
+    let (start, end) = (egui::pos2(420., 80.), egui::pos2(560., 200.));
+    two_photo_frame(&ctx, &mut rotations, &mut time, pointer_button(start, true));
+    two_photo_frame(
+        &ctx,
+        &mut rotations,
+        &mut time,
+        vec![egui::Event::PointerMoved(end)],
+    );
+    assert_eq!(displayed(&ctx, Path::new("a.x3f"), before), before);
+    assert_ne!(
+        displayed(&ctx, Path::new("b.x3f"), rotations[1]),
+        rotations[1]
+    );
+    let changed = two_photo_frame(&ctx, &mut rotations, &mut time, pointer_button(end, false));
+    assert_eq!(changed, [false, true]);
+    assert_eq!(rotations[0], before);
+    assert!(!rotations[1].is_neutral());
 }

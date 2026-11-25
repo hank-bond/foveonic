@@ -2,7 +2,7 @@
 
 mod gesture;
 mod ratios;
-pub use ratios::NamedRatio;
+pub use ratios::{Action, NamedRatio};
 
 use crate::{
     photo_tools::{self, Tool},
@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Default)]
 struct State {
-    source: Option<PathBuf>,
+    /// The photo the drag was started on. Every displayed photo runs the tool,
+    /// and only this one may continue, show or finish the drag.
+    owner: Option<PathBuf>,
     drag: Option<gesture::Drag>,
     dialog: Option<ratios::Dialog>,
     menu_open: bool,
@@ -36,12 +38,10 @@ pub fn menu_open(ctx: &egui::Context) -> bool {
     let s = state(ctx);
     s.menu_open || s.dialog.is_some()
 }
-pub fn source(ctx: &egui::Context, path: Option<&Path>) {
+pub fn displayed_photos(ctx: &egui::Context, paths: &[PathBuf]) {
     let mut s = state(ctx);
-    if s.source.as_deref() != path {
-        s.source = path.map(Path::to_path_buf);
+    if s.drag.is_some() && !s.owner.as_ref().is_some_and(|owner| paths.contains(owner)) {
         s.drag = None;
-        s.dialog = None;
         store(ctx, s);
     }
 }
@@ -74,18 +74,27 @@ pub fn toggle(ctx: &egui::Context) {
         },
     );
 }
-pub fn displayed(ctx: &egui::Context, crop: Crop) -> (Crop, bool) {
+/// The crop to draw on `path`: the drag's draft on the photo being dragged.
+pub fn displayed(ctx: &egui::Context, path: &Path, crop: Crop) -> (Crop, bool) {
     let s = state(ctx);
-    (s.drag.as_ref().map_or(crop, |d| d.draft), s.drag.is_some())
+    let drag = s.drag.filter(|_| s.owner.as_deref() == Some(path));
+    (drag.as_ref().map_or(crop, |d| d.draft), drag.is_some())
 }
 
-pub fn button(ui: &mut egui::Ui, crop: &mut Crop, extent: Option<[u32; 2]>, custom: &[NamedRatio]) {
+/// The crop button and its menu. `marked` is the ratio the editing targets
+/// share, if they share one. Returns the menu choice to apply to each of them.
+pub fn button(
+    ui: &mut egui::Ui,
+    marked: Option<foveonic::crop::Aspect>,
+    enabled: bool,
+    custom: &[NamedRatio],
+) -> Option<Action> {
     let mut s = state(ui.ctx());
-    ui.add_enabled_ui(extent.is_some(), |ui| {
-        let mut action = None;
+    let mut action = None;
+    ui.add_enabled_ui(enabled, |ui| {
         let (button, menu) =
             widgets::split_icon_button(ui, "Crop", active(ui.ctx()), ControlSize::Large, |ui| {
-                action = ratios::menu(ui, *crop, custom, &mut s.dialog);
+                action = ratios::menu(ui, marked, custom, &mut s.dialog);
             });
         crop_icon(ui, &button, active(ui.ctx()));
         if button
@@ -97,46 +106,48 @@ pub fn button(ui: &mut egui::Ui, crop: &mut Crop, extent: Option<[u32; 2]>, cust
         }
         s.menu_open = menu.inner.is_some();
         menu.response.on_hover_text("Aspect ratios and crop reset");
-        if let (Some(action), Some(extent)) = (action, extent) {
-            match action {
-                ratios::Action::Reset => *crop = Crop::default(),
-                ratios::Action::Flip => {
-                    crop.flipped = !crop.flipped;
-                    *crop = gesture::fit(*crop, extent);
-                }
-                ratios::Action::Aspect(aspect) => {
-                    crop.aspect = aspect;
-                    *crop = gesture::fit(*crop, extent);
-                }
-            }
+        if action.is_some() {
             photo_tools::select(ui.ctx(), Tool::Crop);
             s = state(ui.ctx());
         }
     });
     store(ui.ctx(), s);
+    action
 }
 
-pub fn dialog(
-    ctx: &egui::Context,
-    crop: &mut Crop,
-    extent: Option<[u32; 2]>,
-    custom: &mut Vec<NamedRatio>,
-) {
+/// The custom ratio dialog. Returns a newly chosen ratio.
+pub fn dialog(ctx: &egui::Context, enabled: bool, custom: &mut Vec<NamedRatio>) -> Option<Action> {
     let mut s = state(ctx);
-    if let Some(aspect) = ratios::show_dialog(ctx, &mut s.dialog, custom) {
-        if let Some(extent) = extent {
-            crop.aspect = aspect;
-            *crop = gesture::fit(*crop, extent);
-            photo_tools::select(ctx, Tool::Crop);
-            s = state(ctx);
-        }
+    let chosen = ratios::show_dialog(ctx, &mut s.dialog, custom).filter(|_| enabled);
+    if chosen.is_some() {
+        photo_tools::select(ctx, Tool::Crop);
+        s = state(ctx);
     }
     store(ctx, s);
+    chosen.map(Action::Aspect)
+}
+
+/// Apply a menu choice to one photo's crop, within that photo's frame.
+pub fn apply(action: Action, crop: &mut Crop, extent: [u32; 2]) {
+    match action {
+        Action::Reset => *crop = Crop::default(),
+        // An unconstrained crop has no orientation to switch.
+        Action::Flip if crop.aspect == foveonic::crop::Aspect::Unconstrained => {}
+        Action::Flip => {
+            crop.flipped = !crop.flipped;
+            *crop = gesture::fit(*crop, extent);
+        }
+        Action::Aspect(aspect) => {
+            crop.aspect = aspect;
+            *crop = gesture::fit(*crop, extent);
+        }
+    }
 }
 
 pub fn photo(
     ui: &mut egui::Ui,
     response: &egui::Response,
+    path: &Path,
     image: egui::Rect,
     extent: [u32; 2],
     crop: &mut Crop,
@@ -145,13 +156,15 @@ pub fn photo(
     if !active(ui.ctx()) || extent.contains(&0) {
         return false;
     }
-    if s.drag.as_ref().is_some_and(|drag| drag.original != *crop) {
-        s.drag = None;
+    let owns = s.owner.as_deref() == Some(path);
+    let mut drag = if owns { s.drag.take() } else { None };
+    if drag.as_ref().is_some_and(|drag| drag.original != *crop) {
+        drag = None;
     }
     let position = ui.input(|i| i.pointer.interact_pos());
     let panning = ui.input(|i| i.key_down(egui::Key::Space));
     if panning {
-        s.drag = None;
+        drag = None;
     }
     if !panning {
         if let Some(position) = position {
@@ -164,9 +177,9 @@ pub fn photo(
                 && image.contains(position)
                 && ui.input(|i| i.pointer.primary_pressed())
             {
-                s.drag = Some(gesture::Drag::new(*crop, extent, handle, native));
+                drag = Some(gesture::Drag::new(*crop, extent, handle, native));
             }
-            if let Some(drag) = &mut s.drag {
+            if let Some(drag) = &mut drag {
                 if drag.moved || ui.input(|i| i.pointer.is_decidedly_dragging()) {
                     drag.update(native);
                 }
@@ -178,16 +191,20 @@ pub fn photo(
     }
     let mut changed = false;
     if !panning && response.double_clicked() && position.is_some_and(|p| image.contains(p)) {
-        s.drag = None;
+        drag = None;
         changed = *crop != Crop::default();
         *crop = Crop::default();
     } else if ui.input(|i| i.pointer.primary_released()) {
-        if let Some(drag) = s.drag.take().filter(|d| d.moved) {
+        if let Some(drag) = drag.take().filter(|d| d.moved) {
             *crop = drag.draft;
             changed = drag.original != drag.draft;
         }
     }
-    store(ui.ctx(), s);
+    if owns || drag.is_some() {
+        s.drag = drag;
+        s.owner = Some(path.to_owned());
+        store(ui.ctx(), s);
+    }
     changed
 }
 
@@ -229,5 +246,115 @@ mod tests {
         assert!(!active(&ctx));
         assert_eq!(photo_tools::selected(&ctx), Tool::Pointer);
         assert!(crate::photo_tools::take_view_change(&ctx));
+    }
+
+    /// Two displayed photos run the tool in one frame, as tiles do.
+    fn two_photo_frame(
+        ctx: &egui::Context,
+        crops: &mut [Crop; 2],
+        time: &mut f64,
+        events: Vec<egui::Event>,
+    ) -> ([bool; 2], [egui::Rect; 2]) {
+        *time += 0.05;
+        let mut changed = [false; 2];
+        let mut images = [egui::Rect::NOTHING; 2];
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(700., 400.),
+                )),
+                time: Some(*time),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        for (index, name) in ["a.x3f", "b.x3f"].into_iter().enumerate() {
+                            let (image, response) = ui.allocate_exact_size(
+                                egui::vec2(300., 300.),
+                                egui::Sense::click_and_drag(),
+                            );
+                            images[index] = image;
+                            changed[index] = photo(
+                                ui,
+                                &response,
+                                Path::new(name),
+                                image,
+                                [300, 300],
+                                &mut crops[index],
+                            );
+                        }
+                    });
+                });
+            },
+        );
+        (changed, images)
+    }
+
+    #[test]
+    fn a_drag_crops_only_the_photo_it_started_on() {
+        let ctx = egui::Context::default();
+        toggle(&ctx);
+        // The first photo already differs, which must not cancel the other's drag.
+        let mut crops = [
+            Crop {
+                bounds: [0.2, 0.2, 0.8, 0.8],
+                ..Default::default()
+            },
+            Crop::default(),
+        ];
+        let before = crops[0];
+        let mut time = 0.;
+        let (_, images) = two_photo_frame(&ctx, &mut crops, &mut time, vec![]);
+        // The second photo's top-left corner, dragged inward.
+        let start = images[1].min + egui::vec2(2., 2.);
+        let end = start + egui::vec2(90., 90.);
+        let press = |pos, pressed| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ]
+        };
+        two_photo_frame(&ctx, &mut crops, &mut time, press(start, true));
+        two_photo_frame(
+            &ctx,
+            &mut crops,
+            &mut time,
+            vec![egui::Event::PointerMoved(end)],
+        );
+        assert_eq!(displayed(&ctx, Path::new("a.x3f"), before), (before, false));
+        assert!(displayed(&ctx, Path::new("b.x3f"), crops[1]).1);
+        let (changed, _) = two_photo_frame(&ctx, &mut crops, &mut time, press(end, false));
+        assert_eq!(changed, [false, true]);
+        assert_eq!(crops[0], before);
+        assert!(crops[1].bounds[0] > 0.2 && crops[1].bounds[1] > 0.2);
+    }
+
+    #[test]
+    fn a_menu_choice_fits_each_photo_within_its_own_frame() {
+        use foveonic::crop::Aspect;
+        let square = Action::Aspect(Aspect::Ratio([1., 1.]));
+        let (mut wide, mut tall) = (Crop::default(), Crop::default());
+        apply(square, &mut wide, [3000, 2000]);
+        apply(square, &mut tall, [2000, 3000]);
+        assert_eq!(wide.aspect, tall.aspect);
+        // A square in a wide frame is narrower than the frame, and in a tall one shorter.
+        let size = |crop: Crop| {
+            [
+                crop.bounds[2] - crop.bounds[0],
+                crop.bounds[3] - crop.bounds[1],
+            ]
+        };
+        assert!(size(wide)[0] < 1. && size(wide)[1] == 1.);
+        assert!(size(tall)[0] == 1. && size(tall)[1] < 1.);
+        apply(Action::Reset, &mut wide, [3000, 2000]);
+        assert_eq!(wide, Crop::default());
     }
 }

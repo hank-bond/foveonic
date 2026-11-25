@@ -828,6 +828,38 @@ pub fn icon_rect(ui: &egui::Ui, response: &egui::Response) -> egui::Rect {
     egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(side))
 }
 
+/// Four equal tiles, or one tall tile beside two of different heights. The
+/// tiles are solid and fill the icon so they read at the smallest control size.
+pub fn arrangement_icon(ui: &egui::Ui, response: &egui::Response, selected: bool, equal: bool) {
+    const GAP: f32 = 1.5;
+    let rect = icon_rect(ui, response);
+    let color = visuals(ui, response, selected).text_color();
+    let cell = |x: [f32; 2], y: [f32; 2]| {
+        egui::Rect::from_min_max(
+            rect.min + egui::vec2(x[0], y[0]) * rect.size(),
+            rect.min + egui::vec2(x[1], y[1]) * rect.size(),
+        )
+        .shrink(GAP * 0.5)
+    };
+    let cells = if equal {
+        vec![
+            cell([0., 0.5], [0., 0.5]),
+            cell([0.5, 1.], [0., 0.5]),
+            cell([0., 0.5], [0.5, 1.]),
+            cell([0.5, 1.], [0.5, 1.]),
+        ]
+    } else {
+        vec![
+            cell([0., 0.42], [0., 1.]),
+            cell([0.42, 1.], [0., 0.62]),
+            cell([0.42, 1.], [0.62, 1.]),
+        ]
+    };
+    for cell in cells {
+        ui.painter().rect_filled(cell, 1., color);
+    }
+}
+
 /// Sun and moon glyphs share icon-button geometry and the active appearance's colors.
 pub fn appearance_icon(ui: &egui::Ui, response: &egui::Response, selected: bool, light: bool) {
     let rect = icon_rect(ui, response);

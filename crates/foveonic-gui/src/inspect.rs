@@ -29,6 +29,25 @@ pub fn background(ui: &mut egui::Ui, white: &mut bool) -> egui::Response {
     .response
 }
 
+/// How several displayed photographs are arranged.
+pub fn arrangement(ui: &mut egui::Ui, equal: &mut bool) -> egui::Response {
+    widgets::button_group(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = widgets::MEDIUM_CONTROL_GAP;
+        widgets::centered_control_row(ui, |ui| {
+            for (grid, label) in [(false, "Largest photographs"), (true, "Equal grid")] {
+                let selected = *equal == grid;
+                let response =
+                    widgets::icon_button(ui, label, selected, widgets::ControlSize::Medium);
+                widgets::arrangement_icon(ui, &response, selected, grid);
+                if response.on_hover_text(label).clicked() {
+                    *equal = grid;
+                }
+            }
+        });
+    })
+    .response
+}
+
 pub fn components(channels: Channels) -> &'static [(i32, &'static str)] {
     match channels {
         Channels::Layers => &[(0, "Layer 1 (R)"), (1, "Layer 2 (G)"), (2, "Layer 3 (B)")],

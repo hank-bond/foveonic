@@ -106,7 +106,9 @@ struct Gesture {
 #[derive(Clone, Default)]
 struct State {
     mode: Mode,
-    source: Option<PathBuf>,
+    /// The photo the gesture was started on. Every displayed photo runs the
+    /// tool, and only this one may continue, show or finish the gesture.
+    owner: Option<PathBuf>,
     gesture: Option<Gesture>,
     menu: bool,
 }
@@ -127,10 +129,9 @@ pub fn editing(ctx: &egui::Context) -> bool {
 pub fn menu_open(ctx: &egui::Context) -> bool {
     state(ctx).menu
 }
-pub fn source(ctx: &egui::Context, path: Option<&Path>) {
+pub fn displayed_photos(ctx: &egui::Context, paths: &[PathBuf]) {
     let mut s = state(ctx);
-    if s.source.as_deref() != path {
-        s.source = path.map(Path::to_owned);
+    if s.gesture.is_some() && !s.owner.as_ref().is_some_and(|owner| paths.contains(owner)) {
         s.gesture = None;
         store(ctx, s);
     }
@@ -177,16 +178,21 @@ pub(crate) fn activate(ctx: &egui::Context, mode: Mode) {
     store(ctx, s);
     ctx.request_repaint();
 }
-pub fn displayed(ctx: &egui::Context, rotation: Rotation) -> Rotation {
+/// The rotation to draw on `path`: a freehand gesture's draft on the photo
+/// being turned.
+pub fn displayed(ctx: &egui::Context, path: &Path, rotation: Rotation) -> Rotation {
     let s = state(ctx);
-    if s.mode == Mode::Freehand {
+    if s.mode == Mode::Freehand && s.owner.as_deref() == Some(path) {
         s.gesture.map_or(rotation, |d| d.draft)
     } else {
         rotation
     }
 }
 
-pub fn button(ui: &mut egui::Ui, rotation: &mut Rotation, crop: &mut Crop) {
+/// The rotate button and its menu. Returns whether the menu asked to reset
+/// rotation, which applies to every editing target.
+pub fn button(ui: &mut egui::Ui) -> bool {
+    let mut reset = false;
     let mut s = state(ui.ctx());
     let mut chosen = None;
     let (button, menu) =
@@ -206,7 +212,7 @@ pub fn button(ui: &mut egui::Ui, rotation: &mut Rotation, crop: &mut Crop) {
             }
             ui.separator();
             if widgets::menu_row(ui, "Reset rotation", false).clicked() {
-                rotation.reset(crop);
+                reset = true;
                 ui.close_kind(egui::UiKind::Menu);
             }
         });
@@ -231,6 +237,7 @@ pub fn button(ui: &mut egui::Ui, rotation: &mut Rotation, crop: &mut Crop) {
     }
     s.menu = menu.inner.is_some();
     store(ui.ctx(), s);
+    reset
 }
 
 /// Reuse the selected toolbar glyph at the image pointer.
@@ -268,6 +275,7 @@ fn angle(mode: Mode, original: f64, start: egui::Pos2, end: egui::Pos2, center: 
 pub fn photo(
     ui: &mut egui::Ui,
     response: &egui::Response,
+    path: &Path,
     image: egui::Rect,
     rotation: &mut Rotation,
     crop: &mut Crop,
@@ -289,9 +297,11 @@ pub fn photo(
         }
         return false;
     }
+    let owns = s.owner.as_deref() == Some(path);
+    let mut gesture = if owns { s.gesture.take() } else { None };
     let pan = ui.input(|i| i.key_down(egui::Key::Space));
-    if pan || s.gesture.as_ref().is_some_and(|d| d.original != *rotation) {
-        s.gesture = None;
+    if pan || gesture.as_ref().is_some_and(|d| d.original != *rotation) {
+        gesture = None;
     }
     if !pan {
         if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
@@ -299,14 +309,13 @@ pub fn photo(
                 && image.contains(pos)
                 && ui.input(|i| i.pointer.primary_pressed())
             {
-                if let Some(drag) = s
-                    .gesture
+                if let Some(drag) = gesture
                     .as_mut()
                     .filter(|d| s.mode == Mode::Straighten && d.phase == Phase::AwaitingEnd)
                 {
                     drag.phase = Phase::SecondPress;
                 } else {
-                    s.gesture = Some(Gesture {
+                    gesture = Some(Gesture {
                         phase: Phase::FirstPress,
                         original: *rotation,
                         draft: *rotation,
@@ -317,13 +326,13 @@ pub fn photo(
             }
             if ui.input(|i| i.pointer.primary_pressed())
                 && (!response.hovered() || !image.contains(pos))
-                && s.gesture
+                && gesture
                     .as_ref()
                     .is_some_and(|d| d.phase == Phase::AwaitingEnd)
             {
-                s.gesture = None;
+                gesture = None;
             }
-            if let Some(drag) = &mut s.gesture {
+            if let Some(drag) = &mut gesture {
                 drag.end = pos;
                 let previous = drag.draft;
                 drag.draft.degrees = angle(
@@ -341,22 +350,22 @@ pub fn photo(
     }
     let mut changed = false;
     let completing_line = s.mode == Mode::Straighten
-        && s.gesture
+        && gesture
             .as_ref()
             .is_some_and(|d| d.phase == Phase::SecondPress && d.start.distance(d.end) > 3.);
     if !pan && response.double_clicked() && !completing_line {
-        s.gesture = None;
+        gesture = None;
         changed = !rotation.is_neutral();
         rotation.reset(crop);
     } else if ui.input(|i| i.pointer.primary_released()) {
-        if let Some(drag) = &mut s.gesture {
+        if let Some(drag) = &mut gesture {
             if s.mode == Mode::Straighten
                 && drag.phase == Phase::FirstPress
                 && drag.start.distance(drag.end) <= 3.
             {
                 drag.phase = Phase::AwaitingEnd;
             } else if drag.phase != Phase::AwaitingEnd {
-                let drag = s.gesture.take().unwrap();
+                let drag = gesture.take().unwrap();
                 if drag.start.distance(drag.end) > 3. {
                     changed = *rotation != drag.draft;
                     *rotation = drag.draft;
@@ -364,15 +373,20 @@ pub fn photo(
             }
         }
     }
-    store(ui.ctx(), s);
+    if owns || gesture.is_some() {
+        s.gesture = gesture;
+        s.owner = Some(path.to_owned());
+        store(ui.ctx(), s);
+    }
     changed
 }
 
-pub fn paint_guides(ui: &egui::Ui, canvas: egui::Rect, rotation: Rotation) {
+pub fn paint_guides(ui: &egui::Ui, path: &Path, canvas: egui::Rect, rotation: Rotation) {
     let s = state(ui.ctx());
-    let proposed = s.gesture.as_ref().map_or(rotation, |d| d.draft);
+    let gesture = s.gesture.filter(|_| s.owner.as_deref() == Some(path));
+    let proposed = gesture.as_ref().map_or(rotation, |d| d.draft);
     let painter = ui.painter().with_clip_rect(canvas);
-    if let Some(drag) = &s.gesture {
+    if let Some(drag) = &gesture {
         if s.mode == Mode::Straighten {
             painter.line_segment(
                 [drag.start, drag.end],

@@ -1,4 +1,4 @@
-//! Packs photograph viewports into bounded aspect-aware rows or columns and defers reflow during gestures.
+//! Arranges photograph viewports as an equal grid or as separately sized rows or columns, and defers reflow during gestures.
 
 use eframe::egui;
 use std::path::PathBuf;
@@ -41,10 +41,25 @@ pub(crate) struct State {
     aspects: Vec<f32>,
     count: usize,
     available: egui::Vec2,
+    equal: bool,
     layout: Option<Layout>,
 }
 
 impl State {
+    /// Where each displayed photograph's tile is, for checks that the
+    /// arrangement held still.
+    pub(crate) fn tile_rects(&self) -> Vec<egui::Rect> {
+        let tiles = self.layout.iter().flat_map(|layout| &layout.tiles);
+        tiles.map(|tile| tile.rect).collect()
+    }
+
+    /// The shapes the arrangement was made for, while it shows these
+    /// photographs. Crop and Rotate arrange with them until put down.
+    pub(super) fn held_aspects(&self, paths: &[PathBuf]) -> Option<Vec<f32>> {
+        (self.layout.is_some() && paths.get(..self.paths.len()) == Some(self.paths.as_slice()))
+            .then(|| self.aspects.clone())
+    }
+
     pub(super) fn shown(&self) -> usize {
         self.layout.as_ref().map_or(0, |layout| layout.shown)
     }
@@ -55,15 +70,18 @@ impl State {
         aspects: &[f32],
         count: usize,
         available: egui::Vec2,
+        equal: bool,
         freeze: bool,
     ) -> &Layout {
         let same_photos =
             paths.get(..self.paths.len()) == Some(self.paths.as_slice()) && self.count == count;
         if self.layout.is_none()
             || !same_photos
+            || self.equal != equal
             || (!freeze && (self.available != available || self.aspects != aspects))
         {
-            self.layout = Some(layout(count, available, aspects));
+            self.layout = Some(layout(count, available, aspects, equal));
+            self.equal = equal;
             self.paths = paths[..capacity(count, available).0].to_vec();
             self.aspects = aspects.to_vec();
             self.count = count;
@@ -82,41 +100,66 @@ pub(super) fn capacity(count: usize, available: egui::Vec2) -> (usize, usize) {
     (slots.saturating_sub(usize::from(overflow > 0)), overflow)
 }
 
-fn layout(count: usize, available: egui::Vec2, aspects: &[f32]) -> Layout {
+/// The shape assumed for a photograph whose own is unknown, and for the
+/// overflow tile.
+const UNKNOWN_ASPECT: f32 = 1.5;
+
+/// Reordering must show the smallest photograph this much larger than the
+/// browser's order can, so a small change of shape never shuffles the view.
+const REORDER_GAIN: f32 = 1.1;
+
+/// `equal` gives every photograph the same tile in browser order. Otherwise
+/// rows or columns are sized separately so that the smallest photograph is
+/// as large as it can be.
+fn layout(count: usize, available: egui::Vec2, aspects: &[f32], equal: bool) -> Layout {
     let available = available.max(egui::Vec2::splat(1.));
     let (shown, overflow) = capacity(count, available);
     let mut aspects: Vec<_> = aspects.iter().take(shown).copied().collect();
-    aspects.resize(shown, 1.5);
+    aspects.resize(shown, UNKNOWN_ASPECT);
     for aspect in &mut aspects {
         if !aspect.is_finite() || *aspect <= 0. {
-            *aspect = 1.5;
+            *aspect = UNKNOWN_ASPECT;
         }
     }
     if overflow > 0 {
-        aspects.push(1.5);
+        aspects.push(UNKNOWN_ASPECT);
     }
-    let mut best = grid(&aspects, available, shown);
-    let mut score = area(&best, &aspects, shown);
-    let original: Vec<_> = (0..aspects.len()).collect();
-    let mut sorted = original.clone();
-    sorted.sort_by(|a, b| aspects[*a].total_cmp(&aspects[*b]));
-    // Only two stable orders and two shelf directions are considered. Search
-    // cost is bounded by the readable tile capacity, never browser folder size.
-    for order in [&original, &sorted] {
-        for columns in [false, true] {
-            for groups in 1..=aspects.len() {
-                let candidate = shelves(&aspects, order, available, groups, columns);
-                if candidate.iter().any(|tile| {
-                    tile.rect.width() + 0.01 < MIN_TILE.x.min(available.x)
-                        || tile.rect.height() + 0.01 < MIN_TILE.y.min(available.y)
-                }) {
-                    continue;
+    // The equal grid ignores shapes, so changing one never moves a tile.
+    let mut best = if equal {
+        grid(&vec![UNKNOWN_ASPECT; aspects.len()], available, shown)
+    } else {
+        grid(&aspects, available, shown)
+    };
+    if !equal {
+        let original: Vec<_> = (0..aspects.len()).collect();
+        let mut sorted = original.clone();
+        sorted.sort_by(|a, b| aspects[*a].total_cmp(&aspects[*b]));
+        // Only two stable orders and two shelf directions are considered. Search
+        // cost is bounded by the readable tile capacity, never browser folder size.
+        let mut score = sizes(&best, &aspects, shown);
+        for (order, gain) in [(&original, 1.), (&sorted, REORDER_GAIN)] {
+            let bar = (score.0 * gain, score.1);
+            let mut found: Option<(Vec<Tile>, (f32, f32))> = None;
+            for columns in [false, true] {
+                for groups in 1..=aspects.len() {
+                    let candidate = shelves(&aspects, order, available, groups, columns);
+                    if candidate.is_empty()
+                        || candidate.iter().any(|tile| {
+                            tile.rect.width() + 0.01 < MIN_TILE.x.min(available.x)
+                                || tile.rect.height() + 0.01 < MIN_TILE.y.min(available.y)
+                        })
+                    {
+                        continue;
+                    }
+                    let next = sizes(&candidate, &aspects, shown);
+                    if larger(next, found.as_ref().map_or(bar, |(_, score)| *score)) {
+                        found = Some((candidate, next));
+                    }
                 }
-                let next = area(&candidate, &aspects, shown);
-                if next > score + 0.01 {
-                    best = candidate;
-                    score = next;
-                }
+            }
+            if let Some((tiles, next)) = found {
+                best = tiles;
+                score = next;
             }
         }
     }
@@ -134,16 +177,33 @@ fn layout(count: usize, available: egui::Vec2, aspects: &[f32]) -> Layout {
     }
 }
 
+fn photo_area(tile: &Tile, aspects: &[f32]) -> f32 {
+    let size = (tile.rect.size() - egui::vec2(PAD, FOOT)).max(egui::Vec2::ZERO);
+    let height = size.y.min(size.x / aspects[tile.index]);
+    height * height * aspects[tile.index]
+}
+
 fn area(tiles: &[Tile], aspects: &[f32], shown: usize) -> f32 {
     tiles
         .iter()
         .filter(|tile| tile.index < shown)
-        .map(|tile| {
-            let size = (tile.rect.size() - egui::vec2(PAD, FOOT)).max(egui::Vec2::ZERO);
-            let height = size.y.min(size.x / aspects[tile.index]);
-            height * height * aspects[tile.index]
-        })
+        .map(|tile| photo_area(tile, aspects))
         .sum()
+}
+
+/// The smallest photograph's area, then the total.
+fn sizes(tiles: &[Tile], aspects: &[f32], shown: usize) -> (f32, f32) {
+    let smallest = tiles
+        .iter()
+        .filter(|tile| tile.index < shown)
+        .map(|tile| photo_area(tile, aspects))
+        .fold(f32::INFINITY, f32::min);
+    (smallest, area(tiles, aspects, shown))
+}
+
+/// The smallest photograph decides, and the total breaks a tie.
+fn larger(next: (f32, f32), than: (f32, f32)) -> bool {
+    next.0 > than.0 + 0.01 || (next.0 > than.0 - 0.01 && next.1 > than.1 + 0.01)
 }
 
 fn grid(aspects: &[f32], available: egui::Vec2, shown: usize) -> Vec<Tile> {
@@ -220,6 +280,10 @@ fn partition(weights: &[f32], groups: usize) -> Vec<std::ops::Range<usize>> {
     ranges
 }
 
+/// Rows, or columns, of photographs in `order`. Each shelf has its own size:
+/// a photograph's area is its shelf size squared times its ratio, so shelves
+/// are sized to make the smallest photograph on each equally large, within
+/// what each shelf's length allows, and spare room goes to the others.
 fn shelves(
     aspects: &[f32],
     order: &[usize],
@@ -227,14 +291,13 @@ fn shelves(
     groups: usize,
     columns: bool,
 ) -> Vec<Tile> {
-    let mut span = if columns {
-        (available.x - GAP * (groups - 1) as f32) / groups as f32 - PAD
+    // A shelf's size is its height in rows and its width in columns.
+    let (across, along) = if columns {
+        (available.x, available.y)
     } else {
-        (available.y - GAP * (groups - 1) as f32) / groups as f32 - FOOT
+        (available.y, available.x)
     };
-    if span <= 0. {
-        return Vec::new();
-    }
+    let (shelf_extra, tile_extra) = if columns { (PAD, FOOT) } else { (FOOT, PAD) };
     let ratio = |index: usize| {
         if columns {
             1. / aspects[index]
@@ -242,50 +305,89 @@ fn shelves(
             aspects[index]
         }
     };
-    let overhead = if columns { FOOT } else { PAD };
-    let weights: Vec<_> = order
-        .iter()
-        .map(|index| span * ratio(*index) + overhead + GAP)
-        .collect();
-    let ranges = partition(&weights, groups);
-    for range in &ranges {
-        let total: f32 = order[range.clone()].iter().map(|index| ratio(*index)).sum();
-        let length = if columns { available.y } else { available.x };
-        span = span
-            .min((length - overhead * range.len() as f32 - GAP * (range.len() - 1) as f32) / total);
-    }
-    if span <= 0. {
+    let room = across - shelf_extra * groups as f32 - GAP * (groups - 1) as f32;
+    if room <= 0. {
         return Vec::new();
     }
-    let across =
-        groups as f32 * (span + if columns { PAD } else { FOOT }) + GAP * (groups - 1) as f32;
+    let even = room / groups as f32;
+    let weights: Vec<_> = order
+        .iter()
+        .map(|index| even * ratio(*index) + tile_extra + GAP)
+        .collect();
+    let ranges = partition(&weights, groups);
+    if ranges.len() != groups {
+        return Vec::new();
+    }
+    let limits: Vec<f32> = ranges
+        .iter()
+        .map(|range| {
+            let total: f32 = order[range.clone()].iter().map(|index| ratio(*index)).sum();
+            (along - tile_extra * range.len() as f32 - GAP * (range.len() - 1) as f32) / total
+        })
+        .collect();
+    if limits.iter().any(|limit| *limit <= 0.) {
+        return Vec::new();
+    }
+    let shares: Vec<f32> = ranges
+        .iter()
+        .map(|range| {
+            let smallest = order[range.clone()]
+                .iter()
+                .map(|index| ratio(*index))
+                .fold(f32::INFINITY, f32::min);
+            1. / smallest.sqrt()
+        })
+        .collect();
+    // Shelves that reach their length keep it. The rest share what is left.
+    let mut spans = vec![0.; groups];
+    let mut open: Vec<usize> = (0..groups).collect();
+    let mut left = room;
+    while !open.is_empty() {
+        let unit = left / open.iter().map(|shelf| shares[*shelf]).sum::<f32>();
+        let (full, free): (Vec<_>, Vec<_>) = open
+            .iter()
+            .partition(|shelf| unit * shares[**shelf] >= limits[**shelf]);
+        if full.is_empty() {
+            for shelf in free {
+                spans[shelf] = unit * shares[shelf];
+            }
+            break;
+        }
+        for shelf in full {
+            spans[shelf] = limits[shelf];
+            left -= limits[shelf];
+        }
+        open = free;
+    }
+    let used = spans.iter().sum::<f32>() + shelf_extra * groups as f32 + GAP * (groups - 1) as f32;
+    let mut start = (across - used) * 0.5;
     let mut tiles = Vec::with_capacity(order.len());
-    for (group, range) in ranges.iter().enumerate() {
+    for (range, span) in ranges.iter().zip(&spans) {
         let length: f32 = order[range.clone()]
             .iter()
-            .map(|index| span * ratio(*index) + overhead)
+            .map(|index| span * ratio(*index) + tile_extra)
             .sum::<f32>()
             + GAP * (range.len() - 1) as f32;
-        let mut along = ((if columns { available.y } else { available.x }) - length) * 0.5;
-        let across_start = ((if columns { available.x } else { available.y }) - across) * 0.5
-            + group as f32 * (span + if columns { PAD } else { FOOT } + GAP);
+        let mut position = (along - length) * 0.5;
         for index in &order[range.clone()] {
-            let size = if columns {
-                egui::vec2(span + PAD, span / aspects[*index] + FOOT)
+            let (min, size) = if columns {
+                (
+                    egui::pos2(start, position),
+                    egui::vec2(span + PAD, span * ratio(*index) + FOOT),
+                )
             } else {
-                egui::vec2(span * aspects[*index] + PAD, span + FOOT)
-            };
-            let min = if columns {
-                egui::pos2(across_start, along)
-            } else {
-                egui::pos2(along, across_start)
+                (
+                    egui::pos2(position, start),
+                    egui::vec2(span * ratio(*index) + PAD, span + FOOT),
+                )
             };
             tiles.push(Tile {
                 index: *index,
                 rect: egui::Rect::from_min_size(min, size),
             });
-            along += if columns { size.y + GAP } else { size.x + GAP };
+            position += tile_extra + span * ratio(*index) + GAP;
         }
+        start += span + shelf_extra + GAP;
     }
     tiles
 }
@@ -366,9 +468,14 @@ mod tests {
                                 }),
                             );
                             let canvas = ui.available_rect_before_wrap();
-                            let plan =
-                                self.state
-                                    .get(&paths, &self.aspects, 2, canvas.size(), frozen);
+                            let plan = self.state.get(
+                                &paths,
+                                &self.aspects,
+                                2,
+                                canvas.size(),
+                                false,
+                                frozen,
+                            );
                             let tiles: Vec<_> = plan.tiles.iter().map(|tile| tile.rect).collect();
                             for tile in &plan.tiles {
                                 let image = egui::Rect::from_min_max(
@@ -567,7 +674,7 @@ mod tests {
     fn mixed_orientations_gain_photo_area_and_can_reorder() {
         let available = egui::vec2(1200., 800.);
         let aspects = [1.5, 2. / 3., 1.5];
-        let plan = layout(3, available, &aspects);
+        let plan = layout(3, available, &aspects, false);
         check(&plan, 3, available);
         let equal = grid(&aspects, available, 3);
         assert!(area(&plan.tiles, &aspects, 3) > area(&equal, &aspects, 3) * 1.2);
@@ -576,8 +683,71 @@ mod tests {
             vec![0, 1, 2]
         );
         // Two photos can use the viewport rather than stop at the old preferred boxes.
-        let pair = layout(2, available, &[1.5, 1.5]);
+        let pair = layout(2, available, &[1.5, 1.5], false);
         assert!(area(&pair.tiles, &[1.5, 1.5], 2) > 2. * 320. * 260. * 2.);
+    }
+
+    #[test]
+    fn shelves_are_sized_so_the_smallest_photograph_is_as_large_as_it_can_be() {
+        // Two portraits around a landscape in a tall viewport: the portraits
+        // share a row and the landscape takes a shorter row of its own.
+        let available = egui::vec2(1700., 1800.);
+        let aspects = [2. / 3., 1.5, 2. / 3.];
+        let plan = layout(3, available, &aspects, false);
+        check(&plan, 3, available);
+        let areas: Vec<_> = (0..3)
+            .map(|index| {
+                let tile = plan.tiles.iter().find(|tile| tile.index == index).unwrap();
+                photo_area(tile, &aspects)
+            })
+            .collect();
+        let smallest = areas.iter().copied().fold(f32::INFINITY, f32::min);
+        let largest = areas.iter().copied().fold(0., f32::max);
+        assert!(smallest > largest * 0.9, "unequal photographs: {areas:?}");
+        assert!(smallest > 700_000., "{areas:?}");
+    }
+
+    #[test]
+    fn a_small_change_of_shape_keeps_the_browser_order() {
+        let available = egui::vec2(1200., 800.);
+        for aspects in [
+            [1.5, 1.5, 1.5, 1.5],
+            [1.5, 1.4, 1.5, 1.45],
+            [1.3, 1.5, 1.45, 1.5],
+        ] {
+            let plan = layout(4, available, &aspects, false);
+            assert_eq!(
+                plan.tiles.iter().map(|tile| tile.index).collect::<Vec<_>>(),
+                vec![0, 1, 2, 3],
+                "{aspects:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_equal_grid_gives_every_photograph_the_same_tile_in_browser_order() {
+        let available = egui::vec2(1700., 1800.);
+        let plan = layout(3, available, &[2. / 3., 1.5, 2. / 3.], true);
+        check(&plan, 3, available);
+        assert_eq!(
+            plan.tiles.iter().map(|tile| tile.index).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        let size = plan.tiles[0].rect.size();
+        assert!(plan
+            .tiles
+            .iter()
+            .all(|tile| (tile.rect.size() - size).length() < 0.01));
+        // Changing every photograph's shape moves no tile.
+        let reshaped = layout(3, available, &[1.5, 2. / 3., 3.], true);
+        assert_eq!(
+            reshaped
+                .tiles
+                .iter()
+                .map(|tile| tile.rect)
+                .collect::<Vec<_>>(),
+            plan.tiles.iter().map(|tile| tile.rect).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -595,7 +765,7 @@ mod tests {
                 let aspects: Vec<_> = (0..shown)
                     .map(|index| [1.5, 2. / 3., 1., 12., 0.1][index % 5])
                     .collect();
-                check(&layout(count, available, &aspects), count, available);
+                check(&layout(count, available, &aspects, false), count, available);
             }
         }
     }
@@ -604,7 +774,7 @@ mod tests {
     fn unknown_and_extreme_aspects_keep_the_readable_grid_fallback() {
         let available = egui::vec2(800., 600.);
         for aspects in [[f32::NAN, 0., -1.], [1000., 0.001, 1.5]] {
-            check(&layout(3, available, &aspects), 3, available);
+            check(&layout(3, available, &aspects, false), 3, available);
         }
     }
 
@@ -617,7 +787,9 @@ mod tests {
             PathBuf::from("c.x3f"),
         ];
         let available = egui::vec2(1200., 800.);
-        let original = state.get(&paths, &[1.5; 3], 3, available, false).clone();
+        let original = state
+            .get(&paths, &[1.5; 3], 3, available, false, false)
+            .clone();
         for _ in 0..3 {
             // press, drag and release all freeze the same rectangles
             let held = state.get(
@@ -625,6 +797,7 @@ mod tests {
                 &[1.5, 2. / 3., 1.5],
                 3,
                 egui::vec2(1000., 700.),
+                false,
                 true,
             );
             assert_eq!(
@@ -645,25 +818,26 @@ mod tests {
             3,
             egui::vec2(1000., 700.),
             false,
+            false,
         );
         assert_eq!(state.available, egui::vec2(1000., 700.));
         assert_eq!(state.aspects, vec![1.5, 2. / 3., 1.5]);
         let many: Vec<_> = (0..12)
             .map(|index| PathBuf::from(format!("photo-{index}.x3f")))
             .collect();
-        state.get(&many, &[1.5; 12], 12, available, false);
+        state.get(&many, &[1.5; 12], 12, available, false, false);
         // A resize can lower readable capacity while the pointer remains held.
         assert_eq!(
             state
-                .get(&many, &[], 12, egui::vec2(200., 150.), true)
+                .get(&many, &[], 12, egui::vec2(200., 150.), false, true)
                 .shown,
             12
         );
-        let resized = state.get(&many, &[], 12, egui::vec2(200., 150.), false);
+        let resized = state.get(&many, &[], 12, egui::vec2(200., 150.), false, false);
         assert_eq!(resized.shown, 0);
         assert_eq!(resized.overflow, 12);
         let replaced = vec![PathBuf::from("d.x3f"), paths[1].clone(), paths[2].clone()];
-        state.get(&replaced, &[1.5; 3], 3, available, true);
+        state.get(&replaced, &[1.5; 3], 3, available, false, true);
         assert_eq!(state.paths, replaced);
     }
 }

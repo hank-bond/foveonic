@@ -12,6 +12,6 @@ Follow the [viewport workflow requirements](../../../../docs/specs/viewport-work
 
 ### Source files
 
-- **[layout.rs](./layout.rs)** Packs photograph viewports into bounded aspect-aware rows or columns and defers reflow during gestures.
+- **[layout.rs](./layout.rs)** Arranges photograph viewports as an equal grid or as separately sized rows or columns, and defers reflow during gestures.
 
 <!-- INDEX:END -->

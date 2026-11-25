@@ -119,6 +119,8 @@ fn failed_browser_uploads_report_errors_release_registration_and_allow_other_pho
     };
     FAIL_UPLOAD_AT.with(|target| target.set(Some("registering preview")));
     assert!(pixels().upload(&rs).is_err());
+    // A dropped texture is freed when the next frame starts.
+    free_retired(&rs);
     assert!(rs
         .renderer
         .read()

@@ -9,7 +9,7 @@ use crate::{
     rendering::worker::ColorPickRequest,
 };
 use eframe::egui;
-use foveonic::{crop::Crop, render::Settings};
+use foveonic::render::Settings;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -72,10 +72,13 @@ pub fn release(ctx: &egui::Context, tool: Tool) {
     }
 }
 pub fn source(ctx: &egui::Context, path: Option<&std::path::Path>) {
-    crop_tool::source(ctx, path);
-    rotate_tool::source(ctx, path);
     editor::dehaze::source(ctx, path);
     editor::white_balance::source(ctx, path);
+}
+/// A gesture ends when the photo it was started on is no longer displayed.
+pub fn displayed(ctx: &egui::Context, paths: &[std::path::PathBuf]) {
+    crop_tool::displayed_photos(ctx, paths);
+    rotate_tool::displayed_photos(ctx, paths);
 }
 pub fn takes_pointer(ctx: &egui::Context) -> bool {
     match selected(ctx) {
@@ -269,15 +272,25 @@ pub fn escape(ctx: &egui::Context) {
     }
 }
 
+/// A choice from the tool bar's Crop or Rotate menu. It applies to every
+/// editing target, each within its own frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Framing {
+    Crop(crop_tool::Action),
+    ResetRotation,
+}
+
+/// Draw the photograph tool bar. `marked` is the crop ratio the editing
+/// targets share, if they share one. `framing` is whether a displayed photo can
+/// be cropped or rotated now.
 pub fn show(
     ui: &mut egui::Ui,
-    crop: &mut Crop,
-    rotation: &mut foveonic::rotation::Rotation,
-    extent: Option<[u32; 2]>,
+    marked: Option<foveonic::crop::Aspect>,
+    framing: bool,
     custom: &mut Vec<crop_tool::NamedRatio>,
     loupe: &mut loupe_tool::Options,
-) -> bool {
-    let before = (*crop, *rotation);
+) -> Option<Framing> {
+    let mut chosen = None;
     toolbar::tool_group(ui, &Tool::TOOLBAR.map(Tool::width), |ui| {
         for tool in Tool::TOOLBAR {
             match tool {
@@ -293,18 +306,26 @@ pub fn show(
                     }
                 }
                 Tool::Loupe => loupe_tool::button(ui, loupe),
-                Tool::Crop => crop_tool::button(ui, crop, extent, custom),
+                Tool::Crop => {
+                    if let Some(action) = crop_tool::button(ui, marked, framing, custom) {
+                        chosen = Some(Framing::Crop(action));
+                    }
+                }
                 Tool::Rotate => {
-                    ui.add_enabled_ui(extent.is_some(), |ui| {
-                        rotate_tool::button(ui, rotation, crop)
+                    ui.add_enabled_ui(framing, |ui| {
+                        if rotate_tool::button(ui) {
+                            chosen = Some(Framing::ResetRotation);
+                        }
                     });
                 }
                 _ => unreachable!("only photograph toolbar buttons are listed"),
             }
         }
     });
-    crop_tool::dialog(ui.ctx(), crop, extent, custom);
-    before != (*crop, *rotation)
+    if let Some(action) = crop_tool::dialog(ui.ctx(), framing, custom) {
+        chosen = Some(Framing::Crop(action));
+    }
+    chosen
 }
 
 fn pointer_icon(ui: &egui::Ui, response: &egui::Response, on: bool) {

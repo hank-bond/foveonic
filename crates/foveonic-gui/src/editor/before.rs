@@ -92,11 +92,9 @@ impl App {
     pub(crate) fn exit_before(&mut self) {
         self.before.active = Rendition::Current;
     }
-    pub(crate) fn before_badge(&self, ui: &egui::Ui, rect: egui::Rect) {
-        if self
-            .active_image()
-            .is_none_or(|f| f.request.rendition == Rendition::Current)
-        {
+    /// Mark a photo whose drawn image is a Before rendition.
+    pub(crate) fn before_badge(&self, path: &std::path::Path, ui: &egui::Ui, rect: egui::Rect) {
+        if self.photo_layers(path)[0].is_none_or(|f| f.request.rendition == Rendition::Current) {
             return;
         }
         crate::widgets::overlay_badge(ui, rect, "Before");

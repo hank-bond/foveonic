@@ -64,6 +64,15 @@ The multi-edit count limit is a separate user setting within the memory design. 
 
 Parallel CPU processing must use the host's available logical CPUs through a shared processing pool. CPU capacity and the number of simultaneously retained source buffers are separate limits. Foreground and speculative work retain their priority and cancellation rules. GPU execution and disk I/O keep separate owners. A dependency-bound stream or serial recipe walk need not invent parallel work solely to occupy every core.
 
+## Arrangement
+
+Several displayed photographs are arranged in one of two ways, chosen by a switch beside the viewport's background switch. The switch appears only while several photographs are displayed, and the choice is an application preference.
+
+- **Largest photographs** is the default. Photographs are placed in rows or in columns, and each row or column has its own size. The arrangement must make the smallest photograph as large as it can be, and then prefer the larger total. Photographs must keep the browser's order unless another order shows the smallest photograph at least 10% larger, so a small change of shape does not move them.
+- **Equal grid** gives every photograph the same tile in the browser's order. Changing a photograph's shape must not move or resize any tile.
+
+The arrangement must hold still during a pointer gesture on a photograph. For as long as Crop or Rotate is armed it must keep the shapes it was made for, while still following the viewport's size. Those tools change photographs' shapes one after another, and nothing may move under the pointer meanwhile. The view is arranged again when the tool is put down. A change to which photographs are displayed arranges the view at once.
+
 ## Per-photo viewing
 
 Each photograph must retain its own Fit or fixed zoom and pan during the application session. Single and multi-photo views must use the same transform and gesture implementation. Selection changes, tile reordering and leaving or rejoining the displayed set must preserve photograph identity. Double-click toggles the hovered photograph between Fit and the application’s zoom snap, preserving the existing pointer-anchor behavior. Pointer drag or temporary Space pans only the hovered photograph without changing editing selection. Temporary Space preserves the selected tool and suppresses viewport selection. Explicit preview modes keep their requested processing scale through these gestures. Smart may resolve a different scale from the photograph’s drawn pixel demand.

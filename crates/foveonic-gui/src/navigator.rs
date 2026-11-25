@@ -283,7 +283,7 @@ impl Navigator {
     }
     fn free(&mut self) {
         if let Some((_, id)) = self.displayed.take() {
-            self.rs.renderer.write().free_texture(&id);
+            crate::display_image::retire(id);
         }
     }
     /// Wait 16 ms after building the main UI so its image can be submitted first.

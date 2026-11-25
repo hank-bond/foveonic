@@ -1,6 +1,6 @@
 //! Fits browser-selected photographs into bounded comparison tiles with explicit viewport editing targets.
 
-use crate::{viewport, viewport_selection::Request, App};
+use crate::{viewport_selection::Request, App};
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -50,9 +50,24 @@ impl App {
                     ]
                 }),
         );
+        // Crop and Rotate change photographs' shapes one after another. The
+        // arrangement keeps the shapes it was made for until the tool is put
+        // down, so no photograph moves under the pointer while they are being
+        // framed. It still follows the viewport's size.
+        let held = crate::photo_tools::framing(ui.ctx())
+            .then(|| self.comparison_layout.held_aspects(paths))
+            .flatten();
+        let aspects = held.unwrap_or(aspects);
         let layout = self
             .comparison_layout
-            .get(paths, &aspects, paths.len(), available, freeze)
+            .get(
+                paths,
+                &aspects,
+                paths.len(),
+                available,
+                self.preferences.equal_viewport_grid,
+                freeze,
+            )
             .clone();
         self.viewport_selection.extend(
             layout
@@ -62,7 +77,6 @@ impl App {
                 .map(|tile| paths[tile.index].clone()),
         );
         let (canvas, _) = ui.allocate_exact_size(available, egui::Sense::hover());
-        let mapping = self.displayed_mapping();
         let selecting = crate::photo_tools::selects_photos(ui.ctx())
             && !ui.input(|input| input.key_down(egui::Key::Space));
         for tile in layout.tiles.iter().filter(|tile| tile.index < layout.shown) {
@@ -82,73 +96,8 @@ impl App {
                     .id_salt(("comparison photo content", path)),
             );
             child.set_clip_rect(image_rect.intersect(ui.clip_rect()));
-            if active {
-                let temporary_pan = ui.input(|input| input.key_down(egui::Key::Space));
-                let editing = crate::photo_tools::takes_pointer(ui.ctx()) && !temporary_pan;
-                if editing
-                    && !(self.photo_interaction_available(path) || self.framing_preview_active())
-                {
-                    child.disable();
-                }
-                changed |= self.show_photo(&mut child, mapping);
-                self.before_badge(&child, image_rect);
-            } else {
-                let [frame, detail] = self.photo_layers(path);
-                let tile_mapping = self.mapping_for(frame);
-                let detail = detail.map(|detail| viewport::ImageLayer {
-                    texture: detail.texture.clone(),
-                    coverage: detail.detail_region(),
-                    identity: detail.diagnostic_identity(false),
-                });
-                let content = frame.map(|frame| {
-                    (
-                        frame.view(tile_mapping.input).clone(),
-                        frame.display_extent(tile_mapping.input),
-                        frame.diagnostic_identity(tile_mapping.input),
-                        frame.display_window(false),
-                        frame.request.rendition,
-                    )
-                });
-                let group_target = target && self.edit_selection.paths().len() > 1;
-                let view = self.viewports.view_mut(Some(path));
-                view.group_target = group_target;
-                view.editing = crate::photo_tools::takes_pointer(ui.ctx());
-                view.framing = None;
-                view.zoom_snap = self.preferences.zoom_snap;
-                if let Some((texture, extent, identity, window, actual_rendition)) = content {
-                    view.show(
-                        &mut child,
-                        texture,
-                        extent,
-                        None,
-                        tile_mapping,
-                        self.srgb_target,
-                        identity,
-                    );
-                    if let Some(layer) = detail {
-                        view.show_region(&mut child, layer, window, tile_mapping, self.srgb_target);
-                    }
-                    if actual_rendition != crate::editor::Rendition::Current {
-                        crate::widgets::overlay_badge(&child, image_rect, "Before");
-                    }
-                } else {
-                    let preview = if target {
-                        self.browser.preview(path)
-                    } else {
-                        self.browser.thumbnail(path)
-                    };
-                    if let Some(preview) = preview {
-                        view.show_preview(
-                            &mut child,
-                            &preview.texture,
-                            preview.native_extent,
-                            Default::default(),
-                        );
-                    } else {
-                        view.show_empty(&mut child);
-                    }
-                };
-            }
+            changed |= self.show_photo(path, &mut child);
+            self.before_badge(path, &child, image_rect);
             // The image owns its gestures. Only the non-overlapping caption
             // needs a separate selection response.
             let caption = ui.interact(
