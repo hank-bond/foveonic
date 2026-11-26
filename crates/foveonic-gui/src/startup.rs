@@ -138,7 +138,8 @@ fn fit_within(window: egui::Rect, area: egui::Rect) -> egui::Rect {
 }
 
 /// The free area, in points, of the monitor nearest to a window rectangle.
-#[cfg(target_os = "windows")]
+/// Tests supply their own area so results do not depend on the test machine's monitor.
+#[cfg(all(target_os = "windows", not(test)))]
 fn work_area(pixels_per_point: f32, window: egui::Rect) -> Option<egui::Rect> {
     use windows_sys::Win32::{
         Foundation::RECT,
@@ -182,7 +183,7 @@ fn work_area(pixels_per_point: f32, window: egui::Rect) -> Option<egui::Rect> {
 }
 
 /// Placement on other platforms is unchanged.
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(not(target_os = "windows"), test))]
 fn work_area(_pixels_per_point: f32, _window: egui::Rect) -> Option<egui::Rect> {
     None
 }
