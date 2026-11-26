@@ -18,6 +18,11 @@
       "target": "capture_export",
       "kind": "test",
       "id": "capture_export"
+    },
+    {
+      "target": "quicklook_preview",
+      "kind": "test",
+      "id": "quicklook_preview"
     }
   ],
   "input_sets": {
@@ -596,6 +601,7 @@
         "render::recipes::quattro::tiger::tests::tiger_fast_blue_repairs_phase_detection_pairs_before_reduction",
         "render::reduced::tests::every_camera_white_balance_matches_source_free_and_fresh_at_native_and_reduced_scales",
         "render::reduced::tests::full_option_dependency_cuts_release_source_and_match_fresh",
+        "render::reduced::tests::reduced_as_shot_renders_the_recorded_presets",
         "render::reduced::tests::per_output_scale_and_reduced_roi_hint_match_whole_grid",
         "render::reduced::tests::eviction_protected_reduced_photo_keeps_its_sensor_data_under_pressure",
         "render::reduced::tests::shared_working_set_orders_native_reduced_and_speculative_owners",
@@ -982,6 +988,16 @@
         "diagnostics::review_exit_saves_active_and_starting_captures",
         "diagnostics::smoke_panic_saves_active_sdk_capture",
         "startup::tests::early_setup_intervals_survive_asynchronous_recorder_start"
+      ]
+    },
+    {
+      "id": "quicklook_preview",
+      "suite": "quicklook_preview",
+      "environment": "standard",
+      "resource": "gpu",
+      "one_test_per_process": false,
+      "tests": [
+        "merrill_high_previews_render_at_half_size"
       ]
     }
   ],

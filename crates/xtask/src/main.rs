@@ -142,12 +142,18 @@ fn build_app(root: &Path, build: &Build) -> Result<std::path::PathBuf> {
     if let Some(tag) = &build.tag {
         release::check_tag(tag, &app.version)?;
     }
-    let binary = cargo::build(root, &app.id, build.debug, build.offline)?;
+    let built = cargo::build(root, &app.id, build.debug, build.offline)?;
     let compiled = tempfile::Builder::new()
-        .prefix("foveonic-icons-")
+        .prefix("foveonic-native-")
         .tempdir()?;
     bundle::compile_icon(root, compiled.path())?;
-    bundle::assemble(&binary, compiled.path(), &app.version)
+    let extension = bundle::compile_preview_extension(
+        root,
+        &built.preview_library,
+        compiled.path(),
+        &app.version,
+    )?;
+    bundle::assemble(&built.gui, compiled.path(), &extension, &app.version)
 }
 
 #[cfg(test)]

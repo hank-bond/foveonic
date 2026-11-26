@@ -962,17 +962,17 @@ fn color_guide(
     let mut color = settings.clone();
     color.rendering = Rendering::Color;
     let caps = crate::render::ControlCapabilities::from_metadata(source.metadata())?;
-    color.color_mode = caps.default_color_mode(source.metadata())?;
-    // The neutral color look is independent of the authored rendering and mono mix.
-    if caps
+    // The neutral color look is independent of the authored rendering and mono mix:
+    // Standard where the camera offers it, otherwise the recorded mode.
+    color.color_mode = if caps
         .color_mode_presets(source.metadata())
         .contains(&"Standard")
     {
-        color.color_mode = "Standard".into();
-    }
-    if color.white_balance.is_empty() {
-        color.white_balance = caps.default_white_balance(source.metadata())?;
-    }
+        "Standard".into()
+    } else {
+        crate::render::AS_SHOT.into()
+    };
+    let mut color = color.with_camera_choices(source.metadata()).into_owned();
     color.processing_sections.noise = true;
     color.processing_sections.detail = true;
     color.sharpen_amount = Some(0.);

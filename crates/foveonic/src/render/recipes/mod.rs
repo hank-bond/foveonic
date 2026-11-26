@@ -125,6 +125,34 @@ fn execution_settings<'a>(
     request
 }
 
+/// What a recipe builds from. `authored` names the presets As Shot stands for.
+/// `effective` also fixes Auto exposure and the family's processing choices.
+struct RecipeSettings {
+    authored: Settings,
+    effective: Settings,
+}
+
+fn recipe_settings(
+    planned: &Settings,
+    metadata: &crate::source::Metadata,
+    dng: bool,
+) -> Result<RecipeSettings> {
+    let authored = planned.with_camera_choices(metadata).into_owned();
+    let resolved = authored.resolved_exposure(metadata);
+    let input = if dng {
+        std::borrow::Cow::Owned(resolved.dng_settings())
+    } else {
+        resolved
+    };
+    let effective = input
+        .processing_settings(metadata.processing_family()?)
+        .into_owned();
+    Ok(RecipeSettings {
+        authored,
+        effective,
+    })
+}
+
 pub(super) struct PreparedRecipe {
     pub(super) built: BuiltRecipe,
     pub(super) settings: Settings,
@@ -198,30 +226,30 @@ impl Engine {
             camera_settings.rotation = Default::default();
             camera_settings
         });
-        let settings = camera_settings.as_ref().unwrap_or(requested);
-        let resolved = settings.resolved_exposure(source.metadata());
-        let dng_settings;
-        let input = if matches!(recipe, Recipe::DngBase) {
-            dng_settings = resolved.dng_settings();
-            &dng_settings
-        } else {
-            resolved.as_ref()
-        };
-        let effective = input.processing_settings(source.metadata().processing_family()?);
+        // Artifacts keep the planned settings, including As Shot.
+        let planned = camera_settings.as_ref().unwrap_or(requested);
+        let RecipeSettings {
+            authored,
+            effective,
+        } = recipe_settings(
+            planned,
+            source.metadata(),
+            matches!(recipe, Recipe::DngBase),
+        )?;
         let mut built = match recipe {
             Recipe::Photographic(_) => build_photographic(
-                self, source, &effective, settings, names, profile, execution,
+                self, source, &effective, &authored, names, profile, execution,
             )?,
             Recipe::DngBase => build_dng(
                 self,
                 source.original()?,
                 &effective,
-                settings,
+                &authored,
                 profile,
                 execution,
             )?,
         };
-        if settings.preview_region.is_some() {
+        if planned.preview_region.is_some() {
             built
                 .graph
                 .set_view(built.final_id, camera_view(built.params));
@@ -235,7 +263,7 @@ impl Engine {
         }
         Ok(PreparedRecipe {
             built,
-            settings: settings.clone(),
+            settings: planned.clone(),
             requested: requested.clone(),
             regional,
         })
@@ -312,9 +340,11 @@ pub(super) fn sensor_data_graph(
     execution: &mut Execution<'_>,
 ) -> Result<Graph> {
     let request = execution_settings(source.metadata(), settings, &["final"]);
-    let settings = request.as_ref();
-    let resolved = settings.resolved_exposure(source.metadata());
-    let effective = resolved.processing_settings(source.metadata().processing_family()?);
+    let RecipeSettings {
+        authored,
+        effective,
+    } = recipe_settings(&request, source.metadata(), false)?;
+    let settings = &authored;
     let mut built = build_photographic(
         engine,
         source,
@@ -451,12 +481,7 @@ pub(super) fn default_sharpen_amount(
         Some(ProcessingFamily::Merrill) if settings.is_monochrome() => {
             Ok(MERRILL_MONOCHROME_SHARPEN_BASE)
         }
-        _ => Ok(crate::noise::couplings(
-            metadata,
-            &settings.white_balance,
-            settings.sensor_noise_controls(),
-        )?
-        .sharpen_base),
+        _ => Ok(settings.noise_couplings(metadata)?.sharpen_base),
     }
 }
 

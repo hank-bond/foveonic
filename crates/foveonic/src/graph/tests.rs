@@ -578,7 +578,6 @@ fn image_signals_round_trip_with_their_canonical_layout_and_extent() {
         DataType::PatternSeedTiles,
         DataType::RatioTiles,
         DataType::ColorTiles(ColorSpace::Srgb),
-        DataType::File,
     ] {
         assert!(data.image_description(extent).is_none(), "{data:?}");
     }

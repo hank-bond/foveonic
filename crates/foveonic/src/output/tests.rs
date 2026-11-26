@@ -1,6 +1,7 @@
 //! Checks encoded precision, color profiles, compression tags and rejected output requests.
 
 use super::*;
+use crate::render::TiffColorSpace;
 use std::io::Cursor;
 
 #[path = "../../tests/common/capture_exif.rs"]
@@ -22,13 +23,8 @@ fn metadata() -> crate::source::Metadata {
         lists: Default::default(),
     }
 }
-fn fixture() -> (EncodeParams, Vec<u8>, Vec<u16>) {
-    let params = EncodeParams {
-        mapping: [[0.; 4]; 2],
-        source: [17, 9, 0, 0],
-        crop: [0, 0, 17, 9],
-        output: [17, 9, 0, 0],
-    };
+fn fixture() -> ([u32; 2], Vec<u8>, Vec<u16>) {
+    let extent = [17, 9];
     let rgb: Vec<u16> = (0..17 * 9 * 3)
         .map(|i| [0, 1, 128, 257, 32768, 64000, 65535][i % 7])
         .collect();
@@ -38,16 +34,18 @@ fn fixture() -> (EncodeParams, Vec<u8>, Vec<u16>) {
         .iter()
         .flat_map(|p| [p[0], p[1], p[2], 0].into_iter().flat_map(u16::to_le_bytes))
         .collect();
-    (params, packed, rgb)
+    (extent, packed, rgb)
 }
 fn encoded(format: Format, options: EncodingOptions, space: TiffColorSpace) -> Vec<u8> {
-    let (params, bytes, _) = fixture();
+    let (extent, bytes, _) = fixture();
     let mut writer = Cursor::new(Vec::new());
     write(
         &mut writer,
-        &bytes,
-        &params,
-        space,
+        &EncodedImage {
+            samples: bytes.clone(),
+            color_space: space,
+            extent,
+        },
         format,
         options,
         &metadata(),
@@ -107,19 +105,16 @@ fn uncompressed_tiff_strips_match_whole_image_encoding() {
                 .flat_map(u16::to_le_bytes)
         })
         .collect();
-    let params = EncodeParams {
-        mapping: [[0.; 4]; 2],
-        source: [width, height, 0, 0],
-        crop: [0, 0, width, height],
-        output: [width, height, 0, 0],
-    };
+    let extent = [width, height];
     let space = TiffColorSpace::Srgb;
     let mut actual = Cursor::new(Vec::new());
     write(
         &mut actual,
-        &packed,
-        &params,
-        space,
+        &EncodedImage {
+            samples: packed.clone(),
+            color_space: space,
+            extent,
+        },
         Format::Tiff,
         Default::default(),
         &metadata(),
@@ -204,18 +199,15 @@ fn png_rgb16_stream_preserves_rows_and_propagates_writer_errors() {
                 .flat_map(u16::to_le_bytes)
         })
         .collect();
-    let params = EncodeParams {
-        mapping: [[0.; 4]; 2],
-        source: [width, height, 0, 0],
-        crop: [0, 0, width, height],
-        output: [width, height, 0, 0],
-    };
+    let extent = [width, height];
     let mut output = Cursor::new(Vec::new());
     write(
         &mut output,
-        &packed,
-        &params,
-        TiffColorSpace::AdobeRgb,
+        &EncodedImage {
+            samples: packed.clone(),
+            color_space: TiffColorSpace::AdobeRgb,
+            extent,
+        },
         Format::Png,
         Default::default(),
         &metadata(),
@@ -279,9 +271,11 @@ fn png_rgb16_stream_preserves_rows_and_propagates_writer_errors() {
         };
         let error = write(
             &mut writer,
-            &packed,
-            &params,
-            TiffColorSpace::AdobeRgb,
+            &EncodedImage {
+                samples: packed.clone(),
+                color_space: TiffColorSpace::AdobeRgb,
+                extent,
+            },
             Format::Png,
             Default::default(),
             &metadata(),
@@ -297,9 +291,11 @@ fn png_rgb16_stream_preserves_rows_and_propagates_writer_errors() {
     };
     let error = write(
         &mut writer,
-        &packed,
-        &params,
-        TiffColorSpace::AdobeRgb,
+        &EncodedImage {
+            samples: packed.clone(),
+            color_space: TiffColorSpace::AdobeRgb,
+            extent,
+        },
         Format::Png,
         Default::default(),
         &metadata(),
@@ -311,21 +307,18 @@ fn png_rgb16_stream_preserves_rows_and_propagates_writer_errors() {
 
 #[test]
 fn png_rgb8_quantizes_every_u16_value() {
-    let params = EncodeParams {
-        mapping: [[0.; 4]; 2],
-        source: [256, 256, 0, 0],
-        crop: [0, 0, 256, 256],
-        output: [256, 256, 0, 0],
-    };
+    let extent = [256, 256];
     let packed: Vec<u8> = (0..=u16::MAX)
         .flat_map(|v| [v, v, v, 0].into_iter().flat_map(u16::to_le_bytes))
         .collect();
     let mut writer = Cursor::new(Vec::new());
     write(
         &mut writer,
-        &packed,
-        &params,
-        TiffColorSpace::Srgb,
+        &EncodedImage {
+            samples: packed.clone(),
+            color_space: TiffColorSpace::Srgb,
+            extent,
+        },
         Format::Png,
         EncodingOptions {
             png_depth: BitDepth::Eight,
@@ -525,7 +518,7 @@ fn jxl_lossy_is_readable_and_retains_the_destination_profile() {
 
 #[test]
 fn invalid_options_and_dimensions_do_not_write_output() {
-    let (params, bytes, _) = fixture();
+    let (extent, bytes, _) = fixture();
     for (format, options, packed) in [
         (Format::Dng, EncodingOptions::default(), bytes.as_slice()),
         (
@@ -553,9 +546,11 @@ fn invalid_options_and_dimensions_do_not_write_output() {
         let mut writer = Cursor::new(Vec::new());
         assert!(write(
             &mut writer,
-            packed,
-            &params,
-            TiffColorSpace::Srgb,
+            &EncodedImage {
+                samples: packed.to_vec(),
+                color_space: TiffColorSpace::Srgb,
+                extent,
+            },
             format,
             options,
             &metadata(),
@@ -576,18 +571,15 @@ fn lossy_jxl_preserves_wide_rgb_values_and_native_destination_metadata() {
             .take(64 * 64 * 4)
             .flat_map(u16::to_le_bytes)
             .collect();
-        let params = EncodeParams {
-            mapping: [[0.; 4]; 2],
-            source: [64, 64, 0, 0],
-            crop: [0, 0, 64, 64],
-            output: [64, 64, space.encoding_code(true), 0],
-        };
+        let extent = [64, 64];
         let mut writer = Cursor::new(Vec::new());
         write(
             &mut writer,
-            &bytes,
-            &params,
-            space,
+            &EncodedImage {
+                samples: bytes.clone(),
+                color_space: space,
+                extent,
+            },
             Format::Jxl,
             EncodingOptions {
                 jxl_lossless: false,
@@ -765,13 +757,15 @@ fn check_capture_tiff(bytes: &[u8], embedded: bool) {
 }
 
 fn encode_capture(format: Format) -> Vec<u8> {
-    let (params, bytes, _) = fixture();
+    let (extent, bytes, _) = fixture();
     let mut writer = Cursor::new(Vec::new());
     write(
         &mut writer,
-        &bytes,
-        &params,
-        TiffColorSpace::Srgb,
+        &EncodedImage {
+            samples: bytes.clone(),
+            color_space: TiffColorSpace::Srgb,
+            extent,
+        },
         format,
         EncodingOptions::default(),
         &metadata_with_embedded_tags(),
@@ -837,13 +831,15 @@ fn jpeg_rejects_oversized_exif_without_writing_a_corrupt_segment() {
         "EXIF_CAPTURE_TAGS".into(),
         serde_json::to_string(&[entry]).unwrap(),
     );
-    let (params, pixels, _) = fixture();
+    let (extent, pixels, _) = fixture();
     let mut output = Cursor::new(Vec::new());
     assert!(write(
         &mut output,
-        &pixels,
-        &params,
-        TiffColorSpace::Srgb,
+        &EncodedImage {
+            samples: pixels.clone(),
+            color_space: TiffColorSpace::Srgb,
+            extent,
+        },
         Format::Jpeg,
         EncodingOptions::default(),
         &metadata,
@@ -862,13 +858,15 @@ fn x3f_embedded_capture_reaches_every_photographic_encoder() {
     let mut metadata = metadata();
     metadata.properties = properties;
     for format in [Format::Tiff, Format::Jpeg, Format::Png, Format::Jxl] {
-        let (params, packed, _) = fixture();
+        let (extent, packed, _) = fixture();
         let mut file = Cursor::new(Vec::new());
         write(
             &mut file,
-            &packed,
-            &params,
-            TiffColorSpace::Srgb,
+            &EncodedImage {
+                samples: packed.clone(),
+                color_space: TiffColorSpace::Srgb,
+                extent,
+            },
             format,
             EncodingOptions::default(),
             &metadata,

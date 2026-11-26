@@ -2,8 +2,7 @@
 
 use crate::{
     capture_metadata::{ExifOutput, Undefined},
-    nodes::sensor::calibration::EncodeParams,
-    render::TiffColorSpace,
+    render::EncodedImage,
     source::{Metadata, Result},
 };
 use image::ImageEncoder;
@@ -137,22 +136,16 @@ impl EncodingOptions {
         }
         Ok(())
     }
-    pub(crate) fn key(self) -> [u8; 6] {
-        [
-            self.tiff_compression as u8,
-            self.jpeg_quality,
-            self.png_depth as u8,
-            self.jxl_lossless as u8,
-            self.jxl_quality,
-            self.jxl_effort,
-        ]
-    }
 }
 
 fn rgb_samples(bytes: &[u8]) -> impl Iterator<Item = u16> + '_ {
-    bytes.as_chunks::<8>().0.iter().flat_map(|pixel| {
-        [0, 2, 4].map(|offset| u16::from_le_bytes([pixel[offset], pixel[offset + 1]]))
-    })
+    bytes
+        .as_chunks::<{ EncodedImage::BYTES_PER_PIXEL }>()
+        .0
+        .iter()
+        .flat_map(|pixel| {
+            [0, 2, 4].map(|offset| u16::from_le_bytes([pixel[offset], pixel[offset + 1]]))
+        })
 }
 
 fn repack_rgb8(bytes: &[u8], profile: &mut crate::profile::Profile) -> Vec<u8> {
@@ -174,24 +167,21 @@ fn repack_rgb16(bytes: &[u8], profile: &mut crate::profile::Profile) -> Vec<u16>
 /// Samples arrive as little-endian RGB16 with one padding component per pixel.
 /// Encoders receive the already oriented, resized, destination-encoded image.
 /// Lossy JXL uses native color signaling with a pure gamma ProPhoto transfer.
-#[allow(clippy::too_many_arguments)]
 pub fn write<W: Write + Seek>(
     mut writer: W,
-    bytes: &[u8],
-    params: &EncodeParams,
-    space: TiffColorSpace,
+    image: &EncodedImage,
     format: Format,
     options: EncodingOptions,
     metadata: &Metadata,
     profile: &mut crate::profile::Profile,
 ) -> Result<()> {
     options.validate(format)?;
-    let [width, height, _, _] = params.output;
+    let (bytes, space, [width, height]) = (&image.samples[..], image.color_space, image.extent);
     let count = (width as usize)
         .checked_mul(height as usize)
         .filter(|&n| n > 0)
         .ok_or("invalid output dimensions")?;
-    if count.checked_mul(8) != Some(bytes.len()) {
+    if count.checked_mul(EncodedImage::BYTES_PER_PIXEL) != Some(bytes.len()) {
         return Err("invalid packed RGB16 output".into());
     }
     let capture = crate::capture_metadata::Capture::new(metadata);
@@ -234,7 +224,7 @@ pub fn write<W: Write + Seek>(
                 let mut strip = Vec::new();
                 while image.next_strip_sample_count() > 0 {
                     let samples = usize::try_from(image.next_strip_sample_count())?;
-                    let packed_bytes = samples / 3 * 8;
+                    let packed_bytes = samples / 3 * EncodedImage::BYTES_PER_PIXEL;
                     strip.clear();
                     strip.extend(rgb_samples(&bytes[offset..offset + packed_bytes]));
                     image.write_strip(&strip)?;
@@ -277,11 +267,10 @@ pub fn write<W: Write + Seek>(
                 {
                     let mut stream = png_writer.stream_writer()?;
                     let mut row = Vec::with_capacity(width as usize * 6);
-                    for packed in bytes.chunks_exact(width as usize * 8) {
+                    for packed in bytes.chunks_exact(width as usize * EncodedImage::BYTES_PER_PIXEL)
+                    {
                         row.clear();
-                        row.extend(packed.as_chunks::<8>().0.iter().flat_map(|pixel| {
-                            [pixel[1], pixel[0], pixel[3], pixel[2], pixel[5], pixel[4]]
-                        }));
+                        row.extend(rgb_samples(packed).flat_map(u16::to_be_bytes));
                         stream.write_all(&row)?;
                     }
                     stream.finish()?;

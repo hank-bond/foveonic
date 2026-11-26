@@ -920,10 +920,8 @@ fn camera_choices_keep_loading_layout_and_saved_values_until_metadata_arrives() 
         let (_, output, _) = frame(None, vec![]);
         let value = if initial.white_balance_bias.neutral.is_some() {
             "Custom"
-        } else if initial.white_balance.is_empty() {
-            "As Shot"
         } else {
-            "Sunlight"
+            foveonic::render::ControlCapabilities::option_label(&initial.white_balance)
         };
         let mode_y = text_centers(&output, "Mode")[0].y;
         let point = text_centers(&output, value)
@@ -2388,6 +2386,13 @@ fn correction_checkboxes_start_enabled_and_toggle_independently() {
 fn noise_checkbox_enables_only_noise_and_preserves_inactive_settings() {
     let ctx = egui::Context::default();
     let mut settings = Settings::new("Sunlight", "Standard");
+    // Noise and detail switched off, as the app saves them.
+    settings.reconstruction = Some(foveonic::noise::Controls {
+        noise_enabled: false,
+        detail_enabled: false,
+        ..Default::default()
+    });
+    let initial = settings.reconstruction;
     let mut frame = |time, events| {
         let mut changed = false;
         let output = ctx.run(
@@ -2409,7 +2414,7 @@ fn noise_checkbox_enables_only_noise_and_preserves_inactive_settings() {
         (changed, output, settings.reconstruction)
     };
     let (changed, output, reconstruction) = frame(0., vec![]);
-    assert!(reconstruction.is_none());
+    assert_eq!(reconstruction, initial);
     assert!(!changed);
     let point = output
         .shapes
@@ -3046,7 +3051,7 @@ fn family_metadata_changes_normalize_only_incompatible_settings() {
     settings.rendering = Rendering::Monochrome;
     settings.exposure = 1.2;
     settings.highlight_restoration = false;
-    settings.reconstruction = None;
+    settings.reconstruction = Some(Default::default());
     let saved = settings.clone();
     assert!(!normalize(&mut settings, None));
     assert_eq!(settings, saved);
@@ -3055,7 +3060,7 @@ fn family_metadata_changes_normalize_only_incompatible_settings() {
     assert_eq!(settings.rendering, Rendering::Monochrome);
     assert_eq!(settings.exposure, 1.2);
     assert_eq!(settings.white_balance, "Shade");
-    assert!(!settings.highlight_restoration && settings.reconstruction.is_none());
+    assert!(!settings.highlight_restoration && settings.reconstruction.is_some());
     let compatible = settings.clone();
     assert!(!normalize(&mut settings, merrill.processing_family().ok()));
     assert_eq!(settings, compatible);

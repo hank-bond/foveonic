@@ -2443,31 +2443,6 @@ impl Traversal {
                     );
                     Some(output)
                 }
-                Operation::WriteImage {
-                    format,
-                    options,
-                    path,
-                    params,
-                    space,
-                } => {
-                    let bytes = profile
-                        .measure("readback wait and copy", || gpu.readback(&input(0).buffer))?;
-                    let file = std::fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(path)?;
-                    crate::output::write(
-                        std::io::BufWriter::new(file),
-                        &bytes,
-                        params,
-                        *space,
-                        *format,
-                        *options,
-                        context.metadata(),
-                        profile,
-                    )?;
-                    None
-                }
             };
             let mut diagnostic =
                 diagnostic.map(|(mut observation, started, before, shared_start)| {
@@ -2477,9 +2452,7 @@ impl Traversal {
                     let shared_end = profile.mode.gpu().then(|| trace.len());
                     (observation, started, shared_start.zip(shared_end))
                 });
-            if !matches!(node.operation, Operation::WriteImage { .. }) {
-                profile.record(node.operation.label(), start);
-            }
+            profile.record(node.operation.label(), start);
             let publication = profile.mode.enabled().then(Instant::now);
             if !cached[index] {
                 values[index] = output.map(|buffer| Value {

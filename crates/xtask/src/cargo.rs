@@ -1,6 +1,6 @@
-//! Finds application versions and executable artifacts through Cargo's machine-readable output.
+//! Finds application versions, executables and the preview library through Cargo's machine-readable output.
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
@@ -59,7 +59,16 @@ pub fn application(root: &Path, offline: bool) -> Result<Package> {
         .context("Cargo metadata is missing foveonic-gui")
 }
 
-pub fn build(root: &Path, package: &str, debug: bool, offline: bool) -> Result<PathBuf> {
+/// Compiled inputs for one macOS bundle.
+pub struct Artifacts {
+    pub gui: PathBuf,
+    /// Static library linked into the Quick Look preview extension.
+    pub preview_library: PathBuf,
+}
+
+const PREVIEW_LIBRARY_TARGET: &str = "foveonic_quicklook";
+
+pub fn build(root: &Path, package: &str, debug: bool, offline: bool) -> Result<Artifacts> {
     let mut command = command(root);
     command
         .args([
@@ -69,6 +78,9 @@ pub fn build(root: &Path, package: &str, debug: bool, offline: bool) -> Result<P
             "foveonic-gui",
             "--bin",
             "foveonic-gui",
+            "-p",
+            "foveonic-quicklook",
+            "--lib",
             "--message-format=json-render-diagnostics",
         ])
         .env(
@@ -84,37 +96,57 @@ pub fn build(root: &Path, package: &str, debug: bool, offline: bool) -> Result<P
     let output = command.output().context("Cannot run cargo build")?;
     ensure!(
         output.status.success(),
-        "GUI build failed: {}",
+        "App build failed: {}",
         output.status
     );
-    artifact(&output.stdout, package)
+    artifacts(&output.stdout, package)
 }
 
-fn artifact(report: &[u8], package: &str) -> Result<PathBuf> {
-    let mut binary = None;
+fn artifacts(report: &[u8], package: &str) -> Result<Artifacts> {
+    let mut gui = None;
+    let mut preview_library = None;
     for line in report
         .split(|&byte| byte == b'\n')
         .filter(|line| !line.is_empty())
     {
         let message: serde_json::Value =
             serde_json::from_slice(line).context("Invalid Cargo compiler message")?;
-        if message["reason"] == "compiler-artifact"
-            && message["package_id"] == package
-            && message["target"]["name"] == "foveonic-gui"
-            && message["target"]["kind"]
+        if message["reason"] != "compiler-artifact" {
+            continue;
+        }
+        let kind = |name: &str| {
+            message["target"]["kind"]
                 .as_array()
-                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == name))
+        };
+        if message["package_id"] == package
+            && message["target"]["name"] == "foveonic-gui"
+            && kind("bin")
         {
             if let Some(path) = message["executable"].as_str() {
-                ensure!(binary.is_none(), "Cargo reported multiple GUI executables");
-                binary = Some(PathBuf::from(path));
+                ensure!(gui.is_none(), "Cargo reported multiple GUI executables");
+                gui = Some(PathBuf::from(path));
+            }
+        } else if message["target"]["name"] == PREVIEW_LIBRARY_TARGET && kind("staticlib") {
+            let library = message["filenames"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|name| name.as_str())
+                .find(|name| name.ends_with(".a"));
+            if let Some(path) = library {
+                ensure!(
+                    preview_library.is_none(),
+                    "Cargo reported multiple preview libraries"
+                );
+                preview_library = Some(PathBuf::from(path));
             }
         }
     }
-    match binary {
-        Some(binary) => Ok(binary),
-        None => bail!("Cargo did not report the GUI executable"),
-    }
+    Ok(Artifacts {
+        gui: gui.context("Cargo did not report the GUI executable")?,
+        preview_library: preview_library.context("Cargo did not report the preview library")?,
+    })
 }
 
 #[cfg(test)]
@@ -129,23 +161,33 @@ mod tests {
             let message = json!({"reason": "compiler-artifact", "package_id": "gui-id",
                 "target": {"name": "foveonic-gui", "kind": ["bin"]},
                 "executable": path, "fresh": true});
-            let report = format!("{{\"reason\":\"build-script-executed\"}}\n{message}\n");
-            assert_eq!(
-                artifact(report.as_bytes(), "gui-id").unwrap(),
-                PathBuf::from(path)
-            );
-            assert!(artifact(report.as_bytes(), "other-id").is_err());
-            assert!(artifact(format!("{message}\n{message}").as_bytes(), "gui-id").is_err());
+            let library_path = format!("/custom target/{profile}/libfoveonic_quicklook.a");
+            let library = json!({"reason": "compiler-artifact", "package_id": "ql-id",
+                "target": {"name": "foveonic_quicklook", "kind": ["staticlib", "rlib"]},
+                "filenames": [format!("/custom target/{profile}/libfoveonic_quicklook.rlib"), library_path],
+                "executable": null, "fresh": true});
+            let report =
+                format!("{{\"reason\":\"build-script-executed\"}}\n{message}\n{library}\n");
+            let built = artifacts(report.as_bytes(), "gui-id").unwrap();
+            assert_eq!(built.gui, PathBuf::from(path));
+            assert_eq!(built.preview_library, PathBuf::from(library_path));
+            assert!(artifacts(report.as_bytes(), "other-id").is_err());
+            assert!(artifacts(format!("{message}\n").as_bytes(), "gui-id").is_err());
+            assert!(artifacts(
+                format!("{message}\n{message}\n{library}").as_bytes(),
+                "gui-id"
+            )
+            .is_err());
         }
     }
 
     #[test]
     fn missing_executable_and_invalid_messages_fail() {
-        assert!(artifact(
+        assert!(artifacts(
             b"{\"reason\":\"build-finished\",\"success\":true}\n",
             "gui-id"
         )
         .is_err());
-        assert!(artifact(b"invalid JSON", "gui-id").is_err());
+        assert!(artifacts(b"invalid JSON", "gui-id").is_err());
     }
 }

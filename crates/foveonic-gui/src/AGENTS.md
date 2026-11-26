@@ -47,7 +47,7 @@ The native smoke test is opt-in through `FOVEONIC_GUI_SMOKE_DIR`; it captures re
 - **[diagnostics.rs](./diagnostics.rs)** Controls bounded manual and scripted captures through the shared background recorder.
 - **[display.rs](./display.rs)** Declares the window's display encoding and tags its native Metal layer for host color matching.
 - **[display_image.rs](./display_image.rs)** Uploads bounded linear-light photographic previews without clipping them to sRGB.
-- **[export.rs](./export.rs)** Shares camera-choice resolution and Quality photographic and DNG exports between interactive and batch workers.
+- **[export.rs](./export.rs)** Shares Quality photographic and DNG exports between interactive and batch workers.
 - **[folder_loader.rs](./folder_loader.rs)** Discovers folder snapshots away from the UI and publishes only the newest request.
 - **[framing.rs](./framing.rs)** Shares the rotated editing plane, crop frame, exterior shading and dimensions across framing tools.
 - **[help.rs](./help.rs)** Explains editing controls, inspection stages, scopes, and navigator gestures in photographic language.

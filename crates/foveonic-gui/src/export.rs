@@ -1,4 +1,4 @@
-//! Shares camera-choice resolution and Quality photographic and DNG exports between interactive and batch workers.
+//! Shares Quality photographic and DNG exports between interactive and batch workers.
 
 use foveonic::diagnostics as trace;
 use foveonic::support::{self, Level, OperationContext};
@@ -7,7 +7,6 @@ use foveonic::{
     inspection::Content,
     profile::Profile,
     render::{Engine, NativePhoto, Settings},
-    source::Metadata,
 };
 use std::{
     collections::HashSet,
@@ -70,16 +69,16 @@ pub fn write(
     let mut settings = settings.for_export();
     settings.processing_sections = export.sections;
     settings.tiff_color_space = export.tiff_color_space;
-    let errors = resolve_camera_settings_typed(&mut settings, session.metadata());
-    let mut phase = "resolve-camera-settings";
+    let checked = settings.validate_for_camera(session.metadata());
+    let mut phase = "validate-recipe";
     let mut context = OperationContext {
         operation_id: Some(operation_id.clone()),
         component: Some("export".into()),
         phase: Some(
-            if errors.is_empty() {
+            if checked.is_ok() {
                 "publish-output"
             } else {
-                "resolve-camera-settings"
+                "validate-recipe"
             }
             .into(),
         ),
@@ -100,8 +99,8 @@ pub fn write(
         "Export started",
         serde_json::json!({"operation":context}),
     );
-    let result = if !errors.is_empty() {
-        Err(Box::new(CameraSettingsError(errors)) as Box<dyn std::error::Error + Send + Sync>)
+    let result = if let Err(error) = checked {
+        Err(error)
     } else {
         phase = "prepare-output";
         foveonic::importing::write_output(&export.path, export.conflict, |temporary| {
@@ -162,74 +161,6 @@ pub fn write(
         }
         Err(error) => Err(support::reported_error("export.write", error, context)),
     }
-}
-
-#[derive(Debug)]
-struct CameraSettingsError(Vec<Box<dyn std::error::Error + Send + Sync>>);
-impl std::fmt::Display for CameraSettingsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (index, error) in self.0.iter().enumerate() {
-            if index != 0 {
-                write!(f, "; ")?;
-            }
-            write!(f, "{error}")?;
-        }
-        Ok(())
-    }
-}
-impl std::error::Error for CameraSettingsError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.0
-            .first()
-            .map(|error| error.as_ref() as &(dyn std::error::Error + 'static))
-    }
-}
-
-/// Camera defaults fill missing choices only. Otherwise loading metadata
-/// could overwrite a launch override or an edit made while the photo was opening.
-pub fn resolve_camera_settings(settings: &mut Settings, metadata: &Metadata) -> Vec<String> {
-    resolve_camera_settings_typed(settings, metadata)
-        .into_iter()
-        .map(|error| error.to_string())
-        .collect()
-}
-
-fn resolve_camera_settings_typed(
-    settings: &mut Settings,
-    metadata: &Metadata,
-) -> Vec<Box<dyn std::error::Error + Send + Sync>> {
-    let mut errors = Vec::new();
-    let capabilities = foveonic::render::ControlCapabilities::from_metadata(metadata).ok();
-    let color_required =
-        capabilities.map_or(!settings.is_monochrome(), |c| c.color_mode_active(settings));
-    let wb_required = capabilities.is_none_or(|c| c.white_balance_active(settings));
-    for (value, recorded, required) in [
-        (
-            &mut settings.white_balance,
-            capabilities.map_or_else(
-                || metadata.recorded_white_balance(),
-                |c| c.default_white_balance(metadata),
-            ),
-            wb_required,
-        ),
-        (
-            &mut settings.color_mode,
-            capabilities.map_or_else(
-                || metadata.recorded_color_mode(),
-                |c| c.default_color_mode(metadata),
-            ),
-            color_required,
-        ),
-    ] {
-        if value.is_empty() {
-            match recorded {
-                Ok(name) => *value = name,
-                Err(error) if required => errors.push(error),
-                Err(_) => (),
-            }
-        }
-    }
-    errors
 }
 
 #[cfg(test)]

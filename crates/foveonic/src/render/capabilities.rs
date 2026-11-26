@@ -2,6 +2,7 @@
 
 use super::{
     ColorFieldControls, HighlightMode, MerrillNoiseMethod, Rendering, RepairThreshold, Settings,
+    AS_SHOT,
 };
 use crate::source::{Metadata, ProcessingFamily, Result};
 
@@ -91,23 +92,6 @@ impl ControlCapabilities {
         }
     }
 
-    /// Resolve the editable optional container without enabling another inactive group.
-    pub fn editable_noise_controls_for_metadata(
-        &self,
-        metadata: &Metadata,
-        authored: Option<crate::noise::Controls>,
-    ) -> Result<crate::noise::Controls> {
-        if let Some(controls) = authored {
-            return Ok(controls);
-        }
-        let mut controls = self.default_noise_controls_for_metadata(metadata)?;
-        if self.family == ProcessingFamily::Merrill {
-            controls.noise_enabled = false;
-            controls.detail_enabled = false;
-        }
-        Ok(controls)
-    }
-
     /// Capture modes and saved X3F choices initialize the rendering independently of color looks.
     pub fn default_rendering(&self, metadata: &Metadata) -> Result<Rendering> {
         if self.family == ProcessingFamily::Quattro {
@@ -128,7 +112,7 @@ impl ControlCapabilities {
     }
 
     /// Saved header presets take precedence over the original capture descriptions.
-    pub fn default_white_balance(&self, metadata: &Metadata) -> Result<String> {
+    pub(crate) fn default_white_balance(&self, metadata: &Metadata) -> Result<String> {
         if self.family == ProcessingFamily::Quattro {
             super::recipes::quattro::default_white_balance(metadata)
         } else {
@@ -136,7 +120,7 @@ impl ControlCapabilities {
         }
     }
 
-    pub fn default_color_mode(&self, metadata: &Metadata) -> Result<String> {
+    pub(crate) fn default_color_mode(&self, metadata: &Metadata) -> Result<String> {
         if self.family == ProcessingFamily::Quattro {
             super::recipes::quattro::default_color_mode(metadata)
         } else if self.recorded_monochrome(metadata) {
@@ -148,7 +132,7 @@ impl ControlCapabilities {
 
     /// Initialize a new photo before applying saved edits or explicit overrides.
     /// Existing editing settings must not be passed to this initializer.
-    pub fn apply_capture_defaults(
+    pub(crate) fn apply_capture_defaults(
         &self,
         settings: &mut Settings,
         metadata: &Metadata,
@@ -157,9 +141,6 @@ impl ControlCapabilities {
             super::recipes::quattro::apply_capture_defaults(settings, metadata)?;
         } else if self.family == ProcessingFamily::Merrill {
             settings.reconstruction = Some(self.default_noise_controls());
-            if settings.color_mode.is_empty() && self.recorded_monochrome(metadata) {
-                settings.color_mode = self.default_color_mode(metadata)?;
-            }
         }
         Ok(())
     }
@@ -202,8 +183,31 @@ impl ControlCapabilities {
         self.family == ProcessingFamily::Classic || !settings.is_monochrome()
     }
 
+    /// White-balance options in camera order, with As Shot first.
+    pub fn white_balance_options<'a>(&self, metadata: &'a Metadata) -> Vec<&'a str> {
+        std::iter::once(AS_SHOT)
+            .chain(metadata.white_balance_presets())
+            .collect()
+    }
+
+    /// Color-mode options in camera order, with As Shot first.
+    pub fn color_mode_options<'a>(&self, metadata: &'a Metadata) -> Vec<&'a str> {
+        std::iter::once(AS_SHOT)
+            .chain(self.color_mode_presets(metadata))
+            .collect()
+    }
+
+    /// Display name of a white-balance or color-mode option.
+    pub fn option_label(option: &str) -> &str {
+        if option == AS_SHOT {
+            "As Shot"
+        } else {
+            option
+        }
+    }
+
     /// Camera modes whose complete recipe is available.
-    pub fn color_mode_presets<'a>(&self, metadata: &'a Metadata) -> Vec<&'a str> {
+    pub(crate) fn color_mode_presets<'a>(&self, metadata: &'a Metadata) -> Vec<&'a str> {
         if self.family == ProcessingFamily::Quattro {
             super::recipes::quattro::color_mode_presets(metadata)
         } else {
@@ -258,6 +262,10 @@ impl ControlCapabilities {
         }
         if !self.noise_adjustments {
             settings.reconstruction = settings.reconstruction.map(|_| Default::default());
+        } else if self.family == ProcessingFamily::Merrill && settings.reconstruction.is_none() {
+            // Off is stored as controls with noise disabled. Missing controls,
+            // as 0.3.0 to 0.4.0 saved an off checkbox, mean the camera default.
+            settings.reconstruction = Some(self.default_noise_controls());
         }
         settings.highlight_amount = None;
         settings.monochrome_smoothness = None;

@@ -23,7 +23,8 @@ pub(in crate::render) fn validate_photographic(settings: &Settings) -> Result<()
     if !(-2. ..=2.).contains(&settings.exposure) {
         return Err("Quattro exposure must be in -2..2 EV".into());
     }
-    if !settings.color_mode.is_empty() && !appearance::MODES.contains(&settings.color_mode.as_str())
+    if settings.color_mode != crate::render::AS_SHOT
+        && !appearance::MODES.contains(&settings.color_mode.as_str())
     {
         return Err("this Quattro color mode is not implemented".into());
     }
@@ -49,7 +50,9 @@ pub(in crate::render) fn normalize_photographic(settings: &mut Settings) -> bool
     supported.exposure_auto = settings.exposure_auto;
     supported.exposure_auto_compensation = settings.exposure_auto_compensation;
     supported.prevent_color_clipping = settings.prevent_color_clipping;
-    if settings.color_mode.is_empty() || appearance::MODES.contains(&settings.color_mode.as_str()) {
+    if settings.color_mode == crate::render::AS_SHOT
+        || appearance::MODES.contains(&settings.color_mode.as_str())
+    {
         supported.color_mode.clone_from(&settings.color_mode);
     }
     supported.processing_sections = settings.processing_sections;

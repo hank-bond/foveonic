@@ -500,7 +500,7 @@ fn automatic_manual_and_export_choices_round_trip_without_changing_numeric_recip
 }
 
 #[test]
-fn camera_validation_requires_only_active_photographic_choices() {
+fn camera_validation_accepts_recorded_as_shot_and_ignores_inactive_choices() {
     let mut metadata = crate::source::Metadata {
         processing_version: None,
         width: 1,
@@ -518,15 +518,15 @@ fn camera_validation_requires_only_active_photographic_choices() {
     );
     settings.color_mode.clear();
     assert!(
-        settings.validate_for_camera(&metadata).is_err(),
-        "Classic mono color mode is active"
+        settings.validate_for_camera(&metadata).is_ok(),
+        "Classic As Shot falls back to the camera's Standard mode"
     );
     metadata
         .properties
         .insert("CAMMODEL".into(), "SIGMA DP2 Merrill".into());
     assert!(
         settings.validate_for_camera(&metadata).is_err(),
-        "Merrill mono needs WB"
+        "Merrill mono uses WB, and this file recorded none"
     );
     settings.white_balance = "Sunlight".into();
     assert!(
@@ -978,4 +978,51 @@ fn corrections_bypass_is_saved_scoped_and_preserves_noise_and_authored_values() 
             .amount,
         25.
     );
+}
+
+#[test]
+fn quattro_as_shot_waits_for_recorded_white_balance_and_keeps_explicit_choices() {
+    use crate::source::PropertyList;
+    let mut metadata = Metadata {
+        processing_version: Some([3, 1, 2, 0]),
+        width: 5888,
+        height: 3672,
+        rotation: 0,
+        properties: [
+            ("CAMMODEL".into(), "SIGMA dp2 Quattro".into()),
+            ("WB_DESC".into(), "Auto".into()),
+            ("CM_DESC".into(), "Standard".into()),
+        ]
+        .into(),
+        matrices: Default::default(),
+        lists: [(
+            "ColorModeCompensations".into(),
+            PropertyList::new(vec![("Standard".into(), "standard".into())]).unwrap(),
+        )]
+        .into(),
+    };
+    let capabilities = crate::render::ControlCapabilities::from_metadata(&metadata).unwrap();
+    let mut settings = Settings::new(crate::render::AS_SHOT, crate::render::AS_SHOT);
+    capabilities.normalize(&mut settings);
+    assert!(settings.white_balance.is_empty());
+    // No recorded white-balance preset: As Shot cannot render, and the request is unchanged.
+    assert_eq!(
+        settings.with_camera_choices(&metadata).white_balance,
+        crate::render::AS_SHOT
+    );
+    assert!(settings.validate_for_camera(&metadata).is_err());
+    metadata.lists.insert(
+        "WhiteBalanceGains".into(),
+        PropertyList::new(vec![("Auto".into(), "auto_gain".into())]).unwrap(),
+    );
+    let resolved = settings.with_camera_choices(&metadata);
+    assert_eq!(resolved.white_balance, "Auto");
+    assert_eq!(resolved.color_mode, "Standard");
+    assert!(settings.white_balance.is_empty() && settings.color_mode.is_empty());
+    settings.white_balance = "Shade".into();
+    settings.color_mode = "Vivid".into();
+    capabilities.normalize(&mut settings);
+    let resolved = settings.with_camera_choices(&metadata);
+    assert_eq!(resolved.white_balance, "Shade");
+    assert_eq!(resolved.color_mode, "Vivid");
 }

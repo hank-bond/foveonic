@@ -18,7 +18,7 @@ fn directional_banding_is_merrill_only_and_preserves_its_inactive_choices() {
     }
     let cap = capabilities("SIGMA DP2 Merrill");
     for rendering in [Rendering::Color, Rendering::Monochrome] {
-        let mut settings = Settings::new("Sunlight", "Standard");
+        let mut settings = merrill_settings();
         settings.rendering = rendering;
         settings.merrill_banding.rows.bands[1].strength = 0.7;
         let before = settings.clone();
@@ -48,14 +48,15 @@ fn merrill_monochrome_capture_starts_mono_with_a_normal_inactive_color_look() {
         cap.default_rendering(&metadata).unwrap(),
         Rendering::Monochrome
     );
+    // As Shot names Standard, the normal look, for a Monochrome capture.
     assert_eq!(cap.default_color_mode(&metadata).unwrap(), "Standard");
     let mut settings = crate::render::camera_settings(&metadata, None).unwrap();
     assert!(settings.is_monochrome());
-    assert_eq!(settings.color_mode, "Standard");
+    assert_eq!(settings.color_mode, crate::render::AS_SHOT);
     assert_eq!(settings.saturation, 1.);
     settings.rendering = Rendering::Color;
     assert!(!cap.normalize(&mut settings));
-    assert_eq!(settings.color_mode, "Standard");
+    assert_eq!(settings.color_mode, crate::render::AS_SHOT);
     assert_eq!(settings.saturation, 1.);
     settings.color_mode = "Vivid".into();
     settings.saturation = 1.4;
@@ -67,12 +68,20 @@ fn merrill_monochrome_capture_starts_mono_with_a_normal_inactive_color_look() {
     assert_eq!(settings.saturation, 1.4);
     let explicit = crate::render::camera_settings(&metadata, Some(Rendering::Color)).unwrap();
     assert_eq!(explicit.rendering, Rendering::Color);
-    assert_eq!(explicit.color_mode, "Standard");
+    assert_eq!(explicit.color_mode, crate::render::AS_SHOT);
     assert_eq!(explicit.saturation, 1.);
     let mut authored = Settings::new("Sunlight", "Vivid");
     cap.apply_capture_defaults(&mut authored, &metadata)
         .unwrap();
     assert_eq!(authored.color_mode, "Vivid");
+}
+
+/// A saved Merrill recipe always carries noise controls.
+fn merrill_settings() -> Settings {
+    Settings {
+        reconstruction: Some(Default::default()),
+        ..Settings::new("Sunlight", "Standard")
+    }
 }
 
 fn capabilities(model: &str) -> ControlCapabilities {
@@ -114,7 +123,7 @@ fn multiscale_methods_are_rejected_and_normalized_outside_merrill() {
         let mut settings = Settings {
             rendering,
             merrill_noise_method: MerrillNoiseMethod::MultiscaleRowsAndColumns,
-            ..Settings::new("Sunlight", "Standard")
+            ..merrill_settings()
         };
         assert!(capabilities.validate(&settings).is_ok());
         assert!(!capabilities.normalize(&mut settings));
@@ -192,7 +201,7 @@ fn classic_resets_noise_adjustments_without_disabling_reconstruction() {
 }
 
 #[test]
-fn fresh_merrill_defaults_enable_noise_without_reenabling_saved_off_choices() {
+fn merrill_recipes_without_noise_controls_get_the_camera_default_and_keep_an_explicit_off() {
     let metadata = Metadata {
         processing_version: None,
         width: 4928,
@@ -218,15 +227,20 @@ fn fresh_merrill_defaults_enable_noise_without_reenabling_saved_off_choices() {
         br#"{"format":"foveonic-editing","version":1,"settings":{"reconstruction":null}}"#,
     )
     .unwrap();
-    assert!(!capabilities.normalize(&mut saved));
-    assert_eq!(saved.reconstruction, None);
+    assert!(capabilities.normalize(&mut saved));
+    assert_eq!(saved.reconstruction, fresh.reconstruction);
     assert!(capabilities.validate(&saved).is_ok());
+    let mut off = fresh.clone();
+    off.reconstruction.as_mut().unwrap().noise_enabled = false;
+    let before = off.clone();
+    assert!(!capabilities.normalize(&mut off));
+    assert_eq!(off, before);
 }
 
 #[test]
 fn merrill_retains_its_supported_adjustments() {
     let capabilities = capabilities("SIGMA DP2 Merrill");
-    let mut settings = Settings::new("Sunlight", "Standard");
+    let mut settings = merrill_settings();
     settings.rendering = Rendering::Monochrome;
     settings.row_correction = false;
     settings.highlight_threshold_ev = Some(1.);

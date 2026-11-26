@@ -9,7 +9,6 @@ use crate::nodes::{
     sensor::{banding, calibration, camera_repair, color_field, despeckle, highlight},
 };
 use crate::render::TiffColorSpace;
-use std::path::PathBuf;
 
 pub enum Operation {
     HighlightEvidence(crate::nodes::sensor::highlight_restoration::Evidence),
@@ -290,13 +289,6 @@ pub enum Operation {
         space: ColorSpace,
         destination: TiffColorSpace,
     },
-    WriteImage {
-        format: crate::output::Format,
-        options: crate::output::EncodingOptions,
-        path: PathBuf,
-        params: EncodeParams,
-        space: TiffColorSpace,
-    },
 }
 
 /// Native encoding reads only its crop. Resizing and affine sampling retain
@@ -350,7 +342,6 @@ impl Operation {
             Self::AdvancedColor { params, .. } => {
                 retained.add_bytes(std::mem::size_of_val(params.as_ref()));
             }
-            Self::WriteImage { path, .. } => retained.add_bytes(path.capacity()),
             Self::Source
             | Self::RenderedInput { .. }
             | Self::Black(_)
@@ -804,16 +795,6 @@ impl Operation {
                 destination,
                 ..
             } => Key::pod(params).with(&(*destination as u32)),
-            Self::WriteImage {
-                params,
-                space,
-                format,
-                options,
-                ..
-            } => Key::pod(params)
-                .with(&(*space as u32))
-                .with(&(*format as u32))
-                .slice(&options.key()),
         };
         // Compact tile buffers depend on their window. Only projected images
         // also depend on the physical output rectangle within those tiles.
@@ -955,7 +936,6 @@ impl Operation {
             Self::TonalRanges { .. } => "TonalRanges",
             Self::Tone { .. } => "Tone",
             Self::Encode { .. } => "Encode",
-            Self::WriteImage { .. } => "WriteImage",
         }
     }
 
@@ -1089,7 +1069,6 @@ impl Operation {
             Self::TonalRanges { .. } => "submit tonal range exposure",
             Self::Tone { .. } => "submit tone",
             Self::Encode { .. } => "submit encode",
-            Self::WriteImage { .. } => "image file",
         }
     }
 
@@ -1404,7 +1383,6 @@ impl Operation {
             Self::Encode {
                 space, destination, ..
             } => (vec![ToneMappedRgb(*space)], EncodedRgb16(*destination)),
-            Self::WriteImage { space, .. } => (vec![EncodedRgb16(*space)], File),
         }
     }
 }
@@ -1692,7 +1670,6 @@ impl Operation {
             Self::SharpSignal { .. } => "detail.signal",
             Self::Sharpen { .. } => "sharpen.rgb",
             Self::Encode { .. } => "export.rgb16",
-            Self::WriteImage { .. } => "export.file",
         }
     }
 }

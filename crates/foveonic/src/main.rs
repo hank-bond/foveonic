@@ -6,7 +6,6 @@ use foveonic::profile::{self, Mode, Profile};
 use foveonic::render::RepairThreshold;
 use foveonic::render::{Engine, Settings};
 use foveonic::source::{Result, Source};
-use options::parse_settings;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io::Write;
@@ -20,9 +19,9 @@ const USAGE: &str = "usage: foveonic inspect INPUT.x3f
 
 Batch directories are scanned nonrecursively for .x3f files. Outputs use each input's
 stem with the chosen extension (TIFF by default). Existing outputs and duplicate output names are rejected.
-Color requires --wb and --mode. Merrill monochrome requires --wb.
-Classic monochrome requires --mode and ignores --wb. Merrill --mono-* options
-select monochrome automatically. Classic uses its camera mixture and rejects overrides.
+Each photograph starts from its camera defaults, as in the app. --wb and --mode
+default to As Shot, the choices recorded in the file. Classic monochrome ignores
+--wb. Merrill --mono-* options select monochrome automatically. Classic uses its camera mixture and rejects overrides.
 Quattro supports white balance, camera color modes, tone, saturation,
 chroma and luminance noise, native Smooth/Crisp detail and sharpening, with camera-derived ISO controls.
 
@@ -81,7 +80,7 @@ Options (also available for batch):
   --row-correction          Reduce additive per-row sensor banding (default on)
   --no-row-correction       Disable per-row banding correction
   --repair-badness MIN       Enable ordered repair with a manual cutoff in 0..15
-  --reconstruction          Enable full-resolution noise/detail processing
+  --reconstruction          Enable noise/detail processing (on by default for Merrill)
   --fine-detail FACTOR      Fine texture restoration 0..2, default 1
   --coarse-detail FACTOR    Coarse texture restoration 0..2, default 1
   --fine-size FACTOR        Fine boundary size 0.5..2, default 1
@@ -415,8 +414,7 @@ fn run() -> Result<()> {
             } else if format != foveonic::output::Format::Dng {
                 return Err("export-dng requires a .dng destination".into());
             }
-            let control_args = control_args.into_iter();
-            let (_settings, extra, profiling) = parse_settings(control_args.clone())?;
+            let (_settings, extra, profiling) = options::parse_args(control_args.iter().cloned())?;
             if !extra.is_empty() {
                 return Err(USAGE.into());
             }
@@ -425,7 +423,7 @@ fn run() -> Result<()> {
             }
             let source = open_source(Path::new(&path))?;
             let (settings, _, _) =
-                options::parse_settings_for_camera(control_args, &source.metadata)?;
+                options::parse_settings_for_camera(&control_args, &source.metadata)?;
             foveonic::support::update_context(
                 "command",
                 serde_json::json!({"command":command.to_string_lossy(),"source":Path::new(&path).to_string_lossy(),"destination":destination.to_string_lossy(),"effective_settings":foveonic::support::settings_snapshot(&settings),"format":format,"encoding":encoding}),
@@ -514,8 +512,7 @@ fn run() -> Result<()> {
             let (format, encoding, control_args) = parse_export_options(args)?;
             let format = format.unwrap_or(foveonic::output::Format::Tiff);
             encoding.validate(format)?;
-            let control_args = control_args.into_iter();
-            let (_settings, inputs, profiling) = parse_settings(control_args.clone())?;
+            let (_settings, inputs, profiling) = options::parse_args(control_args.iter().cloned())?;
             if inputs.is_empty() {
                 return Err(USAGE.into());
             }
@@ -542,7 +539,7 @@ fn run() -> Result<()> {
                     }) as Box<dyn std::error::Error + Send + Sync>
                 })?;
                 let (settings, _, _) =
-                    options::parse_settings_for_camera(control_args.clone(), &source.metadata)?;
+                    options::parse_settings_for_camera(&control_args, &source.metadata)?;
                 let size = convert(
                     &engine,
                     &source,
@@ -610,7 +607,7 @@ mod tests {
 
     #[test]
     fn monochrome_cli_resolves_actual_layer_proportions_without_a_color_mode() {
-        let parse = |args: &str| parse_settings(args.split_whitespace().map(Into::into));
+        let parse = |args: &str| options::parse_args(args.split_whitespace().map(Into::into));
         let s = parse("--wb Sunlight --mono-mix 0,0,1 --mono-noise 0 --mono-banding 4")
             .unwrap()
             .0;
@@ -637,12 +634,19 @@ mod tests {
         ] {
             assert!(parse(&format!("--wb Sunlight {bad}")).is_err(), "{bad}");
         }
-        assert!(parse("--wb Sunlight --rendering color").is_err());
+        // An omitted color mode stays As Shot; the photograph supplies it at render.
+        assert_eq!(
+            parse("--wb Sunlight --rendering color")
+                .unwrap()
+                .0
+                .color_mode,
+            foveonic::render::AS_SHOT
+        );
     }
 
     #[test]
     fn controls_are_shared_and_defaults_enable_independent_corrections() {
-        let parse = |args: &str| parse_settings(args.split_whitespace().map(OsString::from));
+        let parse = |args: &str| options::parse_args(args.split_whitespace().map(OsString::from));
         let (neutral, paths, profiling) = parse("--wb Sunlight --mode Standard").unwrap();
         assert_eq!(profiling, Mode::Off);
         assert_eq!(
@@ -847,7 +851,10 @@ mod tests {
                 "{invalid}"
             );
         }
-        assert!(parse("--wb Sunlight").is_err());
+        assert_eq!(
+            parse("").unwrap().0.white_balance,
+            foveonic::render::AS_SHOT
+        );
     }
 
     #[test]
@@ -918,7 +925,7 @@ fn color_sensitivity_cli_preserves_the_selected_rendering() {
     ]
     .into_iter()
     .map(OsString::from);
-    let (settings, _, _) = parse_settings(args).unwrap();
+    let (settings, _, _) = options::parse_args(args).unwrap();
     assert_eq!(settings.rendering, foveonic::render::Rendering::Color);
     assert_eq!(
         settings.photographic.color_editor,

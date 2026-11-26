@@ -44,6 +44,19 @@ pub use scale::Scale;
 pub(crate) use scale::WorkingGrid;
 pub use scheduler::{Host, Interruption, Job, Outcome, Render, Scheduler, Start};
 pub use working_set::{PhotoInUse, PhotoKey, Purpose, Resolution, WorkingSet};
+
+/// Finished photograph samples on the CPU, ready for an encoder or a display.
+pub struct EncodedImage {
+    /// Little-endian RGB16 with one padding component per pixel, rows top to bottom.
+    pub samples: Vec<u8>,
+    pub color_space: TiffColorSpace,
+    /// Width and height in pixels.
+    pub extent: [u32; 2],
+}
+impl EncodedImage {
+    pub const BYTES_PER_PIXEL: usize = 8;
+}
+
 /// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.
 pub fn native_extent(metadata: &crate::source::Metadata) -> crate::source::Result<[u32; 2]> {
     recipes::native_extent(metadata)
@@ -77,6 +90,7 @@ pub use settings::{
     DehazeControls, HighlightMode, MerrillNoiseMethod, MonochromeControls, PerceptualControls,
     PhotographicControls, PhotographicMethod, ProcessingSections, Rendering, RepairThreshold,
     Settings, TiffColorSpace, TonalRanges, ToneControls, UniversalSharpening, WhiteBalanceBias,
+    AS_SHOT,
 };
 
 /// A completed working-photo render or a request to recover missing reduced-photo inputs.
@@ -588,12 +602,43 @@ impl Engine {
         options: crate::output::EncodingOptions,
         profile: &mut Profile,
     ) -> Result<[u32; 2]> {
-        options.validate(format)?;
-        profile.mode.check_gpu_features(self.device().features())?;
-        self.check_owner(image)?;
         if path.exists() {
             return Err("output file already exists".into());
         }
+        let encoded = self.encode(image, options.native_jxl(format), profile)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        crate::output::write(
+            std::io::BufWriter::new(file),
+            &encoded,
+            format,
+            options,
+            &image.metadata,
+            profile,
+        )?;
+        Ok(encoded.extent)
+    }
+
+    /// Returns the oriented, cropped photograph in its destination color space.
+    pub fn encode_image(
+        &self,
+        image: &RenderedImage,
+        profile: &mut Profile,
+    ) -> Result<EncodedImage> {
+        self.encode(image, false, profile)
+    }
+
+    /// Native JXL stores pure-gamma ProPhoto samples instead of the usual transfer.
+    fn encode(
+        &self,
+        image: &RenderedImage,
+        native_jxl: bool,
+        profile: &mut Profile,
+    ) -> Result<EncodedImage> {
+        profile.mode.check_gpu_features(self.device().features())?;
+        self.check_owner(image)?;
         let mut params = image.params();
         let Space::ToneMappedRgb(space) = image.description.space else {
             return Err("photographic export requires tone-mapped RGB".into());
@@ -611,7 +656,7 @@ impl Engine {
                 .unwrap_or(crate::image::ColorSpace::Srgb)
                 .into()
         });
-        params.output[2] = destination.encoding_code(options.native_jxl(format));
+        params.output[2] = destination.encoding_code(native_jxl);
         // Neutral mono has the same white in every destination. Avoid adding
         // rounding differences between its otherwise equal channels.
         params.output[3] = u32::from(
@@ -625,24 +670,24 @@ impl Engine {
             },
             &[input],
         )?;
-        let file = graph.add(
-            Operation::WriteImage {
-                format,
-                options,
-                path: path.to_owned(),
-                params,
-                space: destination,
-            },
-            &[encoded],
-        )?;
-        self.run_graph(
-            Input::Rendered(image),
-            &graph,
-            &[file],
-            profile,
-            &mut Execution::default(),
-        )?;
-        Ok(image.view().extent)
+        let value = self
+            .run_graph(
+                Input::Rendered(image),
+                &graph,
+                &[encoded],
+                profile,
+                &mut Execution::default(),
+            )?
+            .pop()
+            .ok_or("missing encoded image")?;
+        let samples = profile.measure("readback wait and copy", || {
+            self.gpu.readback(&value.buffer)
+        })?;
+        Ok(EncodedImage {
+            samples,
+            color_space: destination,
+            extent: [params.output[0], params.output[1]],
+        })
     }
 
     /// Materializes the logical view as an RGBA32Float texture on GPU.

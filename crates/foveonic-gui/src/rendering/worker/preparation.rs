@@ -1,10 +1,7 @@
 //! Prepares ready decoded neighbors during idle time using the render worker's existing owners.
 
 use super::processing::Photos;
-use crate::{
-    export::resolve_camera_settings, rendering::request::camera_preview_scale,
-    sidecars::CachedRecipes,
-};
+use crate::{rendering::request::camera_preview_scale, sidecars::CachedRecipes};
 use foveonic::{
     decode_cache::Cache,
     diagnostics::{self as trace, Category},
@@ -137,7 +134,7 @@ impl Preparation {
                 if source.origin() != &origin || cancel() {
                     return Ok(false);
                 }
-                if !resolve_camera_settings(&mut settings, &source.metadata).is_empty() {
+                if settings.validate_for_camera(&source.metadata).is_err() {
                     return Ok(false);
                 }
                 settings.working_scale = camera_preview_scale(

@@ -3,74 +3,25 @@
 use foveonic::{
     profile::Mode,
     render::{
-        ColorFieldApproach, HighlightMode, MerrillBandingMethod, MerrillNoiseMethod,
-        MonochromeControls, Rendering, RepairThreshold, Settings, TiffColorSpace,
+        camera_settings, ColorFieldApproach, ControlCapabilities, HighlightMode,
+        MerrillBandingMethod, MerrillNoiseMethod, MonochromeControls, Rendering, RepairThreshold,
+        Settings, TiffColorSpace,
     },
     source::Result,
 };
 use std::{ffi::OsString, path::PathBuf};
 
+/// Apply command-line options on top of `settings`. Values are checked here.
+/// Camera choices are checked when the photograph renders. `noise_defaults`
+/// fills the noise controls a flag edits when `settings` has none.
 pub(crate) fn parse_settings(
-    args: impl Iterator<Item = OsString>,
-) -> Result<(Settings, Vec<PathBuf>, Mode)> {
-    parse_settings_with_noise_defaults(args, Default::default(), Settings::new("", ""))
-}
-
-/// Seed only unspecified noise fields from the selected camera's recipe.
-/// Parsing each batch input separately preserves defaults in mixed-family jobs.
-pub(crate) fn parse_settings_for_camera(
-    args: impl Iterator<Item = OsString>,
-    metadata: &foveonic::source::Metadata,
-) -> Result<(Settings, Vec<PathBuf>, Mode)> {
-    let args: Vec<_> = args.collect();
-    let capabilities = foveonic::render::ControlCapabilities::from_metadata(metadata)?;
-    let defaults = capabilities.default_noise_controls_for_metadata(metadata)?;
-    let mut initial = Settings::new("", "");
-    initial.rendering = capabilities.default_rendering(metadata)?;
-    // Select the initial rendering before reading its saved tonal defaults.
-    // The ordinary parser still validates and applies every explicit value.
-    for (index, flag) in args.iter().enumerate() {
-        match flag.to_str() {
-            Some("--rendering") => match args.get(index + 1).and_then(|v| v.to_str()) {
-                Some("color") => initial.rendering = Rendering::Color,
-                Some("monochrome") => initial.rendering = Rendering::Monochrome,
-                _ => {}
-            },
-            Some("--mono-mix" | "--mono-noise" | "--mono-banding" | "--mono-smoothness") => {
-                initial.rendering = Rendering::Monochrome
-            }
-            _ => {}
-        }
-    }
-    capabilities.apply_capture_defaults(&mut initial, metadata)?;
-    let (mut settings, paths, profiling) =
-        if capabilities.family == foveonic::source::ProcessingFamily::Quattro {
-            parse_settings_with_noise_defaults(args.into_iter(), defaults, initial)?
-        } else {
-            parse_settings(args.into_iter())?
-        };
-    if metadata.processing_family()? == foveonic::source::ProcessingFamily::Quattro {
-        if capabilities.white_balance_active(&settings) && settings.white_balance.is_empty() {
-            settings.white_balance =
-                foveonic::render::ControlCapabilities::from_metadata(metadata)?
-                    .default_white_balance(metadata)?;
-        }
-        if capabilities.color_mode_active(&settings) && settings.color_mode.is_empty() {
-            settings.color_mode = foveonic::render::ControlCapabilities::from_metadata(metadata)?
-                .default_color_mode(metadata)?;
-        }
-    }
-    Ok((settings, paths, profiling))
-}
-
-pub(crate) fn parse_settings_with_noise_defaults(
-    args: impl Iterator<Item = OsString>,
-    noise_defaults: foveonic::noise::Controls,
+    args: &[OsString],
     mut settings: Settings,
+    noise_defaults: foveonic::noise::Controls,
 ) -> Result<(Settings, Vec<PathBuf>, Mode)> {
     let mut paths = Vec::new();
     let mut profiling = Mode::Off;
-    let mut args = args;
+    let mut args = args.iter().cloned();
     while let Some(arg) = args.next() {
         if arg == "--auto-exposure" {
             settings.exposure_auto = true;
@@ -365,13 +316,25 @@ pub(crate) fn parse_settings_with_noise_defaults(
             _ => return Err(format!("unknown option {flag}").into()),
         }
     }
-    if settings.is_monochrome() {
-        // Active WB and color-mode requirements depend on the loaded family.
-        settings.validate_values()?;
-    } else {
-        settings.validate()?;
-    }
+    settings.validate_values()?;
     Ok((settings, paths, profiling))
+}
+
+/// Start from the photograph's camera defaults, as the app does, then apply the options.
+pub(crate) fn parse_settings_for_camera(
+    args: &[OsString],
+    metadata: &foveonic::source::Metadata,
+) -> Result<(Settings, Vec<PathBuf>, Mode)> {
+    // A Quattro recipe leaves noise to the file's recorded controls, which an edit starts from.
+    let noise = ControlCapabilities::from_metadata(metadata)?
+        .default_noise_controls_for_metadata(metadata)?;
+    // Options may choose the rendering, which selects the camera's defaults.
+    let (chosen, _, _) = parse_settings(args, camera_settings(metadata, None)?, noise)?;
+    parse_settings(
+        args,
+        camera_settings(metadata, Some(chosen.rendering))?,
+        noise,
+    )
 }
 
 fn parse_method(value: &str) -> Result<foveonic::render::PhotographicMethod> {
@@ -382,18 +345,90 @@ fn parse_method(value: &str) -> Result<foveonic::render::PhotographicMethod> {
     }
 }
 
+/// Parse onto default settings, before any photograph's camera is known.
+pub(crate) fn parse_args(
+    args: impl IntoIterator<Item = OsString>,
+) -> Result<(Settings, Vec<PathBuf>, Mode)> {
+    let args: Vec<_> = args.into_iter().collect();
+    parse_settings(&args, Settings::default(), Default::default())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn command_line_starts_from_the_camera_defaults_the_app_uses() {
+        let metadata = foveonic::source::Metadata {
+            processing_version: None,
+            width: 1,
+            height: 1,
+            rotation: 0,
+            properties: [
+                ("CAMMODEL".into(), "SIGMA DP2 Merrill".into()),
+                ("CM_DESC".into(), "Monochrome".into()),
+            ]
+            .into(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        };
+        let parse = |args: &[&str]| {
+            let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+            parse_settings_for_camera(&args, &metadata).unwrap().0
+        };
+        let camera = foveonic::render::camera_settings(&metadata, None).unwrap();
+        let defaults = parse(&[]);
+        assert_eq!(defaults, camera);
+        assert_eq!(defaults.rendering, Rendering::Monochrome);
+        assert!(defaults.reconstruction.is_some(), "Merrill noise reduction");
+        assert_eq!(defaults.white_balance, foveonic::render::AS_SHOT);
+        let color = parse(&["--rendering", "color", "--wb", "Shade"]);
+        assert_eq!(
+            color,
+            Settings {
+                white_balance: "Shade".into(),
+                ..foveonic::render::camera_settings(&metadata, Some(Rendering::Color)).unwrap()
+            }
+        );
+    }
+
+    #[test]
+    fn a_quattro_noise_edit_keeps_the_files_other_noise_controls() {
+        let metadata = foveonic::source::Metadata {
+            processing_version: None,
+            width: 1,
+            height: 1,
+            rotation: 0,
+            properties: [("CAMMODEL".into(), "SIGMA dp2 Quattro".into())].into(),
+            matrices: Default::default(),
+            lists: Default::default(),
+        };
+        let recorded = ControlCapabilities::from_metadata(&metadata)
+            .unwrap()
+            .default_noise_controls_for_metadata(&metadata)
+            .unwrap();
+        let args: Vec<OsString> = ["--chroma-noise", "3"].map(OsString::from).to_vec();
+        let edited = parse_settings_for_camera(&args, &metadata)
+            .unwrap()
+            .0
+            .reconstruction
+            .unwrap();
+        assert_eq!(
+            edited,
+            foveonic::noise::Controls {
+                chroma: 3,
+                ..recorded
+            }
+        );
+        assert_ne!(recorded.detail, foveonic::noise::Controls::default().detail);
+    }
+
     #[test]
     fn explicit_noop_preserves_seeded_settings() {
         let mut initial = foveonic::render::Settings::new("Sunlight", "Standard");
         initial.reconstruction = Some(Default::default());
-        let (actual, _, _) = super::parse_settings_with_noise_defaults(
-            ["--exposure", "0"]
-                .into_iter()
-                .map(std::ffi::OsString::from),
-            Default::default(),
+        let (actual, _, _) = parse_settings(
+            &["--exposure", "0"].map(std::ffi::OsString::from),
             initial.clone(),
+            Default::default(),
         )
         .unwrap();
         assert_eq!(actual, initial);
@@ -401,7 +436,7 @@ mod tests {
     #[test]
     fn dehaze_cli_preserves_auto_and_manual_shadow_tones() {
         let parse = |args: &[&str]| {
-            super::parse_settings(
+            parse_args(
                 ["--wb", "Sunlight", "--mode", "Standard"]
                     .into_iter()
                     .chain(args.iter().copied())
@@ -427,7 +462,7 @@ mod tests {
     }
     #[test]
     fn base_response_is_an_independent_saved_choice() {
-        let (settings, _, _) = super::parse_settings(
+        let (settings, _, _) = parse_args(
             [
                 "--base-response",
                 "natural",
@@ -446,7 +481,7 @@ mod tests {
         );
         assert_eq!(settings.exposure, 0.);
         assert!(settings.tonal_ranges.is_neutral());
-        assert!(super::parse_settings(
+        assert!(parse_args(
             ["--base-response", "unknown"]
                 .into_iter()
                 .map(std::ffi::OsString::from),
@@ -476,7 +511,7 @@ mod tests {
             "--saturation-highlights",
             "-0.5",
         ];
-        let (s, _, _) = parse_settings(args.into_iter().map(OsString::from)).unwrap();
+        let (s, _, _) = parse_args(args.into_iter().map(OsString::from)).unwrap();
         assert_eq!(
             s.photographic.tone_method,
             foveonic::render::PhotographicMethod::Reference
@@ -501,7 +536,7 @@ mod tests {
                 "2.01"
             };
             for invalid in [upper, "-1.01", "NaN"] {
-                assert!(parse_settings(
+                assert!(parse_args(
                     ["--wb", "Sunlight", "--mode", "Standard", flag, invalid]
                         .into_iter()
                         .map(OsString::from)
@@ -517,7 +552,7 @@ mod tests {
             ("reference", MerrillBandingMethod::Reference),
             ("directional", MerrillBandingMethod::Directional),
         ] {
-            let (settings, _, _) = parse_settings(
+            let (settings, _, _) = parse_args(
                 [
                     "--wb",
                     "Sunlight",
@@ -536,12 +571,10 @@ mod tests {
         let mut initial = Settings::new("Sunlight", "Standard");
         initial.merrill_banding.enabled = false;
         initial.merrill_banding.rows.bands[0].strength = 0.5;
-        let (selected, _, _) = parse_settings_with_noise_defaults(
-            ["--merrill-banding-method", "directional"]
-                .into_iter()
-                .map(OsString::from),
-            Default::default(),
+        let (selected, _, _) = parse_settings(
+            &["--merrill-banding-method", "directional"].map(OsString::from),
             initial,
+            Default::default(),
         )
         .unwrap();
         assert!(selected.merrill_banding.enabled);
@@ -550,7 +583,7 @@ mod tests {
             vec!["--merrill-banding-method"],
             vec!["--merrill-banding-method", "invalid"],
         ] {
-            assert!(parse_settings(
+            assert!(parse_args(
                 ["--wb", "Sunlight", "--mode", "Standard"]
                     .into_iter()
                     .chain(args)
@@ -567,7 +600,7 @@ mod tests {
             ("rows", MerrillNoiseMethod::MultiscaleRows),
             ("rows-columns", MerrillNoiseMethod::MultiscaleRowsAndColumns),
         ] {
-            let (settings, _, _) = parse_settings(
+            let (settings, _, _) = parse_args(
                 [
                     "--wb",
                     "Sunlight",
@@ -585,7 +618,7 @@ mod tests {
             assert_eq!(settings.merrill_noise_method, method);
             assert_eq!(settings.reconstruction.unwrap().chroma, 3);
             assert!(settings.reconstruction.unwrap().noise_enabled);
-            let (method_only, _, _) = parse_settings(
+            let (method_only, _, _) = parse_args(
                 [
                     "--wb",
                     "Sunlight",
@@ -604,7 +637,7 @@ mod tests {
             vec!["--merrill-noise-method"],
             vec!["--merrill-noise-method", "invalid"],
         ] {
-            assert!(parse_settings(
+            assert!(parse_args(
                 ["--wb", "Sunlight", "--mode", "Standard"]
                     .into_iter()
                     .chain(args)
@@ -633,7 +666,7 @@ mod tests {
                 ColorFieldApproach::Faithful,
             ),
         ] {
-            let (settings, _, _) = parse_settings(
+            let (settings, _, _) = parse_args(
                 [
                     "--wb",
                     "Sunlight",
@@ -657,7 +690,7 @@ mod tests {
     fn color_field_cli_bounds_selectivity_and_preserves_strength_across_methods() {
         for value in ["auto", "-0.001", "1.001", "NaN", "inf"] {
             assert!(
-                parse_settings(
+                parse_args(
                     [
                         "--wb",
                         "Sunlight",
@@ -675,7 +708,7 @@ mod tests {
         }
         for method in ["classic", "color-field-local", "color-field-global"] {
             for (value, expected) in [("0", 0.), ("0.5", 0.5), ("1", 1.)] {
-                let (s, _, _) = parse_settings(
+                let (s, _, _) = parse_args(
                     [
                         "--wb",
                         "Sunlight",
@@ -702,7 +735,7 @@ mod tests {
             "--color-field-area",
             "--color-field-approach",
         ] {
-            assert!(parse_settings(
+            assert!(parse_args(
                 ["--wb", "Sunlight", "--mode", "Standard", flag, "1"]
                     .into_iter()
                     .map(OsString::from)
@@ -725,13 +758,13 @@ mod tests {
             "--color-field-selectivity",
             "0.5",
         ];
-        let (s, paths, _) = parse_settings(args.into_iter().map(OsString::from)).unwrap();
+        let (s, paths, _) = parse_args(args.into_iter().map(OsString::from)).unwrap();
         assert!(paths.is_empty());
         assert_eq!(s.highlight_mode, HighlightMode::ColorField);
         assert_eq!(s.highlight_threshold_ev, Some(1.25));
         assert_eq!(s.color_field.selectivity, 0.5);
         assert_eq!(s.color_field.approach, ColorFieldApproach::Faithful);
-        assert!(parse_settings(
+        assert!(parse_args(
             [
                 "--wb",
                 "Sunlight",
@@ -748,7 +781,7 @@ mod tests {
     #[test]
     fn texture_cli_preserves_amounts_sizes_and_validates_ranges() {
         let parse = |args: &[&str]| {
-            parse_settings(
+            parse_args(
                 ["--wb", "Sunlight", "--mode", "Standard"]
                     .into_iter()
                     .map(OsString::from)
@@ -790,7 +823,7 @@ mod saturation_policy_tests {
     #[test]
     fn cli_accepts_extended_amounts_and_one_shared_policy_without_selecting_reference_or_tone() {
         let parse = |flags: &[&str]| {
-            super::parse_settings(
+            super::parse_args(
                 ["--wb", "Sunlight", "--mode", "Standard"]
                     .iter()
                     .chain(flags.iter())
@@ -825,7 +858,7 @@ mod exposure_auto_tests {
     #[test]
     fn cli_keeps_auto_compensation_dynamic_and_manual_ev_turns_it_off() {
         let parse = |flags: &[&str]| {
-            super::parse_settings(
+            super::parse_args(
                 ["--wb", "Sunlight", "--mode", "Standard"]
                     .iter()
                     .chain(flags.iter())

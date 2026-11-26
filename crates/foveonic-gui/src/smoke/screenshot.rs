@@ -37,7 +37,7 @@ mod tests {
         assert_eq!(recipe.tools_width, 330.);
         assert!(recipe.zoom.is_finite() && recipe.zoom >= 1.);
         assert!(recipe.pan.iter().all(|value| (0. ..=1.).contains(value)));
-        recipe.settings.validate().unwrap();
+        recipe.settings.validate_values().unwrap();
         assert_eq!(recipe.settings.white_balance, "Sunlight");
         assert_eq!(recipe.settings.color_mode, "Standard");
         assert!(recipe.settings.reconstruction.is_some());

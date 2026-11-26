@@ -1301,6 +1301,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "foveonic-quicklook"
+version = "0.9.1"
+dependencies = [
+ "foveonic",
+]
+
+[[package]]
 name = "fs2"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

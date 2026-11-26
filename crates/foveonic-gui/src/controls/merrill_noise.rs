@@ -10,13 +10,7 @@ use foveonic::render::{
 
 pub(super) fn color(ui: &mut egui::Ui, settings: &Settings, rotation: u32) -> bool {
     let mut changed = false;
-    let mut controls = settings
-        .reconstruction
-        .unwrap_or(foveonic::noise::Controls {
-            noise_enabled: false,
-            detail_enabled: false,
-            ..Default::default()
-        });
+    let mut controls = settings.reconstruction.unwrap_or_default();
     changed |= crate::multi_edit_controls::choice(
         ui,
         "/reconstruction/noise_enabled",

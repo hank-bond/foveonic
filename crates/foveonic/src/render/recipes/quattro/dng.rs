@@ -35,20 +35,8 @@ pub(crate) fn prepare_appearance(
             notes: Some("Monochrome channel mix and spatial corrections are baked. Technical samples retain preceding 0..65535 code clamps; photographic tone is deferred."),
         });
     }
-    let recorded_balance;
-    let balance = if settings.white_balance.is_empty() {
-        recorded_balance = super::default_white_balance(metadata)?;
-        &recorded_balance
-    } else {
-        &settings.white_balance
-    };
-    let recorded_mode;
-    let mode = if settings.color_mode.is_empty() {
-        recorded_mode = super::default_color_mode(metadata)?;
-        &recorded_mode
-    } else {
-        &settings.color_mode
-    };
+    let balance = &settings.white_balance;
+    let mode = &settings.color_mode;
     let gains = super::calibration::white_balance(metadata, balance)?;
     let base = Matrix(super::calibration::color_matrix(
         metadata, balance, "Standard",

@@ -6,7 +6,6 @@ use crate::rendering::request::RenderRequest;
 use crate::rendering::request::RequestId;
 use crate::{
     editor::Rendition,
-    export::resolve_camera_settings,
     rendering::matching::{same_calibration_snapshot, same_pixel_settings},
 };
 use foveonic::render::ProcessingQuality;
@@ -158,8 +157,7 @@ impl Presentation {
         {
             return None;
         }
-        let mut settings = request.settings.clone();
-        resolve_camera_settings(&mut settings, &whole.images[0].metadata);
+        let settings = &request.settings;
         let changed = whole.framing != request.framing_preview
             || whole.settings.crop != settings.crop
             || whole.settings.rotation != settings.rotation;
@@ -170,7 +168,7 @@ impl Presentation {
                     &whole.images[0].metadata,
                 )
                 .ok()?
-            && same_pixel_settings(&whole.settings, &settings)
+            && same_pixel_settings(&whole.settings, settings)
         {
             return None;
         }
@@ -213,9 +211,8 @@ impl Presentation {
         {
             return Ok(None);
         }
-        let mut settings = request.settings.clone();
-        resolve_camera_settings(&mut settings, &whole.images[0].metadata);
-        if !same_pixel_settings(&whole.settings, &settings) {
+        let settings = &request.settings;
+        if !same_pixel_settings(&whole.settings, settings) {
             return Ok(None);
         }
         let changed = whole.framing != request.framing_preview
@@ -248,7 +245,7 @@ impl Presentation {
             artifacts: whole
                 .images
                 .iter()
-                .map(|image| image.compose(&settings))
+                .map(|image| image.compose(settings))
                 .collect::<Result<_>>()?,
             display,
         }))

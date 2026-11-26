@@ -163,15 +163,20 @@ fn classic_calibration_inspection_defers_color_selection() {
     let mut source = Source::open(std::env::var("CLASSIC_X3F").unwrap()).unwrap();
     let engine = Engine::test_executor();
     let mut profile = Profile::default();
-    for mode in ["", "unavailable"] {
+    // As Shot names the recorded mode; only the final image needs a usable one.
+    for (mode, final_renders) in [(crate::render::AS_SHOT, true), ("unavailable", false)] {
         let settings = Settings::new("Sunlight", mode);
         let artifacts = engine
             .render_artifacts(&source, &settings, &["calibration.layers"], &mut profile)
             .unwrap();
         assert_eq!(artifacts.len(), 1);
-        assert!(engine
-            .render_artifacts(&source, &settings, &["final"], &mut profile)
-            .is_err());
+        assert_eq!(
+            engine
+                .render_artifacts(&source, &settings, &["final"], &mut profile)
+                .is_ok(),
+            final_renders,
+            "{mode}"
+        );
     }
     let metadata = std::sync::Arc::make_mut(&mut source.metadata);
     metadata.lists.remove("ColorModeCompensations");

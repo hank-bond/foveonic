@@ -50,6 +50,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[performance-diagnostics](./performance-diagnostics.md)** Integrate the owner-approved Perfetto recorder and application scenarios, then validate causal coverage, capture completeness and overhead before renderer experiments.
 - **[photographic-help](./photographic-help.md)** Replace technical hover copy with photographic explanations, then review a small set of obvious A/B examples before expanding coverage.
 - **[quality-speed](./quality-speed.md)** Replace five preview modes with consistent Quality and Speed processing, dense intermediates and policy-aware reuse.
+- **[quick-look-previews](./quick-look-previews.md)** Ship Quick Look X3F previews in 0.9.2 with one source of a photograph's defaults for the app, the command line and the extensions.
 - **[reference-banding-verification](./reference-banding-verification.md)** Record native Merrill banding presets, reached pixel consumers, and the remaining application-export checks.
 - **[regional-bounds](./regional-bounds.md)** Inventory regional storage, active samples and delivered coverage before a separate geometry consolidation slice.
 - **[regional-preview-completion](./regional-preview-completion.md)** Complete native visible-region rendering for adaptive tone, monochrome and authored rotation, with whole-image comparisons and measured app latency.

@@ -49,7 +49,8 @@ pub fn numeric_settings(
     let capabilities = super::ControlCapabilities::from_metadata(metadata)?;
     let defaults = capabilities.editing_defaults(metadata, settings.rendering)?;
     let mut reset = defaults.clone();
-    reset.reconstruction = Some(capabilities.editable_noise_controls_for_metadata(metadata, None)?);
+    let noise = capabilities.default_noise_controls_for_metadata(metadata)?;
+    reset.reconstruction = Some(noise);
     let mut automatic = settings.clone();
     automatic.sharpening_enabled = true;
     automatic.sharpen_amount = None;
@@ -63,11 +64,7 @@ pub fn numeric_settings(
     reset.monochrome_smoothness = Some(defaults.monochrome_smoothness.unwrap_or(0.5));
     reset.dehaze.shadow = None;
     let mut numeric = settings.clone();
-    if numeric.reconstruction.is_none() {
-        numeric.reconstruction = Some(
-            capabilities.editable_noise_controls_for_metadata(metadata, settings.reconstruction)?,
-        );
-    }
+    numeric.reconstruction.get_or_insert(noise);
     if numeric.sharpen_amount.is_none() {
         numeric.sharpen_amount = reset.sharpen_amount;
     }

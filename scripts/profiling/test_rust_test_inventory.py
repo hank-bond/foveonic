@@ -140,6 +140,21 @@ class InventoryTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_inventory(document)
 
+    def test_library_built_for_linking_is_one_lib_test_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / 'tests'; exe.write_bytes(b'tests')
+            end = {'reason': 'build-finished', 'success': True}
+            for kind, expected in [(['staticlib', 'rlib'], 'lib'), (['lib', 'bin'], None)]:
+                artifact = {'reason': 'compiler-artifact', 'profile': {'test': True},
+                            'package_id': 'preview', 'target': {'name': 'preview', 'kind': kind},
+                            'executable': str(exe)}
+                text = '\n'.join(map(json.dumps, [artifact, end]))
+                with self.subTest(kind=kind):
+                    if expected is None:
+                        with self.assertRaises(ValueError): compiler_artifacts(text)
+                    else:
+                        self.assertEqual(compiler_artifacts(text)[0]['kind'], expected)
+
     def test_truncated_or_merged_compiler_builds_cannot_establish_discovery(self):
         with tempfile.TemporaryDirectory() as tmp:
             exe = Path(tmp) / 'tests'; exe.write_bytes(b'tests')
@@ -210,7 +225,7 @@ class InventoryTests(unittest.TestCase):
 
     def test_maintained_inventory_keeps_release_selection_and_corrected_variants(self):
         document = json.loads(MANIFEST.read_text()); validate_inventory(document)
-        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 502)
+        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 504)
         self.assertEqual(len(document['excluded']), 151)
         self.assertEqual(len(document['input_sets']['standard']), 27)
         groups = {name: g for g in document['groups'] for name in g['tests']}

@@ -72,7 +72,8 @@ jobs:
       - name: Build native test bundle
         run: |
           cargo xtask bundle
-          codesign --force --deep --sign - target/release/Foveonic.app
+          # Without --deep, the extension keeps its sandboxed signature from cargo xtask bundle.
+          codesign --force --sign - target/release/Foveonic.app
           codesign --verify --deep --strict target/release/Foveonic.app
 
       - name: Record source and package identity

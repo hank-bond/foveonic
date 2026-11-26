@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/docs-index", "crates/foveonic", "crates/foveonic-gui", "crates/xtask"]
+members = ["crates/docs-index", "crates/foveonic", "crates/foveonic-gui", "crates/foveonic-quicklook", "crates/xtask"]
 exclude = ["vendor/egui-wgpu", "vendor/tiff"]
 
 [patch.crates-io]

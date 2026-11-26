@@ -55,7 +55,6 @@ pub enum DataType {
     LinearRgb(ColorSpace),
     ToneMappedRgb(ColorSpace),
     EncodedRgb16(crate::render::TiffColorSpace),
-    File,
 }
 
 impl DataType {
@@ -93,7 +92,6 @@ impl DataType {
             | Self::RowTable
             | Self::ShadowColorGuide
             | Self::DehazeAnalysis
-            | Self::File
             | Self::FilteredTiles
             | Self::ConditionedTiles
             | Self::BandEstimates

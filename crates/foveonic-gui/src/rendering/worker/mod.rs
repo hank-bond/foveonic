@@ -13,7 +13,6 @@ use super::{
     matching::{presentation_changed, same_pixel_settings, same_request_context},
     request::RenderRequest,
 };
-use crate::export::resolve_camera_settings;
 use crate::rendering::request::RequestId;
 use eframe::egui;
 use foveonic::{
@@ -341,16 +340,15 @@ pub struct Worker {
     diagnostics: diagnostics::Handle,
     source_control: super::source_loader::Control,
 }
-/// Resolve camera controls and sampling once, preserving a reused photographic plane's grid.
+/// Resolve sampling once, preserving a reused photographic plane's grid.
 fn resolve_settings(
     request: &RenderRequest,
     metadata: &Metadata,
     existing_scale: Option<Scale>,
-) -> foveonic::source::Result<(Settings, Vec<String>)> {
+) -> foveonic::source::Result<Settings> {
     let mut settings = request.settings.clone();
     // The request's quality is the authority; `quality::for_view` decides it.
     settings.processing_quality = request.processing_quality;
-    let errors = resolve_camera_settings(&mut settings, metadata);
     if let Some(scale) = existing_scale {
         settings.working_scale = scale;
         settings.preview_region = None;
@@ -360,7 +358,7 @@ fn resolve_settings(
     settings.dehaze_estimate = request.output == "final"
         && request.rendition == crate::editor::Rendition::Current
         && settings.dehaze_auto();
-    Ok((settings, errors))
+    Ok(settings)
 }
 
 /// A running job continues when the newer request can still use its result:
@@ -385,7 +383,7 @@ fn interruption(
         return Interruption::Continue;
     }
     let pending = &desired.request;
-    let Ok((next, _)) = resolve_settings(pending, metadata, None) else {
+    let Ok(next) = resolve_settings(pending, metadata, None) else {
         return Interruption::Cancel;
     };
     if same_request_context(&task.request, pending)
@@ -716,10 +714,6 @@ fn pick_color(
     settings.output_size = None;
     // Sampling native coordinates gives Full, Fast and Smart the same subject selection.
     settings.working_scale = Scale::NATIVE;
-    let errors = resolve_camera_settings(&mut settings, session.metadata());
-    if !errors.is_empty() {
-        return Err(errors.join("; ").into());
-    }
     let artifacts = engine
         .render_native_photo(
             session,
@@ -978,9 +972,13 @@ pub(crate) mod tests {
                 frame.texture.description().space,
                 foveonic::image::Space::SensorLayers
             );
-            assert_eq!(reply.settings.white_balance, "Sunlight");
-            assert_eq!(reply.settings.color_mode, "Standard");
-            assert_eq!(frame.artifact.settings.white_balance, "Sunlight");
+            // The photograph's recorded choices render, and every reply keeps As Shot.
+            assert_eq!(reply.settings.white_balance, foveonic::render::AS_SHOT);
+            assert_eq!(reply.settings.color_mode, foveonic::render::AS_SHOT);
+            assert_eq!(
+                frame.artifact.settings.white_balance,
+                foveonic::render::AS_SHOT
+            );
             assert!(reply.metadata.unwrap().properties.contains_key("CAMMODEL"));
         }
         worker.submit(super::RenderRequest {
@@ -1004,8 +1002,14 @@ pub(crate) mod tests {
             frame.texture.description().space,
             foveonic::image::Space::ToneMappedRgb(_)
         ));
-        assert_eq!(frame.artifact.settings.white_balance, "Sunlight");
-        assert_eq!(frame.artifact.settings.color_mode, "Standard");
+        assert_eq!(
+            frame.artifact.settings.white_balance,
+            foveonic::render::AS_SHOT
+        );
+        assert_eq!(
+            frame.artifact.settings.color_mode,
+            foveonic::render::AS_SHOT
+        );
         worker.submit(super::RenderRequest {
             detail: false,
             framing_preview: false,
@@ -1021,8 +1025,8 @@ pub(crate) mod tests {
         });
         let reply = receive(&worker);
         assert_eq!(reply.request.id, RequestId(22));
-        assert_eq!(reply.settings.white_balance, "Sunlight");
-        assert_eq!(reply.settings.color_mode, "Standard");
+        assert_eq!(reply.settings.white_balance, foveonic::render::AS_SHOT);
+        assert_eq!(reply.settings.color_mode, foveonic::render::AS_SHOT);
         assert_eq!(reply.settings.working_scale, Scale::NATIVE);
         assert!(reply.settings.preview_region.is_none());
         assert!(!reply.settings.dehaze_estimate);
@@ -1149,84 +1153,6 @@ pub(crate) mod tests {
                 .unwrap_failed()
                 .contains("no operation-input comparison"));
         }
-    }
-
-    #[test]
-    fn quattro_defaults_wait_for_recorded_white_balance_and_preserve_edits() {
-        use foveonic::source::{Metadata, PropertyList};
-        let mut metadata = Metadata {
-            processing_version: Some([3, 1, 2, 0]),
-            width: 5888,
-            height: 3672,
-            rotation: 0,
-            properties: [
-                ("CAMMODEL".into(), "SIGMA dp2 Quattro".into()),
-                ("WB_DESC".into(), "Auto".into()),
-                ("CM_DESC".into(), "Standard".into()),
-            ]
-            .into(),
-            matrices: Default::default(),
-            lists: [(
-                "ColorModeCompensations".into(),
-                PropertyList::new(vec![("Standard".into(), "standard".into())]).unwrap(),
-            )]
-            .into(),
-        };
-        let capabilities = foveonic::render::ControlCapabilities::from_metadata(&metadata).unwrap();
-        let mut settings = foveonic::render::Settings::new("", "");
-        capabilities.normalize(&mut settings);
-        assert!(settings.white_balance.is_empty());
-        assert_eq!(
-            super::resolve_camera_settings(&mut settings, &metadata).len(),
-            1
-        );
-        assert!(settings.white_balance.is_empty());
-        assert_eq!(settings.color_mode, "Standard");
-        metadata.lists.insert(
-            "WhiteBalanceGains".into(),
-            PropertyList::new(vec![("Auto".into(), "auto_gain".into())]).unwrap(),
-        );
-        assert!(super::resolve_camera_settings(&mut settings, &metadata).is_empty());
-        assert_eq!(settings.white_balance, "Auto");
-        settings.white_balance = "Shade".into();
-        settings.color_mode = "Vivid".into();
-        capabilities.normalize(&mut settings);
-        assert!(super::resolve_camera_settings(&mut settings, &metadata).is_empty());
-        assert_eq!(settings.white_balance, "Shade");
-        assert_eq!(settings.color_mode, "Vivid");
-    }
-
-    #[test]
-    fn defaults_resolve_independently_without_replacing_explicit_choices() {
-        let metadata = foveonic::source::Metadata {
-            processing_version: None,
-            width: 1,
-            height: 1,
-            rotation: 0,
-            properties: [
-                ("WB_DESC".into(), "Unknown".into()),
-                ("CM_DESC".into(), "Vivid".into()),
-            ]
-            .into(),
-            matrices: Default::default(),
-            lists: [(
-                "ColorModeCompensations".into(),
-                foveonic::source::PropertyList::new(vec![("Vivid".into(), "v".into())]).unwrap(),
-            )]
-            .into(),
-        };
-        let mut settings = foveonic::render::Settings::new("", "");
-        assert_eq!(
-            super::resolve_camera_settings(&mut settings, &metadata).len(),
-            1
-        );
-        assert!(settings.white_balance.is_empty());
-        assert_eq!(settings.color_mode, "Vivid");
-        settings.white_balance = "Auto".into();
-        settings.color_mode = "Standard".into();
-        assert!(super::resolve_camera_settings(&mut settings, &metadata).is_empty());
-        assert_eq!(settings.white_balance, "Auto");
-        assert_eq!(settings.color_mode, "Standard");
     }
 
     #[test]
@@ -2395,8 +2321,6 @@ mod color_pick_tests {
         let mut settings = caps
             .editing_defaults(&source.metadata, foveonic::render::Rendering::Color)
             .unwrap();
-        settings.white_balance = caps.default_white_balance(&source.metadata).unwrap();
-        settings.color_mode = caps.default_color_mode(&source.metadata).unwrap();
         let worker = TestWorker::new(Engine::new().unwrap(), egui::Context::default());
         worker.submit(RenderRequest {
             detail: false,

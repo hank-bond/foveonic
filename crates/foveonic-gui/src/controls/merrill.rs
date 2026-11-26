@@ -180,13 +180,7 @@ pub(super) fn show(
                     settings.monochrome.texture,
                 )
             } else {
-                let controls = settings
-                    .reconstruction
-                    .unwrap_or(foveonic::noise::Controls {
-                        noise_enabled: false,
-                        detail_enabled: false,
-                        ..Default::default()
-                    });
+                let controls = settings.reconstruction.unwrap_or_default();
                 detail(
                     ui,
                     "/reconstruction",

@@ -20,7 +20,7 @@ implementation: conforming
 
 ## Implementation
 
-`Settings::despeckle` is independent of `Settings::repair`. CLI `--no-despeckle` / `--despeckle` and `--no-repair` / `--repair` control the two stages; both start enabled. Reconstruction remains opt-in. Settings remain session-only in the GUI.
+`Settings::despeckle` is independent of `Settings::repair`. CLI `--no-despeckle` / `--despeckle` and `--no-repair` / `--repair` control the two stages; both start enabled. Noise reduction follows the camera defaults in the command line and the app alike, which turn it on for Merrill photographs. Settings remain session-only in the GUI.
 
 Host preparation derives three 4096-bin float32 threshold tables from calibration's actual float32 WB factors and float32 `DespAdjust`, defaulting to `[15,15,5]`. It receives the already prepared factors rather than reconstructing a separate WB recipe. Integer adjustment vectors do not replace the default. The stage uses the shared native ISO-table despeckle scale, defaulting to neutral noise controls when reconstruction is disabled. Native recipe metadata preparation is separate from tile geometry; it does not require executing reconstruction. The six current originals select scale 1. The independent enabling switch is unchanged. The [WB-scale fix](../../plans/archived/despeckle-wb-scale.md) replaces the earlier mismatched diagnostic WB factors.
 

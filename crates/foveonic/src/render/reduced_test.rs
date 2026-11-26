@@ -932,3 +932,37 @@ fn every_camera_white_balance_matches_source_free_and_fresh_at_native_and_reduce
         }
     }
 }
+
+#[test]
+#[ignore = "requires GPU and SMALL_PREVIEW_X3F"]
+fn reduced_as_shot_renders_the_recorded_presets() {
+    let path = std::env::var_os("SMALL_PREVIEW_X3F").unwrap();
+    let metadata = Source::open(&path).unwrap().metadata.clone();
+    let mut as_shot = crate::render::camera_settings(&metadata, None).unwrap();
+    as_shot.working_scale = Scale::new(4).unwrap();
+    let named = as_shot.with_camera_choices(&metadata).into_owned();
+    assert_ne!(as_shot, named, "fixture must record its choices");
+    let engine = Engine::test_executor();
+    let render = |settings: &Settings| {
+        let source = Arc::new(Source::open(&path).unwrap());
+        let ReducedPreparation::Prepared(mut session) = engine
+            .prepare_reduced_photo(source, settings, || false, &mut Profile::default())
+            .unwrap()
+        else {
+            panic!("reduced preparation");
+        };
+        let image = rendered(
+            engine
+                .render_reduced_photo(
+                    &mut session,
+                    settings,
+                    &["final"],
+                    || false,
+                    &mut Profile::default(),
+                )
+                .unwrap(),
+        );
+        engine.readback_image(&image).unwrap()
+    };
+    assert_eq!(render(&as_shot), render(&named));
+}

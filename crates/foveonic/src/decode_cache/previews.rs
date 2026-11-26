@@ -3,7 +3,6 @@
 use super::{lru, Cache, Command, Control, Identity, Settings, MAX_HEADER, TEMP_SEQUENCE};
 use crate::{
     preview::Preview,
-    render::ControlCapabilities,
     sidecar,
     source::{Metadata, ProcessingFamily, Result},
 };
@@ -222,24 +221,13 @@ impl Cache {
             return Ok(());
         }
 
-        let mut expected = match &key.recipe {
+        let expected = match &key.recipe {
             Some(bytes) => sidecar::decode(bytes)?,
             None => match &key.default_recipe {
                 Some(bytes) => sidecar::decode(bytes)?,
                 None => crate::render::camera_settings(metadata, None)?,
             },
         };
-        let capabilities = ControlCapabilities::from_metadata(metadata)?;
-        if expected.white_balance.is_empty() {
-            expected.white_balance = capabilities
-                .default_white_balance(metadata)
-                .unwrap_or_default();
-        }
-        if expected.color_mode.is_empty() {
-            expected.color_mode = capabilities
-                .default_color_mode(metadata)
-                .unwrap_or_default();
-        }
         if sidecar::encode(&expected)? != sidecar::encode(settings)? {
             return Ok(()); // An unsaved or superseded render cannot label the disk recipe.
         }

@@ -4,7 +4,7 @@ use foveonic::{
     image::RenderedImage,
     inspection::Content,
     profile::{self, Mode, Profile, RenderSettingsSnapshot},
-    render::{ControlCapabilities, Engine, NativePhoto, Scale, Settings},
+    render::{Engine, NativePhoto, Scale, Settings},
     source::Source,
 };
 use serde::Deserialize;
@@ -165,10 +165,10 @@ fn main() -> Result<()> {
         }
         selected += 1;
         let source = Arc::new(Source::open(&case.source)?);
-        let mut initial = Settings::new("Sunlight", "Standard");
+        let mut initial = foveonic::render::camera_settings(&source.metadata, None)?;
+        initial.white_balance = "Sunlight".into();
+        initial.color_mode = "Standard".into();
         initial.processing_quality = processing_quality;
-        ControlCapabilities::from_metadata(&source.metadata)?
-            .apply_capture_defaults(&mut initial, &source.metadata)?;
         let authored = patch_settings(&initial, &case.settings)?;
         let region = if regional {
             Some(

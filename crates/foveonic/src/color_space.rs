@@ -102,7 +102,7 @@ impl TiffColorSpace {
         }
     }
 
-    pub(crate) fn profile(self) -> &'static [u8] {
+    pub fn profile(self) -> &'static [u8] {
         match self {
             Self::Srgb => include_bytes!("../assets/srgb-v4.icc"),
             Self::AdobeRgb => include_bytes!("../assets/adobe-rgb-1998-compat.icc"),

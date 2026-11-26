@@ -34,10 +34,11 @@ struct Completed {
     profile: Profile,
 }
 
-fn camera_settings(source: &Source) -> Result<Settings> {
-    let mut settings = Settings::new("Sunlight", "Standard");
-    foveonic::render::ControlCapabilities::from_metadata(&source.metadata)?
-        .apply_capture_defaults(&mut settings, &source.metadata)?;
+/// Camera defaults with the fixed choices the measurements compare across photographs.
+fn fixed_choice_settings(source: &Source) -> Result<Settings> {
+    let mut settings = foveonic::render::camera_settings(&source.metadata, None)?;
+    settings.white_balance = "Sunlight".into();
+    settings.color_mode = "Standard".into();
     Ok(settings)
 }
 fn completed(
@@ -258,13 +259,12 @@ fn main() -> Result<()> {
             serde_json::from_slice(&std::fs::read(path)?)?;
         snapshot.into_settings()
     } else if controls.is_empty() {
-        camera_settings(&source)?
+        fixed_choice_settings(&source)?
     } else {
-        let initial = camera_settings(&source)?;
         let noise = foveonic::render::ControlCapabilities::from_metadata(&source.metadata)?
             .default_noise_controls_for_metadata(&source.metadata)?;
         let (settings, paths, mode) =
-            options::parse_settings_with_noise_defaults(controls.iter().cloned(), noise, initial)?;
+            options::parse_settings(controls, fixed_choice_settings(&source)?, noise)?;
         if !paths.is_empty() || mode != Mode::Off {
             return Err("Smart controls must not include paths or a profile mode".into());
         }

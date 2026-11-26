@@ -508,12 +508,8 @@ fn compose(
     } else {
         mismatch
     };
-    let recorded_color_mode;
     let color_mode = if settings.is_monochrome() || dng {
         "Standard"
-    } else if settings.color_mode.is_empty() {
-        recorded_color_mode = default_color_mode(metadata)?;
-        &recorded_color_mode
     } else {
         &settings.color_mode
     };
@@ -533,8 +529,6 @@ fn compose(
     let small_white_balance = if reduced {
         Some(if settings.is_monochrome() {
             "Auto".into()
-        } else if settings.white_balance.is_empty() {
-            default_white_balance(metadata)?
         } else {
             settings.white_balance.clone()
         })
@@ -654,12 +648,8 @@ fn compose(
         )?
     };
     finish!(noise);
-    let recorded_white_balance;
     let white_balance = if settings.is_monochrome() {
         "Auto"
-    } else if settings.white_balance.is_empty() {
-        recorded_white_balance = default_white_balance(metadata)?;
-        &recorded_white_balance
     } else {
         &settings.white_balance
     };

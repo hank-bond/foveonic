@@ -473,23 +473,17 @@ fn main() -> Result<()> {
             let source = Source::open(path)?;
             let load_ms = began.elapsed().as_secs_f64() * 1000.;
             let capabilities = ControlCapabilities::from_metadata(&source.metadata)?;
-            let mut initial = if run.sidecars {
+            let initial = if run.sidecars {
                 foveonic::sidecar::load(path)?.settings().ok_or_else(|| {
                     format!("--sidecars requires a saved recipe for {}", path.display())
                 })?
             } else {
                 foveonic::render::camera_settings(&source.metadata, None)?
             };
-            if initial.white_balance.is_empty() {
-                initial.white_balance = capabilities.default_white_balance(&source.metadata)?;
-            }
-            if initial.color_mode.is_empty() {
-                initial.color_mode = capabilities.default_color_mode(&source.metadata)?;
-            }
-            let (mut base, paths, control_mode) = options::parse_settings_with_noise_defaults(
-                run.controls.iter().cloned(),
-                capabilities.default_noise_controls_for_metadata(&source.metadata)?,
+            let (mut base, paths, control_mode) = options::parse_settings(
+                &run.controls,
                 initial,
+                capabilities.default_noise_controls_for_metadata(&source.metadata)?,
             )?;
             base.dehaze_estimate = run.gui_analysis && base.dehaze_auto();
             if !paths.is_empty() || control_mode != Mode::Off {

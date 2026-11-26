@@ -94,6 +94,9 @@ pub fn write_source(
         }
         phase = "validate-recipe";
         settings.validate_for_camera(&source.metadata)?;
+        // The DNG profile and appearance need the color mode As Shot stands for.
+        let resolved = settings.with_camera_choices(&source.metadata);
+        let settings = resolved.as_ref();
         phase = "prepare-appearance";
         let white_balance =
             crate::render::estimated_white_balance(engine, source, settings, profile)?;

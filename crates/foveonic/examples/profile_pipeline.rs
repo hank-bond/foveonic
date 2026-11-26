@@ -1,6 +1,7 @@
 //! Measures completed fresh processing with normal photographic controls, separate GPU diagnostics and optional exact goldens.
 
 #[path = "../src/options.rs"]
+#[allow(dead_code)]
 mod options;
 #[path = "profile_pipeline/sample_difference.rs"]
 mod sample_difference;
@@ -123,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         (settings, Mode::Off)
     } else {
         let (mut settings, paths, mode) =
-            options::parse_settings_for_camera(controls.into_iter(), &source.metadata)?;
+            options::parse_settings_for_camera(&controls, &source.metadata)?;
         if thumb {
             working_scale = foveonic::render::ControlCapabilities::from_metadata(&source.metadata)?
                 .thumb_scale();

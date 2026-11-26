@@ -153,7 +153,11 @@ fn original_result_outlives_source_and_another_render() {
             )
             .unwrap();
         assert!(engine
-            .render(&source, &Settings::new("", ""), &mut Profile::default())
+            .render(
+                &source,
+                &Settings::new("unavailable", "unavailable"),
+                &mut Profile::default()
+            )
             .is_err());
         let mut multi_profile = Profile::new(crate::profile::Mode::Gpu);
         let roots = engine
@@ -988,7 +992,7 @@ fn color_dq_selection_is_auto_only_with_reconstruction_and_explicit_off_wins() {
     s.color_dq_gain = Some(1.);
     assert!(s.color_dq_selected());
     s.color_dq_gain = Some(f32::NAN);
-    assert!(s.validate().is_err());
+    assert!(s.validate_values().is_err());
 }
 
 #[test]

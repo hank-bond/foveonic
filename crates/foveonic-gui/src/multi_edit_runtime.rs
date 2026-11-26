@@ -507,14 +507,12 @@ fn default_ready_values(
     let Some(metadata) = metadata else {
         return true;
     };
-    let mut current = settings.clone();
-    crate::export::resolve_camera_settings(&mut current, metadata);
     match pointer {
-        "/sharpen_amount" => current.automatic_sharpening_matches(basis, metadata),
-        "/color_dq_gain" => current.automatic_color_dq_matches(basis),
+        "/sharpen_amount" => settings.automatic_sharpening_matches(basis, metadata),
+        "/color_dq_gain" => settings.automatic_color_dq_matches(basis),
         "/dehaze/shadow" => {
             basis.dehaze.shadow.is_none()
-                && crate::editor::dehaze::estimate_settings(&current)
+                && crate::editor::dehaze::estimate_settings(settings)
                     == crate::editor::dehaze::estimate_settings(basis)
         }
         _ => true,
@@ -766,6 +764,15 @@ mod tests {
         let paths = runtime.editing_paths.clone();
         runtime.edit(&paths, &Change::Fields(edits.to_vec()), sidecars)
     }
+    /// Quattro recipes leave noise to the file until an edit, unlike Merrill.
+    fn quattro_runtime() -> Runtime {
+        let mut runtime = runtime();
+        for photo in runtime.photos.values_mut() {
+            photo.family = Some(ProcessingFamily::Quattro);
+            photo.settings.as_mut().unwrap().reconstruction = None;
+        }
+        runtime
+    }
     fn runtime() -> Runtime {
         let paths = vec![PathBuf::from("a.x3f"), PathBuf::from("b.x3f")];
         let mut runtime = Runtime {
@@ -776,6 +783,8 @@ mod tests {
         for (index, path) in paths.into_iter().enumerate() {
             let mut settings =
                 Settings::new(if index == 0 { "Sunlight" } else { "Shade" }, "Standard");
+            // A Merrill recipe carries noise controls; normalizing fills missing ones.
+            settings.reconstruction = Some(Default::default());
             settings.exposure = if index == 0 { 7.8 } else { 1.2 };
             let mut numeric = settings.clone();
             numeric.sharpen_amount = Some(if index == 0 { 0.2 } else { 0.7 });
@@ -873,6 +882,7 @@ mod tests {
 
         let pasted = Settings {
             saturation: 0.25,
+            reconstruction: Some(Default::default()),
             ..Default::default()
         };
         let replace = Change::Replace(Box::new(pasted.clone()));
@@ -906,6 +916,7 @@ mod tests {
         runtime.photos.insert(unloaded.clone(), Box::default());
         let pasted = Settings {
             saturation: 0.25,
+            reconstruction: Some(Default::default()),
             ..Default::default()
         };
         assert!(runtime.replace(&[loaded.clone(), unloaded.clone()], &pasted, &mut sidecars));
@@ -984,7 +995,10 @@ mod tests {
         assert_ne!(runtime.settings(&a), Some(&edited));
         assert_eq!(
             runtime.settings(&a),
-            Some(&Settings::default()),
+            Some(&Settings {
+                reconstruction: Some(Default::default()),
+                ..Default::default()
+            }),
             "a session without recipes reloads the camera defaults"
         );
     }
@@ -1075,13 +1089,13 @@ mod tests {
             let settings = runtime.settings(Path::new(path)).unwrap();
             assert_eq!(settings.white_balance, balance);
             assert!(settings.sharpen_amount.is_none());
-            assert!(settings.reconstruction.is_none());
+            assert_eq!(settings.reconstruction, Some(Default::default()));
             assert_eq!(session.requested_settings(Path::new(path)), Some(settings));
         }
     }
     #[test]
     fn optional_numbers_materialize_each_photos_effective_value_only_when_edited() {
-        let mut runtime = runtime();
+        let mut runtime = quattro_runtime();
         let mut session = session();
         assert!(apply(
             &mut runtime,
@@ -1137,7 +1151,7 @@ mod tests {
     }
     #[test]
     fn reconstruction_toggle_leaf_uses_each_photos_own_defaults() {
-        let mut runtime = runtime();
+        let mut runtime = quattro_runtime();
         let mut session = session();
         assert!(apply(
             &mut runtime,

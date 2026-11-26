@@ -400,7 +400,7 @@ impl Metadata {
     }
 
     /// Resolve the recorded WB label to this file's canonical CAMF preset name.
-    pub fn recorded_white_balance(&self) -> Result<String> {
+    pub(crate) fn recorded_white_balance(&self) -> Result<String> {
         let recorded = self
             .properties
             .get("WB_DESC")
@@ -421,7 +421,7 @@ impl Metadata {
             .ok_or_else(|| format!("unavailable recorded white balance: {name}").into())
     }
 
-    pub fn recorded_color_mode(&self) -> Result<String> {
+    pub(crate) fn recorded_color_mode(&self) -> Result<String> {
         if self.processing_family().ok() == Some(ProcessingFamily::Classic)
             && !self.properties.contains_key("CM_DESC")
             && !self.lists.contains_key("ColorModeCompensations")

@@ -91,7 +91,6 @@ struct Started {
     metadata: Arc<Metadata>,
     origin: foveonic::source::SourceOrigin,
     settings: Settings,
-    defaults_errors: Vec<String>,
     edit: Vec<&'static str>,
     input: Option<&'static str>,
     began: Instant,
@@ -439,13 +438,12 @@ impl WorkerHost {
                 completed: 1,
                 total: 1,
             });
-            let (settings, defaults_errors) =
+            let settings =
                 resolve_settings(request, &composed.metadata, Some(composed.working_scale))?;
             let started = Started {
                 metadata: composed.metadata.clone(),
                 origin: composed.origin.clone(),
                 settings,
-                defaults_errors,
                 edit: Vec::new(),
                 input: None,
                 began,
@@ -516,7 +514,7 @@ impl WorkerHost {
         };
         self.rendered_from.insert(task.stamp.target.clone(), key);
         reporter.loaded(foveonic::source::LoadStage::Decoded);
-        let (mut settings, defaults_errors) = resolve_settings(request, &metadata, None)?;
+        let mut settings = resolve_settings(request, &metadata, None)?;
         if let Some(quality) = composition_quality {
             settings.working_scale = quality;
             settings.preview_region = None;
@@ -574,7 +572,6 @@ impl WorkerHost {
             metadata,
             origin,
             settings: settings.clone(),
-            defaults_errors,
             edit,
             input,
             began,
@@ -705,7 +702,6 @@ impl WorkerHost {
     ) {
         let request = &task.request;
         self.served.insert(task.stamp.clone());
-        let defaults_errors = started.map_or(&[][..], |started| &started.defaults_errors);
         let result = result.map_err(|error| {
             foveonic::support::report_error(
                 "render.execute",
@@ -723,14 +719,7 @@ impl WorkerHost {
                     ..Default::default()
                 },
             );
-            if defaults_errors.is_empty() {
-                error.to_string()
-            } else {
-                format!(
-                    "{error}; {}. Choose a preset in Processing.",
-                    defaults_errors.join("; ")
-                )
-            }
+            error.to_string()
         });
         let result = match result {
             Ok(Some(image)) => RenderOutcome::Rendered(Box::new(image)),

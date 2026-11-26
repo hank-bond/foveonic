@@ -3,7 +3,7 @@
 use crate::{help, preferences::EditingSection};
 use eframe::egui;
 use foveonic::{
-    render::{Rendering, RepairThreshold, Settings},
+    render::{ControlCapabilities, Rendering, RepairThreshold, Settings},
     source::Metadata,
 };
 use std::ops::RangeInclusive;
@@ -667,15 +667,13 @@ fn camera_choice_widget(
     value: &mut String,
     enabled: bool,
 ) -> bool {
-    let choices = metadata.map(|metadata| {
-        if key == "WhiteBalanceGains" {
-            metadata.white_balance_presets()
+    let choices = metadata.and_then(|metadata| {
+        let capabilities = ControlCapabilities::from_metadata(metadata).ok()?;
+        Some(if key == "WhiteBalanceGains" {
+            capabilities.white_balance_options(metadata)
         } else {
-            foveonic::render::ControlCapabilities::from_metadata(metadata).map_or_else(
-                |_| metadata.color_mode_presets(),
-                |c| c.color_mode_presets(metadata),
-            )
-        }
+            capabilities.color_mode_options(metadata)
+        })
     });
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -689,7 +687,8 @@ fn camera_choice_widget(
         );
         let response = ui
             .add_enabled_ui(
-                enabled && choices.as_ref().is_some_and(|list| !list.is_empty()),
+                // As Shot alone offers no choice.
+                enabled && choices.as_ref().is_some_and(|list| list.len() > 1),
                 |ui| {
                     let combo = egui::ComboBox::from_id_salt(key)
                         .width(
@@ -702,27 +701,25 @@ fn camera_choice_widget(
                             .max(1.),
                         )
                         .truncate()
-                        .selected_text(if value.is_empty() {
-                            "As Shot"
-                        } else {
-                            value.as_str()
-                        });
+                        .selected_text(ControlCapabilities::option_label(value));
                     crate::widgets::dropdown(ui, combo, |ui| {
                         ui.spacing_mut().item_spacing.y = 0.;
-                        changed |= crate::widgets::menu_value(ui, value, String::new(), "As Shot")
-                            .changed();
                         if let Some(list) = &choices {
-                            for name in list.iter().copied() {
+                            for option in list.iter().copied() {
                                 if !crate::multi_edit_controls::camera_choice_available(
                                     ui.ctx(),
                                     white_balance,
-                                    name,
+                                    option,
                                 ) {
                                     continue;
                                 }
-                                changed |=
-                                    crate::widgets::menu_value(ui, value, name.to_owned(), name)
-                                        .changed();
+                                changed |= crate::widgets::menu_value(
+                                    ui,
+                                    value,
+                                    option.to_owned(),
+                                    ControlCapabilities::option_label(option),
+                                )
+                                .changed();
                             }
                         }
                     })

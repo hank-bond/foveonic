@@ -292,19 +292,20 @@ fn available(ctx: &egui::Context, pointer: &str) -> bool {
             })
     })
 }
-pub fn camera_choice_available(ctx: &egui::Context, white_balance: bool, name: &str) -> bool {
-    if name.is_empty() || !active(ctx) {
+/// With several photographs, offer only options every one of them has.
+pub fn camera_choice_available(ctx: &egui::Context, white_balance: bool, option: &str) -> bool {
+    if !active(ctx) {
         return true;
     }
     ctx.data_mut(|d| d.get_temp::<State>(id())).is_none_or(|s| {
         s.metadata.iter().all(|m| {
-            if white_balance {
-                m.white_balance_presets().contains(&name)
-            } else {
-                foveonic::render::ControlCapabilities::from_metadata(m)
-                    .map(|c| c.color_mode_presets(m).contains(&name))
-                    .unwrap_or(false)
-            }
+            foveonic::render::ControlCapabilities::from_metadata(m).is_ok_and(|c| {
+                if white_balance {
+                    c.white_balance_options(m).contains(&option)
+                } else {
+                    c.color_mode_options(m).contains(&option)
+                }
+            })
         })
     })
 }

@@ -21,6 +21,10 @@ pub use crate::nodes::{
 pub use crate::source::AutoExposureCompensation;
 use crate::source::Result;
 
+/// The camera-choice option that follows the photograph. Only render resolves it,
+/// so the rest of the application never needs the preset it stands for.
+pub const AS_SHOT: &str = "";
+
 #[cfg(test)]
 #[path = "settings_test.rs"]
 mod tests;
@@ -100,8 +104,10 @@ pub struct Settings {
     pub monochrome: MonochromeControls,
     /// Monochrome Smooth/Crisp selection. None follows the file or recipe default.
     pub monochrome_smoothness: Option<f32>,
+    /// A white-balance option from `ControlCapabilities`, or [`AS_SHOT`].
     pub white_balance: String,
     pub white_balance_bias: WhiteBalanceBias,
+    /// A color-mode option from `ControlCapabilities`, or [`AS_SHOT`].
     pub color_mode: String,
     /// Stops applied to linear RGB before the selected rendering mode's tone curve.
     pub exposure: f32,
@@ -333,11 +339,21 @@ impl Settings {
         if let Some(gain) = self.color_dq_gain {
             return Ok(gain);
         }
-        let recipe =
-            crate::noise::couplings(metadata, &self.white_balance, self.sensor_noise_controls())?;
         Ok(crate::noise::processing_gain(metadata)?
             .1
-            .min(recipe.color_dq_limit))
+            .min(self.noise_couplings(metadata)?.color_dq_limit))
+    }
+
+    /// The camera's noise couplings for the white balance As Shot or the choice names.
+    pub(crate) fn noise_couplings(
+        &self,
+        metadata: &crate::source::Metadata,
+    ) -> Result<crate::noise::Couplings> {
+        crate::noise::couplings(
+            metadata,
+            &self.with_camera_choices(metadata).white_balance,
+            self.sensor_noise_controls(),
+        )
     }
     /// Compare the inputs of the camera's automatic sharpening amount.
     pub fn automatic_sharpening_matches(
@@ -571,30 +587,50 @@ impl Settings {
         effective
     }
 
-    pub fn validate(&self) -> Result<()> {
-        if self.white_balance.is_empty() || (!self.is_monochrome() && self.color_mode.is_empty()) {
-            return Err(if self.is_monochrome() {
-                "--wb is required"
-            } else {
-                "--wb and --mode are required"
-            }
-            .into());
-        }
-        self.validate_values()
-    }
-
     /// Validate the complete request using only this camera's active controls.
+    /// As Shot is valid when the photograph recorded a usable choice.
     pub fn validate_for_camera(&self, metadata: &crate::source::Metadata) -> Result<()> {
         let capabilities = super::ControlCapabilities::from_metadata(metadata)?;
         self.validate_values()?;
-        capabilities.validate(self)?;
-        if capabilities.white_balance_active(self) && self.white_balance.is_empty() {
-            return Err("white balance is required for this rendering".into());
+        let unavailable = |error| format!("As Shot is unavailable: {error}. Choose a preset.");
+        if capabilities.white_balance_active(self) && self.white_balance == AS_SHOT {
+            capabilities
+                .default_white_balance(metadata)
+                .map_err(unavailable)?;
         }
-        if capabilities.color_mode_active(self) && self.color_mode.is_empty() {
-            return Err("color mode is required for this rendering".into());
+        if capabilities.color_mode_active(self) && self.color_mode == AS_SHOT {
+            capabilities
+                .default_color_mode(metadata)
+                .map_err(unavailable)?;
         }
-        Ok(())
+        capabilities.validate(&self.with_camera_choices(metadata))
+    }
+
+    /// Name the presets As Shot stands for in this photograph. A choice the file did not
+    /// record stays As Shot, so outputs that do not use it still render;
+    /// `validate_for_camera` reports it when the rendering uses it.
+    pub(crate) fn with_camera_choices(
+        &self,
+        metadata: &crate::source::Metadata,
+    ) -> std::borrow::Cow<'_, Self> {
+        if self.white_balance != AS_SHOT && self.color_mode != AS_SHOT {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let Ok(capabilities) = super::ControlCapabilities::from_metadata(metadata) else {
+            return std::borrow::Cow::Borrowed(self);
+        };
+        let mut resolved = self.clone();
+        if resolved.white_balance == AS_SHOT {
+            if let Ok(name) = capabilities.default_white_balance(metadata) {
+                resolved.white_balance = name;
+            }
+        }
+        if resolved.color_mode == AS_SHOT {
+            if let Ok(name) = capabilities.default_color_mode(metadata) {
+                resolved.color_mode = name;
+            }
+        }
+        std::borrow::Cow::Owned(resolved)
     }
 
     /// Source exports choose Quality independently of any preview request.

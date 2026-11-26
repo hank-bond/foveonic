@@ -70,6 +70,9 @@ def validate_inventory(document):
     return suites
 
 
+LIBRARY_KINDS = {'lib', 'rlib', 'staticlib', 'cdylib', 'dylib'}
+
+
 def compiler_artifacts(text):
     """Read Cargo's JSON messages, including compiler-reported test executable paths."""
     artifacts, build_finished = {}, 0
@@ -87,9 +90,13 @@ def compiler_artifacts(text):
         if build_finished:
             raise ValueError('test artifact appears after build-finished')
         target = row['target']
-        if len(target['kind']) != 1:
+        kinds = set(target['kind'])
+        # A library also built for linking, such as a static library, still runs one lib test.
+        if len(kinds) > 1 and kinds <= LIBRARY_KINDS:
+            kinds = {'lib'}
+        if len(kinds) != 1:
             raise ValueError('ambiguous test target kind')
-        key = (target['kind'][0], target['name'])
+        key = (kinds.pop(), target['name'])
         artifact = {'kind': key[0], 'target': key[1], 'package_id': row['package_id'],
                     'executable': str(Path(row['executable']).resolve(strict=True))}
         if key in artifacts and artifacts[key] != artifact:

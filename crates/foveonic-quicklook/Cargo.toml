@@ -1,0 +1,11 @@
+[package]
+name = "foveonic-quicklook"
+version.workspace = true
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+foveonic = { path = "../foveonic" }

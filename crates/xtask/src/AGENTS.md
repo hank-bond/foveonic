@@ -14,8 +14,8 @@ Source sync stages missing originals and saves an inventory only after success. 
 
 ### Source files
 
-- **[bundle.rs](./bundle.rs)** Compiles native icon resources, stages complete macOS bundles, and resolves launch input paths.
-- **[cargo.rs](./cargo.rs)** Finds application versions and executable artifacts through Cargo's machine-readable output.
+- **[bundle.rs](./bundle.rs)** Compiles native icon resources and the Quick Look extension, stages complete macOS bundles, and resolves launch input paths.
+- **[cargo.rs](./cargo.rs)** Finds application versions, executables and the preview library through Cargo's machine-readable output.
 - **[examples.rs](./examples.rs)** Syncs missing release photographs into one local cache and validates its last inventory offline.
 - **[main.rs](./main.rs)** Exposes explicit Cargo commands for native bundles, example syncing, screenshots, and release notes.
 - **[release.rs](./release.rs)** Validates release tags and selects one changelog section without generating introductory prose.

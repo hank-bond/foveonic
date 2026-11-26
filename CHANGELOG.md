@@ -5,6 +5,20 @@ kind: reference
 
 # Changelog
 
+## 0.9.2
+
+Preview X3F photographs in Finder with the space bar, and render the same camera defaults from the command line as in the app.
+
+### New functionality
+
+- Preview an X3F photograph in Finder and Quick Look with the space bar. The preview renders the camera's default recipe at a size that fills the screen.
+
+### Behavior changes
+
+- The command line starts each photograph from its camera defaults, as the app does. Merrill photographs render with noise reduction on, and a Merrill photograph taken in Monochrome renders in monochrome unless `--rendering color` is given.
+- Open Merrill photographs edited in 0.3.0 or 0.4.0 with Noise and Detail switched off using the camera default, noise reduction on. Photographs switched off in later versions stay off.
+- `--wb` and `--mode` are optional. Without them, the command line uses the white balance and color mode recorded in the photograph, called As Shot in the app.
+
 ## 0.9.1
 
 Treat every photograph in a group alike: update them together, and crop or rotate any of them.
