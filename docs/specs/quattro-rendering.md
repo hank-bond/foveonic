@@ -35,7 +35,7 @@ The native active crop and orientation must be preserved. Define deterministic p
 
 Numerical cropping and resampling precede tone response in the reference route. The raw recorded right/bottom fields and the nominal output dimensions have different endpoint conventions. Keep that operation explicit. An image whose view is already baked must not be cropped or rotated again by presentation or export. Retained physical intermediates keep their original view independently of the final image.
 
-[Speed](./processing-quality.md) may shorten two Quattro filters. Below estimated ISO 400, outside the long-exposure path, the coarse pass of the early RGB filter may cap its radius at 10 color pixels. Below capture ISO 800, blue filtering may use a 7-wide window instead of 11, with the same color weights and blend. Quality and higher-ISO images keep full support. The effective radius and window belong to the cache identity.
+[Speed](./processing-quality.md) may shorten two Quattro filters. Below estimated ISO 400, outside the long-exposure path, the coarse pass of the early RGB filter may cap its radius at 10 color pixels. At native resolution it may sample a checkerboard of offsets within that window, keeping the center and symmetry around it. Below capture ISO 800, blue filtering may use a 7-wide window instead of 11, with the same color weights and blend. Quality and higher-ISO images keep full support. The effective radius and tap pattern belong to the cache identity.
 
 ## Validation
 

@@ -12,6 +12,10 @@ use crate::{
 // another 64 for lowest-band filtering. 512 also covers reconstruction,
 // bilateral filtering, signed-detail support, sharpening and final resampling.
 pub(super) const CAMERA_SUPPORT: u32 = 512;
+// Doubled reconstruction reaches six native pixels (blue repair plus the
+// bilateral radius). Residual RGB is pointwise, box passes reach 7 + 3,
+// and the final crop samples at most two more pixels in either direction.
+pub(super) const BOX_CAMERA_SUPPORT: u32 = 32;
 // Preserve six-level lifting phase and the ordinary 128-pixel padding origin.
 const GRID_ALIGNMENT: u32 = 128;
 
@@ -20,7 +24,12 @@ pub(super) struct Prepared {
     pub crop: code_crop::Prepared,
 }
 impl Prepared {
-    pub fn new(metadata: &Metadata, native_extent: [u32; 2], output: [u32; 4]) -> Result<Self> {
+    pub fn new(
+        metadata: &Metadata,
+        native_extent: [u32; 2],
+        output: [u32; 4],
+        camera_support: u32,
+    ) -> Result<Self> {
         let crop = metadata.fixed::<4>("ActiveImageArea")?.map(|v| v as u32);
         let crop = code_crop::Prepared::new(
             [metadata.width as u32, metadata.height as u32],
@@ -29,7 +38,7 @@ impl Prepared {
             metadata.rotation,
             true,
         )?;
-        let (crop, physical) = crop.region(output, CAMERA_SUPPORT, GRID_ALIGNMENT)?;
+        let (crop, physical) = crop.region(output, camera_support, GRID_ALIGNMENT)?;
         Ok(Self { physical, crop })
     }
     pub fn extent(&self) -> [u32; 2] {

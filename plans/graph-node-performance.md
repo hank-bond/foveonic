@@ -484,6 +484,24 @@ Three paired runs of the reviewed build on the primary MacBook saved a median 10
 
 A 5 × 5 Speed window saved little beyond fusion and had a local error of 37 codes at a DP0 edge relative to the fused Speed image. Skipping the whole limiter and its conversions left 99.0% of visible native DP3 pixels within one code of Quality, but changed individual pixels around a saturated specular edge by up to 163 codes. The ISO 800 DP3 reached 238 codes. Keep the 7 × 7 limiter and report high-difference crops alongside the whole-image distribution when evaluating similar shortcuts.
 
+#### Sample alternating taps in the Speed chroma filter
+
+The native Speed coarse RGB pass uses 221 of 441 taps below estimated ISO 400 with long exposure off. The offsets stay symmetric around the center and preserve the radius and phase between patches and Whole. The fine pass, pooled grids and Quality retain their existing taps.
+
+On the primary M1 Pro MacBook, all four pairs per workload improved. Median DP2 Quattro native Speed went from 635 to 622 ms and its native patch from 451 to 441 ms. Native sd Quattro went from 608 to 586 ms. Quality, ISO 800 Speed, Fit and monochrome controls were bit-identical. Across five original Quattro photos and a DP2 patch, at least 98.6% of visible pixels were within one 8-bit SDR code per channel of Quality. The largest difference was six codes. The owner accepted the DP2 comparison crop. The DP2 center and corner patches matched their Whole crops exactly. Process footprint was flat on DP2. The sd Quattro median paired peak rose 8 MiB with mixed direction and retained cache bytes stayed equal. Regular fine patterns at the coarse grid frequency can be phase sensitive.
+
+#### Smaller margins for Quattro box contrast
+
+Native color patches using box contrast with Reference sharpening off use a 32-pixel camera margin. The 128-pixel phase alignment and shared-edit margin still apply. The bound covers doubled reconstruction, both ordered box passes and the camera crop. The same full upstream checkpoints can serve subsequent pans and Whole.
+
+On the primary M1 Pro, four retained ISO 800 DP3 Quattro pairs per mode measured 565 to 540 ms on first native Speed and 567 to 543 ms in Quality. Warm pan processing went from 60 to 30 ms in Speed and from 59 to 33 ms in Quality. Median paired settled footprint fell by about 40 MiB in three fresh-patch process pairs per mode. Median peak was flat. Output matched exactly in the measured center and corner patches, including across Fit, pans and Whole continuation.
+
+#### Recheck both changes on the reviewed stack
+
+The combined build on `956d27f` reproduced the approved sparse Speed digests for native DP2, the DP2 patch and native sd Quattro. In three pairs, DP2 patch medians were 413 to 407 ms and native sd was 543 to 538 ms. Native DP2 whole was flat at 576 ms. The Quality, Fit and ISO 800 unaffected controls matched their baseline digests.
+
+Six retained ISO 800 pairs per mode put the first native patch near 520 to 496 ms and the first warm pan near 54 to 30 ms. The median paired Whole continuation took 6 ms more in Speed and 4 ms more in Quality, with the same GPU activity and cached bytes. Three separate fresh patch footprint pairs per mode showed about 36 MiB less median held memory and 40 MiB less retained GPU cache. Speed peak varied across pairs and Quality peak was flat. Replaying Fit through Whole and a subsequent pan matched every baseline output in both modes. The maintained regional test passed all 36 exact crop comparisons and all ten Whole continuations.
+
 ### Profiling Quattro edits
 
 A fresh patch benchmark can miss work that moves to later requests. Replay Fit, first native patch, a pan across a processing boundary, a return pan and whole-image continuation in one retained session. Report each step's completed time, dispatch count and retained bytes. Sample process footprint in a separate replay and keep float readback outside the latency samples.

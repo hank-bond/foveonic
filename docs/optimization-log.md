@@ -37,6 +37,10 @@ Check the decoded coefficients used by the shader. Quattro’s RGB and blue shad
 
 Follow the reads in the consuming shader. In Clarity the vertical blur needs one horizontal mean per neighbor. Its accumulated correction belongs to the center pixel and can stay in that pixel’s state. A single scalar plane therefore serves all six horizontal passes. Check every consumer of the old channels before narrowing the buffer. [Clarity measurements](../plans/graph-node-performance.md#reusing-clarity-scratch-across-six-blur-levels)
 
+### Size the patch margin for the active filters
+
+Look for a fixed border sized for the longest filter in any recipe. Keep the grid phase and derive the smaller border from the operations that actually run. Quattro native box contrast uses a smaller patch margin when Reference sharpening is off. Compare center and edge patches with their Whole crops, then measure first zoom, warm pans and footprint separately. [Quattro patch margin measurements](../plans/graph-node-performance.md#smaller-margins-for-quattro-box-contrast)
+
 ## Latency
 
 ### Batch independent repairs
@@ -47,7 +51,7 @@ Look for a loop that submits one sparse repair region at a time. Compare each re
 
 A wide neighborhood can dominate native rendering even after its loads are tiled. Below capture ISO 800, Quattro Speed reduces the blue filter from 121 to 49 taps while retaining the same color weights and blend. Put the effective radius in the cache identity and keep small working grids on their existing support. Compare SDR display crops as well as float deltas. Measure high-ISO grain and process peak separately, since faster submissions can change when other buffers retire. [Speed blue-filter measurements](../plans/graph-node-performance.md#shorten-the-speed-blue-filter-window)
 
-Quattro's coarse RGB pass also caps its radius after computing the working grid. Estimated ISO 400 and the long-exposure path keep their original support. Check fine texture and grain in the areas of greatest difference, compare against Quality on the same grid, and verify that the Speed patch agrees with its whole-image continuation. [Speed chroma measurements](../plans/graph-node-performance.md#shorten-the-speed-chroma-filter-window)
+Quattro's coarse RGB pass also caps its radius after computing the working grid. At native resolution it samples a checkerboard of offsets within that window, keeping the center and reach. Estimated ISO 400 and the long-exposure path keep their original support. Check repeating fine texture and grain in the areas of greatest difference, compare against Quality on the same grid, and verify that the Speed patch agrees with its whole-image continuation. [Sparse Speed chroma measurements](../plans/graph-node-performance.md#sample-alternating-taps-in-the-speed-chroma-filter)
 
 ### Share the halo around a neighborhood filter
 

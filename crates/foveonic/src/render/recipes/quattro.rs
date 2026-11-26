@@ -699,12 +699,32 @@ fn compose(
     if let Some(size) = settings.processing_output_size() {
         params.output[..2].copy_from_slice(&size);
     }
+    let reference_sharpening = settings.sharpening_enabled
+        && settings.photographic.sharpening.method == crate::render::PhotographicMethod::Reference;
     let region = settings
         .preview_region
         .filter(|_| {
             !dng && (names == ["final"] || names == ["linear.base"]) && fast_available(metadata)
         })
-        .map(|rect| region::Prepared::new(metadata, [params.output[0], params.output[1]], rect))
+        .map(|rect| {
+            // Box contrast without Reference sharpening is the only native color
+            // finish whose support fits the smaller patch margin.
+            let camera_support = if grid.is_native()
+                && !settings.is_monochrome()
+                && !reference_sharpening
+                && stage3::uses_box_contrast(metadata)?
+            {
+                region::BOX_CAMERA_SUPPORT
+            } else {
+                region::CAMERA_SUPPORT
+            };
+            region::Prepared::new(
+                metadata,
+                [params.output[0], params.output[1]],
+                rect,
+                camera_support,
+            )
+        })
         .transpose()?;
     let (signals, highlight_mask) = if let Some(region) = &region {
         params.source[..2].copy_from_slice(&region.extent());
@@ -736,8 +756,6 @@ fn compose(
     if reduced {
         reconstruction_view.crop = output_geometry.bounds(reconstruction_view.crop);
     }
-    let reference_sharpening = settings.sharpening_enabled
-        && settings.photographic.sharpening.method == crate::render::PhotographicMethod::Reference;
     // A full native render lets doubled reconstruction retire before residual RGB
     // allocates. Reference sharpening already runs mask and detail work in between.
     let wait_for_reconstruction = grid.is_native()

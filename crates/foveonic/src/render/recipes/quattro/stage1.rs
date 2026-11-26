@@ -253,8 +253,10 @@ fn numerical_scaled(
 ) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
     use crate::nodes::color::{rgb_prefilter, two_scale_noise};
     let adaptive = controls.estimated_iso >= ADAPTIVE_FILTER_ISO;
+    let shorten_coarse =
+        quality == ProcessingQuality::Speed && !adaptive && !controls.long_exposure;
     let mut radii = FILTER_RADII.map(|radius| radius.div_ceil(divisor).max(1));
-    if quality == ProcessingQuality::Speed && !adaptive && !controls.long_exposure {
+    if shorten_coarse {
         radii[1] = radii[1].min(SPEED_COARSE_RADIUS);
     }
     let iteration = |index: usize| -> Result<rgb_prefilter::Prepared> {
@@ -268,7 +270,7 @@ fn numerical_scaled(
             controls.extent.map(|v| v / 2)
         };
         let scale = if index == 0 { 1. } else { 0.25 };
-        rgb_prefilter::Prepared::new(
+        let prepared = rgb_prefilter::Prepared::new(
             extent,
             controls.white_balance,
             FILTER_NOISE_MODEL.map(|v| (v * energy) * scale),
@@ -277,7 +279,12 @@ fn numerical_scaled(
             range,
             2047. / (8. / controls.bilateral_strengths[index]),
             radii[index],
-        )
+        )?;
+        Ok(if index == 1 && divisor == 1 && shorten_coarse {
+            prepared.with_checkerboard_taps()
+        } else {
+            prepared
+        })
     };
     // The recipe supplies the selected caller's highlight-preservation gains.
     let prepared = two_scale_noise::Prepared::new(

@@ -60,13 +60,17 @@ fn rgb_prefilter_range(@builtin(global_invocation_id) id: vec3<u32>) {
     let residual = fma(-quotient, variance, vec3<f32>(strength));
     let gain = fma(vec3<f32>(1.0), quotient, residual / variance);
     let radius = i32(params.shape.z);
+    let checkerboard = params.controls.w != 0.0;
+    let step = select(1, 2, checkerboard);
     var last_row=radius;
     if params.shape.w!=0u {last_row=min(radius,i32(height)-1-i32(id.y));}
     var sum = vec3<f32>(0.0);
     var total = 0.0;
     for (var dy = -radius; dy <= last_row; dy++) {
         let y = u32(clamp(i32(id.y) + dy, 0, i32(height) - 1));
-        for (var dx = -radius; dx <= radius; dx++) {
+        // Offset parity keeps the taps centered on the same samples in a native patch.
+        let first_column = -radius + select(0, (dy + radius) & 1, checkerboard);
+        for (var dx = first_column; dx <= radius; dx += step) {
             let x = u32(clamp(i32(id.x) + dx, 0, i32(width) - 1));
             let j = (y * width + x) * 3u;
             let sample = vec3<f32>(source[j], source[j + 1u], source[j + 2u]);

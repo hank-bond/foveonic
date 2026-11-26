@@ -20,6 +20,7 @@ const GUIDE_BLEND_WIDTH: f32 = 25.;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
     shape: [u32; 4],
+    // The range pass reads `controls[3]` as its checkerboard-taps flag.
     controls: [f32; 4],
     gains: [f32; 4],
 }
@@ -107,6 +108,10 @@ impl Prepared {
     }
     pub(crate) fn extent(&self) -> [u32; 2] {
         [self.params.shape[0], self.params.shape[1]]
+    }
+    pub(crate) fn with_checkerboard_taps(mut self) -> Self {
+        self.params.controls[3] = 1.;
+        self
     }
     pub(crate) fn key(&self) -> Key {
         Key::pod(&self.params)

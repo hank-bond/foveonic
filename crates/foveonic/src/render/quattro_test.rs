@@ -1349,16 +1349,31 @@ fn supported_preview_policy_survives_photographic_control_normalization() {
 fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_panning() {
     let root = std::path::PathBuf::from(std::env::var_os("FOVEONIC_FIXTURE_DIR").unwrap());
     let engine = Engine::test_executor();
-    for name in [
-        "dp0-quattro",
-        "dp1-quattro-pblog",
-        "dp2-quattro",
-        "dp3-quattro",
-        "sd-quattro",
-        "dp3-quattro-iso800",
+    use crate::render::{
+        PhotographicMethod::{Reference, Universal},
+        ProcessingQuality::{Quality, Speed},
+    };
+
+    for (name, quality, sharpening) in [
+        ("dp0-quattro", Quality, Some(Reference)),
+        ("dp1-quattro-pblog", Quality, Some(Reference)),
+        ("dp2-quattro", Quality, Some(Reference)),
+        ("dp2-quattro", Speed, Some(Reference)),
+        ("dp3-quattro", Quality, Some(Reference)),
+        ("sd-quattro", Quality, Some(Reference)),
+        ("dp3-quattro-iso800", Quality, Some(Reference)),
+        ("dp3-quattro-iso800", Quality, None),
+        ("dp3-quattro-iso800", Speed, None),
+        ("dp3-quattro-iso800", Quality, Some(Universal)),
     ] {
         let source = std::sync::Arc::new(Source::open(root.join(format!("{name}.x3f"))).unwrap());
         let mut settings = Settings::new("Sunlight", "Standard");
+        settings.processing_quality = quality;
+        settings.sharpening_enabled = sharpening.is_some();
+        if sharpening == Some(Universal) {
+            settings.photographic.sharpening.method = Universal;
+            settings.photographic.sharpening.amount = 1.;
+        }
         let full = engine
             .render(&source, &settings, &mut Profile::default())
             .unwrap();
@@ -1376,10 +1391,12 @@ fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_pannin
             )
             .unwrap();
         settings.working_scale = Scale::NATIVE;
-        for (index, [x, y]) in [[0, 0], [width / 2, height / 2], [width - 480, height - 320]]
-            .into_iter()
-            .enumerate()
-        {
+        let center = [width / 2, height / 2];
+        let mut positions = vec![[0, 0], center, [width - 480, height - 320]];
+        if sharpening != Some(Reference) {
+            positions.splice(2..2, [[center[0] + 129, center[1] + 1], center]);
+        }
+        for (index, [x, y]) in positions.into_iter().enumerate() {
             settings.preview_region = Some([x, y, x + 480, y + 320]);
             let before = engine.gpu_activity();
             let mut result = engine
@@ -1403,6 +1420,7 @@ fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_pannin
                 panic!("image expected")
             };
             assert_eq!(regional.view().extent, [480, 320]);
+            assert_eq!(regional.settings().preview_region, settings.preview_region);
             let actual = engine.readback_image(&regional).unwrap();
             let mut expected = Vec::with_capacity(actual.len());
             for row in y..y + 320 {
@@ -1424,7 +1442,7 @@ fn regional_quattro_processing_matches_full_crops_after_fast_overview_and_pannin
             eprintln!("{name} {x},{y}: {changed} changed components, maximum {max}");
             assert!(
                 actual == expected,
-                "regional Full mismatch {name} at {x},{y}, maximum {max}"
+                "regional Full mismatch {name} {quality:?}, sharpening {sharpening:?} at {x},{y}, maximum {max}"
             );
         }
         settings.preview_region = None;
