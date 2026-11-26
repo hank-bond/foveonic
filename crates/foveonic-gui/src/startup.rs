@@ -89,8 +89,40 @@ impl Window {
                 )
             });
         }
+        self.fit(context, |outer| {
+            work_area(context.pixels_per_point(), outer)
+        });
         for command in self.commands() {
             context.send_viewport_cmd(command);
+        }
+    }
+    /// Keep the workspace inside the monitor area that the taskbar leaves free.
+    /// Eframe and winit place windows against the whole monitor.
+    fn fit(
+        &mut self,
+        context: &egui::Context,
+        work_area: impl FnOnce(egui::Rect) -> Option<egui::Rect>,
+    ) {
+        let frame = context.input(|input| {
+            let viewport = input.viewport();
+            Some(viewport.outer_rect?.size() - viewport.inner_rect?.size())
+        });
+        let (Some(frame), Some(position), Some(inner_size)) =
+            (frame, self.workspace_position, self.workspace.inner_size)
+        else {
+            return;
+        };
+        let outer = egui::Rect::from_min_size(position, inner_size + frame);
+        let Some(area) = work_area(outer) else {
+            return;
+        };
+        let fitted = fit_within(outer, area);
+        self.workspace_position = Some(fitted.min);
+        self.workspace.inner_size = Some(fitted.size() - frame);
+        // On a screen smaller than the minimum window, the free area wins so the
+        // whole window stays clear of the taskbar.
+        if let Some(minimum) = self.workspace.min_inner_size {
+            self.workspace.min_inner_size = Some(minimum.min(area.size() - frame));
         }
     }
     fn observe_size(&mut self, size: Option<egui::Vec2>) {
@@ -101,6 +133,66 @@ impl Window {
     fn preserve(&self, storage: &mut dyn eframe::Storage) {
         storage.set_string(WINDOW_STORAGE_KEY, self.saved.clone());
     }
+}
+
+/// Shrink a window that is larger than the area, then move it inside.
+/// Fractional scales leave `area.max - size` a rounding error from `area.min`,
+/// so the top-left wins rather than clamping between crossed bounds.
+fn fit_within(window: egui::Rect, area: egui::Rect) -> egui::Rect {
+    let size = window.size().min(area.size());
+    let min = window.min.min(area.max - size).max(area.min);
+    egui::Rect::from_min_size(min, size)
+}
+
+/// The free area, in points, of the monitor nearest to a window rectangle.
+/// Tests supply their own area so results do not depend on the test machine's monitor.
+#[cfg(all(target_os = "windows", not(test)))]
+fn work_area(pixels_per_point: f32, window: egui::Rect) -> Option<egui::Rect> {
+    use windows_sys::Win32::{
+        Foundation::RECT,
+        Graphics::Gdi::{GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST},
+    };
+    let pixels = |points: f32| (points * pixels_per_point).round() as i32;
+    let window = RECT {
+        left: pixels(window.left()),
+        top: pixels(window.top()),
+        right: pixels(window.right()),
+        bottom: pixels(window.bottom()),
+    };
+    let empty = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let mut monitor = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        rcMonitor: empty,
+        rcWork: empty,
+        dwFlags: 0,
+    };
+    // SAFETY: both pointers refer to live locals, and `cbSize` states the
+    // size of the structure the call fills.
+    let found = unsafe {
+        GetMonitorInfoW(
+            MonitorFromRect(&window, MONITOR_DEFAULTTONEAREST),
+            &mut monitor,
+        )
+    };
+    let points = |pixels: i32| pixels as f32 / pixels_per_point;
+    let work = monitor.rcWork;
+    (found != 0).then(|| {
+        egui::Rect::from_min_max(
+            egui::pos2(points(work.left), points(work.top)),
+            egui::pos2(points(work.right), points(work.bottom)),
+        )
+    })
+}
+
+/// Placement on other platforms is unchanged.
+#[cfg(any(not(target_os = "windows"), test))]
+fn work_area(_pixels_per_point: f32, _window: egui::Rect) -> Option<egui::Rect> {
+    None
 }
 
 /// The native hook receives the already restored and monitor-clamped workspace.

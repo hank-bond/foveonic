@@ -363,3 +363,139 @@ fn first_launch_workspace_expands_around_the_center_and_unavailable_geometry_is_
     assert!(unavailable.positioned);
     assert!(unavailable.workspace_position.is_none());
 }
+
+fn fitted(
+    position: egui::Pos2,
+    inner_size: egui::Vec2,
+    area: egui::Rect,
+) -> (egui::Pos2, egui::Vec2) {
+    let context = egui::Context::default();
+    let mut window = Window::new(
+        egui::ViewportBuilder::default().with_inner_size(inner_size),
+        None,
+    );
+    window.workspace_position = Some(position);
+    let _ = context.run(placement_input(egui::Pos2::ZERO), |context| {
+        window.fit(context, |_| Some(area))
+    });
+    (
+        window.workspace_position.unwrap(),
+        window.workspace.inner_size.unwrap(),
+    )
+}
+
+#[test]
+fn workspace_moves_clear_of_a_taskbar_on_any_edge() {
+    let size = egui::vec2(1440., 1000.);
+    let top = egui::Rect::from_min_max(egui::pos2(0., 48.), egui::pos2(1920., 1080.));
+    assert_eq!(
+        fitted(egui::pos2(240., 20.), size, top),
+        (egui::pos2(240., 48.), size)
+    );
+    // The fixture's title bar adds 32 points to the outer height.
+    let bottom = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1920., 1032.));
+    assert_eq!(
+        fitted(egui::pos2(240., 20.), size, bottom),
+        (egui::pos2(240., 0.), size)
+    );
+    let left = egui::Rect::from_min_max(egui::pos2(62., 0.), egui::pos2(1920., 1080.));
+    assert_eq!(
+        fitted(egui::pos2(20., 20.), size, left),
+        (egui::pos2(62., 20.), size)
+    );
+    // The fixture's frame adds nothing to the outer width.
+    let right = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1858., 1080.));
+    assert_eq!(
+        fitted(egui::pos2(460., 20.), size, right),
+        (egui::pos2(418., 20.), size)
+    );
+}
+
+#[test]
+fn workspace_fits_a_monitor_left_of_the_primary_one() {
+    let size = egui::vec2(1440., 1000.);
+    let area = egui::Rect::from_min_max(egui::pos2(-1920., 48.), egui::pos2(0., 1080.));
+    assert_eq!(
+        fitted(egui::pos2(-1500., 0.), size, area),
+        (egui::pos2(-1500., 48.), size)
+    );
+}
+
+#[test]
+fn workspace_larger_than_the_free_area_shrinks_to_fill_it() {
+    // 1920x1080 at 150% with a top taskbar.
+    let area = egui::Rect::from_min_max(egui::pos2(0., 32.), egui::pos2(1280., 720.));
+    assert_eq!(
+        fitted(egui::pos2(-80., -156.), egui::vec2(1440., 1000.), area),
+        (egui::pos2(0., 32.), egui::vec2(1280., 656.))
+    );
+}
+
+#[test]
+fn a_window_filling_a_fractionally_scaled_area_does_not_panic() {
+    // 1920x1080 at 175% with a 120-pixel top taskbar. In f32, the area's
+    // bottom minus its height falls just short of its top.
+    let scale = 1.75_f32;
+    let area = egui::Rect::from_min_max(
+        egui::pos2(0., 120. / scale),
+        egui::pos2(1920. / scale, 1080. / scale),
+    );
+    let (position, size) = fitted(egui::pos2(-80., -156.), egui::vec2(1440., 1000.), area);
+    assert_eq!(position, area.min);
+    assert!(size.x <= area.width() && size.y <= area.height());
+}
+
+#[test]
+fn a_free_area_smaller_than_the_minimum_window_lowers_the_minimum() {
+    // 1366x768 at 125% with a bottom taskbar leaves 1092.8 x 576 points.
+    let area = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1092.8, 576.));
+    let context = egui::Context::default();
+    let mut window = Window::new(
+        egui::ViewportBuilder::default()
+            .with_inner_size([1440., 1000.])
+            .with_min_inner_size([1000., 600.]),
+        None,
+    );
+    window.workspace_position = Some(egui::pos2(-80., -100.));
+    let _ = context.run(placement_input(egui::Pos2::ZERO), |context| {
+        window.fit(context, |_| Some(area))
+    });
+    // The fixture's title bar adds 32 points to the outer height.
+    assert_eq!(window.workspace.inner_size, Some(egui::vec2(1092.8, 544.)));
+    assert_eq!(
+        window.workspace.min_inner_size,
+        Some(egui::vec2(1000., 544.))
+    );
+    let roomy = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1920., 1032.));
+    let mut window = Window::new(
+        egui::ViewportBuilder::default()
+            .with_inner_size([1440., 1000.])
+            .with_min_inner_size([1000., 600.]),
+        None,
+    );
+    window.workspace_position = Some(egui::pos2(0., 0.));
+    let _ = context.run(placement_input(egui::Pos2::ZERO), |context| {
+        window.fit(context, |_| Some(roomy))
+    });
+    assert_eq!(
+        window.workspace.min_inner_size,
+        Some(egui::vec2(1000., 600.))
+    );
+}
+
+#[test]
+fn workspace_inside_the_free_area_and_unknown_areas_are_unchanged() {
+    let size = egui::vec2(1240., 820.);
+    let area = egui::Rect::from_min_max(egui::pos2(0., 48.), egui::pos2(1920., 1080.));
+    assert_eq!(
+        fitted(egui::pos2(130., 72.), size, area),
+        (egui::pos2(130., 72.), size)
+    );
+    let context = egui::Context::default();
+    let mut window = Window::new(egui::ViewportBuilder::default().with_inner_size(size), None);
+    window.workspace_position = Some(egui::pos2(130., -40.));
+    let _ = context.run(placement_input(egui::Pos2::ZERO), |context| {
+        window.fit(context, |_| None)
+    });
+    assert_eq!(window.workspace_position, Some(egui::pos2(130., -40.)));
+}
