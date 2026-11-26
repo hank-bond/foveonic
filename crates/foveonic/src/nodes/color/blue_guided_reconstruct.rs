@@ -226,7 +226,6 @@ pub(crate) fn apply(
     let mut vertical = gpu.storage("Double-word resized vertical guide", low * 2 * 3 * 8)?;
     let mut signed = gpu.storage("Signed code guide", high * 12)?;
     let mut repaired = gpu.storage("Blue outlier correction", high * 4)?;
-    let mut rgb = gpu.storage("Reconstructed unsigned code RGB", high * 12)?;
     let mut residual = gpu.storage("Reconstructed residual gain", high * 4)?;
     let mut trace = gpu.trace(
         profile.mode.gpu(),
@@ -274,6 +273,9 @@ pub(crate) fn apply(
         None
     };
     let restoration_blue = filtered.as_ref().unwrap_or(&repaired);
+    // The vertical guide's double-word lanes occupy exactly one full-resolution RGB plane.
+    // Its last read was submitted by the horizontal guide pass.
+    let mut rgb = vertical;
     gpu.dispatch(
         Kernel::BlueGuidedRestore,
         &mut [

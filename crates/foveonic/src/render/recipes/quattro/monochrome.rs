@@ -677,19 +677,19 @@ mod tests {
         );
         assert!(maximum <= 0.0001 && sum / count as f64 <= 0.0000001);
         let mask: Vec<u32> = read("apply-mask.bin").into_iter().map(u32::from).collect();
-        let output = residual_finish::apply(
+        let (finished_rgb, detail) = residual_finish::tests::both(
             &gpu,
             &rgb.rgb,
             &rgb.residual,
-            Some(&gpu.upload("Native full saturation mask", &mask).unwrap()),
+            &gpu.upload("Native full saturation mask", &mask).unwrap(),
             &prepared.finish,
             &mut profile,
         )
         .unwrap();
         for (name, buffer) in [
             ("apply-rgb.bin", rgb.rgb),
-            ("output-rgb.u16", output.rgb),
-            ("output-detail.i16", output.detail),
+            ("output-rgb.u16", finished_rgb),
+            ("output-detail.i16", detail),
         ] {
             let bytes = gpu.readback(&buffer).unwrap();
             let actual: &[f32] = bytemuck::cast_slice(&bytes);

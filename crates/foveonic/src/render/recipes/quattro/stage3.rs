@@ -457,7 +457,7 @@ mod tests {
         let start = std::time::Instant::now();
         let lab = crate::nodes::color::packed_lab::apply(
             &gpu,
-            &input,
+            input,
             &crate::nodes::color::packed_lab::Prepared::new(
                 size,
                 crate::nodes::color::packed_lab::Direction::Forward,
@@ -476,7 +476,7 @@ mod tests {
         .unwrap();
         let output = crate::nodes::color::packed_lab::apply(
             &gpu,
-            &adjusted,
+            adjusted,
             &crate::nodes::color::packed_lab::Prepared::new(
                 size,
                 crate::nodes::color::packed_lab::Direction::Inverse,
@@ -550,7 +550,7 @@ mod tests {
             .unwrap();
         let lab = packed_lab::apply(
             &gpu,
-            &image,
+            image,
             &Prepared::new(extent, Direction::Forward, RGB_TO_XYZ).unwrap(),
             &mut profile,
         )
@@ -571,7 +571,7 @@ mod tests {
         .unwrap();
         let rgb = packed_lab::apply(
             &gpu,
-            &adjusted,
+            adjusted,
             &Prepared::new(extent, Direction::Inverse, XYZ_TO_RGB).unwrap(),
             &mut profile,
         )

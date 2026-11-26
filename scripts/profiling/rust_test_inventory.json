@@ -909,6 +909,7 @@
         "render::tests::interpolated_waveforms_conserve_weight_reduce_column_beats_and_track_sub_bin_levels",
         "render::tests::scalar_fields_preserve_geometry_and_values_without_rgb_storage",
         "render::tests::viewport_scopes_use_oriented_region_and_crop_relative_columns",
+        "render::execute::observation_tests::packed_lab_preserves_the_requested_intermediate_and_reuses_the_last_read",
         "render::execute::observation_tests::each_tick_waits_once_and_preserves_samples_and_progress",
         "render::execute::observation_tests::resumed_graph_preserves_signed_samples_progress_and_trailing_observations",
         "render::execute::observation_tests::cancellation_between_advancements_does_not_execute_the_next_operation"

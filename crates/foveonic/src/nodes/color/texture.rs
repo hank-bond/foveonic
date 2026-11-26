@@ -90,7 +90,7 @@ impl Default for Color {
 #[derive(Clone, Copy)]
 pub(crate) struct Prepared {
     uniforms: Uniforms,
-    spatial: bool,
+    blur_step_count: usize,
     identity: bool,
 }
 impl Prepared {
@@ -102,7 +102,7 @@ impl Prepared {
         requested: Requested,
     ) -> Option<crate::render::allocation::GpuAllocation> {
         use crate::render::allocation::{image_bytes, uploaded_bytes, GpuAllocation};
-        if self.spatial || !requested.layers || requested.change {
+        if self.blur_step_count != 0 || !requested.layers || requested.change {
             return None;
         }
         let extent = super::reconstruction::whole_atlas_extent(params)?;
@@ -128,7 +128,12 @@ impl Prepared {
             return Err("invalid texture sampling scale".into());
         }
         Ok(Self {
-            spatial: effects.texture.is_some(),
+            blur_step_count: match effects.texture {
+                None => 0,
+                // At unit Coarse Amount the broad blur cancels in the mix.
+                Some(t) if t.coarse == 1. => FINE_BOUNDARY_STEP + 1,
+                Some(_) => NATIVE_STEPS.len(),
+            },
             identity: !effects.changes_layers(),
             uniforms: Uniforms {
                 strength: effects.strength,
@@ -198,25 +203,26 @@ pub(crate) fn apply(
     ];
     let uniform = gpu.uniform(&params);
     let controls = gpu.uniform(&prepared.uniforms);
-    let unit = !prepared.spatial;
+    let steps = &prepared.uniforms.steps[..prepared.blur_step_count];
     let identity = prepared.identity;
     let restore = requested.layers && !identity;
     let mut result = Output {
         layers: (requested.layers && identity).then(|| raw.clone()),
         change: None,
     };
-    // Neutral detail amounts cancel all bands. Neither restoration nor its
-    // diagnostic needs the spatial pyramid in that common case.
-    const PYRAMID_PASSES: u32 = 1 + 2 * NATIVE_STEPS.len() as u32;
-    let dispatches =
-        u32::from(restore) + u32::from(requested.change) + if unit { 0 } else { PYRAMID_PASSES };
+    let pyramid_passes = if steps.is_empty() {
+        0
+    } else {
+        1 + 2 * steps.len() as u32
+    };
+    let dispatches = u32::from(restore) + u32::from(requested.change) + pyramid_passes;
     if dispatches == 0 {
         return Ok(result);
     }
     let mut trace = gpu.trace(profile.mode.gpu(), dispatches);
     let mut fine = ratio.clone();
     let mut coarse = ratio.clone();
-    if !unit {
+    if !steps.is_empty() {
         let mut log = gpu.storage("Texture luminance residual", bytes)?;
         gpu.dispatch(
             Kernel::TextureExtract,
@@ -232,7 +238,7 @@ pub(crate) fn apply(
             &mut trace,
         );
         let mut current = log;
-        for (index, step) in prepared.uniforms.steps.into_iter().enumerate() {
+        for (index, &step) in steps.iter().enumerate() {
             for axis in 0..2 {
                 let pass = gpu.uniform(&Uniforms {
                     steps: [step, axis as f32, 0., 0.],

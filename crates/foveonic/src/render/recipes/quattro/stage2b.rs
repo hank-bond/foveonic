@@ -316,7 +316,7 @@ pub(super) fn build(
     highlight_mask: usize,
     prepared: Prepared,
     view: crate::image::View,
-) -> Result<usize> {
+) -> Result<(usize, usize)> {
     let color_extent = prepared.reconstruct.extent();
     let double_mask = prepared.reconstruct.doubles_output();
     let reconstructed = graph.add(
@@ -335,33 +335,29 @@ pub(super) fn build(
         graph.set_view(id, view);
     }
     let residual = graph.named_output(reconstructed, "reconstruction.residual")?;
-    let mask = if !double_mask {
-        highlight_mask
-    } else {
-        graph.add(
+    let mask = if double_mask {
+        let mask = graph.add(
             Operation::ByteMaskDouble(crate::nodes::color::byte_mask_double::Params::new(
                 color_extent,
             )?),
             &[highlight_mask],
-        )?
-    };
-    if double_mask {
+        )?;
         graph.set_view(mask, view);
-    }
-    let finished = graph.add(
-        Operation::ResidualFinish {
-            params: prepared.finish,
-            with_mask: true,
-        },
+        mask
+    } else {
+        highlight_mask
+    };
+    let detail = graph.add(
+        Operation::ResidualDetail(prepared.finish),
         &[reconstructed, residual, mask],
     )?;
-    for id in graph.nodes[graph.outputs[finished].producer]
-        .outputs
-        .clone()
-    {
-        graph.set_view(id, view);
-    }
-    Ok(finished)
+    let rgb = graph.add(
+        Operation::ResidualRgb(prepared.finish),
+        &[reconstructed, residual],
+    )?;
+    graph.set_view(detail, view);
+    graph.set_view(rgb, view);
+    Ok((rgb, detail))
 }
 
 #[cfg(test)]
@@ -471,7 +467,10 @@ mod tests {
             mask,
         )
         .unwrap();
-        assert!(prepared.finish.key() == native.key());
+        assert_eq!(
+            bytemuck::bytes_of(&prepared.finish),
+            bytemuck::bytes_of(&native)
+        );
     }
     #[test]
     #[ignore = "requires QUATTRO_X3F ISO800 original and QUATTRO_STAGE2B_CONTROLS native metadata capture"]
@@ -509,12 +508,10 @@ mod tests {
             mask_control,
         )
         .unwrap();
-        assert!(
-            prepare(&source.metadata, Controls::default(), "Standard")
-                .unwrap()
-                .finish
-                .key()
-                == native.key()
+        let prepared = prepare(&source.metadata, Controls::default(), "Standard").unwrap();
+        assert_eq!(
+            bytemuck::bytes_of(&prepared.finish),
+            bytemuck::bytes_of(&native)
         );
     }
     #[test]
@@ -615,6 +612,9 @@ mod tests {
             f32::from_le_bytes(data[0x28..0x2c].try_into().unwrap()),
         )
         .unwrap();
-        assert!(prepared.finish.key() == actual.key());
+        assert_eq!(
+            bytemuck::bytes_of(&prepared.finish),
+            bytemuck::bytes_of(&actual)
+        );
     }
 }

@@ -6,7 +6,7 @@ struct Params { shape: vec4<u32>, controls: vec4<f32> }
 @group(0) @binding(4) var<storage, read> adaptive: array<f32>;
 @group(0) @binding(5) var<storage, read_write> destination: array<f32>;
 
-const WORKGROUP_EDGE = 8u;
+const WORKGROUP_EDGE = 16u;
 // Cache the common eleven-wide window. Larger accepted windows use storage.
 const MAXIMUM_CACHED_RADIUS = 5u;
 const MAXIMUM_TILE_EDGE = WORKGROUP_EDGE + 2u * MAXIMUM_CACHED_RADIUS;
@@ -15,7 +15,7 @@ var<workgroup> samples: array<vec2<u32>, MAXIMUM_TILE_EDGE * MAXIMUM_TILE_EDGE>;
 
 fn bin(value: f32) -> u32 { return u32(clamp(i32(value), 0, 16383)) >> 4u; }
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(WORKGROUP_EDGE, WORKGROUP_EDGE)
 fn histogram_bilateral(
     @builtin(global_invocation_id) id: vec3<u32>,
     @builtin(local_invocation_id) local: vec3<u32>,

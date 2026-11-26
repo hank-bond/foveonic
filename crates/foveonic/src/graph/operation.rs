@@ -67,10 +67,8 @@ pub enum Operation {
         output: &'static str,
     },
     BlueGuidedReconstruct(std::sync::Arc<crate::nodes::color::blue_guided_reconstruct::Prepared>),
-    ResidualFinish {
-        params: crate::nodes::color::residual_finish::Params,
-        with_mask: bool,
-    },
+    ResidualRgb(crate::nodes::color::residual_finish::Params),
+    ResidualDetail(crate::nodes::color::residual_finish::Params),
     Source,
     SourcePhaseCells,
     CodeCrop(std::sync::Arc<crate::nodes::finish::code_crop::Prepared>),
@@ -680,7 +678,8 @@ impl Operation {
             Self::ByteMaskDouble(p) => p.key(),
             Self::MaskImage { params, .. } => params.key(),
             Self::BlueGuidedReconstruct(p) => p.key(),
-            Self::ResidualFinish { params, with_mask } => params.key().with(&u32::from(*with_mask)),
+            Self::ResidualRgb(p) => p.rgb_key(),
+            Self::ResidualDetail(p) => p.detail_key(),
             Self::PhaseExtraction(p) => p.key(),
             Self::PhaseGain(p) => p.key(),
             Self::BlueRefresh(p) => p.key(),
@@ -852,7 +851,8 @@ impl Operation {
             Self::ByteMaskDouble(_) => "ByteMaskDouble",
             Self::MaskImage { .. } => "MaskImage",
             Self::BlueGuidedReconstruct(_) => "BlueGuidedReconstruct",
-            Self::ResidualFinish { .. } => "ResidualFinish",
+            Self::ResidualRgb(_) => "ResidualRgb",
+            Self::ResidualDetail(_) => "ResidualDetail",
             Self::Source => "Source",
             Self::SourcePhaseCells => "SourcePhaseCells",
             Self::CodeCrop(_) => "CodeCrop",
@@ -996,7 +996,8 @@ impl Operation {
                     "reconstruct full-resolution color"
                 }
             }
-            Self::ResidualFinish { .. } => "finish reconstruction residual",
+            Self::ResidualRgb(_) => "finish reconstruction residual",
+            Self::ResidualDetail(_) => "derive signed residual detail",
             Self::OrderedBlueRepair(_) => "repair ordered blue defects",
             Self::BlueMismatch(_) => "repair highlight blue mismatch",
             Self::HighlightRestoration(_) => "restore directional highlights",
@@ -1136,13 +1137,10 @@ impl Operation {
                 ],
                 UnsignedCodeRgb,
             ),
-            Self::ResidualFinish { with_mask, .. } => (
-                if *with_mask {
-                    vec![UnsignedCodeRgb, LuminanceRatio, HighlightMask]
-                } else {
-                    vec![UnsignedCodeRgb, LuminanceRatio]
-                },
-                UnsignedCodeRgb,
+            Self::ResidualRgb(_) => (vec![UnsignedCodeRgb, LuminanceRatio], UnsignedCodeRgb),
+            Self::ResidualDetail(_) => (
+                vec![UnsignedCodeRgb, LuminanceRatio, HighlightMask],
+                SignedDetail,
             ),
             Self::Source => (vec![], SensorLayers),
             Self::CalibratedDefects(_) => (vec![SensorLayers], SensorLayers),
@@ -1409,15 +1407,6 @@ impl Operation {
             Self::BlueGuidedReconstruct(_) => {
                 vec![("reconstruction.residual", LuminanceRatio, vec![0, 1, 2, 3])]
             }
-            Self::ResidualFinish { with_mask, .. } => vec![(
-                "reconstruction.detail",
-                SignedDetail,
-                if *with_mask {
-                    vec![0, 1, 2]
-                } else {
-                    vec![0, 1]
-                },
-            )],
             Self::TwoScaleNoise(_) | Self::ChannelNoise(_) => {
                 vec![("noise.source-after", CorrectedSensorRgb, vec![0])]
             }
@@ -1562,7 +1551,8 @@ impl Operation {
             Self::ByteMaskDouble(_) => "reconstruction.mask",
             Self::MaskImage { output, .. } => output,
             Self::BlueGuidedReconstruct(_) => "reconstruction.rgb",
-            Self::ResidualFinish { .. } => "residual.rgb",
+            Self::ResidualRgb(_) => "residual.rgb",
+            Self::ResidualDetail(_) => "reconstruction.detail",
             Self::OrderedBlueRepair(p) => match p.stage() {
                 crate::nodes::sensor::ordered_blue_repair::Stage::Directional => {
                     "luma-repair.directional"

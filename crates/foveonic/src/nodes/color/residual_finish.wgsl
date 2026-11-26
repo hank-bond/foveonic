@@ -5,9 +5,7 @@ struct Params {
 @group(0) @binding(1) var<storage, read> residual: array<f32>;
 @group(0) @binding(2) var<storage, read> mask: array<u32>;
 @group(0) @binding(3) var<uniform> params: Params;
-@group(0) @binding(4) var<storage, read_write> detail: array<f32>;
-@group(0) @binding(5) var<storage, read_write> rgb: array<f32>;
-@group(0) @binding(6) var<storage, read_write> damped: array<f32>;
+@group(0) @binding(4) var<storage, read_write> destination: array<f32>;
 
 fn plus(a: f32, b: f32)->f32 {
     return fma(1., a, b);
@@ -49,7 +47,7 @@ fn residual_sharp(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let i = id.y*w+id.x;
     if id.x == 0u || id.y == 0u || id.x+1u == w || id.y+1u == h {
-        detail[i] = 0.;
+        destination[i] = 0.;
         return;
     }
     let scale = params.controls.x;
@@ -77,30 +75,8 @@ fn residual_sharp(@builtin(global_invocation_id) id: vec3<u32>) {
     let limit = times(relative, center);
     result = clamp(result, -limit, limit);
     result = clamp(result, -32760., 32760.);
-    detail[i] = signed16(plus(times(result, 4.), .5));
-}
-
-@compute @workgroup_size(8, 8)
-
-fn residual_finish(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.shape.x || id.y >= params.shape.y {
-        return;
-    }
-    let i = id.y*params.shape.x+id.x;
-    let r = residual[i];
-    let adaptive = params.controls.z;
-    var gain = 0.;
-    if r>1. {
-        gain = fma(plus(r, -1.), adaptive, 1.);
-    }
-    else {
-        gain = divide(-r, plus(fma(r, adaptive, -r), -adaptive));
-    }
-    for (var c = 0u;c<3u;c++) {
-        rgb[i*3u+c] = trunc(clamp(times(gain, source[i*3u+c]), 0., 65535.));
-    }
-    var sharp = detail[i];
-    if params.shape.w != 0u && mask[i] != 0u {
+    var sharp = signed16(plus(times(result, 4.), .5));
+    if mask[i] != 0u {
         let base = fma(params.controls.w, .25, 1.25);
         let delta = times(base, times(f32(mask[i]), -.0039));
         // Native widens delta before adding one and multiplying signed detail.
@@ -121,5 +97,26 @@ fn residual_finish(@builtin(global_invocation_id) id: vec3<u32>) {
         }
         sharp = signed16(integer);
     }
-    damped[i] = sharp;
+    destination[i] = sharp;
+}
+
+@compute @workgroup_size(8, 8)
+
+fn residual_finish(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.shape.x || id.y >= params.shape.y {
+        return;
+    }
+    let i = id.y*params.shape.x+id.x;
+    let r = residual[i];
+    let adaptive = params.controls.z;
+    var gain = 0.;
+    if r>1. {
+        gain = fma(plus(r, -1.), adaptive, 1.);
+    }
+    else {
+        gain = divide(-r, plus(fma(r, adaptive, -r), -adaptive));
+    }
+    for (var c = 0u;c<3u;c++) {
+        destination[i*3u+c] = trunc(clamp(times(gain, source[i*3u+c]), 0., 65535.));
+    }
 }

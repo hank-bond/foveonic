@@ -270,26 +270,13 @@ fn selected_full_native_stage2b_rgb_matches() {
             eprintln!("Reconstruction boundary {name} changed{changed} max{maximum}");
         }
     }
-    let mask_values = if directory.join("apply-mask.bin").exists() {
-        std::fs::read(directory.join("apply-mask.bin"))
-            .unwrap()
-            .into_iter()
-            .map(u32::from)
-            .collect()
-    } else {
-        vec![0u32; (extent[0] * extent[1] * 4) as usize]
-    };
-    let mask = gpu
-        .upload("Captured detail damping mask", &mask_values)
-        .unwrap();
     let adaptive = read("apply-adaptive.f32");
     assert!(adaptive.iter().all(|v| *v == adaptive[0]));
     let adaptive = adaptive[0];
-    let result = crate::nodes::color::residual_finish::apply(
+    let result = crate::nodes::color::residual_finish::rgb(
         &gpu,
         &output.rgb,
         &output.residual,
-        Some(&mask),
         &crate::nodes::color::residual_finish::Params::new(
             extent.map(|v| v * 2),
             field(0x3c),
@@ -302,7 +289,7 @@ fn selected_full_native_stage2b_rgb_matches() {
         &mut profile,
     )
     .unwrap();
-    let bytes = gpu.readback(&result.rgb).unwrap();
+    let bytes = gpu.readback(&result).unwrap();
     let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
     let expected = std::fs::read(directory.join("output-rgb.u16")).unwrap();
     let words = expected.as_chunks::<2>().0;
