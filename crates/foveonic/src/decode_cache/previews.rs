@@ -359,11 +359,7 @@ fn embedded(
     let preview = crate::preview::read_full(path)?;
     // DP0's large JPEG omits Raw borders. Keep its correctly framed small
     // thumbnail until a photographic render can supply those missing pixels.
-    if (f64::from(preview.extent[0]) / f64::from(preview.extent[1])
-        - f64::from(preview.native_extent[0]) / f64::from(preview.native_extent[1]))
-    .abs()
-        > crate::preview::PREVIEW_ASPECT_TOLERANCE
-    {
+    if !preview.matches_raw_framing() {
         return Ok(());
     }
     crate::priority::checkpoint_or_cancel()?;

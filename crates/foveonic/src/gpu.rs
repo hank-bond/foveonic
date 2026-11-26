@@ -293,7 +293,7 @@ impl Gpu {
                 );
             }
         });
-        Self::from_device(device, queue, adapter_name)
+        Ok(Self::from_device(device, queue, adapter_name))
     }
 
     pub fn activity(&self) -> crate::profile::GpuActivity {
@@ -1218,7 +1218,10 @@ mod pipeline_tests {
         )
         .unwrap();
         assert_eq!(built, Kernel::FieldPrepare as usize);
-        assert!(gpu.pipelines.iter().all(|pipeline| pipeline.get().is_some()));
+        assert!(gpu
+            .pipelines
+            .iter()
+            .all(|pipeline| pipeline.get().is_some()));
         gpu.prepare_color_field().unwrap();
     }
 }

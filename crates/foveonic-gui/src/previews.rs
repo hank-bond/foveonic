@@ -180,7 +180,6 @@ impl Previews {
                                 preview_warning("preview.decode", error.as_ref(), &job)
                             })
                             .ok()?,
-                        0,
                         preview.color_space,
                         job.native_extent,
                         true,

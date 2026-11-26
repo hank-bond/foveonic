@@ -147,13 +147,13 @@ fn build_app(root: &Path, build: &Build) -> Result<std::path::PathBuf> {
         .prefix("foveonic-native-")
         .tempdir()?;
     bundle::compile_icon(root, compiled.path())?;
-    let extension = bundle::compile_preview_extension(
+    let extensions = bundle::compile_quick_look_extensions(
         root,
         &built.preview_library,
         compiled.path(),
         &app.version,
     )?;
-    bundle::assemble(&built.gui, compiled.path(), &extension, &app.version)
+    bundle::assemble(&built.gui, compiled.path(), &extensions, &app.version)
 }
 
 #[cfg(test)]

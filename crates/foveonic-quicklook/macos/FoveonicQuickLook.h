@@ -18,8 +18,14 @@ typedef struct {
     size_t profile_len;
 } FoveonicImage;
 
-/// Renders the camera's default recipe at preview size. On failure, writes a
-/// NUL-terminated message into error and returns false.
+/// Renders the camera's default recipe at preview size, or returns the camera's embedded
+/// image when rendering fails. If neither works, writes a NUL-terminated message into
+/// error and returns false.
 bool foveonic_ql_preview(const char *path, FoveonicImage *image, char *error, size_t error_len);
+
+/// Decodes the camera's embedded image, upright and fitted within side pixels.
+/// Reports failure as foveonic_ql_preview does.
+bool foveonic_ql_thumbnail(const char *path, uint32_t side, FoveonicImage *image, char *error,
+                           size_t error_len);
 
 void foveonic_ql_samples_free(uint8_t *samples, size_t samples_len);

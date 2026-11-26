@@ -168,12 +168,7 @@ fn prepare_assets_cpu(
     crate::priority::checkpoint_or_cancel()?;
     let large = crate::preview::from_original(original, true)
         .ok()
-        .filter(|p| {
-            (f64::from(p.extent[0]) / f64::from(p.extent[1])
-                - f64::from(p.native_extent[0]) / f64::from(p.native_extent[1]))
-            .abs()
-                <= crate::preview::PREVIEW_ASPECT_TOLERANCE
-        })
+        .filter(crate::preview::Preview::matches_raw_framing)
         .or_else(|| small.clone());
     let thumbnail = small
         .or_else(|| large.clone())

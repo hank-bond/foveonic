@@ -55,6 +55,29 @@ pub struct EncodedImage {
 }
 impl EncodedImage {
     pub const BYTES_PER_PIXEL: usize = 8;
+
+    /// Pack linear-light pixels on the CPU, as for embedded camera previews.
+    pub fn from_linear(image: &image::Rgb32FImage, color_space: TiffColorSpace) -> Self {
+        let samples: Vec<u8> = image
+            .pixels()
+            .flat_map(|pixel| {
+                let [r, g, b] = pixel
+                    .0
+                    .map(|v| crate::preview::encode_sample(color_space, v));
+                [r, g, b, 0]
+            })
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        debug_assert_eq!(
+            samples.len(),
+            image.width() as usize * image.height() as usize * Self::BYTES_PER_PIXEL
+        );
+        Self {
+            samples,
+            color_space,
+            extent: [image.width(), image.height()],
+        }
+    }
 }
 
 /// Camera-active oriented dimensions, independent of authored crop, preview quality or output size.

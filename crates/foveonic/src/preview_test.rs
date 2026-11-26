@@ -667,3 +667,39 @@ fn exif_padding_is_removed_only_when_it_matches_the_photo_frame() {
         .unwrap();
     assert!(decode_exif_thumbnail(&jpeg, [5424, 3616], &color::Encoding::Srgb).is_err());
 }
+
+#[test]
+fn upright_previews_turn_pixels_and_photograph_dimensions_together() {
+    // Left half red, right half green, stored sideways.
+    let rgb = (0..2)
+        .flat_map(|_| (0..4).flat_map(|x| if x < 2 { [65535, 0, 0] } else { [0, 65535, 0] }))
+        .collect();
+    for (rotation, extent, red_first) in [
+        (0, [4, 2], true),
+        (90, [2, 4], true),
+        (180, [4, 2], false),
+        (270, [2, 4], false),
+    ] {
+        let preview = Preview {
+            rgb: Vec::clone(&rgb),
+            color_space: crate::color_space::TiffColorSpace::Srgb,
+            extent: [4, 2],
+            rotation,
+            native_extent: [400, 200],
+        };
+        let image = preview.upright_linear(4).unwrap();
+        assert_eq!([image.width(), image.height()], extent, "{rotation}");
+        assert_eq!(preview.upright_native_extent(), extent.map(|v| v * 100));
+        assert_eq!(image.get_pixel(0, 0).0[0] > 0.5, red_first, "{rotation}");
+    }
+}
+
+#[test]
+fn sized_reads_use_the_small_image_only_when_it_is_large_enough() {
+    let bytes = fixture(&[(3, [2, 1], 6, vec![0; 6]), (3, [4, 2], 12, vec![1; 24])]);
+    let path = std::env::temp_dir().join(format!("foveonic-sized-{}.x3f", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let extents = [1, 2, 3, 9].map(|side| read_at_least(&path, side).unwrap().extent);
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(extents, [[2, 1], [2, 1], [4, 2], [4, 2]]);
+}

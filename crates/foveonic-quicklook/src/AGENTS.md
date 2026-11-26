@@ -1,5 +1,5 @@
 ---
-summary: "The library selects the preview recipe and working scale and exposes owned pixels to Swift."
+summary: "The library selects the preview recipe and working scale, falls back to embedded images, and exposes owned pixels to Swift."
 ---
 
 # Quick Look source

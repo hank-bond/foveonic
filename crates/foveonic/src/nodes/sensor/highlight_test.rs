@@ -410,8 +410,7 @@ fn highlight_density_inspection_skips_photographic_prefix_and_retains_original_p
         engine.device().clone(),
         engine.queue().clone(),
         "test".into(),
-    )
-    .unwrap();
+    );
     let before = gpu.readback(image.buffer()).unwrap();
     let values = bytemuck::cast_slice::<u8, f32>(&before);
     assert!(values.iter().all(|v| (0. ..=1.).contains(v)));

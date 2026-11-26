@@ -66,6 +66,22 @@ pub fn read_full(path: &Path) -> Result<Preview> {
     read_selected(path, Selection::Largest)
 }
 
+/// Decode the smallest embedded image whose long edge reaches `side`, or the
+/// largest when none does. Files carry a small thumbnail and a full-size JPEG.
+/// A full-size JPEG framed differently from the Raw is never used.
+pub fn read_at_least(path: &Path, side: u32) -> Result<Preview> {
+    let small = read(path)?;
+    if small.extent[0].max(small.extent[1]) >= side {
+        return Ok(small);
+    }
+    let full = read_full(path)?;
+    Ok(if full.matches_raw_framing() {
+        full
+    } else {
+        small
+    })
+}
+
 fn read_selected(path: &Path, selection: Selection) -> Result<Preview> {
     let _scope = crate::diagnostics::scope_with(
         crate::diagnostics::Category::Io,
@@ -208,11 +224,7 @@ fn read_reader(file: &mut (impl Read + Seek), selection: Selection) -> Result<Pr
             // The thumbnail lives near the JPEG header. Never read the complete
             // large JPEG to find it. A differently cropped JPEG (DP0) cannot
             // supply missing Raw borders, so use its full-frame section instead.
-            if (f64::from(extent[0]) / f64::from(extent[1])
-                - f64::from(native[0]) / f64::from(native[1]))
-            .abs()
-                < PREVIEW_ASPECT_TOLERANCE
-            {
+            if same_framing(extent, native) {
                 let mut prefix = vec![0; (size - IMAGE_HEADER_BYTES).min(EXIF_PREFIX_BYTES)];
                 file.read_exact(&mut prefix)?;
                 crate::priority::checkpoint_or_cancel()?;
@@ -339,7 +351,20 @@ const MAX_BYTES: usize = 256 * 1024 * 1024;
 const EXIF_PREFIX_BYTES: usize = 128 * 1024;
 const MAX_EXIF_THUMBNAIL_SIDE: u32 = 512;
 // Rounded thumbnail dimensions may differ slightly from the nominal Raw ratio.
-pub(crate) const PREVIEW_ASPECT_TOLERANCE: f64 = 0.02;
+const PREVIEW_ASPECT_TOLERANCE: f64 = 0.02;
+
+/// Whether an image of `extent` shows the Raw's framing. DP0's large JPEG is cropped.
+fn same_framing(extent: [u32; 2], raw: [u32; 2]) -> bool {
+    (f64::from(extent[0]) / f64::from(extent[1]) - f64::from(raw[0]) / f64::from(raw[1])).abs()
+        <= PREVIEW_ASPECT_TOLERANCE
+}
+
+impl Preview {
+    /// A differently framed image cannot supply the Raw's missing borders.
+    pub fn matches_raw_framing(&self) -> bool {
+        same_framing(self.extent, self.native_extent)
+    }
+}
 
 struct Embedded {
     offset: u64,

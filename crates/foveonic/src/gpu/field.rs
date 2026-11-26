@@ -27,7 +27,10 @@ impl std::error::Error for CompilationFailure {
 impl Gpu {
     pub(crate) fn prepare_color_field(&self) -> Result<()> {
         let result = self.field.get_or_init(|| {
-            let _build = self.builds.lock().expect("pipeline build lock");
+            let _build = self
+                .builds
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             compile(&self.device).map_err(|e| CompilationFailure(e.into()))
         });
         result

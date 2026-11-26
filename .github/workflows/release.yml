@@ -135,11 +135,12 @@ jobs:
             echo "::error::Expected exactly one valid Developer ID Application identity for the configured team."
             exit 1
           fi
-          # Nested code is signed before the app. The extension keeps the sandbox
+          # Nested code is signed before the app. Each extension keeps the sandbox
           # entitlement that cargo xtask bundle signed into it.
-          codesign --force --sign "$identity" --keychain "$SIGNING_KEYCHAIN" \
-            --options runtime --timestamp --preserve-metadata=entitlements \
-            target/release/Foveonic.app/Contents/PlugIns/FoveonicPreview.appex
+          for extension in target/release/Foveonic.app/Contents/PlugIns/*.appex; do
+            codesign --force --sign "$identity" --keychain "$SIGNING_KEYCHAIN" \
+              --options runtime --timestamp --preserve-metadata=entitlements "$extension"
+          done
           codesign --force --sign "$identity" --keychain "$SIGNING_KEYCHAIN" \
             --options runtime --timestamp target/release/Foveonic.app
           codesign --verify --deep --strict --verbose=2 target/release/Foveonic.app

@@ -11,7 +11,8 @@ Preview X3F photographs in Finder with the space bar, and render the same camera
 
 ### New functionality
 
-- Preview an X3F photograph in Finder and Quick Look with the space bar. The preview renders the camera's default recipe at a size that fills the screen.
+- Preview an X3F photograph in Finder and Quick Look with the space bar. The preview renders the camera's default recipe at a size that fills the screen, or shows the camera's embedded image if rendering fails.
+- Show X3F thumbnails in Finder from the camera's embedded image, upright and framed like the photograph.
 
 ### Behavior changes
 

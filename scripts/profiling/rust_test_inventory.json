@@ -998,7 +998,10 @@
       "resource": "gpu",
       "one_test_per_process": false,
       "tests": [
-        "merrill_high_previews_render_at_half_size"
+        "merrill_high_previews_render_at_half_size",
+        "thumbnails_are_upright_and_fit_the_request",
+        "thumbnails_never_use_a_differently_framed_camera_jpeg",
+        "a_failed_render_falls_back_to_the_upright_embedded_image"
       ]
     }
   ],

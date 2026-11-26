@@ -85,6 +85,28 @@ impl Preview {
         Ok(image)
     }
 
+    /// Fit within `side` in linear light, then turn upright by the file's rotation.
+    /// Reducing first keeps the rotation cheap for large embedded JPEGs.
+    pub fn upright_linear(&self, side: u32) -> Result<image::Rgb32FImage> {
+        let image = self.linear_resized(side)?;
+        Ok(match self.rotation {
+            90 => image::imageops::rotate90(&image),
+            180 => image::imageops::rotate180(&image),
+            270 => image::imageops::rotate270(&image),
+            _ => image,
+        })
+    }
+
+    /// The photograph's dimensions once turned upright.
+    pub fn upright_native_extent(&self) -> [u32; 2] {
+        let [width, height] = self.native_extent;
+        if matches!(self.rotation, 90 | 270) {
+            [height, width]
+        } else {
+            [width, height]
+        }
+    }
+
     pub fn resized(self, side: u32) -> Result<Self> {
         if self.extent[0].max(self.extent[1]) <= side {
             return Ok(self);

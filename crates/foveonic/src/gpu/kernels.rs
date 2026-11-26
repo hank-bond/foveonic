@@ -695,12 +695,8 @@ impl Kernel {
 }
 
 impl Gpu {
-    /// Pipelines are built on first use. Call `prepare_kernels` to build them all now.
-    pub fn from_device(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        adapter_name: String,
-    ) -> Result<Self> {
+    /// Pipelines are built on first use. `from_device_progress` builds them all now.
+    pub fn from_device(device: wgpu::Device, queue: wgpu::Queue, adapter_name: String) -> Self {
         let sources = kernel_sources();
         #[cfg(test)]
         let shader_writes = sources
@@ -708,7 +704,7 @@ impl Gpu {
             .enumerate()
             .map(|(index, source)| shader_writes(&kernel_code(index, &source.module), source.entry))
             .collect();
-        Ok(Self {
+        Self {
             device,
             queue,
             pipelines: (0..sources.len()).map(|_| Default::default()).collect(),
@@ -721,7 +717,7 @@ impl Gpu {
             activity: Default::default(),
             in_flight: Default::default(),
             diagnostics: Default::default(),
-        })
+        }
     }
 
     /// Build every pipeline now, as the app does behind its startup screen,
@@ -733,16 +729,14 @@ impl Gpu {
         profile: &mut crate::profile::Profile,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Self> {
-        let gpu = Self::from_device(device, queue, adapter_name)?;
+        let gpu = Self::from_device(device, queue, adapter_name);
         let began = profile.mode.enabled().then(std::time::Instant::now);
         let _scope =
             crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.pipelines.create");
         let count = gpu.pipelines.len();
         progress(0, count);
         for (index, pipeline) in gpu.pipelines.iter().enumerate() {
-            if pipeline.get().is_none() {
-                let _ = pipeline.set(gpu.build_kernel(index)?);
-            }
+            let _ = pipeline.set(gpu.build_kernel(index)?);
             progress(index + 1, count);
         }
         if let Some(began) = began {
@@ -764,8 +758,13 @@ impl Gpu {
 
     fn build_kernel(&self, index: usize) -> Result<wgpu::ComputePipeline> {
         let KernelSource { module, entry } = &self.sources[index];
-        // wgpu keeps one error-scope stack per device, shared by every thread.
-        let _build = self.builds.lock().expect("pipeline build lock");
+        // wgpu keeps one error-scope stack per device, shared by every thread. The lock
+        // keeps builds apart; other device work could still report into this scope,
+        // which only happens after a bug or out of memory.
+        let _build = self
+            .builds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _scope = crate::diagnostics::scope_with(
             crate::diagnostics::Category::Gpu,
             "gpu.shader.compile",

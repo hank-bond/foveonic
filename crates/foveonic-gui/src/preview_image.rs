@@ -1,4 +1,4 @@
-//! Prepares oriented display thumbnails and larger previews away from the UI thread.
+//! Prepares display thumbnails and larger previews from upright images away from the UI thread.
 
 use crate::display_image::Pixels;
 
@@ -21,42 +21,23 @@ impl PreparedPreview {
         preview: foveonic::preview::Preview,
         large: bool,
     ) -> foveonic::source::Result<Self> {
-        let rotation = preview.rotation;
-        let color_space = preview.color_space;
-        let native_extent = preview.native_extent;
-        let image = preview.linear_resized(if large {
+        let (color_space, native_extent) = (preview.color_space, preview.upright_native_extent());
+        let image = preview.upright_linear(if large {
             foveonic::decode_cache::PREVIEW_MAX_SIDE
         } else {
             THUMBNAIL_SIDE
         })?;
+        // Release the decoded RGB16 input before making the display copies.
         drop(preview);
-        Ok(Self::from_linear(
-            image,
-            rotation,
-            color_space,
-            native_extent,
-            large,
-        ))
+        Ok(Self::from_linear(image, color_space, native_extent, large))
     }
+    /// `image` is upright and `native_extent` gives its upright photograph dimensions.
     pub(crate) fn from_linear(
         image: image::Rgb32FImage,
-        rotation: u32,
         color_space: foveonic::color_space::TiffColorSpace,
-        mut native_extent: [u32; 2],
+        native_extent: [u32; 2],
         large: bool,
     ) -> Self {
-        fn rotate(image: image::Rgb32FImage, rotation: u32) -> image::Rgb32FImage {
-            match rotation {
-                90 => image::imageops::rotate90(&image),
-                180 => image::imageops::rotate180(&image),
-                270 => image::imageops::rotate270(&image),
-                _ => image,
-            }
-        }
-        let image = rotate(image, rotation);
-        if matches!(rotation, 90 | 270) {
-            native_extent.swap(0, 1);
-        }
         let scale = (THUMBNAIL_SIDE as f64 / f64::from(image.width().max(image.height()))).min(1.);
         let small = foveonic::preview::resize_linear(
             &image,
@@ -129,33 +110,6 @@ mod tests {
             }
         }
     }
-    #[test]
-    fn decoded_preview_rotates_pixels_and_native_extent_once() {
-        let preview = foveonic::preview::Preview {
-            color_space: foveonic::color_space::TiffColorSpace::Srgb,
-            rgb: (0..128)
-                .flat_map(|_| {
-                    (0..256).flat_map(|x| {
-                        if x < 128 {
-                            [65535, 0, 0]
-                        } else {
-                            [0, 65535, 0]
-                        }
-                    })
-                })
-                .collect(),
-            extent: [256, 128],
-            rotation: 90,
-            native_extent: [2000, 1000],
-        };
-        let thumbnail = DecodedThumbnail::from_preview(preview).unwrap();
-        assert_eq!(thumbnail.native_extent, [1000, 2000]);
-        assert_eq!(thumbnail.image.size, [128, 256]);
-        let one = half::f16::ONE.to_bits();
-        assert_eq!(thumbnail.image.rgba[0], [one, 0, 0, one]);
-        assert_eq!(thumbnail.image.rgba[128 * 255], [0, one, 0, one]);
-    }
-
     #[test]
     fn decoded_preview_downsampling_preserves_native_extent() {
         let preview = foveonic::preview::Preview {

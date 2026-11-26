@@ -1,10 +1,10 @@
 ---
-summary: "The Quick Look crate renders X3F space-bar previews for the sandboxed macOS extension through a C interface."
+summary: "The Quick Look crate renders X3F space-bar previews and embedded-image thumbnails for the sandboxed macOS extensions through a C interface."
 ---
 
 # Quick Look previews
 
-Follow the [Quick Look preview requirements](../../docs/specs/quick-look-previews.md). Keep photographic processing in `foveonic`. This crate chooses the preview recipe and size and hands finished pixels across the C boundary. `macos/` holds the Swift extension and its entitlements, which `cargo xtask bundle` compiles into the app.
+Follow the [Quick Look preview requirements](../../docs/specs/quick-look-previews.md). Keep photographic processing in `foveonic`. This crate chooses the preview recipe and size, asks `foveonic::preview` for upright embedded images, and hands finished pixels across the C boundary. `macos/` holds the two Swift extensions, the image wrapping they share and their entitlements, which `cargo xtask bundle` compiles into the app.
 
 <!-- INDEX:START -->
 
@@ -12,6 +12,6 @@ Follow the [Quick Look preview requirements](../../docs/specs/quick-look-preview
 
 ### Directories
 
-- **[src/](./src/AGENTS.md)** The library selects the preview recipe and working scale and exposes owned pixels to Swift.
+- **[src/](./src/AGENTS.md)** The library selects the preview recipe and working scale, falls back to embedded images, and exposes owned pixels to Swift.
 
 <!-- INDEX:END -->

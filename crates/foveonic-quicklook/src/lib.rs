@@ -1,7 +1,9 @@
 //! Renders X3F space-bar previews for the macOS Quick Look extension through a C interface.
 
 use foveonic::profile::Profile;
-use foveonic::render::{camera_settings, native_extent, Engine, ProcessingQuality, Scale};
+use foveonic::render::{
+    camera_settings, native_extent, EncodedImage, Engine, ProcessingQuality, Scale,
+};
 use foveonic::source::{Result, Source};
 use std::ffi::{c_char, CStr};
 use std::path::Path;
@@ -21,7 +23,7 @@ fn preview_divisor(native: [u32; 2]) -> u32 {
 }
 
 /// Render the camera's default recipe at preview size with Speed processing.
-pub fn render_preview(path: &Path) -> Result<foveonic::render::EncodedImage> {
+pub fn render_preview(path: &Path) -> Result<EncodedImage> {
     let engine = Engine::new()?;
     let source = Source::open(path)?;
     let metadata = &source.metadata;
@@ -33,6 +35,32 @@ pub fn render_preview(path: &Path) -> Result<foveonic::render::EncodedImage> {
     // Release decoded sensor samples before reading pixels back.
     drop(source);
     engine.encode_image(&image, &mut profile)
+}
+
+/// The space-bar preview: the rendered photograph, or the camera's embedded image
+/// when rendering fails.
+pub fn preview(path: &Path) -> Result<EncodedImage> {
+    or_embedded(path, || render_preview(path))
+}
+
+/// A render that fails or panics, as a GPU validation failure does, falls back to
+/// the embedded image. Keep the render's error when that cannot stand in either.
+pub fn or_embedded(
+    path: &Path,
+    render: impl FnOnce() -> Result<EncodedImage> + std::panic::UnwindSafe,
+) -> Result<EncodedImage> {
+    std::panic::catch_unwind(render)
+        .unwrap_or_else(|_| Err("preview rendering panicked".into()))
+        .or_else(|error| render_thumbnail(path, MIN_PREVIEW_LONG_EDGE).map_err(|_| error))
+}
+
+/// The camera's embedded image, upright and fitted within `side` pixels.
+pub fn render_thumbnail(path: &Path, side: u32) -> Result<EncodedImage> {
+    let preview = foveonic::preview::read_at_least(path, side)?;
+    Ok(EncodedImage::from_linear(
+        &preview.upright_linear(side)?,
+        preview.color_space,
+    ))
 }
 
 /// Mirrors `FoveonicImage` in `macos/FoveonicQuickLook.h`, which documents the fields.
@@ -58,11 +86,41 @@ pub unsafe extern "C" fn foveonic_ql_preview(
     error: *mut c_char,
     error_len: usize,
 ) -> bool {
+    unsafe { deliver(path, image, error, error_len, preview) }
+}
+
+/// Declared in `macos/FoveonicQuickLook.h`.
+///
+/// # Safety
+/// As for `foveonic_ql_preview`.
+#[no_mangle]
+pub unsafe extern "C" fn foveonic_ql_thumbnail(
+    path: *const c_char,
+    side: u32,
+    image: *mut FoveonicImage,
+    error: *mut c_char,
+    error_len: usize,
+) -> bool {
+    unsafe {
+        deliver(path, image, error, error_len, |path| {
+            render_thumbnail(path, side)
+        })
+    }
+}
+
+/// Hand a rendered image to Swift, which then owns its samples, or write the error.
+unsafe fn deliver(
+    path: *const c_char,
+    image: *mut FoveonicImage,
+    error: *mut c_char,
+    error_len: usize,
+    render: impl FnOnce(&Path) -> Result<EncodedImage> + std::panic::UnwindSafe,
+) -> bool {
     let result = std::panic::catch_unwind(|| {
         let path = unsafe { CStr::from_ptr(path) }.to_str()?;
-        render_preview(Path::new(path))
+        render(Path::new(path))
     })
-    .unwrap_or_else(|_| Err("preview rendering panicked".into()));
+    .unwrap_or_else(|_| Err("Quick Look rendering panicked".into()));
     match result {
         Ok(encoded) => {
             let [width, height] = encoded.extent;
@@ -98,7 +156,7 @@ pub unsafe extern "C" fn foveonic_ql_preview(
 ///
 /// # Safety
 /// `samples` and `samples_len` must come from one successful `foveonic_ql_preview`
-/// call and be freed once.
+/// or `foveonic_ql_thumbnail` call and be freed once.
 #[no_mangle]
 pub unsafe extern "C" fn foveonic_ql_samples_free(samples: *mut u8, samples_len: usize) {
     drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(samples, samples_len)) });

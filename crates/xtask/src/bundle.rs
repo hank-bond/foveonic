@@ -36,14 +36,50 @@ pub fn compile_icon(root: &Path, output: &Path) -> Result<()> {
 }
 
 const APP_IDENTIFIER: &str = "org.foveonic.foveonic";
-const PREVIEW_EXTENSION: &str = "FoveonicPreview.appex";
-const PREVIEW_MODULE: &str = "FoveonicPreview";
+/// A sandboxed Quick Look extension built from the shared Swift sources and the engine library.
+pub struct QuickLookExtension {
+    /// Swift module, executable and bundle name.
+    pub module: &'static str,
+    /// Swift source and principal class.
+    provider: &'static str,
+    point: &'static str,
+    identifier: &'static str,
+    display_name: &'static str,
+    /// Previews read the file themselves rather than receiving a document.
+    data_based: bool,
+}
+impl QuickLookExtension {
+    pub fn bundle(&self) -> String {
+        format!("{}.appex", self.module)
+    }
+}
+
+pub const QUICK_LOOK_EXTENSIONS: [QuickLookExtension; 2] = [
+    QuickLookExtension {
+        module: "FoveonicPreview",
+        provider: "PreviewProvider",
+        point: "com.apple.quicklook.preview",
+        identifier: "preview",
+        display_name: "Foveonic Preview",
+        data_based: true,
+    },
+    QuickLookExtension {
+        module: "FoveonicThumbnail",
+        provider: "ThumbnailProvider",
+        point: "com.apple.quicklook.thumbnail",
+        identifier: "thumbnail",
+        display_name: "Foveonic Thumbnail",
+        data_based: false,
+    },
+];
 /// Declared by SIGMA Photo Pro. Importing it lets Quick Look route X3F files without that app.
 const X3F_TYPE: &str = "com.sigmaphoto.photopro-x3f";
 /// System libraries the engine's static library needs, beyond what Swift links itself.
-const PREVIEW_LINK_ARGUMENTS: &[&str] = &[
+const QUICK_LOOK_LINK_ARGUMENTS: &[&str] = &[
     "-framework",
     "QuickLookUI",
+    "-framework",
+    "QuickLookThumbnailing",
     "-framework",
     "Metal",
     "-framework",
@@ -57,49 +93,57 @@ const PREVIEW_LINK_ARGUMENTS: &[&str] = &[
     "-lc++",
 ];
 
-/// Compile and ad-hoc sign the sandboxed space-bar preview extension into `output`.
-pub fn compile_preview_extension(
+/// Compile and ad-hoc sign each sandboxed Quick Look extension into `output`.
+pub fn compile_quick_look_extensions(
     root: &Path,
     library: &Path,
     output: &Path,
     version: &str,
-) -> Result<PathBuf> {
+) -> Result<Vec<PathBuf>> {
     let sources = root.join("crates/foveonic-quicklook/macos");
-    let extension = output.join(PREVIEW_EXTENSION);
-    let contents = extension.join("Contents");
-    fs::create_dir_all(contents.join("MacOS"))?;
-    let status = Command::new("xcrun")
-        .arg("swiftc")
-        .args(["-O", "-parse-as-library", "-application-extension"])
-        .arg("-target")
-        .arg(format!("arm64-apple-macos{MINIMUM_MACOS_VERSION}"))
-        .args(["-module-name", PREVIEW_MODULE, "-import-objc-header"])
-        .arg(sources.join("FoveonicQuickLook.h"))
-        .arg(sources.join("PreviewProvider.swift"))
-        .arg(library)
-        .args(PREVIEW_LINK_ARGUMENTS)
-        // App extensions start in the system's extension runtime, not a Swift main.
-        .args(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain", "-o"])
-        .arg(contents.join("MacOS").join(PREVIEW_MODULE))
-        .status()
-        .context("Cannot run xcrun swiftc. Select Xcode 26 or later")?;
-    ensure!(
-        status.success(),
-        "Preview extension compilation failed: {status}"
-    );
-    preview_metadata(version).to_file_xml(contents.join("Info.plist"))?;
-    // The sandbox entitlement is required for Quick Look to load the extension.
-    let status = Command::new("codesign")
-        .args(["--force", "--sign", "-", "--entitlements"])
-        .arg(sources.join("Preview.entitlements"))
-        .arg(&extension)
-        .status()
-        .context("Cannot run codesign")?;
-    ensure!(
-        status.success(),
-        "Preview extension signing failed: {status}"
-    );
-    Ok(extension)
+    QUICK_LOOK_EXTENSIONS
+        .iter()
+        .map(|kind| {
+            let extension = output.join(kind.bundle());
+            let contents = extension.join("Contents");
+            fs::create_dir_all(contents.join("MacOS"))?;
+            let status = Command::new("xcrun")
+                .arg("swiftc")
+                .args(["-O", "-parse-as-library", "-application-extension"])
+                .arg("-target")
+                .arg(format!("arm64-apple-macos{MINIMUM_MACOS_VERSION}"))
+                .args(["-module-name", kind.module, "-import-objc-header"])
+                .arg(sources.join("FoveonicQuickLook.h"))
+                .arg(sources.join("FoveonicImage.swift"))
+                .arg(sources.join(format!("{}.swift", kind.provider)))
+                .arg(library)
+                .args(QUICK_LOOK_LINK_ARGUMENTS)
+                // App extensions start in the system's extension runtime, not a Swift main.
+                .args(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain", "-o"])
+                .arg(contents.join("MacOS").join(kind.module))
+                .status()
+                .context("Cannot run xcrun swiftc. Select Xcode 26 or later")?;
+            ensure!(
+                status.success(),
+                "{} compilation failed: {status}",
+                kind.display_name
+            );
+            extension_metadata(kind, version).to_file_xml(contents.join("Info.plist"))?;
+            // The sandbox entitlement is required for Quick Look to load the extension.
+            let status = Command::new("codesign")
+                .args(["--force", "--sign", "-", "--entitlements"])
+                .arg(sources.join("QuickLook.entitlements"))
+                .arg(&extension)
+                .status()
+                .context("Cannot run codesign")?;
+            ensure!(
+                status.success(),
+                "{} signing failed: {status}",
+                kind.display_name
+            );
+            Ok(extension)
+        })
+        .collect()
 }
 
 fn strings(pairs: &[(&str, &str)]) -> Dictionary {
@@ -109,19 +153,21 @@ fn strings(pairs: &[(&str, &str)]) -> Dictionary {
         .collect()
 }
 
-fn preview_metadata(version: &str) -> Value {
+fn extension_metadata(kind: &QuickLookExtension, version: &str) -> Value {
     let mut attributes = Dictionary::new();
-    attributes.insert("QLIsDataBasedPreview".into(), Value::Boolean(true));
-    attributes.insert("QLSupportsSearchableItems".into(), Value::Boolean(false));
     attributes.insert(
         "QLSupportedContentTypes".into(),
         Value::Array(vec![X3F_TYPE.into()]),
     );
+    if kind.data_based {
+        attributes.insert("QLIsDataBasedPreview".into(), Value::Boolean(true));
+        attributes.insert("QLSupportsSearchableItems".into(), Value::Boolean(false));
+    }
     let mut extension = strings(&[
-        ("NSExtensionPointIdentifier", "com.apple.quicklook.preview"),
+        ("NSExtensionPointIdentifier", kind.point),
         (
             "NSExtensionPrincipalClass",
-            &format!("{PREVIEW_MODULE}.PreviewProvider"),
+            &format!("{}.{}", kind.module, kind.provider),
         ),
     ]);
     extension.insert(
@@ -129,10 +175,13 @@ fn preview_metadata(version: &str) -> Value {
         Value::Dictionary(attributes),
     );
     let mut metadata = strings(&[
-        ("CFBundleExecutable", PREVIEW_MODULE),
-        ("CFBundleIdentifier", &format!("{APP_IDENTIFIER}.preview")),
-        ("CFBundleName", PREVIEW_MODULE),
-        ("CFBundleDisplayName", "Foveonic Preview"),
+        ("CFBundleExecutable", kind.module),
+        (
+            "CFBundleIdentifier",
+            &format!("{APP_IDENTIFIER}.{}", kind.identifier),
+        ),
+        ("CFBundleName", kind.module),
+        ("CFBundleDisplayName", kind.display_name),
         ("CFBundlePackageType", "XPC!"),
         ("CFBundleShortVersionString", version),
         ("CFBundleVersion", version),
@@ -177,7 +226,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
 pub fn assemble(
     binary: &Path,
     compiled: &Path,
-    extension: &Path,
+    extensions: &[PathBuf],
     version: &str,
 ) -> Result<PathBuf> {
     let parent = binary
@@ -200,8 +249,13 @@ pub fn assemble(
         fs::copy(compiled.join(name), contents.join("Resources").join(name))
             .with_context(|| format!("Missing compiled icon resource {name}"))?;
     }
-    copy_tree(extension, &contents.join("PlugIns").join(PREVIEW_EXTENSION))
-        .with_context(|| format!("Cannot copy preview extension {}", extension.display()))?;
+    for extension in extensions {
+        let name = extension
+            .file_name()
+            .context("Extension path has no name")?;
+        copy_tree(extension, &contents.join("PlugIns").join(name))
+            .with_context(|| format!("Cannot copy extension {}", extension.display()))?;
+    }
     let icon_metadata = Value::from_file(compiled.join("partial.plist"))?
         .into_dictionary()
         .context("Icon compiler plist must be a dictionary")?;
@@ -259,7 +313,7 @@ pub fn launch_arguments(arguments: &[OsString], cwd: &Path, home: Option<&Path>)
 mod tests {
     use super::*;
 
-    fn fixture(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    fn fixture(root: &Path) -> (PathBuf, PathBuf, Vec<PathBuf>) {
         let binary = root.join("foveonic-gui");
         fs::write(&binary, b"test executable").unwrap();
         #[cfg(unix)]
@@ -278,21 +332,27 @@ mod tests {
         Value::Dictionary(metadata)
             .to_file_xml(compiled.join("partial.plist"))
             .unwrap();
-        let extension = root.join(PREVIEW_EXTENSION);
-        fs::create_dir_all(extension.join("Contents/MacOS")).unwrap();
-        fs::write(
-            extension.join("Contents/MacOS").join(PREVIEW_MODULE),
-            b"extension",
-        )
-        .unwrap();
-        (binary, compiled, extension)
+        let extensions = QUICK_LOOK_EXTENSIONS
+            .iter()
+            .map(|kind| {
+                let extension = root.join(kind.bundle());
+                fs::create_dir_all(extension.join("Contents/MacOS")).unwrap();
+                fs::write(
+                    extension.join("Contents/MacOS").join(kind.module),
+                    kind.module,
+                )
+                .unwrap();
+                extension
+            })
+            .collect();
+        (binary, compiled, extensions)
     }
 
     #[test]
     fn bundle_preserves_compiler_metadata_permissions_and_replaces_stale_resources() {
         let temp = tempfile::tempdir().unwrap();
-        let (binary, compiled, extension) = fixture(temp.path());
-        let bundle = assemble(&binary, &compiled, &extension, "0.1.0").unwrap();
+        let (binary, compiled, extensions) = fixture(temp.path());
+        let bundle = assemble(&binary, &compiled, &extensions, "0.1.0").unwrap();
         let contents = bundle.join("Contents");
         let executable = contents.join("MacOS/foveonic-gui");
         assert_eq!(fs::read(&executable).unwrap(), fs::read(&binary).unwrap());
@@ -324,17 +384,19 @@ mod tests {
             .as_dictionary()
             .unwrap();
         assert_eq!(imported["UTTypeIdentifier"].as_string(), Some(X3F_TYPE));
-        assert_eq!(
-            fs::read(
-                contents
-                    .join("PlugIns")
-                    .join(PREVIEW_EXTENSION)
-                    .join("Contents/MacOS")
-                    .join(PREVIEW_MODULE)
-            )
-            .unwrap(),
-            b"extension"
-        );
+        for kind in &QUICK_LOOK_EXTENSIONS {
+            assert_eq!(
+                fs::read_to_string(
+                    contents
+                        .join("PlugIns")
+                        .join(kind.bundle())
+                        .join("Contents/MacOS")
+                        .join(kind.module)
+                )
+                .unwrap(),
+                kind.module
+            );
+        }
         assert_eq!(fs::read_dir(contents.join("Resources")).unwrap().count(), 3);
         assert_eq!(
             fs::read_to_string(contents.join("Resources/JPEG-XL-LICENSES.txt")).unwrap(),
@@ -342,40 +404,51 @@ mod tests {
         );
         let stale = contents.join("Resources/old-icon.png");
         fs::write(&stale, "old").unwrap();
-        assemble(&binary, &compiled, &extension, "0.1.1").unwrap();
+        assemble(&binary, &compiled, &extensions, "0.1.1").unwrap();
         assert!(!stale.exists());
     }
 
     #[test]
-    fn preview_extension_matches_the_app_version_and_x3f_type() {
-        let metadata = preview_metadata("0.1.0").into_dictionary().unwrap();
-        assert_eq!(
-            metadata["CFBundleIdentifier"].as_string(),
-            Some("org.foveonic.foveonic.preview")
-        );
-        assert_eq!(
-            metadata["CFBundleShortVersionString"].as_string(),
-            Some("0.1.0")
-        );
-        let extension = metadata["NSExtension"].as_dictionary().unwrap();
-        assert_eq!(
-            extension["NSExtensionPrincipalClass"].as_string(),
-            Some("FoveonicPreview.PreviewProvider")
-        );
-        let types = extension["NSExtensionAttributes"].as_dictionary().unwrap()
-            ["QLSupportedContentTypes"]
-            .as_array()
-            .unwrap();
-        assert_eq!(types[0].as_string(), Some(X3F_TYPE));
+    fn quick_look_extensions_match_the_app_version_and_x3f_type() {
+        for (kind, identifier, class, data_based) in [
+            (
+                &QUICK_LOOK_EXTENSIONS[0],
+                "org.foveonic.foveonic.preview",
+                "FoveonicPreview.PreviewProvider",
+                true,
+            ),
+            (
+                &QUICK_LOOK_EXTENSIONS[1],
+                "org.foveonic.foveonic.thumbnail",
+                "FoveonicThumbnail.ThumbnailProvider",
+                false,
+            ),
+        ] {
+            let metadata = extension_metadata(kind, "0.1.0").into_dictionary().unwrap();
+            assert_eq!(metadata["CFBundleIdentifier"].as_string(), Some(identifier));
+            assert_eq!(
+                metadata["CFBundleShortVersionString"].as_string(),
+                Some("0.1.0")
+            );
+            let extension = metadata["NSExtension"].as_dictionary().unwrap();
+            assert_eq!(
+                extension["NSExtensionPrincipalClass"].as_string(),
+                Some(class)
+            );
+            let attributes = extension["NSExtensionAttributes"].as_dictionary().unwrap();
+            let types = attributes["QLSupportedContentTypes"].as_array().unwrap();
+            assert_eq!(types[0].as_string(), Some(X3F_TYPE));
+            assert_eq!(attributes.contains_key("QLIsDataBasedPreview"), data_based);
+        }
     }
 
     #[test]
     fn incomplete_resources_keep_previous_bundle_intact() {
         let temp = tempfile::tempdir().unwrap();
-        let (binary, compiled, extension) = fixture(temp.path());
-        let app = assemble(&binary, &compiled, &extension, "0.1.0").unwrap();
+        let (binary, compiled, extensions) = fixture(temp.path());
+        let app = assemble(&binary, &compiled, &extensions, "0.1.0").unwrap();
         fs::remove_file(compiled.join("Assets.car")).unwrap();
-        assert!(assemble(&binary, &compiled, &extension, "0.1.1").is_err());
+        assert!(assemble(&binary, &compiled, &extensions, "0.1.1").is_err());
         let metadata = Value::from_file(app.join("Contents/Info.plist")).unwrap();
         assert_eq!(
             metadata.as_dictionary().unwrap()["CFBundleVersion"].as_string(),
