@@ -575,11 +575,16 @@ fn texture_change_tracks_sizes_without_changing_layers() {
     let mut previous_change = Vec::new();
     // Include fractional taps and both radius limits. The diagnostic must
     // predict the actual brightness edit, without changing its retained image.
-    for (fine_size, coarse_size) in [(0.5, 0.5), (0.83, 1.37), (2., 2.)] {
+    for (fine_size, coarse_size, coarse) in [
+        (0.5, 0.5, 1.75),
+        (0.83, 1.37, 1.75),
+        (2., 2., 1.75),
+        (0.83, 2., 1.),
+    ] {
         c.texture.fine_size = fine_size;
         c.texture.coarse_size = coarse_size;
         c.texture.fine = 0.25;
-        c.texture.coarse = 1.75;
+        c.texture.coarse = coarse;
         let result = render(
             c,
             Requested {
@@ -589,12 +594,18 @@ fn texture_change_tracks_sizes_without_changing_layers() {
         );
         let layers = read(result.layers.as_ref().unwrap());
         let change = read(result.change.as_ref().unwrap());
+        let before = gpu.activity();
         let ordinary = render(
             c,
             Requested {
                 layers: true,
                 ..Default::default()
             },
+        );
+        // Extract and mix surround four blur passes for Fine, eight for Coarse.
+        assert_eq!(
+            gpu.activity().since(before).dispatches,
+            if coarse == 1. { 6 } else { 10 }
         );
         assert_eq!(layers, read(ordinary.layers.as_ref().unwrap()));
         let diagnostic = render(
