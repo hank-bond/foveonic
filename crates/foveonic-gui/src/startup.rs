@@ -136,9 +136,11 @@ impl Window {
 }
 
 /// Shrink a window that is larger than the area, then move it inside.
+/// Fractional scales leave `area.max - size` a rounding error from `area.min`,
+/// so the top-left wins rather than clamping between crossed bounds.
 fn fit_within(window: egui::Rect, area: egui::Rect) -> egui::Rect {
     let size = window.size().min(area.size());
-    let min = window.min.clamp(area.min, area.max - size);
+    let min = window.min.min(area.max - size).max(area.min);
     egui::Rect::from_min_size(min, size)
 }
 

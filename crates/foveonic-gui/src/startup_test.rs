@@ -432,6 +432,20 @@ fn workspace_larger_than_the_free_area_shrinks_to_fill_it() {
 }
 
 #[test]
+fn a_window_filling_a_fractionally_scaled_area_does_not_panic() {
+    // 1920x1080 at 175% with a 120-pixel top taskbar. In f32, the area's
+    // bottom minus its height falls just short of its top.
+    let scale = 1.75_f32;
+    let area = egui::Rect::from_min_max(
+        egui::pos2(0., 120. / scale),
+        egui::pos2(1920. / scale, 1080. / scale),
+    );
+    let (position, size) = fitted(egui::pos2(-80., -156.), egui::vec2(1440., 1000.), area);
+    assert_eq!(position, area.min);
+    assert!(size.x <= area.width() && size.y <= area.height());
+}
+
+#[test]
 fn a_free_area_smaller_than_the_minimum_window_lowers_the_minimum() {
     // 1366x768 at 125% with a bottom taskbar leaves 1092.8 x 576 points.
     let area = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1092.8, 576.));
