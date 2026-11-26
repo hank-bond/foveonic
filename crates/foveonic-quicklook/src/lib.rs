@@ -108,7 +108,7 @@ pub unsafe extern "C" fn foveonic_ql_thumbnail(
     }
 }
 
-/// Hand a rendered image to Swift, which then owns its samples, or write the error.
+/// Hand a rendered image to Swift, which then owns its samples.
 unsafe fn deliver(
     path: *const c_char,
     image: *mut FoveonicImage,
@@ -116,26 +116,40 @@ unsafe fn deliver(
     error_len: usize,
     render: impl FnOnce(&Path) -> Result<EncodedImage> + std::panic::UnwindSafe,
 ) -> bool {
-    let result = std::panic::catch_unwind(|| {
-        let path = unsafe { CStr::from_ptr(path) }.to_str()?;
-        render(Path::new(path))
-    })
-    .unwrap_or_else(|_| Err("Quick Look rendering panicked".into()));
-    match result {
-        Ok(encoded) => {
+    unsafe {
+        answer(path, error, error_len, render, |encoded| {
             let [width, height] = encoded.extent;
             let profile = encoded.color_space.profile();
             let samples = Box::leak(encoded.samples.into_boxed_slice());
-            unsafe {
-                image.write(FoveonicImage {
-                    width,
-                    height,
-                    samples: samples.as_mut_ptr(),
-                    samples_len: samples.len(),
-                    profile: profile.as_ptr(),
-                    profile_len: profile.len(),
-                });
-            }
+            image.write(FoveonicImage {
+                width,
+                height,
+                samples: samples.as_mut_ptr(),
+                samples_len: samples.len(),
+                profile: profile.as_ptr(),
+                profile_len: profile.len(),
+            });
+        })
+    }
+}
+
+/// Run `work` on the C path without letting a panic cross into Swift. On success
+/// `write` stores the result; on failure the message goes into `error`.
+unsafe fn answer<T>(
+    path: *const c_char,
+    error: *mut c_char,
+    error_len: usize,
+    work: impl FnOnce(&Path) -> Result<T> + std::panic::UnwindSafe,
+    write: impl FnOnce(T),
+) -> bool {
+    let result = std::panic::catch_unwind(|| {
+        let path = unsafe { CStr::from_ptr(path) }.to_str()?;
+        work(Path::new(path))
+    })
+    .unwrap_or_else(|_| Err("the Foveonic library panicked".into()));
+    match result {
+        Ok(value) => {
+            write(value);
             true
         }
         Err(message) => {
@@ -149,6 +163,87 @@ unsafe fn deliver(
             }
             false
         }
+    }
+}
+
+/// Text fields hold at most this many bytes plus a terminating NUL.
+const CAPTURE_TEXT_BYTES: usize = 64;
+
+/// Mirrors `FoveonicCapture` in `macos/FoveonicQuickLook.h`, which documents the fields.
+#[repr(C)]
+pub struct FoveonicCapture {
+    pub make: [c_char; CAPTURE_TEXT_BYTES],
+    pub model: [c_char; CAPTURE_TEXT_BYTES],
+    pub lens: [c_char; CAPTURE_TEXT_BYTES],
+    pub focal_length: f64,
+    pub f_number: f64,
+    pub exposure_seconds: f64,
+    pub exposure_bias: f64,
+    pub iso: u32,
+    pub focal_length_35mm: u16,
+    pub exposure_program: u16,
+    pub metering: u16,
+    pub taken: [c_char; CAPTURE_TEXT_BYTES],
+    pub width: u32,
+    pub height: u32,
+}
+
+impl FoveonicCapture {
+    fn new(summary: &foveonic::source::MetadataSummary) -> Self {
+        fn text(value: Option<&str>) -> [c_char; CAPTURE_TEXT_BYTES] {
+            let mut out = [0; CAPTURE_TEXT_BYTES];
+            let value = value.unwrap_or_default();
+            // Truncate on a character boundary, keeping room for the NUL.
+            let mut end = value.len().min(CAPTURE_TEXT_BYTES - 1);
+            while !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            for (slot, byte) in out.iter_mut().zip(&value.as_bytes()[..end]) {
+                *slot = *byte as c_char;
+            }
+            out
+        }
+        let facts = &summary.capture;
+        let [width, height] = summary.extent.unwrap_or_default();
+        Self {
+            make: text(Some(&facts.make)),
+            model: text(facts.model.as_deref()),
+            lens: text(facts.lens.as_deref()),
+            focal_length: facts.focal_length.unwrap_or(f64::NAN),
+            f_number: facts.f_number.unwrap_or(f64::NAN),
+            exposure_seconds: facts.exposure_seconds.unwrap_or(f64::NAN),
+            exposure_bias: facts.exposure_bias.unwrap_or(f64::NAN),
+            iso: facts.iso.unwrap_or_default(),
+            focal_length_35mm: facts.focal_length_35mm.unwrap_or_default(),
+            exposure_program: facts.exposure_program.unwrap_or_default(),
+            metering: facts.metering.unwrap_or_default(),
+            taken: text(facts.taken.as_deref()),
+            width,
+            height,
+        }
+    }
+}
+
+/// Declared in `macos/FoveonicQuickLook.h`.
+///
+/// # Safety
+/// `path` must be a NUL-terminated UTF-8 path, `capture` must be writable, and
+/// `error` must point to `error_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn foveonic_ql_capture(
+    path: *const c_char,
+    capture: *mut FoveonicCapture,
+    error: *mut c_char,
+    error_len: usize,
+) -> bool {
+    unsafe {
+        answer(
+            path,
+            error,
+            error_len,
+            |path| foveonic::source::read_metadata_summary(path).map(|s| FoveonicCapture::new(&s)),
+            |value| capture.write(value),
+        )
     }
 }
 
@@ -174,6 +269,16 @@ mod tests {
             foveonic::render::EncodedImage::BYTES_PER_PIXEL
         );
         assert!(header.contains(&declared));
+        assert!(header.contains(&format!(
+            "_Static_assert(sizeof(FoveonicCapture) == {},",
+            std::mem::size_of::<FoveonicCapture>()
+        )));
+        for field in ["make", "model", "lens", "taken"] {
+            assert!(
+                header.contains(&format!("char {field}[{CAPTURE_TEXT_BYTES}];")),
+                "{field}"
+            );
+        }
     }
 
     #[test]

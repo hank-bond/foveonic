@@ -1,24 +1,20 @@
 //! Formats available X3F metadata as photographic readouts.
 
 use eframe::egui;
-use foveonic::source::Metadata;
+use foveonic::source::{CaptureFacts, Metadata, MetadataSummary};
 use std::collections::BTreeMap;
 
 fn compact(value: f64) -> String {
     let text = format!("{value:.1}");
     text.strip_suffix(".0").unwrap_or(&text).to_owned()
 }
-pub fn aperture(value: &str) -> Option<String> {
-    let n = value.trim().trim_start_matches("f/").parse::<f64>().ok()?;
-    (n.is_finite() && n > 0.).then(|| format!("f/{}", compact(n)))
+fn aperture(f_number: f64) -> String {
+    format!("f/{}", compact(f_number))
 }
-pub fn shutter(value: &str) -> Option<String> {
-    let seconds = value.parse::<f64>().ok()?;
-    if !seconds.is_finite() || seconds <= 0. {
-        return None;
-    }
+/// Show the nearest standard shutter speed, as cameras label them.
+fn shutter(seconds: f64) -> String {
     if seconds >= 1. {
-        return Some(format!("{} s", compact(seconds)));
+        return format!("{} s", compact(seconds));
     }
     const SPEEDS: &[f64] = &[
         1., 1.3, 1.6, 2., 2.5, 3., 4., 5., 6., 8., 10., 13., 15., 20., 25., 30., 40., 50., 60.,
@@ -28,152 +24,107 @@ pub fn shutter(value: &str) -> Option<String> {
     let inverse = 1. / seconds;
     let snapped = SPEEDS
         .iter()
-        .min_by(|a, b| ((**a / inverse).ln().abs()).total_cmp(&((**b / inverse).ln().abs())))?;
-    Some(format!("1/{}", compact(*snapped)))
+        .min_by(|a, b| ((**a / inverse).ln().abs()).total_cmp(&((**b / inverse).ln().abs())))
+        .expect("standard speeds");
+    format!("1/{}", compact(*snapped))
 }
-fn captured(value: &str) -> Option<String> {
-    let seconds = value.parse::<u64>().ok()?;
-    if seconds > 253402300799 {
-        return None;
-    }
-    let mut days = seconds / 86400;
-    let mut year = 1970_u32;
-    let leap = |y: u32| y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400));
-    while days >= if leap(year) { 366 } else { 365 } {
-        days -= if leap(year) { 366 } else { 365 };
-        year += 1;
-    }
-    let months = [
-        31,
-        if leap(year) { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut month = 0;
-    while days >= months[month] {
-        days -= months[month];
-        month += 1;
-    }
-    Some(format!(
-        "{year:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        month + 1,
-        days + 1,
-        seconds / 3600 % 24,
-        seconds / 60 % 60,
-        seconds % 60
-    ))
+/// EXIF's `YYYY:MM:DD HH:MM:SS` with the date written with hyphens.
+fn captured(taken: &str) -> String {
+    taken.replacen(':', "-", 2)
 }
+fn focal_length(millimetres: f64) -> String {
+    format!("{} mm", compact(millimetres))
+}
+/// Turn negative zero into zero so it does not print as "-0.0".
+fn bias(ev: f64) -> f64 {
+    if ev == 0. {
+        0.
+    } else {
+        ev
+    }
+}
+/// Capture details come from `CaptureFacts`, which also feeds exported EXIF and
+/// Spotlight. This only words them for the panel.
 pub fn property_rows(
-    p: &std::collections::BTreeMap<String, String>,
+    facts: &CaptureFacts,
+    properties: &BTreeMap<String, String>,
 ) -> Vec<(&'static str, String)> {
-    let get = |key: &str| p.get(key).map(|s| s.trim()).filter(|s| !s.is_empty());
-    let mut rows = Vec::new();
-    for (label, key) in [
-        ("Camera", "CAMMODEL"),
-        ("Lens", "LENSMODEL"),
-        ("Focal length", "FLENGTH"),
-        ("Aperture", "APERTURE"),
-        ("Shutter", "SHUTTER"),
-        ("ISO", "ISO"),
-        ("Exposure comp.", "EXPCOMP"),
-        ("Program", "PMODE"),
-        ("Metering", "AEMODE"),
-        ("White balance", "WB_DESC"),
-        ("Color mode", "CM_DESC"),
-        ("Color space", "COLORSPACE"),
-        ("Captured", "TIME"),
-        ("Software", "FIRMVERS"),
-        ("Serial", "CAMSERIAL"),
-    ] {
-        if key == "EXPCOMP" {
-            if let Some(inverse) = foveonic::source::inverse_exposure_compensation(p) {
-                let compensation = if inverse == 0. { 0. } else { -inverse };
-                rows.push((label, compact(f64::from(compensation))));
-                continue;
-            }
+    let raw = |key: &str| {
+        properties
+            .get(key)
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let program = facts.exposure_program.map(|code| {
+        match code {
+            1 => "Manual",
+            2 => "Program",
+            3 => "Aperture priority",
+            4 => "Shutter priority",
+            _ => return code.to_string(),
         }
-        let Some(raw) = get(key) else {
-            continue;
-        };
-        let value = match key {
-            "LENSMODEL" => match raw {
-                "1003" => "Sigma 19mm F2.8".into(),
-                "1004" => "Sigma 30mm F2.8".into(),
-                _ => format!("Lens ID {raw}"),
-            },
-            "FLENGTH" => raw
-                .parse::<f64>()
-                .ok()
-                .filter(|v| v.is_finite())
-                .map(|v| format!("{} mm", compact(v)))
-                .unwrap_or(raw.into()),
-            "APERTURE" => aperture(get("AP_DESC").unwrap_or(raw))
-                .or_else(|| aperture(raw))
-                .unwrap_or(raw.into()),
-            "SHUTTER" => get("SH_DESC")
-                .map(str::to_owned)
-                .or_else(|| shutter(raw))
-                .unwrap_or(raw.into()),
-            "PMODE" => match raw {
-                "A" => "Aperture priority",
-                "S" => "Shutter priority",
-                "P" => "Program",
-                "M" => "Manual",
-                _ => raw,
-            }
-            .into(),
-            "AEMODE" => match raw {
-                "8" => "Multi-segment",
-                "C" => "Center-weighted",
-                "A" => "Average",
-                _ => raw,
-            }
-            .into(),
-            "TIME" => captured(raw).unwrap_or(raw.into()),
-            _ => raw.into(),
-        };
-        rows.push((label, value));
-    }
-    rows
-}
-
-pub fn capture_values(properties: &BTreeMap<String, String>) -> Vec<String> {
-    let rows = property_rows(properties);
+        .to_owned()
+    });
+    let metering = facts.metering.map(|code| {
+        match code {
+            1 => "Average",
+            2 => "Center-weighted",
+            5 => "Multi-segment",
+            _ => return code.to_string(),
+        }
+        .to_owned()
+    });
     [
-        "Shutter",
-        "Aperture",
-        "Focal length",
-        "ISO",
-        "Exposure comp.",
+        ("Camera", facts.model.clone()),
+        ("Lens", facts.lens.clone()),
+        ("Focal length", facts.focal_length.map(focal_length)),
+        ("Aperture", facts.f_number.map(aperture)),
+        ("Shutter", facts.exposure_seconds.map(shutter)),
+        ("ISO", facts.iso.map(|v| v.to_string())),
+        (
+            "Exposure comp.",
+            facts.exposure_bias.map(|v| compact(bias(v))),
+        ),
+        ("Program", program),
+        ("Metering", metering),
+        ("White balance", raw("WB_DESC")),
+        ("Color mode", raw("CM_DESC")),
+        ("Color space", raw("COLORSPACE")),
+        ("Captured", facts.taken.as_deref().map(captured)),
+        ("Software", facts.firmware.clone()),
+        ("Serial", facts.serial.clone()),
     ]
     .into_iter()
-    .filter_map(|key| {
-        rows.iter()
-            .find(|(label, _)| *label == key)
-            .map(|(_, value)| match key {
-                "ISO" => format!("ISO {value}"),
-                "Exposure comp." => value
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|v| v.is_finite())
-                    .map(|v| format!("{v:+.1} EV"))
-                    .unwrap_or_else(|| format!("{value} EV")),
-                _ => value.clone(),
-            })
-    })
+    .filter_map(|(label, value)| Some((label, value?)))
     .collect()
 }
 
-pub fn rows(metadata: &Metadata) -> Vec<(&'static str, String)> {
-    let mut rows = property_rows(&metadata.properties);
+/// The short exposure readout under the viewport and in browser tooltips.
+pub fn capture_values(facts: &CaptureFacts) -> Vec<String> {
+    [
+        facts.exposure_seconds.map(shutter),
+        facts.f_number.map(aperture),
+        facts.focal_length.map(focal_length),
+        facts.iso.map(|v| format!("ISO {v}")),
+        facts.exposure_bias.map(|v| format!("{:+.1} EV", bias(v))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// `summary` is the browser's, already resolved; without it the facts are read here.
+pub fn rows(metadata: &Metadata, summary: Option<&MetadataSummary>) -> Vec<(&'static str, String)> {
+    let resolved;
+    let facts = match summary {
+        Some(summary) => &summary.capture,
+        None => {
+            resolved = CaptureFacts::from_properties(&metadata.properties);
+            &resolved
+        }
+    };
+    let mut rows = property_rows(facts, &metadata.properties);
     if let Ok(area) = metadata.fixed::<4>("ActiveImageArea") {
         rows.insert(
             rows.len().min(12),
@@ -194,7 +145,7 @@ pub fn rows(metadata: &Metadata) -> Vec<(&'static str, String)> {
     }
     rows
 }
-pub fn show(ui: &mut egui::Ui, metadata: Option<&Metadata>) {
+pub fn show(ui: &mut egui::Ui, metadata: Option<&Metadata>, summary: Option<&MetadataSummary>) {
     let Some(metadata) = metadata else {
         ui.weak("No metadata loaded");
         return;
@@ -203,7 +154,7 @@ pub fn show(ui: &mut egui::Ui, metadata: Option<&Metadata>) {
         .num_columns(2)
         .spacing([12., 7.])
         .show(ui, |ui| {
-            for (label, value) in rows(metadata) {
+            for (label, value) in rows(metadata, summary) {
                 ui.weak(label);
                 ui.add(egui::Label::new(value.clone()).truncate())
                     .on_hover_text(value);
@@ -211,45 +162,6 @@ pub fn show(ui: &mut egui::Ui, metadata: Option<&Metadata>) {
             }
         });
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn camera_shutter_description_is_shared_by_table_and_viewport() {
-        let properties = BTreeMap::from([
-            ("SHUTTER".into(), "0.01563".into()),
-            ("SH_DESC".into(), "1/60".into()),
-        ]);
-        assert_eq!(property_rows(&properties), [("Shutter", "1/60".into())]);
-        assert_eq!(capture_values(&properties), ["1/60"]);
-    }
-    #[test]
-    fn photographic_not_measured_formatting() {
-        assert_eq!(aperture("4.0").unwrap(), "f/4");
-        assert_eq!(aperture("2.8").unwrap(), "f/2.8");
-        assert_eq!(shutter("0.01013").unwrap(), "1/100");
-        assert_eq!(shutter("0.00638").unwrap(), "1/160");
-        assert_eq!(shutter("2").unwrap(), "2 s");
-        assert!(shutter("NaN").is_none());
-        assert_eq!(captured("1790791918").unwrap(), "2026-09-30 18:11:58");
-        assert_eq!(captured("951782400").unwrap(), "2000-02-29 00:00:00");
-    }
-}
-
-#[cfg(test)]
-mod compensation_tests {
-    #[test]
-    fn capture_readout_uses_net_compensation_for_bracketed_shots() {
-        let p = [
-            ("EXPCOMP".into(), "+0.00".into()),
-            ("EXPNET".into(), "+1.00".into()),
-            ("BRACKET".into(), "3 of 3".into()),
-        ]
-        .into();
-        assert_eq!(super::capture_values(&p), vec!["+1.0 EV"]);
-    }
-}
-
 /// Adapt early capture properties to processing-owned defaults without decoding pixels.
 pub(crate) fn processing_metadata(
     properties: std::collections::BTreeMap<String, String>,
@@ -262,5 +174,44 @@ pub(crate) fn processing_metadata(
         properties,
         matrices: Default::default(),
         lists: Default::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn facts(pairs: &[(&str, &str)]) -> (CaptureFacts, BTreeMap<String, String>) {
+        let properties: BTreeMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        (CaptureFacts::from_properties(&properties), properties)
+    }
+    #[test]
+    fn camera_shutter_description_is_shared_by_table_and_viewport() {
+        let (facts, properties) = facts(&[("SHUTTER", "0.01563"), ("SH_DESC", "1/60")]);
+        assert_eq!(
+            property_rows(&facts, &properties),
+            [("Shutter", "1/60".into())]
+        );
+        assert_eq!(capture_values(&facts), ["1/60"]);
+    }
+    #[test]
+    fn photographic_not_measured_formatting() {
+        assert_eq!(aperture(4.), "f/4");
+        assert_eq!(aperture(2.8), "f/2.8");
+        assert_eq!(shutter(0.01013), "1/100");
+        assert_eq!(shutter(0.00638), "1/160");
+        assert_eq!(shutter(2.), "2 s");
+        assert_eq!(captured("2026:09:30 18:11:58"), "2026-09-30 18:11:58");
+    }
+    #[test]
+    fn capture_readout_uses_net_compensation_for_bracketed_shots() {
+        let (facts, _) = facts(&[
+            ("EXPCOMP", "+0.00"),
+            ("EXPNET", "+1.00"),
+            ("BRACKET", "3 of 3"),
+        ]);
+        assert_eq!(capture_values(&facts), vec!["+1.0 EV"]);
     }
 }

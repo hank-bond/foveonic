@@ -15,7 +15,7 @@ Read a crate's local instructions before changing it. Follow [`contributing.md`]
 - **[docs-index/](./docs-index/AGENTS.md)** The Rust documentation tool generates directory indexes and checks document fields, titles, and relative links.
 - **[foveonic/](./foveonic/AGENTS.md)** The processor crate decodes X3F sensor layouts and shares a GPU graph for inspection, photographs and editable DNGs.
 - **[foveonic-gui/](./foveonic-gui/AGENTS.md)** The egui desktop app browses embedded previews and inspects named outputs of the shared GPU engine.
-- **[foveonic-quicklook/](./foveonic-quicklook/AGENTS.md)** The Quick Look crate renders X3F space-bar previews and embedded-image thumbnails for the sandboxed macOS extensions through a C interface.
+- **[foveonic-quicklook/](./foveonic-quicklook/AGENTS.md)** The Quick Look crate renders X3F previews and thumbnails and reports capture details for the macOS extensions and Spotlight importer through a C interface.
 - **[xtask/](./xtask/AGENTS.md)** Cargo tasks package native apps, prepare draft-release notes, sync example photographs, and capture the README image.
 
 <!-- INDEX:END -->

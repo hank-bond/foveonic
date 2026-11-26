@@ -16,6 +16,19 @@ fn rational(value: Value) -> f64 {
     }
 }
 
+fn rationals(value: Value) -> Vec<(u32, u32)> {
+    let Value::List(values) = value else {
+        panic!("rational list expected, got {value:?}")
+    };
+    values
+        .into_iter()
+        .map(|v| match v {
+            Value::Rational(n, d) => (n, d),
+            other => panic!("rational expected, got {other:?}"),
+        })
+        .collect()
+}
+
 fn encoded(properties: &[(&str, &str)]) -> Decoder<Cursor<Vec<u8>>> {
     let metadata = Metadata {
         width: 1,
@@ -66,6 +79,8 @@ fn capture_exif_roundtrips_without_changing_image_or_orientation() {
         ("AEMODE", "8"),
         ("CAMSERIAL", "90406890"),
         ("LENSMODEL", "1004"),
+        ("LENSFRANGE", "30"),
+        ("LENSARANGE", "2.8 to 16"),
         ("ARTIST", "Photographer"),
         ("COPYRIGHT", "Copyright Photographer"),
     ]);
@@ -109,6 +124,11 @@ fn capture_exif_roundtrips_without_changing_image_or_orientation() {
     ] {
         assert!((rational(exif.get_tag(Tag::Unknown(id)).unwrap()) - expected).abs() < 1e-6);
     }
+    // Recorded decimals stay exact fractions.
+    assert!(matches!(
+        exif.get_tag(Tag::Unknown(EXPOSURE_BIAS)).unwrap(),
+        Value::SRational(3, 10)
+    ));
     for (id, expected) in [
         (ISO_SPEED_RATINGS, 200),
         (ISO_SPEED, 200),
@@ -123,7 +143,12 @@ fn capture_exif_roundtrips_without_changing_image_or_orientation() {
     }
     assert_eq!(
         exif.get_tag_ascii_string(Tag::Unknown(LENS_MODEL)).unwrap(),
-        "1004"
+        "30mm F2.8",
+        "the lens is described from its recorded ranges, not its ID"
+    );
+    assert_eq!(
+        rationals(exif.get_tag(Tag::Unknown(0xa432)).unwrap()),
+        [(30, 1), (30, 1), (14, 5), (14, 5)]
     );
     assert_eq!(
         exif.get_tag_ascii_string(Tag::Unknown(BODY_SERIAL_NUMBER))
@@ -525,7 +550,8 @@ fn malformed_standard_values_do_not_block_camera_fallbacks() {
         ("SH_DESC", "1/250"),
         ("AP_DESC", "8"),
         ("ISO", "200"),
-        ("LENSMODEL", "a known lens"),
+        ("LENSFRANGE", "50"),
+        ("LENSARANGE", "2.8 to 16"),
     ]);
     let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
     let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
@@ -544,7 +570,7 @@ fn malformed_standard_values_do_not_block_camera_fallbacks() {
     );
     assert_eq!(
         exif.get_tag_ascii_string(Tag::Unknown(LENS_MODEL)).unwrap(),
-        "a known lens"
+        "50mm F2.8"
     );
 }
 
@@ -618,4 +644,47 @@ fn unique_ids_remove_only_valid_trailing_padding() {
         tag.normalize_unique_id();
         assert!(!tag.valid());
     }
+}
+
+#[test]
+fn a_bracketed_frame_exports_its_own_exposure_bias() {
+    let mut decoder = encoded(&[
+        ("EXPCOMP", "+0.00"),
+        ("EXPNET", "+1.00"),
+        ("BRACKET", "3 of 3"),
+    ]);
+    let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
+    let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
+    let mut exif = decoder.read_directory_tags(&directory);
+    let bias = exif.get_tag(Tag::Unknown(EXPOSURE_BIAS)).unwrap();
+    assert_eq!(rational(bias), 1.);
+}
+
+#[test]
+fn a_zoom_records_its_widest_aperture_only_for_the_end_it_was_shot() {
+    let mut decoder = encoded(&[
+        ("LENSFRANGE", "18 to 50"),
+        ("LENSARANGE", "22 to 2.8"),
+        ("FLENGTH", "18"),
+    ]);
+    let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
+    let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
+    let mut exif = decoder.read_directory_tags(&directory);
+    assert_eq!(
+        exif.get_tag_ascii_string(Tag::Unknown(LENS_MODEL)).unwrap(),
+        "18-50mm"
+    );
+    assert_eq!(
+        rationals(exif.get_tag(Tag::Unknown(0xa432)).unwrap()),
+        [(18, 1), (50, 1), (14, 5), (0, 0)]
+    );
+    let mut decoder = encoded(&[("LENSFRANGE", "30")]);
+    let pointer = decoder.get_tag_u32(Tag::Unknown(EXIF_IFD)).unwrap();
+    let directory = decoder.read_directory(IfdPointer(pointer.into())).unwrap();
+    let mut exif = decoder.read_directory_tags(&directory);
+    assert_eq!(
+        rationals(exif.get_tag(Tag::Unknown(0xa432)).unwrap()),
+        [(30, 1), (30, 1), (0, 0), (0, 0)],
+        "an unrecorded aperture stays unknown"
+    );
 }

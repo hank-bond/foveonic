@@ -55,18 +55,6 @@ impl Field {
             Self::Shutter => "Shutter speed",
         }
     }
-    fn property(self) -> Option<&'static str> {
-        match self {
-            Self::Date => Some("TIME"),
-            Self::Camera => Some("CAMMODEL"),
-            Self::Lens => Some("LENSMODEL"),
-            Self::Iso => Some("ISO"),
-            Self::FocalLength => Some("FLENGTH"),
-            Self::Aperture => Some("APERTURE"),
-            Self::Shutter => Some("SHUTTER"),
-            _ => None,
-        }
-    }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -102,13 +90,11 @@ impl Entry {
             Field::Width => f64::from(self.summary.extent?[0]),
             Field::Height => f64::from(self.summary.extent?[1]),
             Field::FileSize => self.bytes? as f64,
-            _ => self
-                .summary
-                .properties
-                .get(field.property()?)?
-                .trim()
-                .parse()
-                .ok()?,
+            Field::Iso => f64::from(self.summary.capture.iso?),
+            Field::FocalLength => self.summary.capture.focal_length?,
+            Field::Aperture => self.summary.capture.f_number?,
+            Field::Shutter => self.summary.capture.exposure_seconds?,
+            Field::Name | Field::Date | Field::Camera | Field::Lens => return None,
         };
         value.is_finite().then_some(value)
     }
@@ -198,12 +184,15 @@ pub fn sort(files: &mut [PathBuf], entries: &HashMap<PathBuf, Entry>, sort: Sort
                 sort.reverse,
                 |a, b| a.cmp(&b),
             )
-        } else if matches!(field, Field::Camera | Field::Lens) {
+        } else if matches!(field, Field::Date | Field::Camera | Field::Lens) {
+            // EXIF dates sort chronologically as text.
             let text = |entry: Option<&Entry>| {
-                entry
-                    .and_then(|e| e.summary.properties.get(field.property().unwrap()))
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
+                let capture = &entry?.summary.capture;
+                match field {
+                    Field::Date => capture.taken.clone(),
+                    Field::Camera => capture.model.as_ref().map(|s| s.to_lowercase()),
+                    _ => capture.lens.as_ref().map(|s| s.to_lowercase()),
+                }
             };
             optional(text(left), text(right), sort.reverse, |a, b| a.cmp(&b))
         } else {

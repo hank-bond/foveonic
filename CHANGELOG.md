@@ -13,9 +13,12 @@ Preview X3F photographs in Finder with the space bar, and render the same camera
 
 - Preview an X3F photograph in Finder and Quick Look with the space bar. The preview renders the camera's default recipe at a size that fills the screen, or shows the camera's embedded image if rendering fails.
 - Show X3F thumbnails in Finder from the camera's embedded image, upright and framed like the photograph.
+- Show X3F capture details in Finder's gallery panel, Get Info and Spotlight search: camera, lens, focal length, aperture, shutter speed, ISO, exposure compensation, exposure program, metering, size and date taken. Finder treats X3F files as camera raw images while Foveonic is installed, so it also offers Convert Image for them, which macOS cannot perform for X3F and which produces an empty file.
 
 ### Behavior changes
 
+- Exported files describe the lens from its recorded focal length and aperture (for example "30mm F2.8", or "24-70mm" for a zoom) instead of recording a numeric lens ID. The exported lens specification now covers ranges recorded largest-first, records a zoom's widest aperture only for the end it was shot at, and no longer records the narrowest aperture as the widest at the long end. A bracketed frame records its own exposure bias rather than the dial setting.
+- The information panel and the browser's columns and sorting use the camera's own EXIF where the file carries it, as exports do, so Quattro files show details that were missing.
 - The command line starts each photograph from its camera defaults, as the app does. Merrill photographs render with noise reduction on, and a Merrill photograph taken in Monochrome renders in monochrome unless `--rendering color` is given.
 - Open Merrill photographs edited in 0.3.0 or 0.4.0 with Noise and Detail switched off using the camera default, noise reduction on. Photographs switched off in later versions stay off.
 - `--wb` and `--mode` are optional. Without them, the command line uses the white balance and color mode recorded in the photograph, called As Shot in the app.

@@ -73,3 +73,51 @@ fn a_failed_render_falls_back_to_the_upright_embedded_image() {
     let error = foveonic_quicklook::or_embedded(&missing, || Err("render failed".into()));
     assert_eq!(error.err().unwrap().to_string(), "render failed");
 }
+
+fn capture(name: &str) -> foveonic_quicklook::FoveonicCapture {
+    let path = std::ffi::CString::new(photograph(name).to_str().unwrap()).unwrap();
+    let mut capture = std::mem::MaybeUninit::uninit();
+    let mut error = [0; 256];
+    let read = unsafe {
+        foveonic_quicklook::foveonic_ql_capture(
+            path.as_ptr(),
+            capture.as_mut_ptr(),
+            error.as_mut_ptr(),
+            error.len(),
+        )
+    };
+    assert!(read, "{name}");
+    unsafe { capture.assume_init() }
+}
+
+fn text(field: &[std::ffi::c_char]) -> String {
+    unsafe { std::ffi::CStr::from_ptr(field.as_ptr()) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[test]
+#[ignore = "requires FOVEONIC_FIXTURE_DIR"]
+fn spotlight_capture_details_come_from_the_shared_capture_facts() {
+    let merrill = capture("blue-parking-sign.x3f");
+    assert_eq!(text(&merrill.model), "SIGMA DP2 Merrill");
+    assert_eq!(text(&merrill.lens), "30mm F2.8");
+    assert_eq!(merrill.exposure_seconds, 0.01);
+    assert_eq!(merrill.f_number, 3.2);
+    assert_eq!(merrill.iso, 200);
+    assert_eq!(merrill.focal_length, 30.);
+    assert_eq!((merrill.exposure_program, merrill.metering), (3, 5));
+    assert_eq!(text(&merrill.taken), "2026:09:30 18:11:58");
+    assert_eq!([merrill.width, merrill.height], [3136, 4704], "upright");
+    let quattro = capture("dp2-quattro.x3f");
+    assert_eq!(text(&quattro.make), "SIGMA");
+    assert!(text(&quattro.model).contains("dp2 Quattro"));
+    assert_eq!(quattro.iso, 100);
+    assert_eq!(quattro.f_number, 2.8);
+    assert!((quattro.exposure_seconds - 1. / 60.).abs() < 1e-6);
+    assert_eq!(
+        text(&quattro.taken).len(),
+        19,
+        "dated from the camera's EXIF"
+    );
+}

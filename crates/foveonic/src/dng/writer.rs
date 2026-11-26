@@ -127,12 +127,7 @@ pub(super) fn write<W: Write + Seek>(
     let mut directory = encoder.image_directory()?;
     samples(&mut directory, packed, size)?;
     capture.write_primary(&mut directory, exif)?;
-    if let Some(serial) = metadata
-        .properties
-        .get("CAMSERIAL")
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && s.is_ascii() && !s.contains('\0'))
-    {
+    if let Some(serial) = capture.facts().serial.as_deref() {
         tag(&mut directory, 50735, serial)?;
     }
 

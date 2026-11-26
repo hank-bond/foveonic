@@ -1138,7 +1138,11 @@ impl App {
                 changed
             }
             Section::Metadata => {
-                metadata::show(ui, self.selected_metadata().as_deref());
+                let summary = self
+                    .selected
+                    .as_deref()
+                    .and_then(|path| self.browser.metadata_summary(path));
+                metadata::show(ui, self.selected_metadata().as_deref(), summary);
                 false
             }
         }
@@ -1414,10 +1418,8 @@ impl App {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy())
             .unwrap_or_default();
-        let properties = path
-            .and_then(|path| self.browser.metadata_summary(path))
-            .map(|summary| &summary.properties);
-        information::show(ui, properties, &filename, self.viewport().visible_pixels());
+        let summary = path.and_then(|path| self.browser.metadata_summary(path));
+        information::show(ui, summary, &filename, self.viewport().visible_pixels());
         changed
     }
 

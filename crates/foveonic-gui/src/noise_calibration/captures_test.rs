@@ -29,7 +29,11 @@ fn offline_dataset_retains_shared_readouts_and_replaces_changed_identity() {
     let (restored, error) = Dataset::load(Some(dir.path()), &[]);
     assert!(error.is_none());
     assert_eq!(restored.captures.as_slice(), std::slice::from_ref(&capture));
-    let rows = crate::metadata::property_rows(&restored.properties[&capture.path]);
+    let saved = &restored.properties[&capture.path];
+    let rows = crate::metadata::property_rows(
+        &foveonic::source::CaptureFacts::from_properties(saved),
+        saved,
+    );
     assert!(rows.contains(&("Shutter", "1/60".into())));
     assert!(restored.missing_metadata().is_empty());
     let mut changed = capture.clone();

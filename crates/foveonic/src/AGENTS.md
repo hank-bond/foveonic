@@ -27,6 +27,7 @@ Image arithmetic belongs in WGSL beside its owning [node group](./nodes/AGENTS.m
 
 ### Source files
 
+- **[capture_facts.rs](./capture_facts.rs)** Resolves a photograph's capture details once, for EXIF export, the app's readout and Spotlight.
 - **[capture_metadata.rs](./capture_metadata.rs)** Translates source capture details into shared EXIF directories for all exports.
 - **[color_space.rs](./color_space.rs)** Defines RGB primaries, camera color-space selection, output colorants, and transfer functions.
 - **[crop.rs](./crop.rs)** Composes saved oriented crop coordinates with camera framing and final output sizing.

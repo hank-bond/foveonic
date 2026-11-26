@@ -1001,7 +1001,8 @@
         "merrill_high_previews_render_at_half_size",
         "thumbnails_are_upright_and_fit_the_request",
         "thumbnails_never_use_a_differently_framed_camera_jpeg",
-        "a_failed_render_falls_back_to_the_upright_embedded_image"
+        "a_failed_render_falls_back_to_the_upright_embedded_image",
+        "spotlight_capture_details_come_from_the_shared_capture_facts"
       ]
     }
   ],

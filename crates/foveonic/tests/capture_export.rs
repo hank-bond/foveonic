@@ -180,7 +180,7 @@ fn run(format: Format, file: &str, expected: Value, shutter: (u32, u32)) {
 }
 
 fn merrill() -> Value {
-    json!({"Make":"SIGMA", "Model":"SIGMA DP2 Merrill", "ISO":200, "DateTimeOriginal":"2026:09:30 18:11:58", "ExposureTime":0.01, "FNumber":3.2, "FocalLength":30, "ExposureCompensation":0.3, "ExposureProgram":3, "MeteringMode":5, "SerialNumber":90406890})
+    json!({"Make":"SIGMA", "Model":"SIGMA DP2 Merrill", "ISO":200, "DateTimeOriginal":"2026:09:30 18:11:58", "ExposureTime":0.01, "FNumber":3.2, "FocalLength":30, "ExposureCompensation":0.3, "ExposureProgram":3, "MeteringMode":5, "SerialNumber":90406890, "LensModel":"30mm F2.8"})
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn all_formats_preserve_classic_capture_after_geometry_edits() {
         run(
             format,
             "sd9.x3f",
-            json!({"Make":"SIGMA", "Model":"SIGMA SD9", "ISO":100, "DateTimeOriginal":"2003:04:12 12:40:05", "ExposureTime":1.0/30.0, "FNumber":4.5, "FocalLength":53, "ExposureProgram":2, "MeteringMode":2, "SerialNumber":"01004355"}),
+            json!({"Make":"SIGMA", "Model":"SIGMA SD9", "ISO":100, "DateTimeOriginal":"2003:04:12 12:40:05", "ExposureTime":1.0/30.0, "FNumber":4.5, "FocalLength":53, "ExposureProgram":2, "MeteringMode":2, "SerialNumber":"01004355", "LensModel":"24-70mm"}),
             (1, 30),
         );
     }

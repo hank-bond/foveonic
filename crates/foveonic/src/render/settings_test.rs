@@ -857,7 +857,9 @@ fn auto_exposure_uses_finite_capture_compensation_and_neutral_missing_metadata()
     for value in ["", "bad", "NaN", "inf", "1000", "-1000"] {
         m.properties.insert("EXPCOMP".into(), value.into());
         assert_eq!(
-            crate::source::inverse_exposure_compensation(&m.properties),
+            crate::source::AutoExposureCompensation::Both.inverse(
+                crate::source::CaptureExposureCompensation::from_properties(&m.properties)
+            ),
             None
         );
         assert_eq!(settings.resolved_exposure(&m).exposure, 0.);

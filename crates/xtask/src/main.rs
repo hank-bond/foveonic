@@ -153,7 +153,21 @@ fn build_app(root: &Path, build: &Build) -> Result<std::path::PathBuf> {
         compiled.path(),
         &app.version,
     )?;
-    bundle::assemble(&built.gui, compiled.path(), &extensions, &app.version)
+    let importer = bundle::compile_spotlight_importer(
+        root,
+        &built.preview_library,
+        compiled.path(),
+        &app.version,
+    )?;
+    let bundle = bundle::assemble(
+        &built.gui,
+        compiled.path(),
+        &extensions,
+        &importer,
+        &app.version,
+    )?;
+    bundle::sign_ad_hoc(&bundle)?;
+    Ok(bundle)
 }
 
 #[cfg(test)]

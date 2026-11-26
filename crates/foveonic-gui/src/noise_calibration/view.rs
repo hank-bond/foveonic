@@ -101,7 +101,14 @@ impl State {
                             let rows = paths
                                 .iter()
                                 .find_map(|p| self.dataset.properties.get(p))
-                                .map(crate::metadata::property_rows)
+                                .map(|properties| {
+                                    crate::metadata::property_rows(
+                                        &foveonic::source::CaptureFacts::from_properties(
+                                            properties,
+                                        ),
+                                        properties,
+                                    )
+                                })
                                 .unwrap_or_default();
                             let readout = |key| {
                                 rows.iter()

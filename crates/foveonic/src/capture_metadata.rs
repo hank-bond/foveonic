@@ -9,6 +9,9 @@ use std::{
     collections::BTreeMap,
     io::{Seek, Write},
 };
+#[path = "capture_facts.rs"]
+mod facts;
+pub use facts::CaptureFacts;
 use tiff::{
     encoder::{DirectoryEncoder, Rational, SRational, TiffEncoder, TiffKindStandard, TiffValue},
     tags::{Tag, Type},
@@ -111,6 +114,7 @@ const METERING_MODE: u16 = 0x9207;
 const FOCAL_LENGTH: u16 = 0x920a;
 const BODY_SERIAL_NUMBER: u16 = 0xa431;
 const LENS_MODEL: u16 = 0xa434;
+const LENS_SPECIFICATION: u16 = 0xa432;
 const SENSITIVITY_TYPE: u16 = 0x8830;
 const ISO_SPEED: u16 = 0x8833;
 const FOCAL_LENGTH_35MM: u16 = 0xa405;
@@ -391,42 +395,46 @@ fn write_embedded<W: Write + Seek>(
 
 pub(crate) struct Capture<'a> {
     properties: &'a BTreeMap<String, String>,
-    date: Option<String>,
     embedded: Vec<EmbeddedTag>,
+    facts: CaptureFacts,
 }
+
+/// A property's text as EXIF can store it: trimmed, ASCII, without NULs.
+fn property_text<'a>(properties: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    properties
+        .get(key)
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty() && v.is_ascii() && !v.contains('\0'))
+}
+
+/// The camera's own EXIF fields retained from the embedded JPEG, if any.
+pub(crate) fn embedded_tags(properties: &BTreeMap<String, String>) -> Vec<EmbeddedTag> {
+    let embedded: Vec<EmbeddedTag> = properties
+        .get("EXIF_CAPTURE_TAGS")
+        .filter(|s| s.len() <= 1_000_000)
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    embedded
+        .into_iter()
+        .map(|mut entry| {
+            entry.normalize_unique_id();
+            entry
+        })
+        .filter(EmbeddedTag::valid)
+        .map(|mut e| {
+            e.reduce_rationals();
+            e
+        })
+        .collect()
+}
+
 impl<'a> Capture<'a> {
     pub fn new(metadata: &'a Metadata) -> Self {
         let properties = &metadata.properties;
-        let date = properties
-            .get("TIME")
-            .and_then(|value| value.trim().parse().ok())
-            .and_then(capture_date)
-            .or_else(|| {
-                properties
-                    .get("EXIF_DATETIME")
-                    .filter(|value| valid_date(value))
-                    .cloned()
-            });
-        let embedded: Vec<EmbeddedTag> = properties
-            .get("EXIF_CAPTURE_TAGS")
-            .filter(|s| s.len() <= 1_000_000)
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default();
-        let embedded = embedded
-            .into_iter()
-            .map(|mut entry| {
-                entry.normalize_unique_id();
-                entry
-            })
-            .filter(EmbeddedTag::valid)
-            .map(|mut e| {
-                e.reduce_rationals();
-                e
-            })
-            .collect();
+        let embedded = embedded_tags(properties);
         Self {
             properties,
-            date,
+            facts: CaptureFacts::resolve(properties, &embedded),
             embedded,
         }
     }
@@ -449,42 +457,16 @@ impl<'a> Capture<'a> {
     }
 
     fn text(&self, key: &str) -> Option<&str> {
-        self.properties
-            .get(key)
-            .map(|v| v.trim())
-            .filter(|v| !v.is_empty() && v.is_ascii() && !v.contains('\0'))
+        property_text(self.properties, key)
     }
-    fn number(&self, key: &str) -> Option<f64> {
-        self.text(key)?
-            .parse::<f64>()
-            .ok()
-            .filter(|v| v.is_finite())
-    }
-    fn positive(&self, key: &str) -> Option<f64> {
-        self.number(key).filter(|v| *v > 0.)
+    pub(crate) fn facts(&self) -> &CaptureFacts {
+        &self.facts
     }
     fn has(&self, ifd: u8, id: u16) -> bool {
         self.embedded
             .iter()
             .any(|entry| entry.ifd == ifd && entry.id == id)
     }
-    fn shutter(&self) -> Option<f64> {
-        self.text("SH_DESC")
-            .and_then(|v| {
-                if let Some((n, d)) = v.split_once('/') {
-                    Some(n.trim().parse::<f64>().ok()? / d.trim().parse::<f64>().ok()?)
-                } else {
-                    v.trim_end_matches('"').parse().ok()
-                }
-            })
-            .filter(|v| v.is_finite() && *v > 0.)
-            .or_else(|| self.positive("SHUTTER"))
-            .or_else(|| {
-                self.positive("EXPTIME")
-                    .map(|v| v / MICROSECONDS_PER_SECOND)
-            })
-    }
-
     pub fn write_exif<W: Write + Seek>(
         &self,
         encoder: &mut TiffEncoder<W>,
@@ -504,7 +486,7 @@ impl<'a> Capture<'a> {
         for entry in self.embedded.iter().filter(|entry| entry.ifd == 1) {
             write_embedded(&mut directory, entry)?;
         }
-        let v3 = self.text("FIRMVERS").is_some()
+        let v3 = self.facts.firmware.is_some()
             || self
                 .embedded
                 .iter()
@@ -533,14 +515,9 @@ impl<'a> Capture<'a> {
             tag(&mut directory, 0x9101, Undefined(&[1, 2, 3, 0]))?;
         }
         for (id, value) in [
-            (EXPOSURE_TIME, self.shutter()),
-            (
-                F_NUMBER,
-                self.positive("EXIF_FNUMBER")
-                    .or_else(|| self.positive("AP_DESC"))
-                    .or_else(|| self.positive("APERTURE")),
-            ),
-            (FOCAL_LENGTH, self.number("FLENGTH")),
+            (EXPOSURE_TIME, self.facts.exposure_seconds),
+            (F_NUMBER, self.facts.f_number),
+            (FOCAL_LENGTH, self.facts.focal_length),
         ] {
             if self.has(1, id) {
                 continue;
@@ -553,25 +530,14 @@ impl<'a> Capture<'a> {
             }
         }
         if let Some(values) = self
-            .number("EXIF_EXPOSURE_BIAS")
-            .or_else(|| self.number("EXPCOMP"))
+            .facts
+            .exposure_bias
             .and_then(|v| signed_rationals(&[v]).ok())
             .filter(|_| !self.has(1, EXPOSURE_BIAS))
         {
             tag(&mut directory, EXPOSURE_BIAS, values.as_slice())?;
         }
-        let standard_iso = self
-            .embedded
-            .iter()
-            .find(|e| e.ifd == 1 && e.id == ISO_SPEED)
-            .map(|e| u32::from_ne_bytes(e.data.as_slice().try_into().unwrap()));
-        if let Some(iso) = standard_iso
-            .map(f64::from)
-            .or_else(|| self.number("ISO"))
-            .filter(|_| !self.has(1, ISO_SPEED_RATINGS))
-            .filter(|v| v.fract() == 0. && (1. ..=u32::MAX as f64).contains(v))
-        {
-            let iso = iso as u32;
+        if let Some(iso) = self.facts.iso.filter(|_| !self.has(1, ISO_SPEED_RATINGS)) {
             tag(
                 &mut directory,
                 ISO_SPEED_RATINGS,
@@ -584,7 +550,7 @@ impl<'a> Capture<'a> {
                 tag(&mut directory, ISO_SPEED, iso)?;
             }
         }
-        if let Some(date) = &self.date {
+        if let Some(date) = &self.facts.taken {
             for id in [DATE_TIME_ORIGINAL, DATE_TIME_DIGITIZED] {
                 if !self
                     .embedded
@@ -595,59 +561,44 @@ impl<'a> Capture<'a> {
                 }
             }
         }
-        if let Some(program) = self.text("PMODE").and_then(|v| match v {
-            "M" => Some(1_u16),
-            "P" => Some(2),
-            "A" => Some(3),
-            "S" => Some(4),
-            _ => None,
-        }) {
+        if let Some(program) = self.facts.exposure_program {
             if !self.has(1, EXPOSURE_PROGRAM) {
                 tag(&mut directory, EXPOSURE_PROGRAM, program)?;
             }
         }
-        if let Some(mode) = self.text("AEMODE").and_then(|v| match v {
-            "A" => Some(1_u16),
-            "C" => Some(2),
-            "8" => Some(5),
-            _ => None,
-        }) {
+        if let Some(mode) = self.facts.metering {
             if !self.has(1, METERING_MODE) {
                 tag(&mut directory, METERING_MODE, mode)?;
             }
         }
-        for (id, key) in [(BODY_SERIAL_NUMBER, "CAMSERIAL"), (LENS_MODEL, "LENSMODEL")] {
-            if let Some(value) = self.text(key).filter(|_| !self.has(1, id)) {
+        for (id, value) in [
+            (BODY_SERIAL_NUMBER, &self.facts.serial),
+            (LENS_MODEL, &self.facts.lens),
+            (0xa439, &self.facts.firmware),
+        ] {
+            if let Some(value) = value.as_deref().filter(|_| !self.has(1, id)) {
                 tag(&mut directory, id, value)?;
             }
         }
-        if let Some(firmware) = self.text("FIRMVERS").filter(|_| !self.has(1, 0xa439)) {
-            tag(&mut directory, 0xa439, firmware)?;
-        }
         if let Some(value) = self
-            .number("FLEQ35MM")
-            .filter(|v| v.fract() == 0. && (1. ..=u16::MAX as f64).contains(v))
+            .facts
+            .focal_length_35mm
             .filter(|_| !self.has(1, FOCAL_LENGTH_35MM))
         {
-            tag(&mut directory, FOCAL_LENGTH_35MM, value as u16)?;
+            tag(&mut directory, FOCAL_LENGTH_35MM, value)?;
         }
-        if !self
-            .embedded
-            .iter()
-            .any(|entry| entry.ifd == 1 && entry.id == 0xa432)
+        if let Some(lens) = self
+            .facts
+            .lens_range
+            .filter(|_| !self.has(1, LENS_SPECIFICATION))
         {
-            let range = |key| -> Option<[f64; 2]> {
-                let (a, b) = self.text(key)?.split_once(" to ")?;
-                let a = a.trim().parse::<f64>().ok()?;
-                let b = b.trim().parse::<f64>().ok()?;
-                (a.is_finite() && b.is_finite() && a > 0. && b >= a).then_some([a, b])
-            };
-            if let Some((focal, aperture)) = range("LENSFRANGE").zip(range("LENSARANGE")) {
-                if let Ok(values) =
-                    unsigned_rationals(&[focal[0], focal[1], aperture[0], aperture[1]])
-                {
-                    tag(&mut directory, 0xa432, values.as_slice())?;
-                }
+            if let Ok(mut values) = unsigned_rationals(&lens.focal) {
+                // EXIF records an unknown f-number as 0/0.
+                values.extend(lens.widest.map(|v| {
+                    v.and_then(|v| unsigned_rationals(&[v]).ok()?.pop())
+                        .unwrap_or(Rational { n: 0, d: 0 })
+                }));
+                tag(&mut directory, LENS_SPECIFICATION, values.as_slice())?;
             }
         }
         if let Some(wb) = self.text("WB_DESC") {
@@ -694,12 +645,17 @@ impl<'a> Capture<'a> {
             tag(directory, 0x8825, gps)?;
         }
         if !self.has(0, 271) {
-            tag(directory, 271, self.text("CAMMANUF").unwrap_or("SIGMA"))?;
+            tag(directory, 271, self.facts.make.as_str())?;
         }
-        if let Some(model) = self.text("CAMMODEL").filter(|_| !self.has(0, 272)) {
+        if let Some(model) = self.facts.model.as_deref().filter(|_| !self.has(0, 272)) {
             tag(directory, 272, model)?;
         }
-        if let Some(date) = self.date.as_ref().filter(|_| !self.has(0, DATE_TIME)) {
+        if let Some(date) = self
+            .facts
+            .taken
+            .as_ref()
+            .filter(|_| !self.has(0, DATE_TIME))
+        {
             tag(directory, DATE_TIME, date.as_str())?;
         }
         for (id, key) in [(ARTIST, "ARTIST"), (COPYRIGHT, "COPYRIGHT")] {

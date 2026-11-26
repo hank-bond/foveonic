@@ -72,14 +72,10 @@ pub const QUICK_LOOK_EXTENSIONS: [QuickLookExtension; 2] = [
         data_based: false,
     },
 ];
-/// Declared by SIGMA Photo Pro. Importing it lets Quick Look route X3F files without that app.
+/// The X3F type SIGMA Photo Pro also declares; the app exports it as a camera raw image.
 const X3F_TYPE: &str = "com.sigmaphoto.photopro-x3f";
-/// System libraries the engine's static library needs, beyond what Swift links itself.
-const QUICK_LOOK_LINK_ARGUMENTS: &[&str] = &[
-    "-framework",
-    "QuickLookUI",
-    "-framework",
-    "QuickLookThumbnailing",
+/// System libraries the engine's static library needs.
+const ENGINE_LINK_ARGUMENTS: &[&str] = &[
     "-framework",
     "Metal",
     "-framework",
@@ -117,7 +113,13 @@ pub fn compile_quick_look_extensions(
                 .arg(sources.join("FoveonicImage.swift"))
                 .arg(sources.join(format!("{}.swift", kind.provider)))
                 .arg(library)
-                .args(QUICK_LOOK_LINK_ARGUMENTS)
+                .args(ENGINE_LINK_ARGUMENTS)
+                .args([
+                    "-framework",
+                    "QuickLookUI",
+                    "-framework",
+                    "QuickLookThumbnailing",
+                ])
                 // App extensions start in the system's extension runtime, not a Swift main.
                 .args(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain", "-o"])
                 .arg(contents.join("MacOS").join(kind.module))
@@ -144,6 +146,98 @@ pub fn compile_quick_look_extensions(
             Ok(extension)
         })
         .collect()
+}
+
+const SPOTLIGHT_IMPORTER: &str = "FoveonicSpotlight";
+/// The plug-in factory the Info.plist names and the C source is compiled with.
+const SPOTLIGHT_FACTORY: &str = "1E24C19A-0056-4C0D-81D4-4527D64D0C0F";
+/// Apple's type ID for Spotlight metadata importers (kMDImporterTypeID).
+const SPOTLIGHT_IMPORTER_TYPE: &str = "8B08C4BF-415B-11D8-B3F9-0003936726FC";
+
+/// Compile and ad-hoc sign the Spotlight importer. macOS indexes files through
+/// importer plug-ins; Core Spotlight import extensions do not run for files on macOS.
+pub fn compile_spotlight_importer(
+    root: &Path,
+    library: &Path,
+    output: &Path,
+    version: &str,
+) -> Result<PathBuf> {
+    let sources = root.join("crates/foveonic-quicklook/macos");
+    let importer = output.join(format!("{SPOTLIGHT_IMPORTER}.mdimporter"));
+    let contents = importer.join("Contents");
+    fs::create_dir_all(contents.join("MacOS"))?;
+    let status = Command::new("xcrun")
+        .args([
+            "clang", "-bundle", "-O2", "-Wall", "-Werror", "-arch", "arm64",
+        ])
+        .arg(format!("-mmacosx-version-min={MINIMUM_MACOS_VERSION}"))
+        .arg(format!(
+            "-DFOVEONIC_SPOTLIGHT_FACTORY=\"{SPOTLIGHT_FACTORY}\""
+        ))
+        .arg("-I")
+        .arg(&sources)
+        .arg(sources.join("SpotlightImporter.c"))
+        .arg(library)
+        .args(ENGINE_LINK_ARGUMENTS)
+        .args(["-framework", "CoreFoundation", "-framework", "CoreServices"])
+        .args(["-Wl,-dead_strip", "-o"])
+        .arg(contents.join("MacOS").join(SPOTLIGHT_IMPORTER))
+        .status()
+        .context("Cannot run xcrun clang. Select Xcode 26 or later")?;
+    ensure!(
+        status.success(),
+        "Spotlight importer compilation failed: {status}"
+    );
+    importer_metadata(version).to_file_xml(contents.join("Info.plist"))?;
+    // The schema declares the importer's custom exposure-compensation attribute.
+    let resources = contents.join("Resources");
+    fs::create_dir_all(resources.join("en.lproj"))?;
+    for file in ["schema.xml", "en.lproj/schema.strings"] {
+        fs::copy(sources.join(file), resources.join(file))
+            .with_context(|| format!("Cannot copy Spotlight importer {file}"))?;
+    }
+    let status = Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(&importer)
+        .status()
+        .context("Cannot run codesign")?;
+    ensure!(
+        status.success(),
+        "Spotlight importer signing failed: {status}"
+    );
+    Ok(importer)
+}
+
+fn importer_metadata(version: &str) -> Value {
+    let mut document = strings(&[("CFBundleTypeRole", "MDImporter")]);
+    document.insert(
+        "LSItemContentTypes".into(),
+        Value::Array(vec![X3F_TYPE.into()]),
+    );
+    let mut factories = Dictionary::new();
+    factories.insert(SPOTLIGHT_FACTORY.into(), "FoveonicSpotlightFactory".into());
+    let mut types = Dictionary::new();
+    types.insert(
+        SPOTLIGHT_IMPORTER_TYPE.into(),
+        Value::Array(vec![SPOTLIGHT_FACTORY.into()]),
+    );
+    let mut metadata = strings(&[
+        ("CFBundleExecutable", SPOTLIGHT_IMPORTER),
+        ("CFBundleIdentifier", &format!("{APP_IDENTIFIER}.spotlight")),
+        ("CFBundleName", SPOTLIGHT_IMPORTER),
+        ("CFBundlePackageType", "BNDL"),
+        ("CFBundleShortVersionString", version),
+        ("CFBundleVersion", version),
+        ("CFPlugInDynamicRegistration", "NO"),
+        ("LSMinimumSystemVersion", MINIMUM_MACOS_VERSION),
+    ]);
+    metadata.insert(
+        "CFBundleDocumentTypes".into(),
+        Value::Array(vec![Value::Dictionary(document)]),
+    );
+    metadata.insert("CFPlugInFactories".into(), Value::Dictionary(factories));
+    metadata.insert("CFPlugInTypes".into(), Value::Dictionary(types));
+    Value::Dictionary(metadata)
 }
 
 fn strings(pairs: &[(&str, &str)]) -> Dictionary {
@@ -201,9 +295,10 @@ fn x3f_type_declaration() -> Value {
         ("UTTypeIdentifier", X3F_TYPE),
         ("UTTypeDescription", "SIGMA X3F raw image"),
     ]);
+    // A camera raw image, so Finder and Spotlight treat X3F files as photographs.
     declaration.insert(
         "UTTypeConformsTo".into(),
-        Value::Array(vec!["public.data".into()]),
+        Value::Array(vec!["public.camera-raw-image".into()]),
     );
     declaration.insert("UTTypeTagSpecification".into(), Value::Dictionary(tags));
     Value::Array(vec![Value::Dictionary(declaration)])
@@ -227,6 +322,7 @@ pub fn assemble(
     binary: &Path,
     compiled: &Path,
     extensions: &[PathBuf],
+    importer: &Path,
     version: &str,
 ) -> Result<PathBuf> {
     let parent = binary
@@ -256,6 +352,9 @@ pub fn assemble(
         copy_tree(extension, &contents.join("PlugIns").join(name))
             .with_context(|| format!("Cannot copy extension {}", extension.display()))?;
     }
+    let name = importer.file_name().context("Importer path has no name")?;
+    copy_tree(importer, &contents.join("Library/Spotlight").join(name))
+        .with_context(|| format!("Cannot copy Spotlight importer {}", importer.display()))?;
     let icon_metadata = Value::from_file(compiled.join("partial.plist"))?
         .into_dictionary()
         .context("Icon compiler plist must be a dictionary")?;
@@ -275,7 +374,9 @@ pub fn assemble(
     ] {
         metadata.insert(key.into(), Value::Boolean(true));
     }
-    metadata.insert("UTImportedTypeDeclarations".into(), x3f_type_declaration());
+    // Exported, not imported: SIGMA Photo Pro exports the type as plain data, and
+    // Finder shows capture details only for types that conform to an image type.
+    metadata.insert("UTExportedTypeDeclarations".into(), x3f_type_declaration());
     // Apple's compiler owns icon names, including the automatic appearances.
     metadata.extend(icon_metadata);
     Value::Dictionary(metadata).to_file_xml(contents.join("Info.plist"))?;
@@ -285,6 +386,20 @@ pub fn assemble(
     }
     fs::rename(staged, &bundle)?;
     Ok(bundle)
+}
+
+/// Ad-hoc sign the finished app so macOS accepts it locally; Spotlight will not load
+/// an importer from an app with an invalid signature. Nested code keeps its own
+/// signature, including the extensions' sandbox entitlement. Releases re-sign
+/// with the Developer ID.
+pub fn sign_ad_hoc(bundle: &Path) -> Result<()> {
+    let status = Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(bundle)
+        .status()
+        .context("Cannot run codesign")?;
+    ensure!(status.success(), "App signing failed: {status}");
+    Ok(())
 }
 
 pub fn launch_arguments(arguments: &[OsString], cwd: &Path, home: Option<&Path>) -> Vec<OsString> {
@@ -313,7 +428,7 @@ pub fn launch_arguments(arguments: &[OsString], cwd: &Path, home: Option<&Path>)
 mod tests {
     use super::*;
 
-    fn fixture(root: &Path) -> (PathBuf, PathBuf, Vec<PathBuf>) {
+    fn fixture(root: &Path) -> (PathBuf, PathBuf, Vec<PathBuf>, PathBuf) {
         let binary = root.join("foveonic-gui");
         fs::write(&binary, b"test executable").unwrap();
         #[cfg(unix)]
@@ -345,14 +460,21 @@ mod tests {
                 extension
             })
             .collect();
-        (binary, compiled, extensions)
+        let importer = root.join(format!("{SPOTLIGHT_IMPORTER}.mdimporter"));
+        fs::create_dir_all(importer.join("Contents/MacOS")).unwrap();
+        fs::write(
+            importer.join("Contents/MacOS").join(SPOTLIGHT_IMPORTER),
+            SPOTLIGHT_IMPORTER,
+        )
+        .unwrap();
+        (binary, compiled, extensions, importer)
     }
 
     #[test]
     fn bundle_preserves_compiler_metadata_permissions_and_replaces_stale_resources() {
         let temp = tempfile::tempdir().unwrap();
-        let (binary, compiled, extensions) = fixture(temp.path());
-        let bundle = assemble(&binary, &compiled, &extensions, "0.1.0").unwrap();
+        let (binary, compiled, extensions, importer) = fixture(temp.path());
+        let bundle = assemble(&binary, &compiled, &extensions, &importer, "0.1.0").unwrap();
         let contents = bundle.join("Contents");
         let executable = contents.join("MacOS/foveonic-gui");
         assert_eq!(fs::read(&executable).unwrap(), fs::read(&binary).unwrap());
@@ -380,10 +502,14 @@ mod tests {
             assert_eq!(metadata[key].as_string(), Some(value));
         }
         assert!(!metadata.contains_key("NSRequiresAquaSystemAppearance"));
-        let imported = metadata["UTImportedTypeDeclarations"].as_array().unwrap()[0]
+        let declared = metadata["UTExportedTypeDeclarations"].as_array().unwrap()[0]
             .as_dictionary()
             .unwrap();
-        assert_eq!(imported["UTTypeIdentifier"].as_string(), Some(X3F_TYPE));
+        assert_eq!(declared["UTTypeIdentifier"].as_string(), Some(X3F_TYPE));
+        assert_eq!(
+            declared["UTTypeConformsTo"].as_array().unwrap()[0].as_string(),
+            Some("public.camera-raw-image")
+        );
         for kind in &QUICK_LOOK_EXTENSIONS {
             assert_eq!(
                 fs::read_to_string(
@@ -397,6 +523,15 @@ mod tests {
                 kind.module
             );
         }
+        assert_eq!(
+            fs::read_to_string(
+                contents
+                    .join("Library/Spotlight/FoveonicSpotlight.mdimporter/Contents/MacOS")
+                    .join(SPOTLIGHT_IMPORTER)
+            )
+            .unwrap(),
+            SPOTLIGHT_IMPORTER
+        );
         assert_eq!(fs::read_dir(contents.join("Resources")).unwrap().count(), 3);
         assert_eq!(
             fs::read_to_string(contents.join("Resources/JPEG-XL-LICENSES.txt")).unwrap(),
@@ -404,7 +539,7 @@ mod tests {
         );
         let stale = contents.join("Resources/old-icon.png");
         fs::write(&stale, "old").unwrap();
-        assemble(&binary, &compiled, &extensions, "0.1.1").unwrap();
+        assemble(&binary, &compiled, &extensions, &importer, "0.1.1").unwrap();
         assert!(!stale.exists());
     }
 
@@ -443,12 +578,37 @@ mod tests {
     }
 
     #[test]
+    fn spotlight_importer_registers_its_factory_for_x3f() {
+        let metadata = importer_metadata("0.1.0").into_dictionary().unwrap();
+        assert_eq!(
+            metadata["CFBundleIdentifier"].as_string(),
+            Some("org.foveonic.foveonic.spotlight")
+        );
+        let factories = metadata["CFPlugInFactories"].as_dictionary().unwrap();
+        assert_eq!(
+            factories[SPOTLIGHT_FACTORY].as_string(),
+            Some("FoveonicSpotlightFactory")
+        );
+        let types = metadata["CFPlugInTypes"].as_dictionary().unwrap()[SPOTLIGHT_IMPORTER_TYPE]
+            .as_array()
+            .unwrap();
+        assert_eq!(types[0].as_string(), Some(SPOTLIGHT_FACTORY));
+        let document = metadata["CFBundleDocumentTypes"].as_array().unwrap()[0]
+            .as_dictionary()
+            .unwrap();
+        assert_eq!(
+            document["LSItemContentTypes"].as_array().unwrap()[0].as_string(),
+            Some(X3F_TYPE)
+        );
+    }
+
+    #[test]
     fn incomplete_resources_keep_previous_bundle_intact() {
         let temp = tempfile::tempdir().unwrap();
-        let (binary, compiled, extensions) = fixture(temp.path());
-        let app = assemble(&binary, &compiled, &extensions, "0.1.0").unwrap();
+        let (binary, compiled, extensions, importer) = fixture(temp.path());
+        let app = assemble(&binary, &compiled, &extensions, &importer, "0.1.0").unwrap();
         fs::remove_file(compiled.join("Assets.car")).unwrap();
-        assert!(assemble(&binary, &compiled, &extensions, "0.1.1").is_err());
+        assert!(assemble(&binary, &compiled, &extensions, &importer, "0.1.1").is_err());
         let metadata = Value::from_file(app.join("Contents/Info.plist")).unwrap();
         assert_eq!(
             metadata.as_dictionary().unwrap()["CFBundleVersion"].as_string(),

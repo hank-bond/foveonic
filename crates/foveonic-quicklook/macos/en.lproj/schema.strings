@@ -1,0 +1,3 @@
+/* Display names for the Foveonic Spotlight importer's custom attributes. */
+"org_foveonic_exposure_bias" = "Exposure compensation";
+"org_foveonic_exposure_bias.Description" = "Exposure compensation in EV, including any bracket offset";

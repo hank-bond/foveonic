@@ -760,7 +760,7 @@ impl Browser {
             .to_string_lossy()
             .into_owned()];
         if let Some(entry) = self.records.get(path) {
-            lines.extend(crate::metadata::capture_values(&entry.summary.properties));
+            lines.extend(crate::metadata::capture_values(&entry.summary.capture));
         }
         lines.join("\n")
     }

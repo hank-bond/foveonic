@@ -136,10 +136,12 @@ jobs:
             exit 1
           fi
           # Nested code is signed before the app. Each extension keeps the sandbox
-          # entitlement that cargo xtask bundle signed into it.
-          for extension in target/release/Foveonic.app/Contents/PlugIns/*.appex; do
+          # entitlement that cargo xtask bundle signed into it; the Spotlight
+          # importer runs inside Spotlight's own sandbox and has none.
+          for nested in target/release/Foveonic.app/Contents/PlugIns/*.appex \
+            target/release/Foveonic.app/Contents/Library/Spotlight/*.mdimporter; do
             codesign --force --sign "$identity" --keychain "$SIGNING_KEYCHAIN" \
-              --options runtime --timestamp --preserve-metadata=entitlements "$extension"
+              --options runtime --timestamp --preserve-metadata=entitlements "$nested"
           done
           codesign --force --sign "$identity" --keychain "$SIGNING_KEYCHAIN" \
             --options runtime --timestamp target/release/Foveonic.app

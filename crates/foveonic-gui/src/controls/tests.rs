@@ -4459,9 +4459,9 @@ fn exposure_auto_is_editable_and_leaving_it_keeps_the_shown_value() {
                                 ui,
                                 settings,
                                 calculated.map(|v| foveonic::source::CaptureExposureCompensation {
-                                    dial: Some(-v),
+                                    dial: Some(-f64::from(v)),
                                     bracket: Some(0.),
-                                    net: Some(-v),
+                                    net: Some(-f64::from(v)),
                                 }),
                             )
                         });

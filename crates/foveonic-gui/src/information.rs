@@ -2,12 +2,11 @@
 
 use crate::viewport::PixelRegion;
 use eframe::egui;
-use std::collections::BTreeMap;
 
 pub const HEIGHT: f32 = crate::widgets::FOOTER_HEIGHT;
 
-pub fn capture(properties: &BTreeMap<String, String>) -> String {
-    crate::metadata::capture_values(properties).join("  ")
+pub fn capture(summary: &foveonic::source::MetadataSummary) -> String {
+    crate::metadata::capture_values(&summary.capture).join("  ")
 }
 pub fn region_text(region: PixelRegion) -> String {
     let [w, h] = region.extent;
@@ -18,11 +17,11 @@ pub fn region_text(region: PixelRegion) -> String {
 
 pub fn show(
     ui: &mut egui::Ui,
-    properties: Option<&BTreeMap<String, String>>,
+    summary: Option<&foveonic::source::MetadataSummary>,
     filename: &str,
     region: Option<PixelRegion>,
 ) {
-    let left = properties.map(capture).unwrap_or_default();
+    let left = summary.map(capture).unwrap_or_default();
     let right = region.map(region_text).unwrap_or_default();
     let (rect, response) = crate::widgets::footer(ui);
     let color = ui.visuals().text_color();
@@ -88,7 +87,7 @@ pub fn show(
         );
     }
     response.on_hover_text(format!("{filename}\n{}\n{}\n0-based image pixels; inclusive top-left and bottom-right. Includes partly visible pixels.",
-        properties.map(capture).unwrap_or_default(), region.map(region_text).unwrap_or_default()));
+        summary.map(capture).unwrap_or_default(), region.map(region_text).unwrap_or_default()));
 }
 
 #[cfg(test)]
@@ -96,7 +95,9 @@ mod tests {
     use super::*;
     #[test]
     fn every_readout_supports_drag_selection_and_copy() {
-        let properties = [("ISO".into(), "100".into())].into_iter().collect();
+        let properties = foveonic::source::MetadataSummary::from_properties(
+            [("ISO".into(), "100".into())].into_iter().collect(),
+        );
         let region = PixelRegion {
             top_left: [1150, 2094],
             bottom_right: [2292, 3123],
@@ -171,16 +172,18 @@ mod tests {
             }),
             "300×300 · (100,200)–(399,499)"
         );
-        let properties = [
-            ("SHUTTER", "0.01013"),
-            ("APERTURE", "2.8"),
-            ("FLENGTH", "30"),
-            ("ISO", "100"),
-            ("EXPCOMP", "0"),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.into(), v.into()))
-        .collect();
+        let properties = foveonic::source::MetadataSummary::from_properties(
+            [
+                ("SHUTTER", "0.01013"),
+                ("APERTURE", "2.8"),
+                ("FLENGTH", "30"),
+                ("ISO", "100"),
+                ("EXPCOMP", "0"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect(),
+        );
         assert_eq!(
             capture(&properties),
             "1/100  f/2.8  30 mm  ISO 100  +0.0 EV"

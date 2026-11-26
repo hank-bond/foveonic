@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Declares the importer's one custom attribute: Spotlight has no standard key for
+     exposure compensation. Finder chooses which details to show from the X3F type's
+     image conformance, not from importer schemas, so no display lists are given. -->
+<schema version="1.0" xmlns="http://www.apple.com/metadata"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.apple.com/metadata file:///System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Resources/MetadataSchema.xsd">
+    <attributes>
+        <attribute name="org_foveonic_exposure_bias" multivalued="false" type="CFNumber"/>
+    </attributes>
+</schema>

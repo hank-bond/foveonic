@@ -30,7 +30,7 @@ pub(super) enum Reply {
     Loaded {
         generation: u64,
         path: PathBuf,
-        entry: Entry,
+        entry: Box<Entry>,
         error: Option<String>,
     },
     Saved {
@@ -363,7 +363,7 @@ fn read_entry(
     Some(Reply::Loaded {
         generation: request.generation,
         path: request.path.clone(),
-        entry: Entry::new(summary, bytes, rating),
+        entry: Box::new(Entry::new(summary, bytes, rating)),
         error,
     })
 }
@@ -400,7 +400,7 @@ impl super::Browser {
                         self.rating_errors.insert(path.clone(), error);
                     }
                     self.metadata_loaded.insert(path.clone());
-                    self.records.insert(path, entry);
+                    self.records.insert(path, *entry);
                     self.query_dirty = true;
                 }
                 Reply::Saved { ratings, error } => {

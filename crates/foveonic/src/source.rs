@@ -13,21 +13,24 @@ pub enum LoadStage {
     Decoded,
 }
 
+pub use crate::capture_metadata::CaptureFacts;
+
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Capture compensation components. Net includes the dial and any bracket offset.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CaptureExposureCompensation {
-    pub dial: Option<f32>,
-    pub bracket: Option<f32>,
-    pub net: Option<f32>,
+    pub dial: Option<f64>,
+    pub bracket: Option<f64>,
+    pub net: Option<f64>,
 }
 impl CaptureExposureCompensation {
     /// Read EV components without guessing an unknown bracket offset.
     pub fn from_properties(properties: &BTreeMap<String, String>) -> Self {
         let number = |key: &str| {
-            properties.get(key)?.trim().parse::<f32>().ok().filter(|v| {
-                let gain = (-*v).exp2();
+            // Keep the recorded decimal exactly; processing applies it as an f32 gain.
+            properties.get(key)?.trim().parse::<f64>().ok().filter(|v| {
+                let gain = (-(*v as f32)).exp2();
                 v.is_finite() && gain.is_finite() && gain > 0.
             })
         };
@@ -37,7 +40,8 @@ impl CaptureExposureCompensation {
             .get("BRACKET")
             .is_some_and(|v| !v.trim().is_empty());
         let bracket = match (net, dial) {
-            (Some(net), Some(dial)) => Some(net - dial),
+            // Subtract in f32, as processing does, so the bracket gain stays bit-identical.
+            (Some(net), Some(dial)) => Some(f64::from(net as f32 - dial as f32)),
             (_, Some(_)) if !bracketed => Some(0.),
             _ => None,
         };
@@ -66,6 +70,7 @@ impl AutoExposureCompensation {
             Self::Dial => values.dial,
             Self::Both => values.net,
         }?;
+        let inverse = inverse as f32;
         let gain = inverse.exp2();
         (inverse.is_finite() && gain.is_finite() && gain > 0.).then_some(if inverse == 0. {
             0.
@@ -73,11 +78,6 @@ impl AutoExposureCompensation {
             inverse
         })
     }
-}
-
-/// Exposure in stops that cancels all recorded capture compensation.
-pub fn inverse_exposure_compensation(properties: &BTreeMap<String, String>) -> Option<f32> {
-    AutoExposureCompensation::Both.inverse(CaptureExposureCompensation::from_properties(properties))
 }
 
 const SENSOR_WIDTH: usize = 4928;
@@ -487,6 +487,8 @@ pub struct MetadataSummary {
     pub extent: Option<[u32; 2]>,
     /// Every recorded property, for display and recipe defaults.
     pub properties: BTreeMap<String, String>,
+    /// Capture details resolved once from the properties.
+    pub capture: CaptureFacts,
 }
 
 impl MetadataSummary {
@@ -494,6 +496,7 @@ impl MetadataSummary {
         Self {
             family: family_of(&properties),
             extent: oriented_extent(&properties),
+            capture: CaptureFacts::from_properties(&properties),
             properties,
         }
     }
