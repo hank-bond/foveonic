@@ -922,12 +922,17 @@ impl Traversal {
                         profile,
                     )?)
                 }
-                Operation::PackedLab(prepared) => Some(crate::nodes::color::packed_lab::apply(
-                    gpu,
-                    &input(0).buffer,
-                    prepared,
-                    profile,
-                )?),
+                Operation::PackedLab(prepared) => {
+                    let id = node.inputs[0];
+                    let source = if consumers[id] == 1 {
+                        values[id].take().unwrap().buffer
+                    } else {
+                        input(0).buffer.clone()
+                    };
+                    Some(crate::nodes::color::packed_lab::apply(
+                        gpu, source, prepared, profile,
+                    )?)
+                }
                 Operation::WaveletContrast(prepared) => {
                     Some(crate::nodes::finish::wavelet_contrast::apply(
                         gpu,
@@ -1339,7 +1344,8 @@ impl Traversal {
                     }
                     required[index].then_some(output.rgb)
                 }
-                Operation::ResidualFinish { params, with_mask } => {
+                Operation::ResidualRgb(params) | Operation::ResidualDetail(params) => {
+                    use crate::nodes::color::residual_finish;
                     if inherited != params.extent()
                         || input(1).description.map(|d| d.extent) != Some(inherited)
                     {
@@ -1347,31 +1353,20 @@ impl Traversal {
                             "residual finishing requires matching RGB and gain extents".into()
                         );
                     }
-                    let output = crate::nodes::color::residual_finish::apply(
-                        gpu,
-                        &input(0).buffer,
-                        &input(1).buffer,
-                        if *with_mask {
-                            Some(&input(2).buffer)
-                        } else {
-                            None
-                        },
-                        params,
-                        profile,
-                    )?;
-                    if required[node.outputs[1]] {
-                        values[node.outputs[1]] = Some(Value {
-                            working_scale,
-                            view_baked,
-                            view,
-                            buffer: output.detail,
-                            description: Some(Description::new(
-                                inherited,
-                                crate::image::Space::SignedDetail,
-                            )),
-                        });
-                    }
-                    required[index].then_some(output.rgb)
+                    let rgb = &input(0).buffer;
+                    let residual = &input(1).buffer;
+                    Some(if matches!(node.operation, Operation::ResidualDetail(_)) {
+                        residual_finish::detail(
+                            gpu,
+                            rgb,
+                            residual,
+                            &input(2).buffer,
+                            params,
+                            profile,
+                        )?
+                    } else {
+                        residual_finish::rgb(gpu, rgb, residual, params, profile)?
+                    })
                 }
                 Operation::RgbDespeckle(prepared) => {
                     if inherited != prepared.extent() {
@@ -2747,6 +2742,62 @@ mod observation_tests {
             )
             .unwrap();
         (image, graph, target)
+    }
+
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn packed_lab_preserves_the_requested_intermediate_and_reuses_the_last_read() {
+        use crate::nodes::color::packed_lab::{Direction, Prepared};
+        let engine = Engine::new().unwrap();
+        let (mut image, _, _) = resumable_fixture(&engine);
+        let extent = image.description.extent;
+        let samples = [100_f32, 200., 13000.].repeat(4);
+        image.buffer = engine.gpu.upload("Unsigned RGB codes", &samples).unwrap();
+        image.description = Description::new(extent, Space::UnsignedCodeRgb);
+        let mut graph = Graph::default();
+        let source = graph
+            .add(
+                Operation::RenderedInput {
+                    data: DataType::UnsignedCodeRgb,
+                },
+                &[],
+            )
+            .unwrap();
+        let convert = |direction| {
+            Operation::PackedLab(
+                Prepared::new(extent, direction, [1., 0., 0., 0., 1., 0., 0., 0., 1.]).unwrap(),
+            )
+        };
+        let lab = graph.add(convert(Direction::Forward), &[source]).unwrap();
+        let rgb = graph.add(convert(Direction::Inverse), &[lab]).unwrap();
+        let render = |roots: &[usize]| {
+            let before = engine.gpu_activity();
+            let values = engine
+                .run_graph(
+                    Input::Rendered(&image),
+                    &graph,
+                    roots,
+                    &mut Profile::default(),
+                    &mut Execution::default(),
+                )
+                .unwrap();
+            let copied = engine.gpu_activity().since(before).device_copy_bytes;
+            let bytes: Vec<_> = values
+                .iter()
+                .map(|v| engine.gpu.readback(&v.buffer).unwrap())
+                .collect();
+            (bytes, copied)
+        };
+        let (lab_only, _) = render(&[lab]);
+        let (rgb_only, copied) = render(&[rgb]);
+        let (both, retained_copied) = render(&[lab, rgb]);
+        assert_eq!(both, [lab_only[0].clone(), rgb_only[0].clone()]);
+        assert_ne!(both[0], both[1]);
+        assert_eq!(retained_copied, copied + image.buffer.size());
+        assert_eq!(
+            engine.gpu.readback(&image.buffer).unwrap(),
+            bytemuck::cast_slice::<_, u8>(&samples)
+        );
     }
 
     #[test]

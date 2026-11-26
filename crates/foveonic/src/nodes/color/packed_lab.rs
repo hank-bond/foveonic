@@ -63,7 +63,7 @@ impl Prepared {
 
 pub(crate) fn apply(
     gpu: &Gpu,
-    source: &ReadGuard,
+    source: ReadGuard,
     prepared: &Prepared,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
@@ -72,15 +72,17 @@ pub(crate) fn apply(
         return Err("packed Lab conversion extent mismatch".into());
     }
     let uniform = gpu.uniform(prepared);
-    let mut output = gpu.storage("packed Lab conversion", source.size())?;
+    let mut output = if source.exclusive() {
+        source
+    } else {
+        let mut copy = gpu.storage("packed Lab conversion", source.size())?;
+        gpu.copy(&source, copy.write(), source.size());
+        copy
+    };
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
         Kernel::PackedLab,
-        &mut [
-            (0, Read(source)),
-            (1, Read(&uniform)),
-            (2, Write(output.write())),
-        ],
+        &mut [(1, Read(&uniform)), (2, Write(output.write()))],
         [width.div_ceil(8), height.div_ceil(8)],
         &mut trace,
     );

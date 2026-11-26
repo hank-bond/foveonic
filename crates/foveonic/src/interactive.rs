@@ -1815,24 +1815,35 @@ mod tests {
                 &[original_mask],
             )
             .unwrap();
-        let finish = |detail| O::ResidualFinish {
-            params: residual_finish::Params::new([16, 16], detail, 0., 0, 0., 0.).unwrap(),
-            with_mask: true,
-        };
+        let params = |scale| residual_finish::Params::new([16, 16], scale, 0., 0, 0., 0.).unwrap();
         let root = graph
-            .add(finish(1.), &[reconstructed, residual, mask])
+            .add(
+                O::ResidualDetail(params(1.)),
+                &[reconstructed, residual, mask],
+            )
             .unwrap();
+        let finished = graph
+            .add(O::ResidualRgb(params(1.)), &[reconstructed, residual])
+            .unwrap();
+        let rgb_only = graph.required(&[finished]).unwrap();
+        assert!(rgb_only[reconstructed] && rgb_only[residual]);
+        assert!(!rgb_only[mask] && !rgb_only[original_mask] && !rgb_only[root]);
+        let inspection = graph.required(&[root]).unwrap();
+        assert!(inspection[mask] && inspection[original_mask] && !inspection[finished]);
         let mut cache = Cache::default();
         let frontier = cache.plan(&graph, &[root]).unwrap();
         assert_eq!(frontier, vec![rgb, blue, mask]);
-        let previous = cache.planned.versions["residual.rgb"].generation;
-        graph.nodes[graph.outputs[root].producer].operation = finish(1.2);
+        let previous = cache.planned.versions["reconstruction.detail"].generation;
+        graph.nodes[graph.outputs[root].producer].operation = O::ResidualDetail(params(1.2));
         // A detail edit can use the initial checkpoints before reconstruction.
         assert_eq!(
             cache.plan(&graph, &[root]).unwrap(),
             vec![reconstructed, residual, mask]
         );
-        assert_ne!(cache.planned.versions["residual.rgb"].generation, previous);
+        assert_ne!(
+            cache.planned.versions["reconstruction.detail"].generation,
+            previous
+        );
         graph.nodes[graph.outputs[reconstructed].producer].operation = O::BlueGuidedReconstruct(
             Arc::new(blue_guided_reconstruct::Prepared::new([8, 8], 0.5, [0.; 3], None).unwrap()),
         );

@@ -25,7 +25,7 @@ fn complete_native_callbacks() {
             .unwrap();
         let result = apply(
             &gpu,
-            &source,
+            source.clone(),
             &Prepared::new(extent, direction, matrix).unwrap(),
             &mut Profile::default(),
         )

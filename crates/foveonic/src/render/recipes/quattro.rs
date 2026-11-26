@@ -744,7 +744,7 @@ fn compose(
     if reduced {
         reconstruction_view.crop = output_geometry.bounds(reconstruction_view.crop);
     }
-    let reconstructed = stage2b::build(
+    let (reconstructed, detail) = stage2b::build(
         &mut graph,
         &signals,
         highlight_mask,
@@ -752,7 +752,6 @@ fn compose(
         reconstruction_view,
     )?;
     finish!(reconstructed);
-    let detail = graph.named_output(reconstructed, "reconstruction.detail")?;
     let spatial_input = if settings.is_monochrome() {
         graph.add_scoped(
             Operation::CodeChannelMap(std::sync::Arc::new(

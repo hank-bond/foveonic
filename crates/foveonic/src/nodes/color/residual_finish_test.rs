@@ -1,5 +1,18 @@
 //! Checks bounded residual gain and signed-detail controls.
 use super::*;
+pub(crate) fn both(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    residual: &ReadGuard,
+    mask: &ReadGuard,
+    params: &Params,
+    profile: &mut Profile,
+) -> Result<(ReadGuard, ReadGuard)> {
+    Ok((
+        rgb(gpu, input, residual, params, profile)?,
+        detail(gpu, input, residual, mask, params, profile)?,
+    ))
+}
 // Float32 word selected by the ordinary unit-scale residual LUT.
 const SELECTED_ADAPTIVE: f32 = 1.600_000_1;
 #[test]
@@ -39,16 +52,16 @@ fn independent_sharp_and_gain_fixtures_match() {
                     .collect::<Vec<_>>(),
             )
             .unwrap();
-        let output = apply(
+        let (rgb_output, detail_output) = both(
             &gpu,
             &rgb,
             &residual,
-            Some(&mask),
+            &mask,
             &Params::new([32, 24], 1., 16., mode, SELECTED_ADAPTIVE, 0.7).unwrap(),
             &mut Profile::default(),
         )
         .unwrap();
-        for (key, buffer) in [("rgb-output", output.rgb), ("detail-output", output.detail)] {
+        for (key, buffer) in [("rgb-output", rgb_output), ("detail-output", detail_output)] {
             let bytes = gpu.readback(&buffer).unwrap();
             let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
             let expected = read(key);
@@ -95,11 +108,11 @@ fn full_actual_residual_inputs_match_rgb_and_detail() {
     let sharp_threshold = f32::from_le_bytes(parameters[0xf0..0xf4].try_into().unwrap());
     let gpu = Gpu::new().unwrap();
     let mut profile = Profile::new(crate::profile::Mode::Gpu);
-    let result = apply(
+    let (rgb_output, detail_output) = both(
         &gpu,
         &gpu.upload("Native reconstructed RGB", &input).unwrap(),
         &gpu.upload("Native residual gains", gain).unwrap(),
-        Some(&gpu.upload("Native saturation mask", &mask).unwrap()),
+        &gpu.upload("Native saturation mask", &mask).unwrap(),
         &Params::new(
             [5888, 3672],
             field(0x38),
@@ -113,8 +126,8 @@ fn full_actual_residual_inputs_match_rgb_and_detail() {
     )
     .unwrap();
     for (name, buffer, signed, channels) in [
-        ("output-rgb.u16", result.rgb, false, 3usize),
-        ("output-detail.i16", result.detail, true, 1),
+        ("output-rgb.u16", rgb_output, false, 3usize),
+        ("output-detail.i16", detail_output, true, 1),
     ] {
         let b = gpu.readback(&buffer).unwrap();
         let actual = bytemuck::cast_slice::<u8, f32>(&b);

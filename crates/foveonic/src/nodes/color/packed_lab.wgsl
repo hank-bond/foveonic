@@ -1,5 +1,4 @@
 struct Params { shape:vec4<u32>, matrix:array<vec4<f32>,6> }
-@group(0) @binding(0) var<storage,read> source:array<f32>;
 @group(0) @binding(1) var<uniform> params:Params;
 @group(0) @binding(2) var<storage,read_write> destination:array<f32>;
 
@@ -34,7 +33,7 @@ fn inverse_curve(v:f32)->f32{
 fn packed_lab(@builtin(global_invocation_id) id:vec3<u32>){
  if id.x>=params.shape.x||id.y>=params.shape.y{return;}
  let index=(id.y*params.shape.x+id.x)*3u;
- let v=vec3<f32>(source[index],source[index+1u],source[index+2u]);
+ let v=vec3<f32>(destination[index],destination[index+1u],destination[index+2u]);
  var result:vec3<f32>;
  if params.shape.z==0u{
   var xyz=transform(v*6.103888e-5);

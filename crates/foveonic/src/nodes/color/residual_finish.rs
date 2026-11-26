@@ -53,73 +53,83 @@ impl Params {
         self.shape[..2].copy_from_slice(&extent);
         Ok(self)
     }
-    pub(crate) fn key(&self) -> Key {
-        Key::pod(self)
+    pub(crate) fn rgb_key(&self) -> Key {
+        let [_, _, adaptive_gain, _] = self.controls;
+        Key::pod(&self.extent()).with(&adaptive_gain)
+    }
+    pub(crate) fn detail_key(&self) -> Key {
+        let [scale, threshold, _, mask_control] = self.controls;
+        Key::pod(&self.shape).with(&[scale, threshold, mask_control])
+    }
+
+    fn check_inputs(&self, rgb: &ReadGuard, residual: &ReadGuard) -> Result<()> {
+        let [w, h] = self.extent();
+        let pixels = u64::from(w) * u64::from(h);
+        if rgb.size() != pixels * 12 || residual.size() != pixels * 4 {
+            return Err("residual finishing input geometry mismatch".into());
+        }
+        Ok(())
     }
 }
-pub(crate) struct Output {
-    pub rgb: ReadGuard,
-    pub detail: ReadGuard,
-}
-pub(crate) fn apply(
+
+pub(crate) fn rgb(
     gpu: &Gpu,
     input: &ReadGuard,
     residual: &ReadGuard,
-    mask: Option<&ReadGuard>,
     params: &Params,
     profile: &mut Profile,
-) -> Result<Output> {
+) -> Result<ReadGuard> {
+    params.check_inputs(input, residual)?;
     let [w, h] = params.extent();
-    let n = u64::from(w) * u64::from(h);
-    if input.size() != n * 12 || residual.size() != n * 4 || mask.is_some_and(|m| m.size() != n * 4)
-    {
-        return Err("residual finishing input geometry mismatch".into());
-    }
-    let mut controls = *params;
-    controls.shape[3] = u32::from(mask.is_some());
-    let empty_mask;
-    let mask = if let Some(mask) = mask {
-        mask
-    } else {
-        empty_mask = gpu.upload("Absent detail mask", &[0_u32])?;
-        &empty_mask
-    };
-    let uniform = gpu.uniform(&controls);
-    let mut detail = gpu.storage("Signed residual detail", n * 4)?;
-    let mut rgb = gpu.storage("Residual-adjusted code RGB", n * 12)?;
-    let mut output_detail = gpu.storage("Damped signed residual detail", n * 4)?;
-    let mut trace = gpu.trace(profile.mode.gpu(), 2);
-    gpu.dispatch(
-        Kernel::ResidualSharp,
-        &mut [
-            (0, Read(input)),
-            (1, Read(residual)),
-            (3, Read(&uniform)),
-            (4, Write(detail.write())),
-        ],
-        [w.div_ceil(8), h.div_ceil(8)],
-        &mut trace,
-    );
+    let uniform = gpu.uniform(params);
+    let mut output = gpu.storage("Residual-adjusted code RGB", input.size())?;
+    let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
         Kernel::ResidualFinish,
         &mut [
             (0, Read(input)),
             (1, Read(residual)),
-            (2, Read(mask)),
             (3, Read(&uniform)),
-            (4, Read(&detail)),
-            (5, Write(rgb.write())),
-            (6, Write(output_detail.write())),
+            (4, Write(output.write())),
         ],
         [w.div_ceil(8), h.div_ceil(8)],
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
-    Ok(Output {
-        rgb,
-        detail: output_detail,
-    })
+    Ok(output)
+}
+
+pub(crate) fn detail(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    residual: &ReadGuard,
+    mask: &ReadGuard,
+    params: &Params,
+    profile: &mut Profile,
+) -> Result<ReadGuard> {
+    params.check_inputs(input, residual)?;
+    if mask.size() != residual.size() {
+        return Err("residual detail mask geometry mismatch".into());
+    }
+    let [w, h] = params.extent();
+    let uniform = gpu.uniform(params);
+    let mut output = gpu.storage("Damped signed residual detail", residual.size())?;
+    let mut trace = gpu.trace(profile.mode.gpu(), 1);
+    gpu.dispatch(
+        Kernel::ResidualSharp,
+        &mut [
+            (0, Read(input)),
+            (1, Read(residual)),
+            (2, Read(mask)),
+            (3, Read(&uniform)),
+            (4, Write(output.write())),
+        ],
+        [w.div_ceil(8), h.div_ceil(8)],
+        &mut trace,
+    );
+    gpu.finish_trace(&trace, profile)?;
+    Ok(output)
 }
 #[cfg(test)]
 #[path = "residual_finish_test.rs"]
-mod tests;
+pub(crate) mod tests;
