@@ -225,7 +225,7 @@ class InventoryTests(unittest.TestCase):
 
     def test_maintained_inventory_keeps_release_selection_and_corrected_variants(self):
         document = json.loads(MANIFEST.read_text()); validate_inventory(document)
-        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 509)
+        self.assertEqual(sum(len(g['tests']) for g in document['groups']), 510)
         self.assertEqual(len(document['excluded']), 151)
         self.assertEqual(len(document['input_sets']['standard']), 27)
         groups = {name: g for g in document['groups'] for name in g['tests']}

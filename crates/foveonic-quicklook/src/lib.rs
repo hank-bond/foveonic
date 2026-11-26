@@ -264,11 +264,12 @@ mod tests {
     #[test]
     fn header_declares_the_engine_pixel_size() {
         let header = include_str!("../macos/FoveonicQuickLook.h");
+        // Whole lines, so a CRLF checkout matches and 4 cannot match 40.
         let declared = format!(
-            "#define FOVEONIC_QL_BYTES_PER_PIXEL {}\n",
+            "#define FOVEONIC_QL_BYTES_PER_PIXEL {}",
             foveonic::render::EncodedImage::BYTES_PER_PIXEL
         );
-        assert!(header.contains(&declared));
+        assert!(header.lines().any(|line| line == declared));
         assert!(header.contains(&format!(
             "_Static_assert(sizeof(FoveonicCapture) == {},",
             std::mem::size_of::<FoveonicCapture>()
