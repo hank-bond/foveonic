@@ -9,6 +9,12 @@ kind: reference
 
 Preview X3F photographs in Finder with the space bar, and render the same camera defaults from the command line as in the app.
 
+### Performance improvements
+
+- Merrill: Edit Fine detail without recomputing the broad blur when Coarse detail is unchanged.
+- Quattro: Compute the detail mask only when sharpening needs it, so Universal and disabled sharpening skip it.
+- Quattro: Reuse intermediate image buffers and speed up shading and blue filtering. On an Apple M1 Pro, native Quality rendering completed 5.3% faster on the DP3 Quattro and 1.9% faster on the DP2 Quattro, and the measured DP3 Quattro editing workflow settled with 82 MiB less memory. Rendered images are unchanged.
+
 ### New functionality
 
 - Preview an X3F photograph in Finder and Quick Look with the space bar. The preview renders the camera's default recipe at a size that fills the screen, or shows the camera's embedded image if rendering fails.
