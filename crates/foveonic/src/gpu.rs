@@ -183,7 +183,10 @@ fn test_trace(phase: &str, details: std::fmt::Arguments<'_>) {
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    pipelines: Vec<wgpu::ComputePipeline>,
+    pipelines: std::sync::Arc<[std::sync::OnceLock<wgpu::ComputePipeline>]>,
+    sources: std::sync::Arc<[kernels::KernelSource]>,
+    /// Serializes pipeline building. See `Gpu::build_kernel`.
+    builds: std::sync::Arc<std::sync::Mutex<()>>,
     field: std::sync::Arc<
         std::sync::OnceLock<std::result::Result<field::FieldKernels, field::CompilationFailure>>,
     >,
@@ -218,6 +221,8 @@ impl Gpu {
             device: self.device.clone(),
             queue: self.queue.clone(),
             pipelines: self.pipelines.clone(),
+            sources: self.sources.clone(),
+            builds: self.builds.clone(),
             field: self.field.clone(),
             #[cfg(test)]
             shader_writes: self.shader_writes.clone(),
@@ -1190,5 +1195,30 @@ mod accounting_tests {
             assert_eq!(trace.account(&mut retained), Some(()));
             assert_eq!(retained.bytes(), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod pipeline_tests {
+    use super::*;
+
+    /// Engines build pipelines on first use, so a test must build every one
+    /// to catch a shader the GPU rejects.
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn every_kernel_pipeline_builds() {
+        let lazy = Gpu::new().unwrap();
+        let mut built = 0;
+        let gpu = Gpu::from_device_progress(
+            lazy.device.clone(),
+            lazy.queue.clone(),
+            lazy.adapter_name.clone(),
+            &mut Profile::default(),
+            &mut |done, _| built = done,
+        )
+        .unwrap();
+        assert_eq!(built, Kernel::FieldPrepare as usize);
+        assert!(gpu.pipelines.iter().all(|pipeline| pipeline.get().is_some()));
+        gpu.prepare_color_field().unwrap();
     }
 }

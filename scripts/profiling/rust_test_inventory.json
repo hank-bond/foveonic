@@ -667,6 +667,7 @@
         "controls_test::shader_resize_preserves_crop_orientation_and_both_transfer_routes",
         "controls_test::small_high_pass_preserves_native_quadratic_support_and_scaled_borders",
         "gpu::completion::tests::completed_submission_preserves_copy_results_and_allows_later_work",
+        "gpu::pipeline_tests::every_kernel_pipeline_builds",
         "gpu::diagnostics::tests::executor_clones_share_one_bounded_capture_query_budget",
         "gpu::diagnostics::tests::manual_capture_resolves_on_normal_poll_without_a_foreground_gate_wait",
         "gpu::scheduling_tests::background_executor_yields_submissions_and_keeps_activity_separate",

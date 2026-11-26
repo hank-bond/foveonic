@@ -695,1088 +695,25 @@ impl Kernel {
 }
 
 impl Gpu {
+    /// Pipelines are built on first use. Call `prepare_kernels` to build them all now.
     pub fn from_device(
         device: wgpu::Device,
         queue: wgpu::Queue,
         adapter_name: String,
     ) -> Result<Self> {
-        Self::from_device_profiled(
-            device,
-            queue,
-            adapter_name,
-            &mut crate::profile::Profile::default(),
-        )
-    }
-
-    pub(crate) fn from_device_profiled(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        adapter_name: String,
-        profile: &mut crate::profile::Profile,
-    ) -> Result<Self> {
-        Self::from_device_progress(device, queue, adapter_name, profile, &mut |_, _| {})
-    }
-
-    pub(crate) fn from_device_progress(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        adapter_name: String,
-        profile: &mut crate::profile::Profile,
-        progress: &mut dyn FnMut(usize, usize),
-    ) -> Result<Self> {
+        let sources = kernel_sources();
         #[cfg(test)]
-        super::test_trace("kernels-start", format_args!("adapter={adapter_name:?}"));
-        let began = profile.mode.enabled().then(std::time::Instant::now);
-        let _scope =
-            crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.pipelines.create");
-        device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let black = include_str!("../nodes/sensor/black.wgsl");
-        let noise = include_str!("../nodes/color/noise_base.wgsl");
-        let luminance = include_str!("../nodes/color/noise_luminance.wgsl");
-        let despeckle = include_str!("../nodes/sensor/despeckle.wgsl");
-        let camera = include_str!("../nodes/sensor/camera_repair.wgsl");
-        let highlight = include_str!("../nodes/sensor/highlight.wgsl");
-        let banding = include_str!("../nodes/sensor/banding.wgsl");
-        let column = include_str!("../nodes/color/noise_column.wgsl");
-        let pattern = include_str!("../nodes/color/pattern.wgsl");
-        let sharpen = include_str!("../nodes/finish/sharpen.wgsl");
-        let dng = include_str!("../dng/dng.wgsl");
-        let mono = include_str!("../nodes/monochrome/mono.wgsl");
-        let sensor_pair = include_str!("../nodes/sensor/pair_arithmetic.wgsl");
-        let scalar_bilateral = format!(
-            "{sensor_pair}\n{}",
-            include_str!("../nodes/color/scalar_bilateral.wgsl")
-        );
-        let chroma_repair = format!(
-            "{sensor_pair}\n{}",
-            include_str!("../nodes/sensor/chroma_repair.wgsl")
-        );
-        let rgb_despeckle = format!(
-            "{sensor_pair}\n{}",
-            include_str!("../nodes/sensor/rgb_despeckle.wgsl")
-        );
-        let photographic_tone = format!(
-            "{}\n{}",
-            include_str!("../nodes/finish/photographic/common.wgsl"),
-            include_str!("../nodes/finish/photographic/tone.wgsl")
-        );
-        let photographic_sharpen = format!(
-            "{}\n{}",
-            include_str!("../nodes/finish/photographic/common.wgsl"),
-            include_str!("../nodes/finish/photographic/sharpen.wgsl")
-        );
-        let photographic_local_contrast = format!(
-            "{}\n{}",
-            include_str!("../nodes/finish/photographic/common.wgsl"),
-            include_str!("../nodes/finish/photographic/local_contrast.wgsl")
-        );
-        let oklab = include_str!("../nodes/finish/oklab.wgsl");
-        let shadow_neutralize = format!(
-            "{oklab}\n{}",
-            include_str!("../nodes/finish/shadow_neutralize.wgsl")
-        );
-        let saturation_guard = include_str!("../nodes/finish/saturation_guard.wgsl");
-        let reference_saturation = format!(
-            "{saturation_guard}\n{}",
-            include_str!("../nodes/finish/reference_saturation.wgsl")
-        );
-        let signed_photographic = format!(
-            "{saturation_guard}\n{}",
-            include_str!("../nodes/finish/signed_response.wgsl")
-        );
-        let color_selection = include_str!("../nodes/finish/color_editor_selection.wgsl");
-        let saturation = include_str!("../nodes/finish/perceptual_saturation.wgsl");
-        let color_editor = format!(
-            "{color_selection}\n{}\n{saturation}\n{}\n{}",
-            include_str!("../nodes/finish/perceptual_color.wgsl"),
-            include_str!("../nodes/finish/color_editor.wgsl"),
-            include_str!("../nodes/finish/color_editor_response.wgsl")
-        );
-        let color_pick = format!(
-            "{color_selection}\n{}",
-            include_str!("../nodes/finish/color_editor_pick.wgsl")
-        );
-        let perceptual = format!(
-            "{}\n{saturation}\n{}",
-            include_str!("../nodes/finish/perceptual_color.wgsl"),
-            include_str!("../nodes/finish/perceptual_grade.wgsl")
-        );
-        let texture = include_str!("../nodes/monochrome/texture.wgsl");
-        let advanced = format!(
-            "{color_selection}\n{}\n{saturation}\n{}",
-            include_str!("../nodes/finish/perceptual_color.wgsl"),
-            include_str!("../nodes/finish/advanced_color.wgsl")
-        );
-        let brightness_guide = include_str!("../nodes/finish/brightness_guide.wgsl");
-        let tonal = format!(
-            "{brightness_guide}\n{}\n{}",
-            include_str!("../nodes/finish/hdr_response.wgsl"),
-            include_str!("../nodes/finish/tone_equalizer.wgsl")
-        );
-        let visibility = format!(
-            "{brightness_guide}\n{}\n{}\n{}",
-            include_str!("../nodes/finish/hdr_response.wgsl"),
-            include_str!("../nodes/finish/adaptive_tone.wgsl"),
-            include_str!("../nodes/finish/adaptive_tone_regions.wgsl")
-        );
-        let kernels: [(&str, &str); Kernel::FieldPrepare as usize] = [
-            (
-                include_str!("../nodes/finish/linear_basis.wgsl"),
-                "linear_basis",
-            ),
-            (
-                include_str!("../nodes/finish/linear_gain.wgsl"),
-                "transfer_linear_gain",
-            ),
-            (color_editor.as_str(), "color_editor_map"),
-            (color_editor.as_str(), "color_editor_filter"),
-            (color_editor.as_str(), "color_editor_apply"),
-            (color_pick.as_str(), "color_editor_pick"),
-            (
-                include_str!("../nodes/finish/white_balance_pick.wgsl"),
-                "white_balance_pick",
-            ),
-            (perceptual.as_str(), "perceptual_grade"),
-            (advanced.as_str(), "advanced_color"),
-            (
-                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
-                "dehaze_prepare",
-            ),
-            (
-                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
-                "dehaze_horizontal",
-            ),
-            (
-                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
-                "dehaze_vertical",
-            ),
-            (
-                include_str!("../nodes/finish/dehaze_minimum.wgsl"),
-                "dehaze_minimum_prepare",
-            ),
-            (
-                include_str!("../nodes/finish/dehaze_minimum.wgsl"),
-                "dehaze_minimum_expand",
-            ),
-            #[cfg(test)]
-            (
-                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
-                "dehaze_estimate",
-            ),
-            (
-                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
-                "dehaze_partition",
-            ),
-            (
-                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
-                "dehaze_merge",
-            ),
-            (
-                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
-                "dehaze_tail_partition",
-            ),
-            (
-                include_str!("../nodes/finish/dehaze_estimate.wgsl"),
-                "dehaze_tail_merge",
-            ),
-            (include_str!("../nodes/finish/dehaze.wgsl"), "dehaze_apply"),
-            (texture, "mono_texture_extract"),
-            (texture, "mono_texture_blur"),
-            (texture, "mono_texture_apply"),
-            (
-                include_str!("../nodes/finish/code_channel_map.wgsl"),
-                "code_channel_map",
-            ),
-            (
-                include_str!("../nodes/color/extract_blue.wgsl"),
-                "extract_blue",
-            ),
-            (
-                include_str!("../nodes/color/channel_noise_replace.wgsl"),
-                "channel_noise_replace",
-            ),
-            (
-                include_str!("../nodes/color/neighborhood_decorrelate_stats.wgsl"),
-                "neighborhood_noise_stats",
-            ),
-            (
-                include_str!("../nodes/color/neighborhood_decorrelate.wgsl"),
-                "neighborhood_decorrelate",
-            ),
-            (
-                include_str!("../nodes/color/chromatic_ratio.wgsl"),
-                "chromatic_ratio",
-            ),
-            (
-                include_str!("../nodes/finish/box_contrast_horizontal.wgsl"),
-                "box_contrast_horizontal",
-            ),
-            (
-                include_str!("../nodes/finish/box_contrast_apply.wgsl"),
-                "box_contrast_apply",
-            ),
-            (
-                include_str!("../nodes/sensor/column_gain.wgsl"),
-                "column_gain",
-            ),
-            (
-                include_str!("../noise_calibration/training.wgsl"),
-                "cap_accumulate",
-            ),
-            (
-                include_str!("../noise_calibration/training.wgsl"),
-                "cap_profiles",
-            ),
-            (
-                include_str!("../noise_calibration/training.wgsl"),
-                "cap_defects",
-            ),
-            (
-                include_str!("../nodes/sensor/calibrated_defects.wgsl"),
-                "calibrated_defect_repair",
-            ),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/multiscale.wgsl")
-                ),
-                "multiscale_prepare",
-            ),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/multiscale.wgsl")
-                ),
-                "multiscale_prepare_calibrated",
-            ),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/multiscale.wgsl")
-                ),
-                "multiscale_downsample",
-            ),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/multiscale.wgsl")
-                ),
-                "multiscale_moments",
-            ),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/multiscale.wgsl")
-                ),
-                "multiscale_coefficients",
-            ),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/multiscale.wgsl")
-                ),
-                "multiscale_average",
-            ),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/multiscale.wgsl")
-                ),
-                "multiscale_apply",
-            ),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/multiscale.wgsl")
-                ),
-                "multiscale_finish",
-            ),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/multiscale.wgsl")
-                ),
-                "multiscale_finish_calibrated",
-            ),
-            (
-                include_str!("../nodes/sensor/shield_noise.wgsl"),
-                "shield_histogram",
-            ),
-            (
-                include_str!("../nodes/sensor/shield_noise.wgsl"),
-                "shield_guard",
-            ),
-            (
-                include_str!("../nodes/sensor/shield_noise.wgsl"),
-                "shield_profile",
-            ),
-            (
-                include_str!("../nodes/sensor/shield_noise.wgsl"),
-                "shield_center",
-            ),
-            (
-                include_str!("../nodes/sensor/shield_noise.wgsl"),
-                "shield_predict",
-            ),
-            (
-                include_str!("../nodes/sensor/shield_noise.wgsl"),
-                "shield_reduce",
-            ),
-            (
-                include_str!("../nodes/sensor/shield_noise.wgsl"),
-                "shield_apply",
-            ),
-            (ROW_GUARD_SHADER, "row_guard_evidence"),
-            (ROW_GUARD_SHADER, "row_guard_evidence_reduced"),
-            (ROW_GUARD_SHADER, "row_guard_profiles"),
-            (ROW_GUARD_SHADER, "row_guard_robust"),
-            (ROW_GUARD_SHADER, "row_guard_reliability"),
-            (ROW_GUARD_SHADER, "row_guard_highpass"),
-            (ROW_GUARD_SHADER, "row_guard_mean"),
-            (ROW_GUARD_SHADER, "row_guard_confidence"),
-            (ROW_GUARD_SHADER, "row_guard_horizontal"),
-            (ROW_GUARD_SHADER, "row_guard_apply"),
-            (ROW_GUARD_SHADER, "row_guard_apply_calibrated"),
-            (
-                include_str!("../nodes/color/directional_banding.wgsl"),
-                "neighborhoods",
-            ),
-            (
-                include_str!("../nodes/color/directional_banding.wgsl"),
-                "block_deltas",
-            ),
-            (
-                include_str!("../nodes/color/directional_banding.wgsl"),
-                "fit_offsets",
-            ),
-            (
-                include_str!("../nodes/color/directional_banding.wgsl"),
-                "correct",
-            ),
-            (
-                include_str!("../nodes/color/purple_fringe.wgsl"),
-                "purple_fringe",
-            ),
-            (include_str!("../nodes/sensor/fppd.wgsl"), "fppd"),
-            (include_str!("../nodes/sensor/fppd_mask.wgsl"), "fppd_mask"),
-            (
-                include_str!("../nodes/sensor/blue_pattern.wgsl"),
-                "blue_pattern",
-            ),
-            (
-                include_str!("../nodes/sensor/phase_extraction.wgsl"),
-                "phase_extraction",
-            ),
-            (
-                include_str!("../nodes/sensor/phase_gain.wgsl"),
-                "phase_gain",
-            ),
-            (
-                include_str!("../nodes/sensor/blue_refresh.wgsl"),
-                "blue_refresh",
-            ),
-            (
-                include_str!("../nodes/sensor/hlp_calibration.wgsl"),
-                "hlp_calibration",
-            ),
-            (
-                include_str!("../nodes/color/uv_repair_convert.wgsl"),
-                "uv_convert",
-            ),
-            (
-                include_str!("../nodes/color/uv_repair_classify.wgsl"),
-                "uv_classify",
-            ),
-            (include_str!("../nodes/sensor/pool.wgsl"), "pool_signal"),
-            (
-                include_str!("../nodes/color/pyramid_resample.wgsl"),
-                "pyramid_resample",
-            ),
-            (
-                include_str!("../nodes/color/rgb_prefilter_gain.wgsl"),
-                "rgb_prefilter_gain",
-            ),
-            (
-                include_str!("../nodes/color/rgb_prefilter_blend.wgsl"),
-                "rgb_prefilter_blend",
-            ),
-            (
-                include_str!("../nodes/color/rgb_prefilter_range.wgsl"),
-                "rgb_prefilter_range",
-            ),
-            (
-                include_str!("../nodes/sensor/sparse_repair.wgsl"),
-                "sparse_repair",
-            ),
-            (
-                include_str!("../nodes/color/two_scale_noise_guide.wgsl"),
-                "noise_edge_guide",
-            ),
-            (
-                include_str!("../nodes/color/two_scale_noise_recursive.wgsl"),
-                "noise_recursive_mean",
-            ),
-            (
-                include_str!("../nodes/color/two_scale_noise_residual.wgsl"),
-                "noise_residual_blend",
-            ),
-            (
-                include_str!("../nodes/color/two_scale_noise_map.wgsl"),
-                "noise_protection_map",
-            ),
-            (
-                include_str!("../nodes/color/two_scale_noise_blend.wgsl"),
-                "noise_protection_blend",
-            ),
-            (chroma_repair.as_str(), "chroma_single"),
-            (chroma_repair.as_str(), "chroma_general"),
-            (
-                include_str!("../nodes/sensor/ordered_blue_repair.wgsl"),
-                "ordered_blue_repair",
-            ),
-            (
-                include_str!("../nodes/color/raw_color_blend_neutralize.wgsl"),
-                "raw_color_neutralize",
-            ),
-            (
-                include_str!("../nodes/color/raw_color_blend_response.wgsl"),
-                "raw_color_response",
-            ),
-            (
-                include_str!("../nodes/color/raw_color_blend_chroma.wgsl"),
-                "raw_color_chroma",
-            ),
-            (
-                include_str!("../nodes/sensor/blue_despeckle.wgsl"),
-                "blue_despeckle",
-            ),
-            (rgb_despeckle.as_str(), "rgb_despeckle"),
-            (
-                include_str!("../nodes/sensor/chroma_clusters.wgsl"),
-                "chroma_clusters",
-            ),
-            (
-                include_str!("../nodes/sensor/luma_cluster.wgsl"),
-                "luma_cluster",
-            ),
-            (
-                include_str!("../nodes/sensor/highlight_evidence.wgsl"),
-                "highlight_evidence",
-            ),
-            (
-                include_str!("../nodes/sensor/highlight_evidence.wgsl"),
-                "highlight_evidence_rows",
-            ),
-            (
-                include_str!("../nodes/sensor/highlight_evidence.wgsl"),
-                "highlight_evidence_columns",
-            ),
-            (
-                include_str!("../nodes/sensor/dynamic_range.wgsl"),
-                "dynamic_range_prepare",
-            ),
-            (
-                include_str!("../nodes/sensor/dynamic_range.wgsl"),
-                "dynamic_range_cells",
-            ),
-            (
-                include_str!("../nodes/sensor/dynamic_range.wgsl"),
-                "dynamic_range_fit",
-            ),
-            (
-                include_str!("../nodes/sensor/dynamic_range.wgsl"),
-                "dynamic_range_apply",
-            ),
-            (
-                include_str!("../nodes/sensor/highlight_restoration.wgsl"),
-                "highlight_prepare",
-            ),
-            (
-                include_str!("../nodes/sensor/highlight_restoration.wgsl"),
-                "highlight_classify",
-            ),
-            (
-                include_str!("../nodes/sensor/highlight_restoration.wgsl"),
-                "highlight_horizontal",
-            ),
-            (
-                include_str!("../nodes/sensor/highlight_restoration.wgsl"),
-                "highlight_vertical",
-            ),
-            (
-                include_str!("../nodes/sensor/highlight_restoration.wgsl"),
-                "highlight_finish",
-            ),
-            (
-                include_str!("../nodes/sensor/blue_mismatch.wgsl"),
-                "blue_mismatch",
-            ),
-            (
-                include_str!("../nodes/color/sector_color.wgsl"),
-                "sector_color",
-            ),
-            (
-                include_str!("../nodes/finish/code_response.wgsl"),
-                "code_response",
-            ),
-            (
-                include_str!("../nodes/color/histogram_bilateral.wgsl"),
-                "histogram_bilateral",
-            ),
-            (&scalar_bilateral, "scalar_bilateral"),
-            (
-                include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
-                "blue_guide_vertical",
-            ),
-            (
-                include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
-                "blue_guide_horizontal",
-            ),
-            (
-                include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
-                "blue_outliers",
-            ),
-            (
-                include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
-                "blue_guided_restore",
-            ),
-            (
-                include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
-                "reduced_blue",
-            ),
-            (
-                include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
-                "reduced_restore",
-            ),
-            (include_str!("../nodes/color/packed_lab.wgsl"), "packed_lab"),
-            (
-                include_str!("../nodes/color/residual_finish.wgsl"),
-                "residual_sharp",
-            ),
-            (
-                include_str!("../nodes/color/residual_finish.wgsl"),
-                "residual_finish",
-            ),
-            (
-                include_str!("../nodes/finish/color_sharpen.wgsl"),
-                "color_sharpen",
-            ),
-            (
-                include_str!("../nodes/finish/proportional_sharpen.wgsl"),
-                "proportional_sharpen",
-            ),
-            (
-                include_str!("../nodes/color/spatial_color_gain.wgsl"),
-                "spatial_color_gain",
-            ),
-            (
-                include_str!("../nodes/finish/wavelet_contrast.wgsl"),
-                "dwt_extract",
-            ),
-            (
-                include_str!("../nodes/finish/wavelet_contrast.wgsl"),
-                "dwt_forward",
-            ),
-            (
-                include_str!("../nodes/finish/wavelet_contrast.wgsl"),
-                "dwt_gain",
-            ),
-            (
-                include_str!("../nodes/finish/wavelet_contrast.wgsl"),
-                "dwt_inverse",
-            ),
-            (
-                include_str!("../nodes/finish/wavelet_contrast.wgsl"),
-                "dwt_copyback",
-            ),
-            (
-                include_str!("../nodes/color/byte_mask_double.wgsl"),
-                "byte_mask_double",
-            ),
-            (
-                include_str!("../nodes/finish/mask_image.wgsl"),
-                "mask_image",
-            ),
-            (include_str!("../nodes/color/cell_gain.wgsl"), "cell_gain"),
-            (include_str!("../nodes/finish/code_crop.wgsl"), "code_crop"),
-            (black, "histogram_pass"),
-            (black, "mean_pass"),
-            (
-                concat!(
-                    include_str!("../nodes/sensor/calibration_common.wgsl"),
-                    "\n",
-                    include_str!("../nodes/sensor/calibrate.wgsl")
-                ),
-                "main",
-            ),
-            (include_str!("../nodes/color/color.wgsl"), "main"),
-            (include_str!("../nodes/finish/tone.wgsl"), "main"),
-            (photographic_tone.as_str(), "photographic_tone"),
-            (photographic_tone.as_str(), "photographic_brightness"),
-            (photographic_sharpen.as_str(), "sharp_extract"),
-            (photographic_sharpen.as_str(), "sharp_blur"),
-            (photographic_sharpen.as_str(), "universal_sharpen"),
-            (photographic_local_contrast.as_str(), "local_extract"),
-            (photographic_local_contrast.as_str(), "local_blur"),
-            (photographic_local_contrast.as_str(), "local_apply"),
-            (tonal.as_str(), "reduce_guide"),
-            (tonal.as_str(), "mean_horizontal"),
-            (tonal.as_str(), "statistics"),
-            (tonal.as_str(), "coefficients"),
-            (tonal.as_str(), "mean_vertical"),
-            (tonal.as_str(), "update_base"),
-            (tonal.as_str(), "finish_mask"),
-            (tonal.as_str(), "expand_mask"),
-            (tonal.as_str(), "calculate_gain"),
-            (tonal.as_str(), "apply_ranges"),
-            (include_str!("../nodes/finish/encode.wgsl"), "main"),
-            #[cfg(test)]
-            (include_str!("../nodes/sensor/repair.wgsl"), "main"),
-            (sharpen, "main"),
-            (include_str!("../nodes/color/color_dq.wgsl"), "main"),
-            (include_str!("shaders/view.wgsl"), "main"),
-            (include_str!("shaders/scopes.wgsl"), "main"),
-            (noise, "tile_input"),
-            (noise, "block_mean"),
-            (noise, "radius_map"),
-            (noise, "bilateral"),
-            (noise, "edge_map"),
-            (noise, "local_mean"),
-            (noise, "transpose_mean_input"),
-            (noise, "transpose_mean_output"),
-            (luminance, "luminance"),
-            (luminance, "diffuse"),
-            (luminance, "osf"),
-            (luminance, "ratio"),
-            (include_str!("../nodes/color/texture.wgsl"), "extract"),
-            (include_str!("../nodes/color/texture.wgsl"), "blur"),
-            (include_str!("../nodes/color/texture.wgsl"), "mix_texture"),
-            (
-                include_str!("../nodes/color/texture.wgsl"),
-                "inspect_texture",
-            ),
-            (include_str!("../nodes/color/noise_stitch.wgsl"), "stitch"),
-            (despeckle, "detect"),
-            (despeckle, "compact"),
-            (shadow_neutralize.as_str(), "analyze"),
-            (shadow_neutralize.as_str(), "regional_filter"),
-            (shadow_neutralize.as_str(), "neutralize"),
-            (despeckle, "prefix"),
-            (despeckle, "scatter"),
-            (despeckle, "classify_ready"),
-            (despeckle, "repair_ready"),
-            (despeckle, "remaining"),
-            (despeckle, "repair"),
-            (camera, "main"),
-            (include_str!("../nodes/sensor/cluster_repair.wgsl"), "main"),
-            (highlight, "connected_flags"),
-            (highlight, "neighborhood_map"),
-            (highlight, "density_field"),
-            (highlight, "donor_marks"),
-            (highlight, "donor_prefix"),
-            (highlight, "donor_scatter"),
-            (highlight, "correction_table"),
-            (highlight, "restore"),
-            (banding, "fit"),
-            (banding, "residual_field"),
-            (banding, "quality"),
-            (banding, "row_means"),
-            (banding, "reduce_rows"),
-            (banding, "apply"),
-            (column, "horizontal"),
-            (column, "block_deltas"),
-            (column, "correct"),
-            (pattern, "mask"),
-            (pattern, "line_counts"),
-            (pattern, "line_prefix"),
-            (pattern, "horizontal"),
-            (pattern, "vertical"),
-            (pattern, "blend"),
-            (pattern, "mask_image"),
-            (sharpen, "signal"),
-            (include_str!("../nodes/finish/resample.wgsl"), "main"),
-            (noise, "global_tile"),
-            (noise, "pattern_seed"),
-            (noise, "global_tile_scalar"),
-            (highlight, "table_interpolation"),
-            (highlight, "bin_histogram"),
-            (highlight, "bin_prefix"),
-            (highlight, "bin_scatter"),
-            (camera, "detect_records"),
-            (camera, "detection_prefix"),
-            (camera, "scatter_detections"),
-            (noise, "cross_medians"),
-            (camera, "detected_correct"),
-            (camera, "detection_block_prefix"),
-            (dng, "convert"),
-            (dng, "quantize"),
-            (mono, "mixing"),
-            (mono, "directional"),
-            (mono, "column"),
-            (mono, "histogram"),
-            (mono, "despeckle"),
-            (mono, "signal"),
-            (mono, "expand"),
-            (sharpen, "monochrome"),
-            (include_str!("../nodes/finish/resize.wgsl"), "main"),
-            (
-                include_str!("../nodes/sensor/fixed_point_correction.wgsl"),
-                "scale",
-            ),
-            (
-                include_str!("../nodes/sensor/fixed_point_correction.wgsl"),
-                "statistics",
-            ),
-            (
-                include_str!("../nodes/sensor/fixed_point_correction.wgsl"),
-                "correct",
-            ),
-            (
-                include_str!("../nodes/sensor/fixed_point_color.wgsl"),
-                "main",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "pack",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "reduce",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "estimate_black",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "bilateral",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "edge_guide",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "neutralize",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "mean_horizontal",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "mean_vertical",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "expand",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "luminance",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "diffuse_noise",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "diffuse_constant",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "extrema",
-            ),
-            (
-                include_str!("../nodes/color/range_reconstruction.wgsl"),
-                "finish",
-            ),
-            (include_str!("../nodes/color/chroma.wgsl"), "horizontal"),
-            (include_str!("../nodes/color/chroma.wgsl"), "apply"),
-            (include_str!("../nodes/color/chroma.wgsl"), "recursive_init"),
-            (
-                include_str!("../nodes/color/chroma.wgsl"),
-                "recursive_horizontal_pass",
-            ),
-            (
-                include_str!("../nodes/color/chroma.wgsl"),
-                "recursive_apply",
-            ),
-            (&signed_photographic, "main"),
-            (&reference_saturation, "main"),
-            (include_str!("../nodes/finish/root_detail.wgsl"), "root_map"),
-            (
-                include_str!("../nodes/finish/root_detail.wgsl"),
-                "detail_vertical",
-            ),
-            (
-                include_str!("../nodes/finish/root_detail.wgsl"),
-                "detail_horizontal",
-            ),
-            (include_str!("../nodes/sensor/signed_repair.wgsl"), "repair"),
-            (
-                include_str!("../nodes/sensor/signed_repair.wgsl"),
-                "despeckle",
-            ),
-            (
-                include_str!("../nodes/sensor/red_detail.wgsl"),
-                "horizontal",
-            ),
-            (include_str!("../nodes/sensor/red_detail.wgsl"), "apply"),
-            (include_str!("../nodes/color/code_gain.wgsl"), "main"),
-            (include_str!("../nodes/color/highlight_stream.wgsl"), "main"),
-            (
-                include_str!("../nodes/color/log_reconstruction.wgsl"),
-                "prepare",
-            ),
-            (
-                include_str!("../nodes/color/log_reconstruction.wgsl"),
-                "gradient",
-            ),
-            (
-                include_str!("../nodes/color/log_reconstruction.wgsl"),
-                "row_statistics",
-            ),
-            (
-                include_str!("../nodes/color/log_reconstruction.wgsl"),
-                "reduce_statistics",
-            ),
-            (
-                include_str!("../nodes/color/log_reconstruction.wgsl"),
-                "edge_guide",
-            ),
-            (
-                include_str!("../nodes/color/log_reconstruction.wgsl"),
-                "forward",
-            ),
-            (
-                include_str!("../nodes/color/log_reconstruction.wgsl"),
-                "backward",
-            ),
-            (
-                include_str!("../nodes/color/log_reconstruction.wgsl"),
-                "combine",
-            ),
-            (
-                include_str!("../nodes/color/log_reconstruction.wgsl"),
-                "finalize",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "black_statistics",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "reduce",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "sample_tone",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "auto_histogram",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "tone_image",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "scores",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "select_neutral",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "neutral_histogram",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "accumulate",
-            ),
-            (
-                include_str!("../nodes/color/weighted_white_balance.wgsl"),
-                "row_means",
-            ),
-            (visibility.as_str(), "histogram"),
-            (visibility.as_str(), "fit"),
-            (visibility.as_str(), "select_fit"),
-            (visibility.as_str(), "adaptive_gain"),
-            (visibility.as_str(), "adaptive_gain"),
-            (visibility.as_str(), "sample_regions"),
-            (visibility.as_str(), "summarize_regions"),
-            (visibility.as_str(), "fit_regions"),
-            (visibility.as_str(), "refine"),
-        ];
-        #[cfg(test)]
-        let mut shader_writes = Vec::new();
-        let same_grid_constants = [("SAME_GRID_APPLICATION", 1.)];
-        progress(0, kernels.len());
-        let pipelines = kernels
+        let shader_writes = sources
             .iter()
             .enumerate()
-            .map(|(index, &(code, entry))| {
-                #[cfg(test)]
-                super::test_trace(
-                    "kernel-start",
-                    format_args!("index={index} entry={entry:?}"),
-                );
-                let _scope = crate::diagnostics::scope_with(
-                    crate::diagnostics::Category::Gpu,
-                    "gpu.shader.compile",
-                    |fields| {
-                        fields.str("entry", entry).u64("kernel", index as u64);
-                    },
-                );
-                let camera_repair = [
-                    Kernel::CameraRepair as usize,
-                    Kernel::CameraDetect as usize,
-                    Kernel::CameraPrefix as usize,
-                    Kernel::CameraScatter as usize,
-                    Kernel::CameraDetected as usize,
-                    Kernel::CameraBlocks as usize,
-                ]
-                .contains(&index);
-                #[cfg(test)]
-                let camera_repair = camera_repair || index == Kernel::Repair as usize;
-                let code: std::borrow::Cow<'_, str> = if [
-                    Kernel::Encode as usize,
-                    Kernel::View as usize,
-                    Kernel::Scopes as usize,
-                    Kernel::DngConvert as usize,
-                    Kernel::DngQuantize as usize,
-                    Kernel::OutputResize as usize,
-                ]
-                .contains(&index)
-                {
-                    format!("{}\n{code}", include_str!("shaders/sample.wgsl")).into()
-                } else if (Kernel::NoiseTile as usize..=Kernel::NoiseStitch as usize)
-                    .contains(&index)
-                    || (Kernel::ColumnHorizontal as usize..=Kernel::ColumnApply as usize)
-                        .contains(&index)
-                    || (Kernel::NoiseGlobalTile as usize..=Kernel::NoiseGlobalScalarTile as usize)
-                        .contains(&index)
-                    || index == Kernel::NoiseMedian as usize
-                    || (Kernel::DirectionalBandingSmooth as usize
-                        ..=Kernel::DirectionalBandingApply as usize)
-                        .contains(&index)
-                {
-                    format!(
-                        "{}\n{code}",
-                        include_str!("../nodes/color/noise_common.wgsl")
-                    )
-                    .into()
-                } else if (Kernel::HighlightEvidence as usize..=Kernel::HighlightFinish as usize)
-                    .contains(&index)
-                {
-                    format!(
-                        "{}\n{code}",
-                        include_str!("../nodes/sensor/highlight_common.wgsl")
-                    )
-                    .into()
-                } else if camera_repair {
-                    format!(
-                        "{}\n{code}",
-                        include_str!("../nodes/sensor/camera_common.wgsl")
-                    )
-                    .into()
-                } else {
-                    code.into()
-                };
-                // A second handwritten write list could repeat the same mistake.
-                // Tests check shader writes, including writes in called functions.
-                #[cfg(test)]
-                {
-                    use wgpu::naga::{
-                        front::wgsl,
-                        valid::{Capabilities, GlobalUse, ValidationFlags, Validator},
-                    };
-                    let module = wgsl::parse_str(&code).expect("valid shader for guard audit");
-                    let info = Validator::new(ValidationFlags::all(), Capabilities::all())
-                        .validate(&module)
-                        .expect("validated guard audit");
-                    let ep = module
-                        .entry_points
-                        .iter()
-                        .position(|p| p.name == entry)
-                        .unwrap();
-                    let function = info.get_entry_point(ep);
-                    let mut writes = 0;
-                    for (handle, variable) in module.global_variables.iter() {
-                        if let Some(binding) = &variable.binding {
-                            if function[handle].intersects(GlobalUse::WRITE | GlobalUse::ATOMIC) {
-                                assert_eq!(binding.group, 0);
-                                writes |= 1 << binding.binding;
-                            }
-                        }
-                    }
-                    shader_writes.push(writes);
-                }
-                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(entry),
-                    source: wgpu::ShaderSource::Wgsl(code),
-                });
-                #[cfg(test)]
-                super::test_trace(
-                    "shader-ready",
-                    format_args!("index={index} entry={entry:?}"),
-                );
-                let compilation_options = if index == Kernel::AdaptiveToneGainSameGrid as usize {
-                    wgpu::PipelineCompilationOptions {
-                        constants: &same_grid_constants,
-                        ..Default::default()
-                    }
-                } else {
-                    Default::default()
-                };
-                let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some(entry),
-                    layout: None,
-                    module: &shader,
-                    entry_point: Some(entry),
-                    compilation_options,
-                    cache: None,
-                });
-                #[cfg(test)]
-                super::test_trace(
-                    "kernel-ready",
-                    format_args!("index={index} entry={entry:?}"),
-                );
-                progress(index + 1, kernels.len());
-                pipeline
-            })
+            .map(|(index, source)| shader_writes(&kernel_code(index, &source.module), source.entry))
             .collect();
-        let validation = pollster::block_on(device.pop_error_scope());
-        if let Some(began) = began {
-            profile.record("gpu pipelines and validation", began);
-        }
-        if let Some(error) = validation {
-            return Err(super::failure(
-                "compile-pipelines",
-                error.into(),
-                serde_json::json!({
-                    "adapter":adapter_name,"kernel_count":kernels.len(),
-                }),
-            ));
-        }
-        #[cfg(test)]
-        super::test_trace("kernels-ready", format_args!("count={}", kernels.len()));
         Ok(Self {
             device,
             queue,
-            pipelines,
+            pipelines: (0..sources.len()).map(|_| Default::default()).collect(),
+            sources: sources.into(),
+            builds: Default::default(),
             field: Default::default(),
             #[cfg(test)]
             shader_writes,
@@ -1786,4 +723,1082 @@ impl Gpu {
             diagnostics: Default::default(),
         })
     }
+
+    /// Build every pipeline now, as the app does behind its startup screen,
+    /// so no later render waits for one.
+    pub(crate) fn from_device_progress(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_name: String,
+        profile: &mut crate::profile::Profile,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Self> {
+        let gpu = Self::from_device(device, queue, adapter_name)?;
+        let began = profile.mode.enabled().then(std::time::Instant::now);
+        let _scope =
+            crate::diagnostics::scope(crate::diagnostics::Category::Gpu, "gpu.pipelines.create");
+        let count = gpu.pipelines.len();
+        progress(0, count);
+        for (index, pipeline) in gpu.pipelines.iter().enumerate() {
+            if pipeline.get().is_none() {
+                let _ = pipeline.set(gpu.build_kernel(index)?);
+            }
+            progress(index + 1, count);
+        }
+        if let Some(began) = began {
+            profile.record("gpu pipelines and validation", began);
+        }
+        Ok(gpu)
+    }
+
+    pub(super) fn kernel_pipeline(&self, index: usize) -> &wgpu::ComputePipeline {
+        self.pipelines[index].get_or_init(|| {
+            self.build_kernel(index).unwrap_or_else(|error| {
+                panic!(
+                    "kernel {} failed to build: {error}",
+                    self.sources[index].entry
+                )
+            })
+        })
+    }
+
+    fn build_kernel(&self, index: usize) -> Result<wgpu::ComputePipeline> {
+        let KernelSource { module, entry } = &self.sources[index];
+        // wgpu keeps one error-scope stack per device, shared by every thread.
+        let _build = self.builds.lock().expect("pipeline build lock");
+        let _scope = crate::diagnostics::scope_with(
+            crate::diagnostics::Category::Gpu,
+            "gpu.shader.compile",
+            |fields| {
+                fields.str("entry", entry).u64("kernel", index as u64);
+            },
+        );
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(entry),
+                source: wgpu::ShaderSource::Wgsl(kernel_code(index, module).into()),
+            });
+        let same_grid_constants = [("SAME_GRID_APPLICATION", 1.)];
+        let compilation_options = if index == Kernel::AdaptiveToneGainSameGrid as usize {
+            wgpu::PipelineCompilationOptions {
+                constants: &same_grid_constants,
+                ..Default::default()
+            }
+        } else {
+            Default::default()
+        };
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry),
+                layout: None,
+                module: &shader,
+                entry_point: Some(entry),
+                compilation_options,
+                cache: None,
+            });
+        match pollster::block_on(self.device.pop_error_scope()) {
+            None => Ok(pipeline),
+            Some(error) => Err(super::failure(
+                "compile-pipelines",
+                error.into(),
+                serde_json::json!({"adapter":self.adapter_name,"kernel":index,"entry":entry}),
+            )),
+        }
+    }
+}
+
+/// A kernel's shader module and entry point. Kernels share modules.
+pub(super) struct KernelSource {
+    module: std::sync::Arc<str>,
+    entry: &'static str,
+}
+
+fn kernel_sources() -> Vec<KernelSource> {
+    let black = include_str!("../nodes/sensor/black.wgsl");
+    let noise = include_str!("../nodes/color/noise_base.wgsl");
+    let luminance = include_str!("../nodes/color/noise_luminance.wgsl");
+    let despeckle = include_str!("../nodes/sensor/despeckle.wgsl");
+    let camera = include_str!("../nodes/sensor/camera_repair.wgsl");
+    let highlight = include_str!("../nodes/sensor/highlight.wgsl");
+    let banding = include_str!("../nodes/sensor/banding.wgsl");
+    let column = include_str!("../nodes/color/noise_column.wgsl");
+    let pattern = include_str!("../nodes/color/pattern.wgsl");
+    let sharpen = include_str!("../nodes/finish/sharpen.wgsl");
+    let dng = include_str!("../dng/dng.wgsl");
+    let mono = include_str!("../nodes/monochrome/mono.wgsl");
+    let sensor_pair = include_str!("../nodes/sensor/pair_arithmetic.wgsl");
+    let scalar_bilateral = format!(
+        "{sensor_pair}\n{}",
+        include_str!("../nodes/color/scalar_bilateral.wgsl")
+    );
+    let chroma_repair = format!(
+        "{sensor_pair}\n{}",
+        include_str!("../nodes/sensor/chroma_repair.wgsl")
+    );
+    let rgb_despeckle = format!(
+        "{sensor_pair}\n{}",
+        include_str!("../nodes/sensor/rgb_despeckle.wgsl")
+    );
+    let photographic_tone = format!(
+        "{}\n{}",
+        include_str!("../nodes/finish/photographic/common.wgsl"),
+        include_str!("../nodes/finish/photographic/tone.wgsl")
+    );
+    let photographic_sharpen = format!(
+        "{}\n{}",
+        include_str!("../nodes/finish/photographic/common.wgsl"),
+        include_str!("../nodes/finish/photographic/sharpen.wgsl")
+    );
+    let photographic_local_contrast = format!(
+        "{}\n{}",
+        include_str!("../nodes/finish/photographic/common.wgsl"),
+        include_str!("../nodes/finish/photographic/local_contrast.wgsl")
+    );
+    let oklab = include_str!("../nodes/finish/oklab.wgsl");
+    let shadow_neutralize = format!(
+        "{oklab}\n{}",
+        include_str!("../nodes/finish/shadow_neutralize.wgsl")
+    );
+    let saturation_guard = include_str!("../nodes/finish/saturation_guard.wgsl");
+    let reference_saturation = format!(
+        "{saturation_guard}\n{}",
+        include_str!("../nodes/finish/reference_saturation.wgsl")
+    );
+    let signed_photographic = format!(
+        "{saturation_guard}\n{}",
+        include_str!("../nodes/finish/signed_response.wgsl")
+    );
+    let color_selection = include_str!("../nodes/finish/color_editor_selection.wgsl");
+    let saturation = include_str!("../nodes/finish/perceptual_saturation.wgsl");
+    let color_editor = format!(
+        "{color_selection}\n{}\n{saturation}\n{}\n{}",
+        include_str!("../nodes/finish/perceptual_color.wgsl"),
+        include_str!("../nodes/finish/color_editor.wgsl"),
+        include_str!("../nodes/finish/color_editor_response.wgsl")
+    );
+    let color_pick = format!(
+        "{color_selection}\n{}",
+        include_str!("../nodes/finish/color_editor_pick.wgsl")
+    );
+    let perceptual = format!(
+        "{}\n{saturation}\n{}",
+        include_str!("../nodes/finish/perceptual_color.wgsl"),
+        include_str!("../nodes/finish/perceptual_grade.wgsl")
+    );
+    let texture = include_str!("../nodes/monochrome/texture.wgsl");
+    let advanced = format!(
+        "{color_selection}\n{}\n{saturation}\n{}",
+        include_str!("../nodes/finish/perceptual_color.wgsl"),
+        include_str!("../nodes/finish/advanced_color.wgsl")
+    );
+    let brightness_guide = include_str!("../nodes/finish/brightness_guide.wgsl");
+    let tonal = format!(
+        "{brightness_guide}\n{}\n{}",
+        include_str!("../nodes/finish/hdr_response.wgsl"),
+        include_str!("../nodes/finish/tone_equalizer.wgsl")
+    );
+    let visibility = format!(
+        "{brightness_guide}\n{}\n{}\n{}",
+        include_str!("../nodes/finish/hdr_response.wgsl"),
+        include_str!("../nodes/finish/adaptive_tone.wgsl"),
+        include_str!("../nodes/finish/adaptive_tone_regions.wgsl")
+    );
+    let kernels: [(&str, &str); Kernel::FieldPrepare as usize] = [
+        (
+            include_str!("../nodes/finish/linear_basis.wgsl"),
+            "linear_basis",
+        ),
+        (
+            include_str!("../nodes/finish/linear_gain.wgsl"),
+            "transfer_linear_gain",
+        ),
+        (color_editor.as_str(), "color_editor_map"),
+        (color_editor.as_str(), "color_editor_filter"),
+        (color_editor.as_str(), "color_editor_apply"),
+        (color_pick.as_str(), "color_editor_pick"),
+        (
+            include_str!("../nodes/finish/white_balance_pick.wgsl"),
+            "white_balance_pick",
+        ),
+        (perceptual.as_str(), "perceptual_grade"),
+        (advanced.as_str(), "advanced_color"),
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_prepare",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_horizontal",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_vertical",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_minimum.wgsl"),
+            "dehaze_minimum_prepare",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_minimum.wgsl"),
+            "dehaze_minimum_expand",
+        ),
+        #[cfg(test)]
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_estimate",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_partition",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_merge",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_tail_partition",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_tail_merge",
+        ),
+        (include_str!("../nodes/finish/dehaze.wgsl"), "dehaze_apply"),
+        (texture, "mono_texture_extract"),
+        (texture, "mono_texture_blur"),
+        (texture, "mono_texture_apply"),
+        (
+            include_str!("../nodes/finish/code_channel_map.wgsl"),
+            "code_channel_map",
+        ),
+        (
+            include_str!("../nodes/color/extract_blue.wgsl"),
+            "extract_blue",
+        ),
+        (
+            include_str!("../nodes/color/channel_noise_replace.wgsl"),
+            "channel_noise_replace",
+        ),
+        (
+            include_str!("../nodes/color/neighborhood_decorrelate_stats.wgsl"),
+            "neighborhood_noise_stats",
+        ),
+        (
+            include_str!("../nodes/color/neighborhood_decorrelate.wgsl"),
+            "neighborhood_decorrelate",
+        ),
+        (
+            include_str!("../nodes/color/chromatic_ratio.wgsl"),
+            "chromatic_ratio",
+        ),
+        (
+            include_str!("../nodes/finish/box_contrast_horizontal.wgsl"),
+            "box_contrast_horizontal",
+        ),
+        (
+            include_str!("../nodes/finish/box_contrast_apply.wgsl"),
+            "box_contrast_apply",
+        ),
+        (
+            include_str!("../nodes/sensor/column_gain.wgsl"),
+            "column_gain",
+        ),
+        (
+            include_str!("../noise_calibration/training.wgsl"),
+            "cap_accumulate",
+        ),
+        (
+            include_str!("../noise_calibration/training.wgsl"),
+            "cap_profiles",
+        ),
+        (
+            include_str!("../noise_calibration/training.wgsl"),
+            "cap_defects",
+        ),
+        (
+            include_str!("../nodes/sensor/calibrated_defects.wgsl"),
+            "calibrated_defect_repair",
+        ),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/multiscale.wgsl")
+            ),
+            "multiscale_prepare",
+        ),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/multiscale.wgsl")
+            ),
+            "multiscale_prepare_calibrated",
+        ),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/multiscale.wgsl")
+            ),
+            "multiscale_downsample",
+        ),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/multiscale.wgsl")
+            ),
+            "multiscale_moments",
+        ),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/multiscale.wgsl")
+            ),
+            "multiscale_coefficients",
+        ),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/multiscale.wgsl")
+            ),
+            "multiscale_average",
+        ),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/multiscale.wgsl")
+            ),
+            "multiscale_apply",
+        ),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/multiscale.wgsl")
+            ),
+            "multiscale_finish",
+        ),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/multiscale.wgsl")
+            ),
+            "multiscale_finish_calibrated",
+        ),
+        (
+            include_str!("../nodes/sensor/shield_noise.wgsl"),
+            "shield_histogram",
+        ),
+        (
+            include_str!("../nodes/sensor/shield_noise.wgsl"),
+            "shield_guard",
+        ),
+        (
+            include_str!("../nodes/sensor/shield_noise.wgsl"),
+            "shield_profile",
+        ),
+        (
+            include_str!("../nodes/sensor/shield_noise.wgsl"),
+            "shield_center",
+        ),
+        (
+            include_str!("../nodes/sensor/shield_noise.wgsl"),
+            "shield_predict",
+        ),
+        (
+            include_str!("../nodes/sensor/shield_noise.wgsl"),
+            "shield_reduce",
+        ),
+        (
+            include_str!("../nodes/sensor/shield_noise.wgsl"),
+            "shield_apply",
+        ),
+        (ROW_GUARD_SHADER, "row_guard_evidence"),
+        (ROW_GUARD_SHADER, "row_guard_evidence_reduced"),
+        (ROW_GUARD_SHADER, "row_guard_profiles"),
+        (ROW_GUARD_SHADER, "row_guard_robust"),
+        (ROW_GUARD_SHADER, "row_guard_reliability"),
+        (ROW_GUARD_SHADER, "row_guard_highpass"),
+        (ROW_GUARD_SHADER, "row_guard_mean"),
+        (ROW_GUARD_SHADER, "row_guard_confidence"),
+        (ROW_GUARD_SHADER, "row_guard_horizontal"),
+        (ROW_GUARD_SHADER, "row_guard_apply"),
+        (ROW_GUARD_SHADER, "row_guard_apply_calibrated"),
+        (
+            include_str!("../nodes/color/directional_banding.wgsl"),
+            "neighborhoods",
+        ),
+        (
+            include_str!("../nodes/color/directional_banding.wgsl"),
+            "block_deltas",
+        ),
+        (
+            include_str!("../nodes/color/directional_banding.wgsl"),
+            "fit_offsets",
+        ),
+        (
+            include_str!("../nodes/color/directional_banding.wgsl"),
+            "correct",
+        ),
+        (
+            include_str!("../nodes/color/purple_fringe.wgsl"),
+            "purple_fringe",
+        ),
+        (include_str!("../nodes/sensor/fppd.wgsl"), "fppd"),
+        (include_str!("../nodes/sensor/fppd_mask.wgsl"), "fppd_mask"),
+        (
+            include_str!("../nodes/sensor/blue_pattern.wgsl"),
+            "blue_pattern",
+        ),
+        (
+            include_str!("../nodes/sensor/phase_extraction.wgsl"),
+            "phase_extraction",
+        ),
+        (
+            include_str!("../nodes/sensor/phase_gain.wgsl"),
+            "phase_gain",
+        ),
+        (
+            include_str!("../nodes/sensor/blue_refresh.wgsl"),
+            "blue_refresh",
+        ),
+        (
+            include_str!("../nodes/sensor/hlp_calibration.wgsl"),
+            "hlp_calibration",
+        ),
+        (
+            include_str!("../nodes/color/uv_repair_convert.wgsl"),
+            "uv_convert",
+        ),
+        (
+            include_str!("../nodes/color/uv_repair_classify.wgsl"),
+            "uv_classify",
+        ),
+        (include_str!("../nodes/sensor/pool.wgsl"), "pool_signal"),
+        (
+            include_str!("../nodes/color/pyramid_resample.wgsl"),
+            "pyramid_resample",
+        ),
+        (
+            include_str!("../nodes/color/rgb_prefilter_gain.wgsl"),
+            "rgb_prefilter_gain",
+        ),
+        (
+            include_str!("../nodes/color/rgb_prefilter_blend.wgsl"),
+            "rgb_prefilter_blend",
+        ),
+        (
+            include_str!("../nodes/color/rgb_prefilter_range.wgsl"),
+            "rgb_prefilter_range",
+        ),
+        (
+            include_str!("../nodes/sensor/sparse_repair.wgsl"),
+            "sparse_repair",
+        ),
+        (
+            include_str!("../nodes/color/two_scale_noise_guide.wgsl"),
+            "noise_edge_guide",
+        ),
+        (
+            include_str!("../nodes/color/two_scale_noise_recursive.wgsl"),
+            "noise_recursive_mean",
+        ),
+        (
+            include_str!("../nodes/color/two_scale_noise_residual.wgsl"),
+            "noise_residual_blend",
+        ),
+        (
+            include_str!("../nodes/color/two_scale_noise_map.wgsl"),
+            "noise_protection_map",
+        ),
+        (
+            include_str!("../nodes/color/two_scale_noise_blend.wgsl"),
+            "noise_protection_blend",
+        ),
+        (chroma_repair.as_str(), "chroma_single"),
+        (chroma_repair.as_str(), "chroma_general"),
+        (
+            include_str!("../nodes/sensor/ordered_blue_repair.wgsl"),
+            "ordered_blue_repair",
+        ),
+        (
+            include_str!("../nodes/color/raw_color_blend_neutralize.wgsl"),
+            "raw_color_neutralize",
+        ),
+        (
+            include_str!("../nodes/color/raw_color_blend_response.wgsl"),
+            "raw_color_response",
+        ),
+        (
+            include_str!("../nodes/color/raw_color_blend_chroma.wgsl"),
+            "raw_color_chroma",
+        ),
+        (
+            include_str!("../nodes/sensor/blue_despeckle.wgsl"),
+            "blue_despeckle",
+        ),
+        (rgb_despeckle.as_str(), "rgb_despeckle"),
+        (
+            include_str!("../nodes/sensor/chroma_clusters.wgsl"),
+            "chroma_clusters",
+        ),
+        (
+            include_str!("../nodes/sensor/luma_cluster.wgsl"),
+            "luma_cluster",
+        ),
+        (
+            include_str!("../nodes/sensor/highlight_evidence.wgsl"),
+            "highlight_evidence",
+        ),
+        (
+            include_str!("../nodes/sensor/highlight_evidence.wgsl"),
+            "highlight_evidence_rows",
+        ),
+        (
+            include_str!("../nodes/sensor/highlight_evidence.wgsl"),
+            "highlight_evidence_columns",
+        ),
+        (
+            include_str!("../nodes/sensor/dynamic_range.wgsl"),
+            "dynamic_range_prepare",
+        ),
+        (
+            include_str!("../nodes/sensor/dynamic_range.wgsl"),
+            "dynamic_range_cells",
+        ),
+        (
+            include_str!("../nodes/sensor/dynamic_range.wgsl"),
+            "dynamic_range_fit",
+        ),
+        (
+            include_str!("../nodes/sensor/dynamic_range.wgsl"),
+            "dynamic_range_apply",
+        ),
+        (
+            include_str!("../nodes/sensor/highlight_restoration.wgsl"),
+            "highlight_prepare",
+        ),
+        (
+            include_str!("../nodes/sensor/highlight_restoration.wgsl"),
+            "highlight_classify",
+        ),
+        (
+            include_str!("../nodes/sensor/highlight_restoration.wgsl"),
+            "highlight_horizontal",
+        ),
+        (
+            include_str!("../nodes/sensor/highlight_restoration.wgsl"),
+            "highlight_vertical",
+        ),
+        (
+            include_str!("../nodes/sensor/highlight_restoration.wgsl"),
+            "highlight_finish",
+        ),
+        (
+            include_str!("../nodes/sensor/blue_mismatch.wgsl"),
+            "blue_mismatch",
+        ),
+        (
+            include_str!("../nodes/color/sector_color.wgsl"),
+            "sector_color",
+        ),
+        (
+            include_str!("../nodes/finish/code_response.wgsl"),
+            "code_response",
+        ),
+        (
+            include_str!("../nodes/color/histogram_bilateral.wgsl"),
+            "histogram_bilateral",
+        ),
+        (&scalar_bilateral, "scalar_bilateral"),
+        (
+            include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
+            "blue_guide_vertical",
+        ),
+        (
+            include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
+            "blue_guide_horizontal",
+        ),
+        (
+            include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
+            "blue_outliers",
+        ),
+        (
+            include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
+            "blue_guided_restore",
+        ),
+        (
+            include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
+            "reduced_blue",
+        ),
+        (
+            include_str!("../nodes/color/blue_guided_reconstruct.wgsl"),
+            "reduced_restore",
+        ),
+        (include_str!("../nodes/color/packed_lab.wgsl"), "packed_lab"),
+        (
+            include_str!("../nodes/color/residual_finish.wgsl"),
+            "residual_sharp",
+        ),
+        (
+            include_str!("../nodes/color/residual_finish.wgsl"),
+            "residual_finish",
+        ),
+        (
+            include_str!("../nodes/finish/color_sharpen.wgsl"),
+            "color_sharpen",
+        ),
+        (
+            include_str!("../nodes/finish/proportional_sharpen.wgsl"),
+            "proportional_sharpen",
+        ),
+        (
+            include_str!("../nodes/color/spatial_color_gain.wgsl"),
+            "spatial_color_gain",
+        ),
+        (
+            include_str!("../nodes/finish/wavelet_contrast.wgsl"),
+            "dwt_extract",
+        ),
+        (
+            include_str!("../nodes/finish/wavelet_contrast.wgsl"),
+            "dwt_forward",
+        ),
+        (
+            include_str!("../nodes/finish/wavelet_contrast.wgsl"),
+            "dwt_gain",
+        ),
+        (
+            include_str!("../nodes/finish/wavelet_contrast.wgsl"),
+            "dwt_inverse",
+        ),
+        (
+            include_str!("../nodes/finish/wavelet_contrast.wgsl"),
+            "dwt_copyback",
+        ),
+        (
+            include_str!("../nodes/color/byte_mask_double.wgsl"),
+            "byte_mask_double",
+        ),
+        (
+            include_str!("../nodes/finish/mask_image.wgsl"),
+            "mask_image",
+        ),
+        (include_str!("../nodes/color/cell_gain.wgsl"), "cell_gain"),
+        (include_str!("../nodes/finish/code_crop.wgsl"), "code_crop"),
+        (black, "histogram_pass"),
+        (black, "mean_pass"),
+        (
+            concat!(
+                include_str!("../nodes/sensor/calibration_common.wgsl"),
+                "\n",
+                include_str!("../nodes/sensor/calibrate.wgsl")
+            ),
+            "main",
+        ),
+        (include_str!("../nodes/color/color.wgsl"), "main"),
+        (include_str!("../nodes/finish/tone.wgsl"), "main"),
+        (photographic_tone.as_str(), "photographic_tone"),
+        (photographic_tone.as_str(), "photographic_brightness"),
+        (photographic_sharpen.as_str(), "sharp_extract"),
+        (photographic_sharpen.as_str(), "sharp_blur"),
+        (photographic_sharpen.as_str(), "universal_sharpen"),
+        (photographic_local_contrast.as_str(), "local_extract"),
+        (photographic_local_contrast.as_str(), "local_blur"),
+        (photographic_local_contrast.as_str(), "local_apply"),
+        (tonal.as_str(), "reduce_guide"),
+        (tonal.as_str(), "mean_horizontal"),
+        (tonal.as_str(), "statistics"),
+        (tonal.as_str(), "coefficients"),
+        (tonal.as_str(), "mean_vertical"),
+        (tonal.as_str(), "update_base"),
+        (tonal.as_str(), "finish_mask"),
+        (tonal.as_str(), "expand_mask"),
+        (tonal.as_str(), "calculate_gain"),
+        (tonal.as_str(), "apply_ranges"),
+        (include_str!("../nodes/finish/encode.wgsl"), "main"),
+        #[cfg(test)]
+        (include_str!("../nodes/sensor/repair.wgsl"), "main"),
+        (sharpen, "main"),
+        (include_str!("../nodes/color/color_dq.wgsl"), "main"),
+        (include_str!("shaders/view.wgsl"), "main"),
+        (include_str!("shaders/scopes.wgsl"), "main"),
+        (noise, "tile_input"),
+        (noise, "block_mean"),
+        (noise, "radius_map"),
+        (noise, "bilateral"),
+        (noise, "edge_map"),
+        (noise, "local_mean"),
+        (noise, "transpose_mean_input"),
+        (noise, "transpose_mean_output"),
+        (luminance, "luminance"),
+        (luminance, "diffuse"),
+        (luminance, "osf"),
+        (luminance, "ratio"),
+        (include_str!("../nodes/color/texture.wgsl"), "extract"),
+        (include_str!("../nodes/color/texture.wgsl"), "blur"),
+        (include_str!("../nodes/color/texture.wgsl"), "mix_texture"),
+        (
+            include_str!("../nodes/color/texture.wgsl"),
+            "inspect_texture",
+        ),
+        (include_str!("../nodes/color/noise_stitch.wgsl"), "stitch"),
+        (despeckle, "detect"),
+        (despeckle, "compact"),
+        (shadow_neutralize.as_str(), "analyze"),
+        (shadow_neutralize.as_str(), "regional_filter"),
+        (shadow_neutralize.as_str(), "neutralize"),
+        (despeckle, "prefix"),
+        (despeckle, "scatter"),
+        (despeckle, "classify_ready"),
+        (despeckle, "repair_ready"),
+        (despeckle, "remaining"),
+        (despeckle, "repair"),
+        (camera, "main"),
+        (include_str!("../nodes/sensor/cluster_repair.wgsl"), "main"),
+        (highlight, "connected_flags"),
+        (highlight, "neighborhood_map"),
+        (highlight, "density_field"),
+        (highlight, "donor_marks"),
+        (highlight, "donor_prefix"),
+        (highlight, "donor_scatter"),
+        (highlight, "correction_table"),
+        (highlight, "restore"),
+        (banding, "fit"),
+        (banding, "residual_field"),
+        (banding, "quality"),
+        (banding, "row_means"),
+        (banding, "reduce_rows"),
+        (banding, "apply"),
+        (column, "horizontal"),
+        (column, "block_deltas"),
+        (column, "correct"),
+        (pattern, "mask"),
+        (pattern, "line_counts"),
+        (pattern, "line_prefix"),
+        (pattern, "horizontal"),
+        (pattern, "vertical"),
+        (pattern, "blend"),
+        (pattern, "mask_image"),
+        (sharpen, "signal"),
+        (include_str!("../nodes/finish/resample.wgsl"), "main"),
+        (noise, "global_tile"),
+        (noise, "pattern_seed"),
+        (noise, "global_tile_scalar"),
+        (highlight, "table_interpolation"),
+        (highlight, "bin_histogram"),
+        (highlight, "bin_prefix"),
+        (highlight, "bin_scatter"),
+        (camera, "detect_records"),
+        (camera, "detection_prefix"),
+        (camera, "scatter_detections"),
+        (noise, "cross_medians"),
+        (camera, "detected_correct"),
+        (camera, "detection_block_prefix"),
+        (dng, "convert"),
+        (dng, "quantize"),
+        (mono, "mixing"),
+        (mono, "directional"),
+        (mono, "column"),
+        (mono, "histogram"),
+        (mono, "despeckle"),
+        (mono, "signal"),
+        (mono, "expand"),
+        (sharpen, "monochrome"),
+        (include_str!("../nodes/finish/resize.wgsl"), "main"),
+        (
+            include_str!("../nodes/sensor/fixed_point_correction.wgsl"),
+            "scale",
+        ),
+        (
+            include_str!("../nodes/sensor/fixed_point_correction.wgsl"),
+            "statistics",
+        ),
+        (
+            include_str!("../nodes/sensor/fixed_point_correction.wgsl"),
+            "correct",
+        ),
+        (
+            include_str!("../nodes/sensor/fixed_point_color.wgsl"),
+            "main",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "pack",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "reduce",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "estimate_black",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "bilateral",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "edge_guide",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "neutralize",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "mean_horizontal",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "mean_vertical",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "expand",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "luminance",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "diffuse_noise",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "diffuse_constant",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "extrema",
+        ),
+        (
+            include_str!("../nodes/color/range_reconstruction.wgsl"),
+            "finish",
+        ),
+        (include_str!("../nodes/color/chroma.wgsl"), "horizontal"),
+        (include_str!("../nodes/color/chroma.wgsl"), "apply"),
+        (include_str!("../nodes/color/chroma.wgsl"), "recursive_init"),
+        (
+            include_str!("../nodes/color/chroma.wgsl"),
+            "recursive_horizontal_pass",
+        ),
+        (
+            include_str!("../nodes/color/chroma.wgsl"),
+            "recursive_apply",
+        ),
+        (&signed_photographic, "main"),
+        (&reference_saturation, "main"),
+        (include_str!("../nodes/finish/root_detail.wgsl"), "root_map"),
+        (
+            include_str!("../nodes/finish/root_detail.wgsl"),
+            "detail_vertical",
+        ),
+        (
+            include_str!("../nodes/finish/root_detail.wgsl"),
+            "detail_horizontal",
+        ),
+        (include_str!("../nodes/sensor/signed_repair.wgsl"), "repair"),
+        (
+            include_str!("../nodes/sensor/signed_repair.wgsl"),
+            "despeckle",
+        ),
+        (
+            include_str!("../nodes/sensor/red_detail.wgsl"),
+            "horizontal",
+        ),
+        (include_str!("../nodes/sensor/red_detail.wgsl"), "apply"),
+        (include_str!("../nodes/color/code_gain.wgsl"), "main"),
+        (include_str!("../nodes/color/highlight_stream.wgsl"), "main"),
+        (
+            include_str!("../nodes/color/log_reconstruction.wgsl"),
+            "prepare",
+        ),
+        (
+            include_str!("../nodes/color/log_reconstruction.wgsl"),
+            "gradient",
+        ),
+        (
+            include_str!("../nodes/color/log_reconstruction.wgsl"),
+            "row_statistics",
+        ),
+        (
+            include_str!("../nodes/color/log_reconstruction.wgsl"),
+            "reduce_statistics",
+        ),
+        (
+            include_str!("../nodes/color/log_reconstruction.wgsl"),
+            "edge_guide",
+        ),
+        (
+            include_str!("../nodes/color/log_reconstruction.wgsl"),
+            "forward",
+        ),
+        (
+            include_str!("../nodes/color/log_reconstruction.wgsl"),
+            "backward",
+        ),
+        (
+            include_str!("../nodes/color/log_reconstruction.wgsl"),
+            "combine",
+        ),
+        (
+            include_str!("../nodes/color/log_reconstruction.wgsl"),
+            "finalize",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "black_statistics",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "reduce",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "sample_tone",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "auto_histogram",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "tone_image",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "scores",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "select_neutral",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "neutral_histogram",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "accumulate",
+        ),
+        (
+            include_str!("../nodes/color/weighted_white_balance.wgsl"),
+            "row_means",
+        ),
+        (visibility.as_str(), "histogram"),
+        (visibility.as_str(), "fit"),
+        (visibility.as_str(), "select_fit"),
+        (visibility.as_str(), "adaptive_gain"),
+        (visibility.as_str(), "adaptive_gain"),
+        (visibility.as_str(), "sample_regions"),
+        (visibility.as_str(), "summarize_regions"),
+        (visibility.as_str(), "fit_regions"),
+        (visibility.as_str(), "refine"),
+    ];
+    let mut modules = std::collections::HashMap::<*const u8, std::sync::Arc<str>>::new();
+    kernels
+        .into_iter()
+        .map(|(code, entry)| KernelSource {
+            module: modules
+                .entry(code.as_ptr())
+                .or_insert_with(|| code.into())
+                .clone(),
+            entry,
+        })
+        .collect()
+}
+
+/// The module's code with the shared helpers this kernel's group needs.
+fn kernel_code(index: usize, code: &str) -> String {
+    let camera_repair = [
+        Kernel::CameraRepair as usize,
+        Kernel::CameraDetect as usize,
+        Kernel::CameraPrefix as usize,
+        Kernel::CameraScatter as usize,
+        Kernel::CameraDetected as usize,
+        Kernel::CameraBlocks as usize,
+    ]
+    .contains(&index);
+    #[cfg(test)]
+    let camera_repair = camera_repair || index == Kernel::Repair as usize;
+    if [
+        Kernel::Encode as usize,
+        Kernel::View as usize,
+        Kernel::Scopes as usize,
+        Kernel::DngConvert as usize,
+        Kernel::DngQuantize as usize,
+        Kernel::OutputResize as usize,
+    ]
+    .contains(&index)
+    {
+        format!("{}\n{code}", include_str!("shaders/sample.wgsl"))
+    } else if (Kernel::NoiseTile as usize..=Kernel::NoiseStitch as usize).contains(&index)
+        || (Kernel::ColumnHorizontal as usize..=Kernel::ColumnApply as usize).contains(&index)
+        || (Kernel::NoiseGlobalTile as usize..=Kernel::NoiseGlobalScalarTile as usize)
+            .contains(&index)
+        || index == Kernel::NoiseMedian as usize
+        || (Kernel::DirectionalBandingSmooth as usize..=Kernel::DirectionalBandingApply as usize)
+            .contains(&index)
+    {
+        format!(
+            "{}\n{code}",
+            include_str!("../nodes/color/noise_common.wgsl")
+        )
+    } else if (Kernel::HighlightEvidence as usize..=Kernel::HighlightFinish as usize)
+        .contains(&index)
+    {
+        format!(
+            "{}\n{code}",
+            include_str!("../nodes/sensor/highlight_common.wgsl")
+        )
+    } else if camera_repair {
+        format!(
+            "{}\n{code}",
+            include_str!("../nodes/sensor/camera_common.wgsl")
+        )
+    } else {
+        code.to_owned()
+    }
+}
+
+/// A second handwritten write list could repeat the same mistake.
+/// Tests check shader writes, including writes in called functions.
+#[cfg(test)]
+fn shader_writes(code: &str, entry: &str) -> u32 {
+    use wgpu::naga::{
+        front::wgsl,
+        valid::{Capabilities, GlobalUse, ValidationFlags, Validator},
+    };
+    let module = wgsl::parse_str(code).expect("valid shader for guard audit");
+    let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+        .validate(&module)
+        .expect("validated guard audit");
+    let ep = module
+        .entry_points
+        .iter()
+        .position(|p| p.name == entry)
+        .unwrap();
+    let function = info.get_entry_point(ep);
+    let mut writes = 0;
+    for (handle, variable) in module.global_variables.iter() {
+        if let Some(binding) = &variable.binding {
+            if function[handle].intersects(GlobalUse::WRITE | GlobalUse::ATOMIC) {
+                assert_eq!(binding.group, 0);
+                writes |= 1 << binding.binding;
+            }
+        }
+    }
+    writes
 }

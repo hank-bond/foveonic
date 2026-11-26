@@ -26,9 +26,10 @@ impl std::error::Error for CompilationFailure {
 }
 impl Gpu {
     pub(crate) fn prepare_color_field(&self) -> Result<()> {
-        let result = self
-            .field
-            .get_or_init(|| compile(&self.device).map_err(|e| CompilationFailure(e.into())));
+        let result = self.field.get_or_init(|| {
+            let _build = self.builds.lock().expect("pipeline build lock");
+            compile(&self.device).map_err(|e| CompilationFailure(e.into()))
+        });
         result
             .as_ref()
             .map(|_| ())
@@ -46,7 +47,7 @@ impl Gpu {
         if index >= Kernel::FieldPrepare as usize {
             &self.field_data().pipelines[index - Kernel::FieldPrepare as usize]
         } else {
-            &self.pipelines[index]
+            self.kernel_pipeline(index)
         }
     }
     #[cfg(test)]
