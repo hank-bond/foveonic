@@ -432,6 +432,44 @@ fn workspace_larger_than_the_free_area_shrinks_to_fill_it() {
 }
 
 #[test]
+fn a_free_area_smaller_than_the_minimum_window_lowers_the_minimum() {
+    // 1366x768 at 125% with a bottom taskbar leaves 1092.8 x 576 points.
+    let area = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1092.8, 576.));
+    let context = egui::Context::default();
+    let mut window = Window::new(
+        egui::ViewportBuilder::default()
+            .with_inner_size([1440., 1000.])
+            .with_min_inner_size([1000., 600.]),
+        None,
+    );
+    window.workspace_position = Some(egui::pos2(-80., -100.));
+    let _ = context.run(placement_input(egui::Pos2::ZERO), |context| {
+        window.fit(context, |_| Some(area))
+    });
+    // The fixture's title bar adds 32 points to the outer height.
+    assert_eq!(window.workspace.inner_size, Some(egui::vec2(1092.8, 544.)));
+    assert_eq!(
+        window.workspace.min_inner_size,
+        Some(egui::vec2(1000., 544.))
+    );
+    let roomy = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1920., 1032.));
+    let mut window = Window::new(
+        egui::ViewportBuilder::default()
+            .with_inner_size([1440., 1000.])
+            .with_min_inner_size([1000., 600.]),
+        None,
+    );
+    window.workspace_position = Some(egui::pos2(0., 0.));
+    let _ = context.run(placement_input(egui::Pos2::ZERO), |context| {
+        window.fit(context, |_| Some(roomy))
+    });
+    assert_eq!(
+        window.workspace.min_inner_size,
+        Some(egui::vec2(1000., 600.))
+    );
+}
+
+#[test]
 fn workspace_inside_the_free_area_and_unknown_areas_are_unchanged() {
     let size = egui::vec2(1240., 820.);
     let area = egui::Rect::from_min_max(egui::pos2(0., 48.), egui::pos2(1920., 1080.));

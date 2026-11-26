@@ -119,6 +119,11 @@ impl Window {
         let fitted = fit_within(outer, area);
         self.workspace_position = Some(fitted.min);
         self.workspace.inner_size = Some(fitted.size() - frame);
+        // On a screen smaller than the minimum window, the free area wins so the
+        // whole window stays clear of the taskbar.
+        if let Some(minimum) = self.workspace.min_inner_size {
+            self.workspace.min_inner_size = Some(minimum.min(area.size() - frame));
+        }
     }
     fn observe_size(&mut self, size: Option<egui::Vec2>) {
         if size.is_some() && size != self.resizing_from {
