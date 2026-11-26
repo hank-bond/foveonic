@@ -1,4 +1,4 @@
-//! Compares the complete finite-input helper and its two retained numerical boundaries.
+//! Compares the complete finite-input helper, its two retained numerical boundaries and the fused chroma limit.
 
 use super::*;
 
@@ -126,4 +126,58 @@ fn complete_native_raw_color_helper() {
             );
         }
     }
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn chroma_limit_matches_a_separate_clamp_and_conversion() {
+    let gpu = Gpu::new().unwrap();
+    let [width, height] = [19, 13];
+    let samples: Vec<_> = (0..width * height)
+        .map(|i| {
+            [
+                128. + i as f32,
+                (i * 29 % 67) as f32 - 35.,
+                (i * 7 % 23) as f32 - 12.,
+            ]
+        })
+        .collect();
+    let mut limited = samples.clone();
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let center = (y as u32 * width + x as u32) as usize;
+            for channel in 1..3 {
+                let mut neighbors = Vec::with_capacity(48);
+                for dy in -3..=3 {
+                    for dx in -3..=3 {
+                        if (dx, dy) == (0, 0) {
+                            continue;
+                        }
+                        let row = (y + dy).clamp(0, height as i32 - 1) as u32;
+                        let column = (x + dx).clamp(0, width as i32 - 1) as u32;
+                        neighbors.push(samples[(row * width + column) as usize][channel]);
+                    }
+                }
+                neighbors.sort_by(f32::total_cmp);
+                limited[center][channel] =
+                    samples[center][channel].clamp(neighbors[1], neighbors[46]);
+            }
+        }
+    }
+    assert_ne!(limited, samples);
+    let extent = [width, height];
+    let upload = |samples: &[[f32; 3]]| gpu.upload("Chroma limit test input", samples).unwrap();
+    let fused = limit_chroma(&gpu, &upload(&samples), extent, &mut Profile::default()).unwrap();
+    let separate = uv_repair::convert(
+        &gpu,
+        &upload(&limited),
+        extent,
+        uv_repair::YUV_TO_RGB,
+        &mut Profile::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        gpu.readback(&fused).unwrap(),
+        gpu.readback(&separate).unwrap()
+    );
 }

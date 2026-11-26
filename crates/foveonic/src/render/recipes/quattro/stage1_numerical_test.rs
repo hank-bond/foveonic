@@ -2,6 +2,10 @@
 
 use super::*;
 
+fn native_filter(controls: &Stage1Controls) -> crate::nodes::color::two_scale_noise::Prepared {
+    numerical_scaled(controls, 1, 1., ProcessingQuality::Quality).unwrap()
+}
+
 #[test]
 fn high_iso_and_long_exposure_have_distinct_prepared_behavior() {
     let controls = Stage1Controls {
@@ -13,21 +17,42 @@ fn high_iso_and_long_exposure_have_distinct_prepared_behavior() {
         long_exposure: false,
         minimum_blend: 0.,
     };
-    let high = numerical(&controls).unwrap();
-    let long = numerical(&Stage1Controls {
+    let high = native_filter(&controls);
+    let long = native_filter(&Stage1Controls {
         long_exposure: true,
         minimum_blend: 0.2,
         ..controls.clone()
-    })
-    .unwrap();
-    let low = numerical(&Stage1Controls {
+    });
+    let low = native_filter(&Stage1Controls {
         estimated_iso: 100,
         minimum_blend: 1.,
         ..controls
-    })
-    .unwrap();
+    });
     assert!(high.key() != long.key());
     assert!(high.key() != low.key());
+}
+
+#[test]
+fn speed_changes_only_the_ordinary_native_filter() {
+    for (estimated_iso, long_exposure, divisor, should_change) in [
+        (399, false, 1, true),
+        (400, false, 1, false),
+        (100, true, 1, false),
+        (100, false, 2, false),
+    ] {
+        let controls = Stage1Controls {
+            extent: [64, 64],
+            white_balance: [1.; 3],
+            estimated_iso,
+            bilateral_strengths: [1., 1.5],
+            long_exposure,
+            minimum_blend: 0.2,
+            highlight_preservation: [1.; 3],
+        };
+        let quality = numerical_scaled(&controls, divisor, 1., ProcessingQuality::Quality).unwrap();
+        let speed = numerical_scaled(&controls, divisor, 1., ProcessingQuality::Speed).unwrap();
+        assert_eq!(quality.key() != speed.key(), should_change);
+    }
 }
 
 #[test]
@@ -73,7 +98,13 @@ fn complete_native_stage1_return_from_calibrated_input() {
     let chroma_step = std::env::var("QUATTRO_CHROMA")
         .map(|value| value.parse().unwrap())
         .unwrap_or(0);
-    let prepared = prepare_filter(&metadata, chroma_step).unwrap();
+    let prepared = prepare_filter_on_grid(
+        &metadata,
+        chroma_step,
+        crate::render::Scale::NATIVE,
+        ProcessingQuality::Quality,
+    )
+    .unwrap();
     let floats = |name| {
         let bytes = std::fs::read(directory.join(name)).unwrap();
         bytemuck::cast_slice::<u8, f32>(&bytes).to_vec()

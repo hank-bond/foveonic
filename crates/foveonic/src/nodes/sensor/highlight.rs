@@ -13,7 +13,10 @@ use crate::{
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[cfg_attr(test, derive(Default))]
 pub(crate) struct Params {
-    pub source: [u32; 4],
+    pub extent: [u32; 2],
+    /// Set from the working extent and donor limit when processing.
+    pub donor_step: u32,
+    pub donor_columns: u32,
     pub area: [u32; 4],
     pub value: [f32; 4],
 }
@@ -24,7 +27,21 @@ pub(crate) struct Prepared {
     /// Original camera evidence is materialized on this grid only when needed.
     pub flags: Option<crate::recipe::Shared<u32>>,
     pub grid: Option<crate::render::WorkingGrid>,
+    /// At most this many donor sites, sampled on a power-of-two grid; None uses every site.
+    pub donor_limit: Option<u32>,
 }
+
+/// The smallest power-of-two sampling step that keeps the donor sites within `limit`.
+fn donor_step([width, height]: [u32; 2], limit: Option<u32>) -> u32 {
+    let mut step = 1;
+    if let Some(limit) = limit {
+        while width.div_ceil(step) * height.div_ceil(step) > limit {
+            step *= 2;
+        }
+    }
+    step
+}
+
 impl Prepared {
     pub(crate) fn on_grid(mut self, grid: Option<crate::render::WorkingGrid>) -> Self {
         self.grid = grid;
@@ -35,8 +52,14 @@ impl Prepared {
         }
         self
     }
+    pub(crate) fn with_donor_limit(mut self, limit: Option<u32>) -> Self {
+        self.donor_limit = limit;
+        self
+    }
+    /// The limit itself is not keyed: grids small enough to use every donor share a key.
     pub(crate) fn sampling_key(&self) -> crate::recipe::Key {
-        let mut key = crate::recipe::Key::pod(&self.params);
+        let mut key = crate::recipe::Key::pod(&self.params)
+            .with(&donor_step(self.extent(), self.donor_limit));
         if let Some(grid) = self.grid {
             key = key
                 .with(&grid.scale.divisor())
@@ -45,12 +68,14 @@ impl Prepared {
         }
         key
     }
+    fn extent(&self) -> [u32; 2] {
+        self.grid.map_or(self.params.extent, |grid| grid.extent)
+    }
     fn processing_params(&self) -> Params {
         let mut params = self.params;
+        let [width, height] = self.extent();
+        params.extent = [width, height];
         if let Some(grid) = self.grid {
-            let [width, height] = grid.extent;
-            let count = width * height;
-            params.source = [width, height, count, count.div_ceil(256)];
             let [l, t, r, b] = self.params.area;
             let bounds = grid.bounds([l, t, r + 1, b + 1]);
             let radius = (2. * grid.scale.factor()).round().max(1.) as u32;
@@ -68,6 +93,8 @@ impl Prepared {
             params.value[2] = radius as f32;
             params.value[3] = 1.;
         }
+        params.donor_step = donor_step([width, height], self.donor_limit);
+        params.donor_columns = width.div_ceil(params.donor_step);
         params
     }
     pub(crate) fn key(&self) -> crate::recipe::Key {
@@ -282,16 +309,14 @@ fn prepare_description(
     let threshold = ramp.mul_add(3000., 4000.) as f32 * threshold_ev.unwrap_or(0.).exp2();
     Ok(Prepared {
         params: Params {
-            source: [
-                metadata.width as u32,
-                metadata.height as u32,
-                count as u32,
-                (count as u32).div_ceil(256),
-            ],
+            extent: [metadata.width as u32, metadata.height as u32],
+            donor_step: 0,
+            donor_columns: 0,
             area,
             value: [threshold, 0., 0., 0.],
         },
         grid: None,
+        donor_limit: None,
         flags: if deferred {
             None
         } else {
@@ -312,13 +337,15 @@ pub(crate) fn materialize(
         Some(flags) => flags,
         None => clipping(metadata, description.grid)?.into(),
     };
-    if flags.len() != description.processing_params().source[2] as usize {
+    let [width, height] = description.extent();
+    if flags.len() != width as usize * height as usize {
         return Err("original saturation map has the wrong sensor extent".into());
     }
     Ok(Prepared {
         params: description.params,
         flags: Some(flags),
         grid: description.grid,
+        donor_limit: description.donor_limit,
     })
 }
 
@@ -330,7 +357,8 @@ pub(crate) fn apply(
     profile: &mut Profile,
 ) -> Result<Output> {
     let params = p.processing_params();
-    let size = u64::from(params.source[2]) * 4;
+    let [width, height] = params.extent;
+    let size = u64::from(width) * u64::from(height) * 4;
     let uniform = gpu.uniform(&params);
     let original = gpu.upload(
         "Original camera clipping flags",
@@ -339,7 +367,7 @@ pub(crate) fn apply(
             .ok_or("highlight clipping evidence must be materialized")?,
     )?;
     let mut flags = gpu.storage("Connected saturation processing copy", size)?;
-    let groups = [params.source[0].div_ceil(8), params.source[1].div_ceil(8)];
+    let groups = [width.div_ceil(8), height.div_ceil(8)];
     let mut trace = gpu.trace(profile.mode.gpu(), 12);
     gpu.dispatch(
         Kernel::HighlightFlags,
@@ -379,16 +407,16 @@ pub(crate) fn apply(
         None
     };
     let pixels = if let Some(input) = input {
-        let mut marks = gpu.storage("Highlight donor ranks", size)?;
-        let mut counts = gpu.storage(
-            "Highlight donor prefix counts",
-            u64::from(params.source[3] + 1) * 4,
-        )?;
-        let mut donors = gpu.storage("Ordered highlight donor indices", size)?;
-        let mut sorted = gpu.storage("Stable per-bin highlight donor indices", size)?;
+        let candidates = params.donor_columns * height.div_ceil(params.donor_step);
+        let blocks = candidates.div_ceil(256);
+        let donor_bytes = u64::from(candidates) * 4;
+        let mut marks = gpu.storage("Highlight donor ranks", donor_bytes)?;
+        let mut counts = gpu.storage("Highlight donor prefix counts", u64::from(blocks + 1) * 4)?;
+        let mut donors = gpu.storage("Ordered highlight donor indices", donor_bytes)?;
+        let mut sorted = gpu.storage("Stable per-bin highlight donor indices", donor_bytes)?;
         let mut histogram = gpu.storage(
             "Highlight block-bin counts/prefixes",
-            u64::from(params.source[3]) * 256 * 4,
+            u64::from(blocks) * 256 * 4,
         )?;
         let mut starts = gpu.storage("Highlight bin start offsets", 257 * 4)?;
         let mut lookup = gpu.storage("Highlight blue correction table and counts", 512 * 4)?;
@@ -401,12 +429,12 @@ pub(crate) fn apply(
                 (6, Write(marks.write())),
                 (7, Write(counts.write())),
             ],
-            [params.source[3], 1],
+            [blocks, 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightPrefix,
-            &mut [(2, Read(&uniform)), (7, Write(counts.write()))],
+            &mut [(7, Write(counts.write()))],
             [1, 1],
             &mut trace,
         );
@@ -418,26 +446,24 @@ pub(crate) fn apply(
                 (7, Read(&counts)),
                 (8, Write(donors.write())),
             ],
-            [params.source[3], 1],
+            [blocks, 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightBinHistogram,
             &mut [
-                (2, Read(&uniform)),
                 (5, Read(input)),
                 (6, Write(marks.write())),
                 (7, Read(&counts)),
                 (8, Read(&donors)),
                 (11, Write(histogram.write())),
             ],
-            [params.source[3], 1],
+            [blocks, 1],
             &mut trace,
         );
         gpu.dispatch(
             Kernel::HighlightBinPrefix,
             &mut [
-                (2, Read(&uniform)),
                 (7, Read(&counts)),
                 (11, Write(histogram.write())),
                 (12, Write(starts.write())),
@@ -448,7 +474,6 @@ pub(crate) fn apply(
         gpu.dispatch(
             Kernel::HighlightBinScatter,
             &mut [
-                (2, Read(&uniform)),
                 (6, Read(&marks)),
                 (7, Read(&counts)),
                 (8, Read(&donors)),
@@ -456,7 +481,7 @@ pub(crate) fn apply(
                 (11, Read(&histogram)),
                 (12, Read(&starts)),
             ],
-            [params.source[3], 1],
+            [blocks, 1],
             &mut trace,
         );
         gpu.dispatch(

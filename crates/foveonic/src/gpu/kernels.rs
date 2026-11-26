@@ -21,6 +21,8 @@ pub enum Kernel {
     PerceptualGrade,
     AdvancedColor,
     DehazePrepare,
+    DehazeBrightnessHistogram,
+    DehazeBrightnessEstimate,
     DehazeHorizontal,
     DehazeVertical,
     DehazeMinimumPrepare,
@@ -136,6 +138,7 @@ pub enum Kernel {
     PackedLab,
     ResidualSharp,
     ResidualFinish,
+    ResidualFinishInPlace,
     ColorSharpen,
     ProportionalSharpen,
     SpatialColorGain,
@@ -362,6 +365,8 @@ impl Kernel {
             Self::PerceptualGrade => "perceptual grading",
             Self::AdvancedColor => "Advanced Color Range",
             Self::DehazePrepare => "prepare haze analysis",
+            Self::DehazeBrightnessHistogram => "count Dehaze brightness levels",
+            Self::DehazeBrightnessEstimate => "estimate Dehaze brightness",
             Self::DehazeHorizontal => "horizontal haze minimum",
             Self::DehazeVertical => "vertical haze minimum",
             Self::DehazeMinimumPrepare => "prepare square haze minimum",
@@ -446,7 +451,7 @@ impl Kernel {
             Self::OrderedBlueRepair => "repair ordered blue defects",
             Self::RawColorNeutralize => "neutralize camera-code highlights",
             Self::RawColorResponse => "apply adaptive camera color response",
-            Self::RawColorChroma => "limit reconstructed chroma neighborhoods",
+            Self::RawColorChroma => "limit chroma and convert to camera RGB",
             Self::BlueDespeckle => "filter blue speckles",
             Self::RgbDespeckle => "filter camera RGB speckles",
             Self::ChromaClusters => "repair ordered RGB defect clusters",
@@ -488,6 +493,7 @@ impl Kernel {
             Self::PackedLab => "convert packed RGB and Lab codes",
             Self::ResidualSharp => "derive signed luma detail",
             Self::ResidualFinish => "apply reconstruction residual",
+            Self::ResidualFinishInPlace => "apply reconstruction residual in place",
             Self::ColorSharpen => "sharpen individual RGB channels",
             Self::ProportionalSharpen => "sharpen RGB with proportional luma detail",
             Self::SpatialColorGain => "apply spatial red and blue color gains",
@@ -930,6 +936,14 @@ fn kernel_sources() -> Vec<KernelSource> {
         ),
         (
             include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_brightness_histogram",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
+            "dehaze_brightness_estimate",
+        ),
+        (
+            include_str!("../nodes/finish/dehaze_estimate.wgsl"),
             "dehaze_horizontal",
         ),
         (
@@ -1238,7 +1252,10 @@ fn kernel_sources() -> Vec<KernelSource> {
             "raw_color_response",
         ),
         (
-            include_str!("../nodes/color/raw_color_blend_chroma.wgsl"),
+            concat!(
+                include_str!("../nodes/color/uv_repair_convert.wgsl"),
+                include_str!("../nodes/color/raw_color_blend_chroma.wgsl"),
+            ),
             "raw_color_chroma",
         ),
         (
@@ -1351,6 +1368,10 @@ fn kernel_sources() -> Vec<KernelSource> {
         (
             include_str!("../nodes/color/residual_finish.wgsl"),
             "residual_finish",
+        ),
+        (
+            include_str!("../nodes/color/residual_finish.wgsl"),
+            "residual_finish_in_place",
         ),
         (
             include_str!("../nodes/finish/color_sharpen.wgsl"),

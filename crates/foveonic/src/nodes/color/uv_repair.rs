@@ -90,27 +90,37 @@ impl Prepared {
     }
 }
 
+pub(crate) const RGB_TO_YUV: [f64; 9] = [
+    0.299, 0.587, 0.114, -0.14713, -0.28886, 0.436, 0.615, -0.51499, -0.10001,
+];
+pub(crate) const YUV_TO_RGB: [f64; 9] = [1., 0., 1.13983, 1., -0.39465, -0.5806, 1., 2.03211, 0.];
+
 /// Converts unclamped floating RGB or YUV codes using fixed numerical coefficients.
 pub(crate) fn convert(
     gpu: &Gpu,
     input: &ReadGuard,
     extent: [u32; 2],
-    inverse: bool,
+    matrix: [f64; 9],
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
-    let mut shape = shape(extent)?;
-    shape[2] = u32::from(inverse);
+    convert_with(gpu, Kernel::UvConvert, input, extent, matrix, profile)
+}
+
+/// Runs a kernel that ends in the shared conversion, so a caller can fuse its
+/// own per-pixel step before writing the converted codes.
+pub(crate) fn convert_with(
+    gpu: &Gpu,
+    kernel: Kernel,
+    input: &ReadGuard,
+    extent: [u32; 2],
+    matrix: [f64; 9],
+    profile: &mut Profile,
+) -> Result<ReadGuard> {
+    let shape = shape(extent)?;
     let bytes = u64::from(extent[0]) * u64::from(extent[1]) * 12;
     if input.size() != bytes {
         return Err("UV conversion input size does not match its extent".into());
     }
-    let matrix: [f64; 9] = if inverse {
-        [1., 0., 1.13983, 1., -0.39465, -0.5806, 1., 2.03211, 0.]
-    } else {
-        [
-            0.299, 0.587, 0.114, -0.14713, -0.28886, 0.436, 0.615, -0.51499, -0.10001,
-        ]
-    };
     let matrix = gpu.upload("RGB/YUV double coefficients", &matrix.map(pair))?;
     let uniform = gpu.uniform(&Params {
         shape,
@@ -120,7 +130,7 @@ pub(crate) fn convert(
     let mut output = gpu.storage("RGB/YUV conversion", bytes)?;
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
-        Kernel::UvConvert,
+        kernel,
         &mut [
             (0, Read(input)),
             (1, Read(&uniform)),

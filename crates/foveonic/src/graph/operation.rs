@@ -67,7 +67,10 @@ pub enum Operation {
         output: &'static str,
     },
     BlueGuidedReconstruct(std::sync::Arc<crate::nodes::color::blue_guided_reconstruct::Prepared>),
-    ResidualRgb(crate::nodes::color::residual_finish::Params),
+    ResidualRgb {
+        params: crate::nodes::color::residual_finish::Params,
+        wait_for_reconstruction: bool,
+    },
     ResidualDetail(crate::nodes::color::residual_finish::Params),
     Source,
     SourcePhaseCells,
@@ -678,7 +681,7 @@ impl Operation {
             Self::ByteMaskDouble(p) => p.key(),
             Self::MaskImage { params, .. } => params.key(),
             Self::BlueGuidedReconstruct(p) => p.key(),
-            Self::ResidualRgb(p) => p.rgb_key(),
+            Self::ResidualRgb { params, .. } => params.rgb_key(),
             Self::ResidualDetail(p) => p.detail_key(),
             Self::PhaseExtraction(p) => p.key(),
             Self::PhaseGain(p) => p.key(),
@@ -851,7 +854,7 @@ impl Operation {
             Self::ByteMaskDouble(_) => "ByteMaskDouble",
             Self::MaskImage { .. } => "MaskImage",
             Self::BlueGuidedReconstruct(_) => "BlueGuidedReconstruct",
-            Self::ResidualRgb(_) => "ResidualRgb",
+            Self::ResidualRgb { .. } => "ResidualRgb",
             Self::ResidualDetail(_) => "ResidualDetail",
             Self::Source => "Source",
             Self::SourcePhaseCells => "SourcePhaseCells",
@@ -996,7 +999,7 @@ impl Operation {
                     "reconstruct full-resolution color"
                 }
             }
-            Self::ResidualRgb(_) => "finish reconstruction residual",
+            Self::ResidualRgb { .. } => "finish reconstruction residual",
             Self::ResidualDetail(_) => "derive signed residual detail",
             Self::OrderedBlueRepair(_) => "repair ordered blue defects",
             Self::BlueMismatch(_) => "repair highlight blue mismatch",
@@ -1137,7 +1140,7 @@ impl Operation {
                 ],
                 UnsignedCodeRgb,
             ),
-            Self::ResidualRgb(_) => (vec![UnsignedCodeRgb, LuminanceRatio], UnsignedCodeRgb),
+            Self::ResidualRgb { .. } => (vec![UnsignedCodeRgb, LuminanceRatio], UnsignedCodeRgb),
             Self::ResidualDetail(_) => (
                 vec![UnsignedCodeRgb, LuminanceRatio, HighlightMask],
                 SignedDetail,
@@ -1551,7 +1554,7 @@ impl Operation {
             Self::ByteMaskDouble(_) => "reconstruction.mask",
             Self::MaskImage { output, .. } => output,
             Self::BlueGuidedReconstruct(_) => "reconstruction.rgb",
-            Self::ResidualRgb(_) => "residual.rgb",
+            Self::ResidualRgb { .. } => "residual.rgb",
             Self::ResidualDetail(_) => "reconstruction.detail",
             Self::OrderedBlueRepair(p) => match p.stage() {
                 crate::nodes::sensor::ordered_blue_repair::Stage::Directional => {

@@ -69,14 +69,15 @@ impl WorkingRows {
     }
 }
 
+/// Speed samples highlight donors on a grid of at most this many sites.
+const SPEED_HIGHLIGHT_DONORS: u32 = 1 << 20;
+
 /// Recovery follows reduction with original camera clipping evidence on the
 /// working grid. Black levels remain a three-value table.
 // A transient recipe handoff keeps its small preparation inline.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum Highlights {
-    Standard {
-        prepared: Arc<highlight::Prepared>,
-    },
+    Standard(highlight::Prepared),
     ColorField {
         prepared: color_field::Prepared,
         original: usize,
@@ -92,12 +93,10 @@ impl Highlights {
         input: usize,
         grid: Option<&super::preview::Grid>,
     ) -> Result<usize> {
-        let working = grid.map(|g| g.grid);
         match self {
-            Self::Standard { prepared } => graph.add(
-                Operation::Highlights(Arc::new((*prepared).clone().on_grid(working))),
-                &[input],
-            ),
+            Self::Standard(prepared) => {
+                graph.add(Operation::Highlights(Arc::new(prepared)), &[input])
+            }
             Self::ColorField {
                 prepared,
                 original,
@@ -118,7 +117,7 @@ impl Highlights {
                     (original, unrepaired, repaired)
                 };
                 graph.add(
-                    Operation::ColorField(prepared.on_grid(working)),
+                    Operation::ColorField(prepared.on_grid(grid.map(|g| g.grid))),
                     &[input, original, black, unrepaired, repaired],
                 )
             }
@@ -187,9 +186,8 @@ pub(super) fn build(
     if settings.highlight_restoration && names.contains(&"highlight.density") {
         let prepared = profile.measure("prepare original saturation", || {
             crate::nodes::sensor::highlight::deferred(metadata, settings.highlight_threshold_ev)
-                .map(Arc::new)
         })?;
-        let density = graph.add(Operation::HighlightDensity(prepared.clone()), &[])?;
+        let density = graph.add(Operation::HighlightDensity(Arc::new(prepared.clone())), &[])?;
         graph.set_view(density, super::super::camera_view(params));
         highlight_params = Some(prepared);
         finish!();
@@ -330,10 +328,13 @@ pub(super) fn build(
             Some(prepared) => prepared,
             None => profile.measure("prepare highlight restoration", || {
                 crate::nodes::sensor::highlight::deferred(metadata, settings.highlight_threshold_ev)
-                    .map(Arc::new)
             })?,
         };
-        Some(Highlights::Standard { prepared })
+        let donor_limit = (settings.processing_quality == crate::render::ProcessingQuality::Speed)
+            .then_some(SPEED_HIGHLIGHT_DONORS);
+        Some(Highlights::Standard(
+            prepared.on_grid(grid).with_donor_limit(donor_limit),
+        ))
     } else {
         None
     };

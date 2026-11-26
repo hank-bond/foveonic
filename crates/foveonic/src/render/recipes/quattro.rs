@@ -643,6 +643,7 @@ fn compose(
                 metadata,
                 controls.chroma as u8,
                 grid,
+                settings.processing_quality,
             )?)),
             &[noise_input],
         )?
@@ -719,6 +720,7 @@ fn compose(
         detail: 1.,
         residual_level,
         grid,
+        quality: settings.processing_quality,
     };
     let reconstruction = if settings.is_monochrome() {
         monochrome::prepare_stage2b(metadata, reconstruction_controls, color_mode)?
@@ -734,12 +736,21 @@ fn compose(
     if reduced {
         reconstruction_view.crop = output_geometry.bounds(reconstruction_view.crop);
     }
+    let reference_sharpening = settings.sharpening_enabled
+        && settings.photographic.sharpening.method == crate::render::PhotographicMethod::Reference;
+    // A full native render lets doubled reconstruction retire before residual RGB
+    // allocates. Reference sharpening already runs mask and detail work in between.
+    let wait_for_reconstruction = grid.is_native()
+        && settings.preview_region.is_none()
+        && !reference_sharpening
+        && reconstruction.reconstruct.doubles_output();
     let (reconstructed, detail) = stage2b::build(
         &mut graph,
         &signals,
         highlight_mask,
         reconstruction,
         reconstruction_view,
+        wait_for_reconstruction,
     )?;
     finish!(reconstructed);
     let spatial_input = if settings.is_monochrome() {
@@ -780,9 +791,7 @@ fn compose(
             region: region.as_ref().map(|r| r.physical),
         }
     };
-    let sharpened = if !settings.sharpening_enabled
-        || settings.photographic.sharpening.method == crate::render::PhotographicMethod::Universal
-    {
+    let sharpened = if !reference_sharpening {
         stage3::build_contrast(
             &mut graph,
             metadata,
@@ -812,16 +821,9 @@ fn compose(
     finish!(sharpened);
     // The same sharpening base selects the proportional table and the optional
     // per-channel amount. Residual restoration remains a separate control.
-    let amount = stage3::color_sharpen_amount(
-        metadata,
-        color_mode,
-        settings.effective_sharpen_amount(metadata)?,
-    )?;
+    let amount = stage3::color_sharpen_amount(metadata, color_mode, spatial_controls.sharpen_base)?;
     let amount = amount * grid.factor().sqrt();
-    let sharpened = if amount > 0.
-        && !settings.is_monochrome()
-        && settings.photographic.sharpening.method == crate::render::PhotographicMethod::Reference
-    {
+    let sharpened = if amount > 0. && !settings.is_monochrome() && reference_sharpening {
         graph.add(
             Operation::ColorSharpen(crate::nodes::finish::color_sharpen::Params::new(
                 [params.source[0], params.source[1]],

@@ -1,10 +1,14 @@
 struct Params {
-    shape: vec4<u32>, candidates: vec4<u32>
+    width: u32, first_job: u32
+}
+struct Job {
+    first_point: u32, point_count: u32, first_candidate: u32, candidate_count: u32
 }
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> points: array<vec4<u32>>;
 @group(0) @binding(2) var<storage, read> candidates: array<u32>;
 @group(0) @binding(3) var<storage, read_write> blue: array<f32>;
+@group(0) @binding(4) var<storage, read> jobs: array<Job>;
 const CANDIDATE_LANES = 256u;
 const PATCH_RADIUS = 2;
 const PATCH_SIDE = 5u;
@@ -15,13 +19,14 @@ const TARGET_TERMS = ORIENTATION_COUNT * PATCH_SAMPLES;
 var<workgroup> target_terms: array<vec2<f32>, TARGET_TERMS>;
 var<workgroup> scores: array<f32, CANDIDATE_LANES>;
 var<workgroup> choices: array<u32, CANDIDATE_LANES>;
+var<workgroup> current_job: Job;
 const TRANSFORMS: array<vec4<i32>, ORIENTATION_COUNT> = array<vec4<i32>, ORIENTATION_COUNT>(
     vec4(1, 0, 0, 1), vec4(0, -1, 1, 0), vec4(0, 1, 1, 0),
     vec4(1, 0, 0, -1), vec4(-1, 0, 0, 1), vec4(-1, 0, 0, -1),
 );
 
 fn position(i: u32, dx: i32, dy: i32)->u32 {
-    return u32(i32(i)+dy*i32(params.shape.x)+dx);
+    return u32(i32(i)+dy*i32(params.width)+dx);
 }
 
 fn patch_score(candidate: u32)->f32 {
@@ -44,9 +49,13 @@ fn patch_score(candidate: u32)->f32 {
 
 @compute @workgroup_size(CANDIDATE_LANES)
 
-fn luma_cluster(@builtin(local_invocation_index) lane: u32) {
-    for (var p = 0u;p<params.shape.w;p++) {
-        let point = points[params.shape.z+p];
+fn luma_cluster(@builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) group: vec3<u32>) {
+    if lane == 0u {
+        current_job = jobs[params.first_job + group.x];
+    }
+    let job = workgroupUniformLoad(&current_job);
+    for (var p = 0u;p<job.point_count;p++) {
+        let point = points[job.first_point+p];
         // Reload after each ordered repair so later points see its correction.
         if lane < TARGET_TERMS {
             let m = TRANSFORMS[lane / PATCH_SAMPLES];
@@ -63,8 +72,8 @@ fn luma_cluster(@builtin(local_invocation_index) lane: u32) {
         workgroupBarrier();
         var best = 3.402823e38;
         var choice = 0xffffffffu;
-        for (var candidate = lane;candidate<params.candidates.y;candidate += CANDIDATE_LANES) {
-            let score = patch_score(candidates[params.candidates.x+candidate]);
+        for (var candidate = lane;candidate<job.candidate_count;candidate += CANDIDATE_LANES) {
+            let score = patch_score(candidates[job.first_candidate+candidate]);
             if score<best {
                 best = score;
                 choice = candidate;
@@ -86,7 +95,7 @@ fn luma_cluster(@builtin(local_invocation_index) lane: u32) {
         if lane == 0u {
             let selected = choices[0];
             if selected != 0xffffffffu {
-                blue[point.x] = blue[candidates[params.candidates.x+selected]];
+                blue[point.x] = blue[candidates[job.first_candidate+selected]];
             } else {
                 blue[point.x] = 0.;
             }

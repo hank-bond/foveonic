@@ -22,14 +22,17 @@ fn add(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 fn multiply(value: vec2<f32>, factor: f32) -> vec2<f32> {
     return add(product(value.x, factor), product(value.y, factor));
 }
+fn write_converted(i: u32, color: vec3<f32>) {
+    for (var channel = 0u; channel < 3u; channel++) {
+        let row = channel * 3u;
+        let first = add(multiply(matrix[row + 1u], color.y), multiply(matrix[row], color.x));
+        let result = add(first, multiply(matrix[row + 2u], color.z));
+        destination[i + channel] = fma(1.0, result.x, result.y);
+    }
+}
 @compute @workgroup_size(8, 8)
 fn uv_convert(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.shape.x || id.y >= params.shape.y { return; }
     let i = (id.y * params.shape.x + id.x) * 3u;
-    for (var channel = 0u; channel < 3u; channel++) {
-        let row = channel * 3u;
-        let first = add(multiply(matrix[row + 1u], source[i + 1u]), multiply(matrix[row], source[i]));
-        let result = add(first, multiply(matrix[row + 2u], source[i + 2u]));
-        destination[i + channel] = fma(1.0, result.x, result.y);
-    }
+    write_converted(i, vec3<f32>(source[i], source[i + 1u], source[i + 2u]));
 }

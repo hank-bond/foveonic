@@ -39,8 +39,9 @@ fn complete_reference_conversion_and_classification_fixtures() {
         let yuv = gpu
             .upload("UV reference YUV", bytemuck::cast_slice::<u8, f32>(&yuv))
             .unwrap();
-        for (input, inverse, expected) in [(&rgb, false, "yuv"), (&yuv, true, "restored")] {
-            let output = convert(&gpu, input, extent, inverse, &mut Default::default()).unwrap();
+        for (input, matrix, expected) in [(&rgb, RGB_TO_YUV, "yuv"), (&yuv, YUV_TO_RGB, "restored")]
+        {
+            let output = convert(&gpu, input, extent, matrix, &mut Default::default()).unwrap();
             let actual = gpu.readback(&output).unwrap();
             compare(
                 fixture["name"].as_str().unwrap(),

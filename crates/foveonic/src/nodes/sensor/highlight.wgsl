@@ -1,7 +1,7 @@
 // Reference clipped-layer restoration with immutable original saturation
 // provenance and stable row-major donor accumulation. Adapted with permission
 // from Foveonic highlight.rs at e47af35, including the owner's existing changes.
-struct Params {source:vec4<u32>,area:vec4<u32>,value:vec4<f32>};
+struct Params {extent:vec2<u32>, donor_step:u32, donor_columns:u32, area:vec4<u32>, value:vec4<f32>};
 @group(0) @binding(0) var<storage,read> original:array<u32>;
 @group(0) @binding(1) var<storage,read_write> flags:array<u32>;
 @group(0) @binding(2) var<uniform> params:Params;
@@ -19,7 +19,7 @@ var<workgroup> ranks:array<u32,256>;
 var<workgroup> histogram:array<atomic<u32>,256>;
 var<workgroup> donor_range:vec2<u32>;
 var<workgroup> donor_rgb:array<vec3<f32>,128>;
-fn in_image(xy:vec2<u32>)->bool{return xy.x<params.source.x && xy.y<params.source.y;}
+fn in_image(xy:vec2<u32>)->bool{return xy.x<params.extent.x && xy.y<params.extent.y;}
 fn work(xy:vec2<u32>)->bool{return all(xy>=params.area.xy) && all(xy<=params.area.zw);}
 fn color(p:u32)->vec3<f32>{return vec3(pixels[p*3u],pixels[p*3u+1u],pixels[p*3u+2u]);}
 // Compare positive normal f32 values against an integer boundary no greater than 256.
@@ -45,11 +45,11 @@ fn donor_bucket(rgb:vec3<f32>)->u32{
 fn clipped(p:u32)->u32 { return original[p]; }
 @compute @workgroup_size(8,8)
 fn connected_flags(@builtin(global_invocation_id)id:vec3<u32>){
-    let xy=id.xy;if !in_image(xy){return;}let p=xy.y*params.source.x+xy.x;var connected=clipped(p);
-    if params.value.w==0.0 && all(xy>=vec2(1u)) && xy.x+1u<params.source.x && xy.y+1u<params.source.y{
+    let xy=id.xy;if !in_image(xy){return;}let p=xy.y*params.extent.x+xy.x;var connected=clipped(p);
+    if params.value.w==0.0 && all(xy>=vec2(1u)) && xy.x+1u<params.extent.x && xy.y+1u<params.extent.y{
         var neighbors=0u;
         for(var dy=-1;dy<=1;dy++){for(var dx=-1;dx<=1;dx++){
-            if dx!=0 || dy!=0{let q=vec2<i32>(xy)+vec2(dx,dy);neighbors|=clipped(u32(q.y)*params.source.x+u32(q.x));}
+            if dx!=0 || dy!=0{let q=vec2<i32>(xy)+vec2(dx,dy);neighbors|=clipped(u32(q.y)*params.extent.x+u32(q.x));}
         }}
         // Connected flags keep each other, so only originally isolated flags can
         // disappear. That lets us read an unchanged map in parallel without
@@ -63,48 +63,66 @@ fn neighborhood_map(@builtin(global_invocation_id)id:vec3<u32>){
     let xy=id.xy;if !in_image(xy){return;}var marked=false;
     for(var dy=-radius();dy<=radius();dy++){for(var dx=-radius();dx<=radius();dx++){
         let q=vec2<i32>(xy)+vec2(dx,dy);
-        if all(q>=vec2(radius())) && q.x<i32(params.source.x)-radius() && q.y<i32(params.source.y)-radius(){
-            if countOneBits(flags[u32(q.y)*params.source.x+u32(q.x)])>=2u{marked=true;}
+        if all(q>=vec2(radius())) && q.x<i32(params.extent.x)-radius() && q.y<i32(params.extent.y)-radius(){
+            if countOneBits(flags[u32(q.y)*params.extent.x+u32(q.x)])>=2u{marked=true;}
         }
     }}
-    map[xy.y*params.source.x+xy.x]=select(0.0,1.0,marked);
+    map[xy.y*params.extent.x+xy.x]=select(0.0,1.0,marked);
 }
 fn radius()->i32{return select(2,i32(params.value.z),params.value.z>0.0);}
 fn density(xy:vec2<u32>)->f32{
     var sum=0.0;
     for(var dy=-radius();dy<=radius();dy++){for(var dx=-radius();dx<=radius();dx++){
-        let q=vec2<i32>(xy)+vec2(dx,dy);sum+=map[u32(q.y)*params.source.x+u32(q.x)];
+        let q=vec2<i32>(xy)+vec2(dx,dy);sum+=map[u32(q.y)*params.extent.x+u32(q.x)];
     }}
     return sum*select(0.04,params.value.y,params.value.z>0.0);
 }
 @compute @workgroup_size(8,8)
 fn density_field(@builtin(global_invocation_id)id:vec3<u32>){
     let xy=id.xy;if !in_image(xy){return;}var value=0.0;
-    if all(xy>=vec2(u32(radius()))) && xy.x+u32(radius())<params.source.x && xy.y+u32(radius())<params.source.y{value=density(xy);}
-    output[xy.y*params.source.x+xy.x]=value;
+    if all(xy>=vec2(u32(radius()))) && xy.x+u32(radius())<params.extent.x && xy.y+u32(radius())<params.extent.y{value=density(xy);}
+    output[xy.y*params.extent.x+xy.x]=value;
+}
+fn donor_pixel(candidate:u32)->u32 {
+    let step = params.donor_step;
+    if step == 1u { return candidate; }
+    let cell = vec2(candidate % params.donor_columns, candidate / params.donor_columns);
+    let xy = min(cell * step + step / 2u, params.extent - 1u);
+    return xy.y * params.extent.x + xy.x;
 }
 @compute @workgroup_size(256)
 fn donor_marks(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3<u32>){
     let p=id.x;var donor=false;
-    if p<params.source.z{
-        let xy=vec2(p%params.source.x,p/params.source.x);
-        if work(xy) && (flags[p]&1u)==0u{let rgb=color(p);donor=rgb.x+rgb.y>4000.0;}
+    if p<arrayLength(&marks){
+        let pixel=donor_pixel(p);let xy=vec2(pixel%params.extent.x,pixel/params.extent.x);
+        if work(xy) && (flags[pixel]&1u)==0u{let rgb=color(pixel);donor=rgb.x+rgb.y>4000.0;}
     }
     ranks[local]=select(0u,1u,donor);workgroupBarrier();
     for(var step=1u;step<256u;step*=2u){var previous=0u;if local>=step{previous=ranks[local-step];}workgroupBarrier();ranks[local]+=previous;workgroupBarrier();}
-    if p<params.source.z{marks[p]=select(0u,ranks[local],donor);}
+    if p<arrayLength(&marks){marks[p]=select(0u,ranks[local],donor);}
     if local==255u{counts[group.x]=ranks[local];}
 }
 @compute @workgroup_size(1)
-fn donor_prefix(){var sum=0u;for(var i=0u;i<params.source.w;i++){let count=counts[i];counts[i]=sum;sum+=count;}counts[params.source.w]=sum;}
+fn donor_prefix() {
+    let blocks = arrayLength(&counts) - 1u;
+    var sum = 0u;
+    for (var i = 0u; i < blocks; i++) {
+        let count = counts[i];
+        counts[i] = sum;
+        sum += count;
+    }
+    counts[blocks] = sum;
+}
+// The final prefix entry holds the total across all blocks.
+fn donor_total() -> u32 { return counts[arrayLength(&counts) - 1u]; }
 @compute @workgroup_size(256)
 fn donor_scatter(@builtin(global_invocation_id)id:vec3<u32>,@builtin(workgroup_id)group:vec3<u32>){
-    let p=id.x;if p>=params.source.z{return;}let rank=marks[p];if rank!=0u{donors[counts[group.x]+rank-1u]=p;}
+    let p=id.x;if p>=arrayLength(&marks){return;}let rank=marks[p];if rank!=0u{donors[counts[group.x]+rank-1u]=donor_pixel(p);}
 }
 @compute @workgroup_size(256)
 fn bin_histogram(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3<u32>){
     atomicStore(&histogram[local],0u);workgroupBarrier();
-    if id.x<counts[params.source.w]{
+    if id.x<donor_total(){
         let rgb=max(color(donors[id.x]),vec3(1.0));let bucket=donor_bucket(rgb);
         // Original rank scratch is no longer needed after donor_scatter.
         marks[id.x]=bucket;atomicAdd(&histogram[bucket],1u);
@@ -113,7 +131,7 @@ fn bin_histogram(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invoc
 }
 @compute @workgroup_size(256)
 fn bin_prefix(@builtin(local_invocation_index)bucket:u32){
-    let blocks=(counts[params.source.w]+255u)/256u;var sum=0u;
+    let blocks=(donor_total()+255u)/256u;var sum=0u;
     for(var block=0u;block<blocks;block++){
         let index=block*256u+bucket;let count=bin_counts[index];bin_counts[index]=sum;sum+=count;
     }
@@ -123,7 +141,7 @@ fn bin_prefix(@builtin(local_invocation_index)bucket:u32){
 }
 @compute @workgroup_size(256)
 fn bin_scatter(@builtin(global_invocation_id)id:vec3<u32>,@builtin(local_invocation_index)local:u32,@builtin(workgroup_id)group:vec3<u32>){
-    let valid=id.x<counts[params.source.w];var bucket=256u;if valid{bucket=marks[id.x];}
+    let valid=id.x<donor_total();var bucket=256u;if valid{bucket=marks[id.x];}
     ranks[local]=bucket;workgroupBarrier();
     if valid{
         var prior=0u;for(var i=0u;i<local;i++){if ranks[i]==bucket{prior+=1u;}}
@@ -159,7 +177,7 @@ fn table_interpolation(){
 }
 @compute @workgroup_size(8,8)
 fn restore(@builtin(global_invocation_id)id:vec3<u32>){
-    let xy=id.xy;if !in_image(xy){return;}let p=xy.y*params.source.x+xy.x;
+    let xy=id.xy;if !in_image(xy){return;}let p=xy.y*params.extent.x+xy.x;
     if !work(xy){for(var c=0u;c<3u;c++){output[p*3u+c]=pixels[p*3u+c];}return;}
     let rgb=color(p);var blue=rgb.z;
     if lookup[0]>0.0 && (flags[p]&1u)!=0u{

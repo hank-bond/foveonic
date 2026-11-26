@@ -80,14 +80,100 @@ fn threshold_offsets_scale_only_camera_threshold_and_preserve_reference_defaults
 }
 
 #[test]
+fn donor_budget_uses_the_working_extent_and_preserves_quality() {
+    use crate::render::{Scale, WorkingGrid};
+
+    const LIMIT: u32 = 1 << 20;
+    let mut native = Prepared::default();
+    native.params.extent = [2049, 2048];
+    native.params.area = [2, 2, 2046, 2045];
+    for (extent, step) in [
+        ([1024, 1024], 1),
+        ([1025, 1024], 2),
+        ([2048, 2048], 2),
+        ([2049, 2048], 4),
+    ] {
+        assert_eq!(donor_step(extent, Some(LIMIT)), step);
+        assert_eq!(donor_step(extent, None), 1);
+    }
+    let reduced = WorkingGrid::new([2049, 2048], Scale::new(4).unwrap(), 1).unwrap();
+    let speed = native.clone().with_donor_limit(Some(LIMIT));
+    let quality = native.clone();
+    assert_ne!(speed.key(), quality.key());
+    assert_eq!(speed.processing_params().donor_step, 4);
+    assert_eq!(speed.processing_params().donor_columns, 513);
+    let reduced_speed = speed.on_grid(Some(reduced));
+    let reduced_quality = native.on_grid(Some(reduced));
+    assert_eq!(reduced_speed.processing_params().donor_step, 1);
+    assert_eq!(reduced_speed.processing_params().donor_columns, 513);
+    assert_eq!(reduced_speed.key(), reduced_quality.key());
+}
+
+#[test]
+#[ignore = "requires a working GPU adapter"]
+fn sampled_donors_restore_clipped_pixels_between_sampling_points() {
+    let gpu = Gpu::test_executor();
+    let [w, h] = [65u32, 47u32];
+    let mut flags = vec![0; (w * h) as usize];
+    let clipped = (w * 20 + 20) as usize;
+    flags[clipped..clipped + 2].fill(1);
+    let mut prepared = Prepared {
+        params: Params {
+            extent: [w, h],
+            area: [2, 2, w - 3, h - 3],
+            value: [7000., 0., 0., 0.],
+            donor_step: 0,
+            donor_columns: 0,
+        },
+        flags: Some(flags.into()),
+        grid: None,
+        donor_limit: None,
+    };
+    let samples: Vec<f32> = (0..w * h)
+        .flat_map(|p| {
+            let sampled = (p % w) % 4 == 2 && (p / w) % 4 == 2;
+            [3000., 3000., if sampled { 1500. } else { 750. }]
+        })
+        .collect();
+    let input = gpu.upload("Donor sampling fixture", &samples).unwrap();
+    // 300 sites puts 65 x 47 on a step of 4; no limit uses every pixel.
+    for (limit, step) in [(Some(300), 4), (None, 1)] {
+        prepared.donor_limit = limit;
+        assert_eq!(prepared.processing_params().donor_step, step);
+        let restored = apply(
+            &gpu,
+            Some(&input),
+            &prepared,
+            false,
+            &mut Profile::default(),
+        )
+        .unwrap()
+        .pixels
+        .unwrap();
+        let pixels = gpu.readback(&restored).unwrap();
+        let rgb = bytemuck::cast_slice::<u8, f32>(&pixels);
+        assert_eq!(&rgb[clipped * 3..clipped * 3 + 2], &[3000., 3000.]);
+        let blue = rgb[clipped * 3 + 2];
+        if step == 4 {
+            assert_eq!(blue, 1500.);
+        } else {
+            assert!((750. ..850.).contains(&blue));
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires a working GPU adapter"]
 fn gpu_threshold_changes_only_brightness_blend_and_keeps_density_and_input() {
     let gpu = Gpu::test_executor();
     let count = 64 * 128;
     let mut prepared = Prepared {
         grid: None,
+        donor_limit: None,
         params: Params {
-            source: [64, 128, count, count.div_ceil(256)],
+            extent: [64, 128],
+            donor_step: 0,
+            donor_columns: 0,
             area: [8, 2, 48, 97],
             value: [5500., 1., 0., 0.],
         },
@@ -189,15 +275,9 @@ fn donor_bins_keep_integer_boundaries_and_adjacent_floats_distinct() {
     let counts = gpu.upload("Boundary donor total", &[0_u32, 12]).unwrap();
     let mut marks = gpu.storage("Boundary bins", 12 * 4).unwrap();
     let mut histogram = gpu.storage("Boundary histogram", 256 * 4).unwrap();
-    let params = gpu.uniform(&Params {
-        source: [12, 1, 12, 1],
-        area: [0; 4],
-        value: [0., 1., 0., 0.],
-    });
     gpu.dispatch(
         Kernel::HighlightBinHistogram,
         &mut [
-            (2, Read(&params)),
             (5, Read(&input)),
             (6, Write(marks.write())),
             (7, Read(&counts)),
@@ -252,15 +332,9 @@ fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
     let mut lookup = gpu
         .upload("Ordered bin sums and counts", &[123_f32; 512])
         .unwrap();
-    let params = gpu.uniform(&Params {
-        source: [128, 64, 8192, 32],
-        area: [0; 4],
-        value: [0., 1., 0., 0.],
-    });
     gpu.dispatch(
         Kernel::HighlightBinHistogram,
         &mut [
-            (2, Read(&params)),
             (5, Read(&input)),
             (6, Write(marks.write())),
             (7, Read(&counts)),
@@ -273,7 +347,6 @@ fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
     gpu.dispatch(
         Kernel::HighlightBinPrefix,
         &mut [
-            (2, Read(&params)),
             (7, Read(&counts)),
             (11, Write(histogram.write())),
             (12, Write(starts.write())),
@@ -284,7 +357,6 @@ fn donor_bin_grouping_is_stable_across_blocks_partial_tail_and_empty_bins() {
     gpu.dispatch(
         Kernel::HighlightBinScatter,
         &mut [
-            (2, Read(&params)),
             (6, Read(&marks)),
             (7, Read(&counts)),
             (8, Read(&donors)),
@@ -447,8 +519,11 @@ fn gpu_highlight_restoration_matches_native_saturation_and_density() {
         .collect();
     let p = Prepared {
         grid: None,
+        donor_limit: None,
         params: Params {
-            source: [w, h, w * h, (w * h).div_ceil(256)],
+            extent: [w, h],
+            donor_step: 0,
+            donor_columns: 0,
             area: values(&f["area"])
                 .into_iter()
                 .map(|v| v as u32)
@@ -547,12 +622,15 @@ fn preview_original_clipping_survives_averaging() {
             let before = gpu.readback(&input).unwrap();
             let recovery = Prepared {
                 params: Params {
-                    source: [64, 64, count, count.div_ceil(256)],
+                    extent: [64, 64],
+                    donor_step: 0,
+                    donor_columns: 0,
                     area: [2, 2, 61, 61],
                     value: [20000., 0., 0., 0.],
                 },
                 flags: Some(flags.into()),
                 grid: Some(grid),
+                donor_limit: None,
             };
             let actual = apply(
                 &gpu,

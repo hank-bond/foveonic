@@ -74,27 +74,43 @@ impl Params {
 
 pub(crate) fn rgb(
     gpu: &Gpu,
-    input: &ReadGuard,
+    mut input: ReadGuard,
     residual: &ReadGuard,
     params: &Params,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
-    params.check_inputs(input, residual)?;
-    let [w, h] = params.extent();
+    params.check_inputs(&input, residual)?;
+    let [width, height] = params.extent();
+    let groups = [width.div_ceil(8), height.div_ceil(8)];
     let uniform = gpu.uniform(params);
-    let mut output = gpu.storage("Residual-adjusted code RGB", input.size())?;
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
-    gpu.dispatch(
-        Kernel::ResidualFinish,
-        &mut [
-            (0, Read(input)),
-            (1, Read(residual)),
-            (3, Read(&uniform)),
-            (4, Write(output.write())),
-        ],
-        [w.div_ceil(8), h.div_ceil(8)],
-        &mut trace,
-    );
+    let output = if input.exclusive() {
+        gpu.dispatch(
+            Kernel::ResidualFinishInPlace,
+            &mut [
+                (1, Read(residual)),
+                (3, Read(&uniform)),
+                (4, Write(input.write())),
+            ],
+            groups,
+            &mut trace,
+        );
+        input
+    } else {
+        let mut output = gpu.storage("Residual-adjusted code RGB", input.size())?;
+        gpu.dispatch(
+            Kernel::ResidualFinish,
+            &mut [
+                (0, Read(&input)),
+                (1, Read(residual)),
+                (3, Read(&uniform)),
+                (4, Write(output.write())),
+            ],
+            groups,
+            &mut trace,
+        );
+        output
+    };
     gpu.finish_trace(&trace, profile)?;
     Ok(output)
 }
@@ -130,6 +146,7 @@ pub(crate) fn detail(
     gpu.finish_trace(&trace, profile)?;
     Ok(output)
 }
+
 #[cfg(test)]
 #[path = "residual_finish_test.rs"]
 pub(crate) mod tests;

@@ -3,6 +3,7 @@
 use crate::{
     graph::{Graph, Operation},
     nodes::color::{blue_guided_reconstruct, histogram_bilateral, residual_finish},
+    render::ProcessingQuality,
     source::{Metadata, Result},
 };
 
@@ -17,6 +18,8 @@ const DETAIL_ISO_NORMALIZATION: f32 = 36.;
 // Smooth/Crisp presets select these ordinary single-input residual powers.
 const RESIDUAL_POWERS: [f32; 7] = [0., 0., 0., 0., 1., 1.25, 1.5];
 const BLUE_FILTER_KERNEL: u32 = 11;
+const SPEED_BLUE_FILTER_KERNEL: u32 = 7;
+const FULL_BLUE_FILTER_ISO: f64 = 800.;
 const BLUE_FILTER_RANGE_CUTOFF: f32 = 0.25;
 const BLUE_FILTER_STRENGTHS: [f32; 5] = [0.2, 0.125, 0.1, 0.075, 0.05];
 // Native Stage2B output-code normalization, independent of the sensor ISO gain.
@@ -48,6 +51,7 @@ pub(super) struct Controls {
     pub detail: f32,
     pub residual_level: u8,
     pub grid: super::WorkingGrid,
+    pub quality: ProcessingQuality,
 }
 impl Default for Controls {
     fn default() -> Self {
@@ -56,6 +60,7 @@ impl Default for Controls {
             detail: 1.,
             residual_level: 6,
             grid: super::WorkingGrid::NATIVE,
+            quality: ProcessingQuality::Quality,
         }
     }
 }
@@ -79,14 +84,8 @@ impl Prepared {
 /// skips blue filtering for ordinary non-Portrait modes. Portrait retains its
 /// separate adaptive blend even at zero.
 pub(super) fn prepare(metadata: &Metadata, controls: Controls, mode: &str) -> Result<Prepared> {
-    if !super::defects::supported(metadata) {
-        return Err("reconstruction preparation requires supported Quattro input".into());
-    }
+    let capture_iso = capture_iso(metadata)?;
     let output_extent = super::output_grid(metadata, controls.grid)?.extent;
-    let capture_iso = metadata.scalar("CaptureISO")?;
-    if !capture_iso.is_finite() || capture_iso <= 0. {
-        return Err("invalid reconstruction capture ISO".into());
-    }
     let iso_gain = (capture_iso / 100.) as f32;
     let low = metadata.is_quattro_low();
     let (sharp_threshold, adaptive) = detail_controls(iso_gain, controls, mode == "Portrait", low)?;
@@ -108,7 +107,7 @@ pub(super) fn prepare(metadata: &Metadata, controls: Controls, mode: &str) -> Re
         ))
     };
     Ok(Prepared {
-        reconstruct: prepare_reconstruction_on_grid(metadata, controls.luma, blend, controls.grid)?,
+        reconstruct: prepare_reconstruction(metadata, controls, capture_iso, blend)?,
         finish: residual_finish::Params::new(
             output_extent,
             iso_gain,
@@ -120,21 +119,27 @@ pub(super) fn prepare(metadata: &Metadata, controls: Controls, mode: &str) -> Re
     })
 }
 
+pub(super) fn capture_iso(metadata: &Metadata) -> Result<f64> {
+    if !super::defects::supported(metadata) {
+        return Err("reconstruction preparation requires supported Quattro input".into());
+    }
+    let iso = metadata.scalar("CaptureISO")?;
+    if !iso.is_finite() || iso <= 0. {
+        return Err("invalid reconstruction capture ISO".into());
+    }
+    Ok(iso)
+}
+
 /// A supplied blend table enables blue filtering independently of the slider's
 /// numerical level. The caller selects the source response, including level zero.
 pub(super) fn prepare_reconstruction(
     metadata: &Metadata,
-    step: u8,
+    controls: Controls,
+    capture_iso: f64,
     blend: Option<Vec<f32>>,
 ) -> Result<blue_guided_reconstruct::Prepared> {
-    prepare_reconstruction_on_grid(metadata, step, blend, super::WorkingGrid::NATIVE)
-}
-pub(super) fn prepare_reconstruction_on_grid(
-    metadata: &Metadata,
-    step: u8,
-    blend: Option<Vec<f32>>,
-    grid: super::WorkingGrid,
-) -> Result<blue_guided_reconstruct::Prepared> {
+    let step = controls.luma;
+    let grid = controls.grid;
     let output_extent = super::output_grid(metadata, grid)?.extent;
     let color_extent = super::color_grid(metadata, grid)?.extent;
     let energy = super::pool_noise_energy([metadata.width as u32, metadata.height as u32], grid);
@@ -147,7 +152,7 @@ pub(super) fn prepare_reconstruction_on_grid(
         }
     };
     if super::same_resolution(metadata, grid) {
-        let iso_gain = (metadata.scalar("CaptureISO")? / 100.) as f32;
+        let iso_gain = (capture_iso / 100.) as f32;
         let filter = blend
             .map(|adaptive| {
                 let strengths = if iso_gain >= 8. {
@@ -174,11 +179,15 @@ pub(super) fn prepare_reconstruction_on_grid(
             .transpose()?;
         return blue_guided_reconstruct::Prepared::native_size(color_extent, noise, filter);
     }
+    let mut window = kernel(BLUE_FILTER_KERNEL, grid);
+    if controls.quality == ProcessingQuality::Speed && capture_iso < FULL_BLUE_FILTER_ISO {
+        window = window.min(SPEED_BLUE_FILTER_KERNEL);
+    }
     let filter = blend
         .map(|table| {
             histogram_bilateral::Prepared::new(
                 output_extent,
-                kernel(BLUE_FILTER_KERNEL, grid),
+                window,
                 noise,
                 BLUE_FILTER_STRENGTHS[usize::from(step)],
                 BLUE_FILTER_RANGE_CUTOFF,
@@ -316,6 +325,7 @@ pub(super) fn build(
     highlight_mask: usize,
     prepared: Prepared,
     view: crate::image::View,
+    wait_for_reconstruction: bool,
 ) -> Result<(usize, usize)> {
     let color_extent = prepared.reconstruct.extent();
     let double_mask = prepared.reconstruct.doubles_output();
@@ -352,7 +362,10 @@ pub(super) fn build(
         &[reconstructed, residual, mask],
     )?;
     let rgb = graph.add(
-        Operation::ResidualRgb(prepared.finish),
+        Operation::ResidualRgb {
+            params: prepared.finish,
+            wait_for_reconstruction,
+        },
         &[reconstructed, residual],
     )?;
     graph.set_view(detail, view);
@@ -405,6 +418,7 @@ mod tests {
                     detail: 1.,
                     residual_level: case["residual_level"].as_u64().unwrap() as u8,
                     grid: super::super::WorkingGrid::NATIVE,
+                    quality: ProcessingQuality::Quality,
                 },
                 case["portrait"].as_bool().unwrap(),
                 false,
@@ -443,6 +457,7 @@ mod tests {
             residual_level: std::env::var("QUATTRO_RESIDUAL_LEVEL")
                 .map_or(6, |v| v.parse().unwrap()),
             grid: super::super::WorkingGrid::NATIVE,
+            quality: ProcessingQuality::Quality,
         };
         let mode = std::env::var("QUATTRO_MODE").unwrap_or_else(|_| "Standard".into());
         let prepared = prepare(&source.metadata, controls, &mode).unwrap();
@@ -543,6 +558,7 @@ mod tests {
             detail: 1.,
             residual_level: 6,
             grid: super::super::WorkingGrid::NATIVE,
+            quality: ProcessingQuality::Quality,
         };
         let (threshold, adaptive) = detail_controls(1., selected, false, false).unwrap();
         assert_eq!(threshold, 19.2);
@@ -565,6 +581,7 @@ mod tests {
                 detail: 1.,
                 residual_level: 6,
                 grid: super::super::WorkingGrid::NATIVE,
+                quality: ProcessingQuality::Quality,
             },
             false,
             false
@@ -577,6 +594,7 @@ mod tests {
                 detail: f32::NAN,
                 residual_level: 6,
                 grid: super::super::WorkingGrid::NATIVE,
+                quality: ProcessingQuality::Quality,
             },
             false,
             false

@@ -105,35 +105,32 @@ pub(super) fn prepare_stage2b(
     controls: super::stage2b::Controls,
     mode: &str,
 ) -> Result<super::stage2b::Prepared> {
-    let mut prepared = super::stage2b::prepare(metadata, controls, mode)?;
-    let iso = (metadata.scalar("CaptureISO")? / 100.) as f32;
+    let capture_iso = super::stage2b::capture_iso(metadata)?;
+    let iso = (capture_iso / 100.) as f32;
     let (sharp, adaptive) =
         residual_controls(iso, controls, mode == "Portrait", metadata.is_quattro_low())?;
     let blend = Some(blue_blend(controls.luma, iso, mode == "Portrait"));
-    prepared.reconstruct = if controls.grid.is_native() {
-        super::stage2b::prepare_reconstruction(metadata, controls.luma, blend)?
-    } else {
-        super::stage2b::prepare_reconstruction_on_grid(
+    Ok(super::stage2b::Prepared {
+        reconstruct: super::stage2b::prepare_reconstruction(
             metadata,
-            controls.luma,
+            controls,
+            capture_iso,
             blend,
-            controls.grid,
-        )?
-    };
-    prepared.finish = crate::nodes::color::residual_finish::Params::new(
-        super::output_grid(metadata, controls.grid)?.extent,
-        iso,
-        sharp
-            * super::pool_noise_energy(
-                [metadata.width as u32, metadata.height as u32],
-                controls.grid,
-            )
-            .sqrt() as f32,
-        0,
-        adaptive,
-        1.,
-    )?;
-    Ok(prepared)
+        )?,
+        finish: crate::nodes::color::residual_finish::Params::new(
+            super::output_grid(metadata, controls.grid)?.extent,
+            iso,
+            sharp
+                * super::pool_noise_energy(
+                    [metadata.width as u32, metadata.height as u32],
+                    controls.grid,
+                )
+                .sqrt() as f32,
+            0,
+            adaptive,
+            1.,
+        )?,
+    })
 }
 
 fn blue_blend(step: u8, iso: f32, portrait: bool) -> Vec<f32> {
@@ -537,7 +534,7 @@ mod tests {
             luma: 2,
             detail: 1.,
             residual_level: 3,
-            grid: super::super::WorkingGrid::NATIVE,
+            ..Default::default()
         };
         let low = residual_controls(1., controls, false, false).unwrap();
         assert_eq!(low.0, 16. * 1.2);

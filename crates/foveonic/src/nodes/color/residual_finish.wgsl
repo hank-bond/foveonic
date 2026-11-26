@@ -100,13 +100,7 @@ fn residual_sharp(@builtin(global_invocation_id) id: vec3<u32>) {
     destination[i] = sharp;
 }
 
-@compute @workgroup_size(8, 8)
-
-fn residual_finish(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.shape.x || id.y >= params.shape.y {
-        return;
-    }
-    let i = id.y*params.shape.x+id.x;
+fn residual_gain(i: u32) -> f32 {
     let r = residual[i];
     let adaptive = params.controls.z;
     var gain = 0.;
@@ -116,7 +110,33 @@ fn residual_finish(@builtin(global_invocation_id) id: vec3<u32>) {
     else {
         gain = divide(-r, plus(fma(r, adaptive, -r), -adaptive));
     }
+    return gain;
+}
+
+fn apply_residual_gain(gain: f32, value: f32) -> f32 {
+    return trunc(clamp(times(gain, value), 0., 65535.));
+}
+
+@compute @workgroup_size(8, 8)
+fn residual_finish(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.shape.x || id.y >= params.shape.y {
+        return;
+    }
+    let i = id.y*params.shape.x+id.x;
+    let gain = residual_gain(i);
     for (var c = 0u;c<3u;c++) {
-        destination[i*3u+c] = trunc(clamp(times(gain, source[i*3u+c]), 0., 65535.));
+        destination[i*3u+c] = apply_residual_gain(gain, source[i*3u+c]);
+    }
+}
+
+@compute @workgroup_size(8, 8)
+fn residual_finish_in_place(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= params.shape.x || id.y >= params.shape.y {
+        return;
+    }
+    let i = id.y*params.shape.x+id.x;
+    let gain = residual_gain(i);
+    for (var c = 0u;c<3u;c++) {
+        destination[i*3u+c] = apply_residual_gain(gain, destination[i*3u+c]);
     }
 }

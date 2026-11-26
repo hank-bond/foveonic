@@ -275,7 +275,7 @@ fn selected_full_native_stage2b_rgb_matches() {
     let adaptive = adaptive[0];
     let result = crate::nodes::color::residual_finish::rgb(
         &gpu,
-        &output.rgb,
+        output.rgb,
         &output.residual,
         &crate::nodes::color::residual_finish::Params::new(
             extent.map(|v| v * 2),

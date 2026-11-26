@@ -512,10 +512,9 @@ fn speckle_inputs_share_the_requested_working_grid() {
                     }
                     Operation::Highlights(highlights) => {
                         assert_eq!(highlights.grid.map_or(1, |g| g.scale.divisor()), divisor);
-                        let extent = highlights.grid.map_or(
-                            [highlights.params.source[0], highlights.params.source[1]],
-                            |g| g.extent,
-                        );
+                        let extent = highlights
+                            .grid
+                            .map_or(highlights.params.extent, |g| g.extent);
                         assert_eq!(extent, prepared.params.source[..2]);
                     }
                     _ => assert_eq!(divisor, 1, "native input reached reduced speckle node"),

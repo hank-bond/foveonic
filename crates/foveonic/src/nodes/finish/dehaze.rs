@@ -14,6 +14,11 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 const ESTIMATE_PARTITIONS: u32 = 16;
+const HISTOGRAM_BINS: u32 = 256;
+// Each histogram workgroup lane clears and flushes one bin and reads one column,
+// so a workgroup covers HISTOGRAM_BINS columns and HISTOGRAM_ROWS rows.
+const HISTOGRAM_ROWS: u32 = 16;
+const EXPANDED_MINIMUM_RADIUS: u32 = 16;
 
 fn tail_partitions(shape: [u32; 2]) -> u32 {
     (u64::from(shape[0]) * u64::from(shape[1]))
@@ -228,11 +233,6 @@ impl Estimate {
     }
     pub fn with_color_estimation(mut self, enabled: bool) -> Self {
         self.normalization[1] = f32::from(!enabled);
-        self.partitions[0] = if enabled && self.partitions[1] != 0 {
-            tail_partitions([self.shape[2], self.shape[3]])
-        } else {
-            ESTIMATE_PARTITIONS
-        };
         self
     }
     pub fn key(self) -> Key {
@@ -274,82 +274,96 @@ pub(crate) fn estimate(
     p: Estimate,
     profile: &mut Profile,
 ) -> Result<ReadGuard> {
-    estimate_impl(gpu, input, p, profile, true, p.selection[0] > 16)
+    if input.size() != u64::from(p.shape[0]) * u64::from(p.shape[1]) * 12 {
+        return Err("Dehaze analysis geometry mismatch".into());
+    }
+    if p.estimates_color() {
+        let radius = p.selection[0];
+        let offsets = (radius > EXPANDED_MINIMUM_RADIUS).then(|| minimum_offsets(radius));
+        estimate_color(gpu, input, p, offsets.as_deref(), profile)
+    } else {
+        estimate_brightness(gpu, input, p, profile)
+    }
 }
 
-fn estimate_impl(
+fn estimate_brightness(
     gpu: &Gpu,
     input: &ReadGuard,
     p: Estimate,
     profile: &mut Profile,
-    partitioned: bool,
-    expanded_minimum: bool,
 ) -> Result<ReadGuard> {
-    if input.size() != u64::from(p.shape[0]) * u64::from(p.shape[1]) * 12 {
-        return Err("Dehaze analysis geometry mismatch".into());
-    }
-    let count = u64::from(p.shape[2]) * u64::from(p.shape[3]);
     let uniform = gpu.uniform(&p);
-    let mut pixels = gpu.storage("Dehaze analysis pixels", count * 16)?;
-    let estimate_color = p.estimates_color();
     let mut output = gpu.storage("Dehaze estimate", 32)?;
-    let groups = [p.shape[2].div_ceil(8), p.shape[3].div_ceil(8)];
-    let offsets = minimum_offsets(p.selection[0]);
-    let minimum_passes = if !estimate_color {
-        0
-    } else if expanded_minimum {
-        offsets.len() as u32
-    } else {
-        2
-    };
-    let mut trace = gpu.trace(profile.mode.gpu(), 3 + minimum_passes);
+    let mut histogram = gpu.storage(
+        "Dehaze brightness histogram",
+        u64::from(HISTOGRAM_BINS) * 3 * 4,
+    )?;
+    let mut trace = gpu.trace(profile.mode.gpu(), 2);
+    gpu.dispatch(
+        Kernel::DehazeBrightnessHistogram,
+        &mut [
+            (0, Read(input)),
+            (1, Read(&uniform)),
+            (9, Write(histogram.write())),
+        ],
+        [
+            p.shape[2].div_ceil(HISTOGRAM_BINS),
+            p.shape[3].div_ceil(HISTOGRAM_ROWS),
+        ],
+        &mut trace,
+    );
+    gpu.dispatch(
+        Kernel::DehazeBrightnessEstimate,
+        &mut [
+            (1, Read(&uniform)),
+            (5, Write(output.write())),
+            (9, Read(&histogram)),
+        ],
+        [1, 1],
+        &mut trace,
+    );
+    gpu.finish_trace(&trace, profile)?;
+    Ok(output)
+}
+
+fn prepare_analysis_pixels(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    p: Estimate,
+    uniform: &ReadGuard,
+    trace: &mut GpuTrace,
+) -> Result<ReadGuard> {
+    let count = u64::from(p.shape[2]) * u64::from(p.shape[3]);
+    let mut pixels = gpu.storage("Dehaze analysis pixels", count * 16)?;
     gpu.dispatch(
         Kernel::DehazePrepare,
         &mut [
             (0, Read(input)),
-            (1, Read(&uniform)),
+            (1, Read(uniform)),
             (2, Write(pixels.write())),
         ],
-        groups,
-        &mut trace,
+        [p.shape[2].div_ceil(8), p.shape[3].div_ceil(8)],
+        trace,
     );
-    let dark = if estimate_color {
-        neighborhood_minimum(
-            gpu,
-            &pixels,
-            p,
-            &uniform,
-            &offsets,
-            expanded_minimum,
-            &mut trace,
-        )?
-    } else {
-        gpu.storage("Dehaze neighborhood minimum", 4)?
-    };
-    #[cfg(test)]
-    if !partitioned {
-        if p.selection[2] > 1000 {
-            return Err("serial Dehaze selection requires at most 1000 candidates".into());
-        }
-        gpu.dispatch(
-            Kernel::DehazeEstimate,
-            &mut [
-                (1, Read(&uniform)),
-                (2, Read(&pixels)),
-                (4, Read(&dark)),
-                (5, Write(output.write())),
-            ],
-            [1, 1],
-            &mut trace,
-        );
-        gpu.finish_trace(&trace, profile)?;
-        return Ok(output);
-    }
-    #[cfg(not(test))]
-    let _ = partitioned;
+    Ok(pixels)
+}
+
+fn estimate_color(
+    gpu: &Gpu,
+    input: &ReadGuard,
+    p: Estimate,
+    offsets: Option<&[u32]>,
+    profile: &mut Profile,
+) -> Result<ReadGuard> {
+    let uniform = gpu.uniform(&p);
+    let mut output = gpu.storage("Dehaze estimate", 32)?;
+    let minimum_passes = offsets.map_or(2, |steps| steps.len() as u32);
+    let mut trace = gpu.trace(profile.mode.gpu(), 3 + minimum_passes);
+    let pixels = prepare_analysis_pixels(gpu, input, p, &uniform, &mut trace)?;
+    let dark = neighborhood_minimum(gpu, &pixels, p, &uniform, offsets, &mut trace)?;
     {
         let partitions = p.partitions[0];
-        let tail_average = p.partitions[1] != 0 && estimate_color;
+        let tail_average = p.partitions[1] != 0;
         // Tail bins store a count and a two-word sum for each RGB channel.
         let mut heaps = gpu.storage(
             "haze candidate selection",
@@ -431,15 +445,14 @@ fn neighborhood_minimum(
     pixels: &ReadGuard,
     p: Estimate,
     uniform: &ReadGuard,
-    offsets: &[u32],
-    expanded: bool,
+    offsets: Option<&[u32]>,
     trace: &mut GpuTrace,
 ) -> Result<ReadGuard> {
     let count = u64::from(p.shape[2]) * u64::from(p.shape[3]);
     let groups = [p.shape[2].div_ceil(8), p.shape[3].div_ceil(8)];
     let mut dark = gpu.storage("Dehaze neighborhood minimum", count * 4)?;
     let mut horizontal = gpu.storage("Dehaze horizontal minimum", count * 4)?;
-    if expanded {
+    if let Some(offsets) = offsets {
         let first = gpu.uniform(&[p.shape[2], p.shape[3], offsets[0], 0]);
         gpu.dispatch(
             Kernel::DehazeMinimumPrepare,

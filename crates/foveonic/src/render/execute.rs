@@ -190,6 +190,35 @@ impl std::fmt::Display for SourceRequired {
 }
 impl std::error::Error for SourceRequired {}
 
+fn check_residual_extents(
+    params: &crate::nodes::color::residual_finish::Params,
+    inherited: [u32; 2],
+    gain: &Value,
+) -> Result<()> {
+    if inherited != params.extent() || gain.description.map(|d| d.extent) != Some(inherited) {
+        return Err("residual finishing requires matching RGB and gain extents".into());
+    }
+    Ok(())
+}
+
+/// The graph's last reader takes the value, so its node can reuse the buffer
+/// when no cache or inspector also holds it. Other readers share it.
+fn last_read_or_share(
+    values: &mut [Option<Value>],
+    consumers: &[usize],
+    id: usize,
+) -> crate::gpu::ReadGuard {
+    if consumers[id] == 1 {
+        values[id].take().expect("validated input is live").buffer
+    } else {
+        values[id]
+            .as_ref()
+            .expect("validated input is live")
+            .buffer
+            .clone()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Value {
     pub(crate) working_scale: super::Scale,
@@ -536,7 +565,7 @@ impl Traversal {
             .chain(self.scratch.buffers())
     }
 
-    /// Run skipped nodes and at most one required node without waiting for the GPU.
+    /// Run skipped nodes and at most one required node in the current GPU tick.
     /// Trailing skipped nodes are consumed too, so the last step reports completion.
     /// The caller completes the step's tick before the next step.
     pub(super) fn step(
@@ -923,12 +952,7 @@ impl Traversal {
                     )?)
                 }
                 Operation::PackedLab(prepared) => {
-                    let id = node.inputs[0];
-                    let source = if consumers[id] == 1 {
-                        values[id].take().unwrap().buffer
-                    } else {
-                        input(0).buffer.clone()
-                    };
+                    let source = last_read_or_share(values, consumers, node.inputs[0]);
                     Some(crate::nodes::color::packed_lab::apply(
                         gpu, source, prepared, profile,
                     )?)
@@ -1344,29 +1368,35 @@ impl Traversal {
                     }
                     required[index].then_some(output.rgb)
                 }
-                Operation::ResidualRgb(params) | Operation::ResidualDetail(params) => {
-                    use crate::nodes::color::residual_finish;
-                    if inherited != params.extent()
-                        || input(1).description.map(|d| d.extent) != Some(inherited)
+                Operation::ResidualRgb {
+                    params,
+                    wait_for_reconstruction,
+                } => {
+                    check_residual_extents(params, inherited, input(1))?;
+                    // The native lookahead can leave reconstruction scratch in flight.
+                    if *wait_for_reconstruction
+                        && node.inputs.iter().any(|&id| !cached[id])
+                        && gpu.has_work_in_flight()
                     {
-                        return Err(
-                            "residual finishing requires matching RGB and gain extents".into()
-                        );
+                        gpu.settle()?;
+                        execution.check()?;
                     }
-                    let rgb = &input(0).buffer;
-                    let residual = &input(1).buffer;
-                    Some(if matches!(node.operation, Operation::ResidualDetail(_)) {
-                        residual_finish::detail(
-                            gpu,
-                            rgb,
-                            residual,
-                            &input(2).buffer,
-                            params,
-                            profile,
-                        )?
-                    } else {
-                        residual_finish::rgb(gpu, rgb, residual, params, profile)?
-                    })
+                    let source = last_read_or_share(values, consumers, node.inputs[0]);
+                    let gain = &values[node.inputs[1]].as_ref().unwrap().buffer;
+                    Some(crate::nodes::color::residual_finish::rgb(
+                        gpu, source, gain, params, profile,
+                    )?)
+                }
+                Operation::ResidualDetail(params) => {
+                    check_residual_extents(params, inherited, input(1))?;
+                    Some(crate::nodes::color::residual_finish::detail(
+                        gpu,
+                        &input(0).buffer,
+                        &input(1).buffer,
+                        &input(2).buffer,
+                        params,
+                        profile,
+                    )?)
                 }
                 Operation::RgbDespeckle(prepared) => {
                     if inherited != prepared.extent() {

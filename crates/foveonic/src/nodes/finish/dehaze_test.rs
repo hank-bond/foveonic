@@ -651,10 +651,12 @@ fn camera_coordinate_response_matches_measured_points_and_retains_signed_samples
 #[ignore = "requires a GPU"]
 fn manual_dehaze_skips_color_selection_and_retains_identical_brightness_calibration() {
     let gpu = Gpu::test_executor();
-    let extent = [64, 48];
+    // Both policies cross histogram workgroup boundaries. Speed pools the offset crop.
+    let extent = [543, 69];
+    let crop = [4, 5, 538, 67];
     let pixels: Vec<f32> = (0..extent[0] * extent[1])
         .flat_map(|i| {
-            let v = 0.04 + (i % 64) as f32 / 256.;
+            let v = 0.04 + ((i * 73 + i / 17) % 256) as f32 / 512.;
             [v, v * 0.8, v * 0.6]
         })
         .collect();
@@ -665,7 +667,7 @@ fn manual_dehaze_skips_color_selection_and_retains_identical_brightness_calibrat
             test_basis(ColorSpace::Srgb),
             1.,
             false,
-            [0, 0, 64, 48],
+            crop,
             quality,
         );
         let automatic = estimate(&gpu, &input, params, &mut Profile::default()).unwrap();
@@ -877,6 +879,27 @@ fn shadow_protector_stays_continuous_when_an_input_channel_crosses_zero() {
     }
 }
 
+fn estimate_serial(gpu: &Gpu, input: &ReadGuard, p: Estimate) -> ReadGuard {
+    assert!(p.selection[2] <= 1000);
+    let uniform = gpu.uniform(&p);
+    let mut output = gpu.storage("Dehaze estimate", 32).unwrap();
+    let mut trace = gpu.trace(false, 0);
+    let pixels = prepare_analysis_pixels(gpu, input, p, &uniform, &mut trace).unwrap();
+    let dark = neighborhood_minimum(gpu, &pixels, p, &uniform, None, &mut trace).unwrap();
+    gpu.dispatch(
+        Kernel::DehazeEstimate,
+        &mut [
+            (1, Read(&uniform)),
+            (2, Read(&pixels)),
+            (4, Read(&dark)),
+            (5, Write(output.write())),
+        ],
+        [1, 1],
+        &mut trace,
+    );
+    output
+}
+
 #[test]
 #[ignore = "requires a GPU"]
 fn partitioned_estimate_matches_serial_for_ties_empty_and_saturation() {
@@ -923,14 +946,12 @@ fn partitioned_estimate_matches_serial_for_ties_empty_and_saturation() {
                     if mode == 3 {
                         p.selection[1] = 65535;
                     }
-                    let a = estimate_impl(&gpu, &input, p, &mut Profile::default(), false, false)
-                        .unwrap();
+                    let a = estimate_serial(&gpu, &input, p);
                     let expected = gpu.readback(&a).unwrap();
-                    for partitions in [16, 32, 64] {
+                    let partitions = if auto { &[16, 32, 64][..] } else { &[16][..] };
+                    for &partitions in partitions {
                         p.partitions[0] = partitions;
-                        let b =
-                            estimate_impl(&gpu, &input, p, &mut Profile::default(), true, false)
-                                .unwrap();
+                        let b = estimate(&gpu, &input, p, &mut Profile::default()).unwrap();
                         assert_eq!(
                             expected,
                             gpu.readback(&b).unwrap(),
@@ -970,8 +991,7 @@ fn partitioned_selection_resolves_equal_score_and_intensity_by_pixel_index() {
     params.selection[0] = 0;
     params.selection[2] = k;
     params.partitions[1] = 0;
-    let serial =
-        estimate_impl(&gpu, &input, params, &mut Profile::default(), false, false).unwrap();
+    let serial = estimate_serial(&gpu, &input, params);
     let expected = gpu.readback(&serial).unwrap();
     for (actual, code) in floats(&gpu, &serial)[..3].iter().zip(first) {
         assert!((actual - code as f32 / 65535.).abs() < 0.000002);
@@ -1403,9 +1423,6 @@ fn quality_tail_partition_count_is_bounded_and_leaves_other_selection_paths_at_s
         ProcessingQuality::Quality,
     );
     assert_eq!(quality.partitions[0], 128);
-    let manual = quality.with_color_estimation(false);
-    assert_eq!(manual.partitions[0], 16);
-    assert_eq!(manual.with_color_estimation(true).partitions[0], 128);
     let speed = Estimate::new(
         extent,
         Basis::monochrome(),
@@ -1567,8 +1584,7 @@ fn expanded_dark_minima_match_rectangular_cpu_truth_at_edges_and_partial_steps()
                         &input,
                         p,
                         &uniform,
-                        &minimum_offsets(radius),
-                        expanded,
+                        expanded.then(|| minimum_offsets(radius)).as_deref(),
                         &mut gpu.trace(false, 0),
                     )
                     .unwrap();
@@ -1617,44 +1633,40 @@ fn expanded_minima_preserve_complete_estimates_and_corrections_in_both_policies(
                     32
                 }
             );
-            for auto in [false, true] {
-                let p = p.with_color_estimation(auto);
-                let baseline =
-                    estimate_impl(&gpu, &input, p, &mut Profile::default(), true, false).unwrap();
-                let candidate = estimate(&gpu, &input, p, &mut Profile::default()).unwrap();
-                assert_eq!(
-                    gpu.readback(&baseline).unwrap(),
-                    gpu.readback(&candidate).unwrap(),
-                    "quality {quality:?}, mono {mono}, auto {auto}"
-                );
-                let controls = Controls {
-                    amount: 45.,
-                    shadow: if auto { None } else { Some([0.08, 0.1, 0.12]) },
-                };
-                let params = Params::new(extent, basis, 1., mono, controls);
-                let baseline = apply(
-                    &gpu,
-                    &input,
-                    &baseline,
-                    params,
-                    extent,
-                    &mut Profile::default(),
-                )
-                .unwrap();
-                let candidate = apply(
-                    &gpu,
-                    &input,
-                    &candidate,
-                    params,
-                    extent,
-                    &mut Profile::default(),
-                )
-                .unwrap();
-                assert_eq!(
-                    gpu.readback(&baseline).unwrap(),
-                    gpu.readback(&candidate).unwrap()
-                );
-            }
+            let baseline = estimate_color(&gpu, &input, p, None, &mut Profile::default()).unwrap();
+            let candidate = estimate(&gpu, &input, p, &mut Profile::default()).unwrap();
+            assert_eq!(
+                gpu.readback(&baseline).unwrap(),
+                gpu.readback(&candidate).unwrap(),
+                "quality {quality:?}, mono {mono}"
+            );
+            let controls = Controls {
+                amount: 45.,
+                shadow: None,
+            };
+            let params = Params::new(extent, basis, 1., mono, controls);
+            let baseline = apply(
+                &gpu,
+                &input,
+                &baseline,
+                params,
+                extent,
+                &mut Profile::default(),
+            )
+            .unwrap();
+            let candidate = apply(
+                &gpu,
+                &input,
+                &candidate,
+                params,
+                extent,
+                &mut Profile::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                gpu.readback(&baseline).unwrap(),
+                gpu.readback(&candidate).unwrap()
+            );
         }
     }
     assert_eq!(floats(&gpu, &input), values);

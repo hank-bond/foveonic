@@ -16,11 +16,9 @@ struct Estimate {
 var<workgroup> heap: array<vec4<u32>,1000>;
 var<workgroup> histogram: array<vec4<u32>,256>;
 
-@compute @workgroup_size(8,8)
-fn dehaze_prepare(@builtin(global_invocation_id) id: vec3<u32>) {
-    if any(id.xy>=p.shape.zw) { return; }
-    let start=p.region.xy+id.xy*p.region.zw/p.shape.zw;
-    let end=p.region.xy+(id.xy+1u)*p.region.zw/p.shape.zw;
+fn analysis_rgb(point: vec2<u32>) -> vec3<u32> {
+    let start=p.region.xy+point*p.region.zw/p.shape.zw;
+    let end=p.region.xy+(point+1u)*p.region.zw/p.shape.zw;
     var sum=vec3(0.); var count=0u;
     for(var y=start.y;y<end.y;y++) { for(var x=start.x;x<end.x;x++) {
         let n=(y*p.shape.x+x)*3u;
@@ -29,7 +27,12 @@ fn dehaze_prepare(@builtin(global_invocation_id) id: vec3<u32>) {
         else { rgb=vec3(dot(rgb,p.basis.to_camera[0].xyz),dot(rgb,p.basis.to_camera[1].xyz),dot(rgb,p.basis.to_camera[2].xyz)); }
         sum+=rgb; count++;
     }}
-    let rgb=vec3<u32>(clamp(sum/f32(max(count,1u)),vec3(0.),vec3(1.))*65535.+0.5);
+    return vec3<u32>(clamp(sum/f32(max(count,1u)),vec3(0.),vec3(1.))*65535.+0.5);
+}
+@compute @workgroup_size(8,8)
+fn dehaze_prepare(@builtin(global_invocation_id) id: vec3<u32>) {
+    if any(id.xy>=p.shape.zw) { return; }
+    let rgb=analysis_rgb(id.xy);
     let intensity=(rgb.x>>2u)+(rgb.y>>1u)+(rgb.z>>2u);
     pixels[id.y*p.shape.z+id.x]=vec4(rgb,intensity);
 }
@@ -54,6 +57,74 @@ fn dehaze_vertical(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     dark[id.y*p.shape.z+id.x]=value;
 }
+fn write_brightness_calibration() {
+    let percentile_count=max(1u,p.shape.z*p.shape.w/100u);
+    var lows=vec3(0.); var highs=vec3(1.);
+    var low_count=vec3(0u); var high_count=vec3(0u);
+    for(var b=0u;b<256u;b++) {
+        let lc=histogram[b].xyz; let hc=histogram[255u-b].xyz;
+        lows=select(lows,vec3(f32(b)/255.),low_count<vec3(percentile_count));
+        highs=select(highs,vec3(f32(255u-b)/255.),high_count<vec3(percentile_count));
+        low_count+=lc; high_count+=hc;
+    }
+    lows=min(lows,vec3(.95)); highs=max(highs,vec3(.05));
+    let center=sqrt(lows*highs);
+    let narrow=highs<=4.*lows;
+    lows=select(lows,min(vec3(.95),.5*center),narrow);
+    highs=select(highs,max(vec3(.05),2.*center),narrow);
+    result[1]=vec4(min(lows.x,min(lows.y,lows.z)),max(highs.x,max(highs.y,highs.z)),0.,0.);
+}
+
+const HISTOGRAM_BINS = 256u;
+const HISTOGRAM_ROWS = 16u;
+var<workgroup> local_counts: array<atomic<u32>, 3 * HISTOGRAM_BINS>;
+@group(0) @binding(9) var<storage,read_write> brightness_counts: array<atomic<u32>>;
+
+// Each lane owns one bin for clearing and flushing and reads one column.
+@compute @workgroup_size(HISTOGRAM_BINS)
+fn dehaze_brightness_histogram(@builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32) {
+    let first_y = id.y * HISTOGRAM_ROWS;
+    if id.x < p.shape.z {
+        let end_y = min(first_y + HISTOGRAM_ROWS, p.shape.w);
+        for (var y = first_y; y < end_y; y++) {
+            let bins = analysis_rgb(vec2(id.x, y)) >> vec3(8u);
+            for (var c = 0u; c < 3u; c++) {
+                atomicAdd(&local_counts[c * HISTOGRAM_BINS + bins[c]], 1u);
+            }
+        }
+    }
+    workgroupBarrier();
+    for (var c = 0u; c < 3u; c++) {
+        let index = c * HISTOGRAM_BINS + lane;
+        let count = atomicLoad(&local_counts[index]);
+        if count > 0u { atomicAdd(&brightness_counts[index], count); }
+    }
+}
+@compute @workgroup_size(HISTOGRAM_BINS)
+fn dehaze_brightness_estimate(@builtin(local_invocation_index) lane: u32) {
+    histogram[lane] = vec4(atomicLoad(&brightness_counts[lane]),
+        atomicLoad(&brightness_counts[HISTOGRAM_BINS + lane]),
+        atomicLoad(&brightness_counts[2u * HISTOGRAM_BINS + lane]), 0u);
+    workgroupBarrier();
+    if lane == 0u {
+        result[0] = vec4(0.);
+        write_brightness_calibration();
+    }
+}
+
+fn write_estimate(camera_color: vec3<f32>, count: u32) {
+    var color = camera_color;
+    if p.selection.w==0u {
+        color=vec3(dot(color,p.basis.to_srgb[0].xyz),dot(color,p.basis.to_srgb[1].xyz),dot(color,p.basis.to_srgb[2].xyz));
+    }
+    // Canonical storage and the swatch share this bounded color. Auto and manual
+    // both convert it back through the same basis, so freezing Auto is exact.
+    color=clamp(color,vec3(0.),vec3(1.));
+    result[0]=vec4(color,select(0.,1.,count>0u && any(color>vec3(0.))));
+    write_brightness_calibration();
+}
+
 // Smaller dark minima and brighter ties are worse candidates. Coordinates settle exact ties.
 fn worse(a:vec4<u32>,b:vec4<u32>)->bool {
     return a.x<b.x || (a.x==b.x && (a.y>b.y || (a.y==b.y && a.z>b.z)));
@@ -69,7 +140,7 @@ fn dehaze_estimate() {
         histogram[rgb.x>>8u].x++;
         histogram[rgb.y>>8u].y++;
         histogram[rgb.z>>8u].z++;
-        // Manual color still needs brightness calibration, not neighborhood color selection.
+        // The serial test oracle also covers manual brightness calibration.
         if p.normalization.y>0.5 { continue; }
         if x<radius || y<radius || x+radius>=p.shape.z || y+radius>=p.shape.w { continue; }
         let score=dark[index];
@@ -98,29 +169,8 @@ fn dehaze_estimate() {
     }}
     var sum=vec3(0u);
     for(var i=0u;i<count;i++) { sum+=pixels[heap[i].z].xyz; }
-    var color=vec3<f32>(sum)/(65535.*f32(max(count,1u)));
-    if p.selection.w==0u {
-        color=vec3(dot(color,p.basis.to_srgb[0].xyz),dot(color,p.basis.to_srgb[1].xyz),dot(color,p.basis.to_srgb[2].xyz));
-    }
-    // Canonical storage and the swatch share this bounded color. Auto and manual
-    // both convert it back through the same basis, so freezing Auto is exact.
-    color=clamp(color,vec3(0.),vec3(1.));
-    result[0]=vec4(color,select(0.,1.,count>0u && any(color>vec3(0.))));
-    let percentile_count=max(1u,p.shape.z*p.shape.w/100u);
-    var lows=vec3(0.); var highs=vec3(1.);
-    var low_count=vec3(0u); var high_count=vec3(0u);
-    for(var b=0u;b<256u;b++) {
-        let lc=histogram[b].xyz; let hc=histogram[255u-b].xyz;
-        lows=select(lows,vec3(f32(b)/255.),low_count<vec3(percentile_count));
-        highs=select(highs,vec3(f32(255u-b)/255.),high_count<vec3(percentile_count));
-        low_count+=lc; high_count+=hc;
-    }
-    lows=min(lows,vec3(.95)); highs=max(highs,vec3(.05));
-    let center=sqrt(lows*highs);
-    let narrow=highs<=4.*lows;
-    lows=select(lows,min(vec3(.95),.5*center),narrow);
-    highs=select(highs,max(vec3(.05),2.*center),narrow);
-    result[1]=vec4(min(lows.x,min(lows.y,lows.z)),max(highs.x,max(highs.y,highs.z)),0.,0.);
+    let color=vec3<f32>(sum)/(65535.*f32(max(count,1u)));
+    write_estimate(color, count);
 }
 
 @group(0) @binding(6) var<storage,read_write> partial_heap: array<vec4<u32>>;
@@ -143,7 +193,6 @@ fn dehaze_partition(@builtin(workgroup_id) group: vec3<u32>) {
         partial_hist[hbase+(rgb.x>>8u)].x++;
         partial_hist[hbase+(rgb.y>>8u)].y++;
         partial_hist[hbase+(rgb.z>>8u)].z++;
-        if p.normalization.y>0.5 { continue; }
         if x<radius || y<radius || x+radius>=p.shape.z || y+radius>=p.shape.w { continue; }
         let score=dark[index];
         if score==0u || rgb.w>p.selection.y { continue; }
@@ -211,29 +260,8 @@ fn dehaze_merge() {
         carry+=select(vec3(0u),vec3(1u),sum<previous);
     }
     let total=vec3<f32>(carry)*4294967296.+vec3<f32>(sum);
-    var color=total/(65535.*f32(max(count,1u)));
-    if p.selection.w==0u {
-        color=vec3(dot(color,p.basis.to_srgb[0].xyz),dot(color,p.basis.to_srgb[1].xyz),dot(color,p.basis.to_srgb[2].xyz));
-    }
-    // Canonical storage and the swatch share this bounded color. Auto and manual
-    // both convert it back through the same basis, so freezing Auto is exact.
-    color=clamp(color,vec3(0.),vec3(1.));
-    result[0]=vec4(color,select(0.,1.,count>0u && any(color>vec3(0.))));
-    let percentile_count=max(1u,p.shape.z*p.shape.w/100u);
-    var lows=vec3(0.); var highs=vec3(1.);
-    var low_count=vec3(0u); var high_count=vec3(0u);
-    for(var b=0u;b<256u;b++) {
-        let lc=histogram[b].xyz; let hc=histogram[255u-b].xyz;
-        lows=select(lows,vec3(f32(b)/255.),low_count<vec3(percentile_count));
-        highs=select(highs,vec3(f32(255u-b)/255.),high_count<vec3(percentile_count));
-        low_count+=lc; high_count+=hc;
-    }
-    lows=min(lows,vec3(.95)); highs=max(highs,vec3(.05));
-    let center=sqrt(lows*highs);
-    let narrow=highs<=4.*lows;
-    lows=select(lows,min(vec3(.95),.5*center),narrow);
-    highs=select(highs,max(vec3(.05),2.*center),narrow);
-    result[1]=vec4(min(lows.x,min(lows.y,lows.z)),max(highs.x,max(highs.y,highs.z)),0.,0.);
+    let color=total/(65535.*f32(max(count,1u)));
+    write_estimate(color, count);
 }
 
 // Quality Auto selection. The boundary bin deliberately averages
@@ -299,27 +327,6 @@ fn dehaze_tail_merge() {
         count+=take;
     }
     let total=vec3<f32>(carry)*4294967296.+vec3<f32>(sum)+fractional;
-    var color=total/(65535.*f32(max(count,1u)));
-    if p.selection.w==0u {
-        color=vec3(dot(color,p.basis.to_srgb[0].xyz),dot(color,p.basis.to_srgb[1].xyz),dot(color,p.basis.to_srgb[2].xyz));
-    }
-    // Canonical storage and the swatch share this bounded color. Auto and manual
-    // both convert it back through the same basis, so freezing Auto is exact.
-    color=clamp(color,vec3(0.),vec3(1.));
-    result[0]=vec4(color,select(0.,1.,count>0u && any(color>vec3(0.))));
-    let percentile_count=max(1u,p.shape.z*p.shape.w/100u);
-    var lows=vec3(0.); var highs=vec3(1.);
-    var low_count=vec3(0u); var high_count=vec3(0u);
-    for(var b=0u;b<256u;b++) {
-        let lc=histogram[b].xyz; let hc=histogram[255u-b].xyz;
-        lows=select(lows,vec3(f32(b)/255.),low_count<vec3(percentile_count));
-        highs=select(highs,vec3(f32(255u-b)/255.),high_count<vec3(percentile_count));
-        low_count+=lc; high_count+=hc;
-    }
-    lows=min(lows,vec3(.95)); highs=max(highs,vec3(.05));
-    let center=sqrt(lows*highs);
-    let narrow=highs<=4.*lows;
-    lows=select(lows,min(vec3(.95),.5*center),narrow);
-    highs=select(highs,max(vec3(.05),2.*center),narrow);
-    result[1]=vec4(min(lows.x,min(lows.y,lows.z)),max(highs.x,max(highs.y,highs.z)),0.,0.);
+    let color=total/(65535.*f32(max(count,1u)));
+    write_estimate(color, count);
 }

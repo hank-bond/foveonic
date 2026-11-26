@@ -30,6 +30,8 @@ pub(crate) fn apply(
     let mut trace = gpu.trace(profile.mode.gpu(), 2 * LEVELS + 2);
 
     let mut state = gpu.storage("Local contrast brightness", count * STATE_BYTES)?;
+    let mut horizontal =
+        gpu.storage("Local contrast horizontal", count * size_of::<f32>() as u64)?;
     let uniform = gpu.uniform(&p);
     gpu.dispatch(
         Kernel::LocalContrastExtract,
@@ -46,37 +48,22 @@ pub(crate) fn apply(
     // The native table runs from coarsest to finest. This undecimated
     // decomposition builds outward from the finest band instead.
     for (level, gain) in gains.into_iter().rev().enumerate() {
-        let mut horizontal = gpu.storage("Local contrast horizontal", count * STATE_BYTES)?;
-        let mut next = gpu.storage("Local contrast base", count * STATE_BYTES)?;
         p.shape[2] = ((1u32 << level) as f32 * p.values[1]).round().max(1.) as u32;
-        p.shape[3] = 0;
         p.values[0] = (gain - 1.) * amount;
-        let uniform = gpu.uniform(&p);
-        gpu.dispatch(
-            Kernel::LocalContrastBlur,
-            &mut [
-                (1, Read(&uniform)),
-                (8, Read(&state)),
-                (6, Read(&state)),
-                (7, Write(horizontal.write())),
-            ],
-            groups,
-            &mut trace,
-        );
-        p.shape[3] = 1;
-        let uniform = gpu.uniform(&p);
-        gpu.dispatch(
-            Kernel::LocalContrastBlur,
-            &mut [
-                (1, Read(&uniform)),
-                (8, Read(&state)),
-                (6, Read(&horizontal)),
-                (7, Write(next.write())),
-            ],
-            groups,
-            &mut trace,
-        );
-        state = next;
+        for axis in 0..2 {
+            p.shape[3] = axis;
+            let uniform = gpu.uniform(&p);
+            gpu.dispatch(
+                Kernel::LocalContrastBlur,
+                &mut [
+                    (1, Read(&uniform)),
+                    (7, Write(state.write())),
+                    (8, Write(horizontal.write())),
+                ],
+                groups,
+                &mut trace,
+            );
+        }
     }
     let uniform = gpu.uniform(&p);
     gpu.dispatch(
@@ -85,7 +72,7 @@ pub(crate) fn apply(
             (0, Read(source)),
             (1, Read(&uniform)),
             (2, Write(output.write())),
-            (6, Read(&state)),
+            (7, Read(&state)),
         ],
         groups,
         &mut trace,

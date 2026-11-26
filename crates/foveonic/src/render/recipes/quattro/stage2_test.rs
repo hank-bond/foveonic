@@ -220,7 +220,13 @@ fn original_dp_metadata_prepares_all_shared_color_stages() {
     let source = crate::source::Source::open(std::env::var_os("QUATTRO_X3F").unwrap()).unwrap();
     let metadata = &source.metadata;
     let expected = [(metadata.width / 2) as u32, (metadata.height / 2) as u32];
-    let noise = super::super::stage1::prepare_filter(metadata, 0).unwrap();
+    let noise = super::super::stage1::prepare_filter_on_grid(
+        metadata,
+        0,
+        crate::render::Scale::NATIVE,
+        crate::render::ProcessingQuality::Quality,
+    )
+    .unwrap();
     assert_eq!(noise.extent(), expected);
     assert_eq!(
         super::super::repair::prepare(metadata, false)

@@ -1,5 +1,34 @@
 //! Checks bounded residual gain and signed-detail controls.
 use super::*;
+
+#[test]
+#[ignore = "requires GPU"]
+fn residual_rgb_reuses_owned_storage_and_matches_shared_path() {
+    let gpu = Gpu::new().unwrap();
+    let extent = [17, 13];
+    let samples: Vec<[f32; 3]> = (0..221)
+        .map(|i| [i as f32 * 17., 65500. - i as f32, 2.])
+        .collect();
+    let gains: Vec<f32> = (0..221).map(|i| 0.45 + i as f32 * 0.005).collect();
+    let retained = gpu.upload("Retained reconstruction", &samples).unwrap();
+    let owned = gpu.upload("Owned reconstruction", &samples).unwrap();
+    let identity = owned.identity().0;
+    let residual = gpu.upload("Residual gain", &gains).unwrap();
+    let params = Params::new(extent, 1., 16., 0, 1.6, 0.7).unwrap();
+    let mut profile = Profile::default();
+    let updated = rgb(&gpu, owned, &residual, &params, &mut profile).unwrap();
+    let shared = rgb(&gpu, retained.clone(), &residual, &params, &mut profile).unwrap();
+    assert_eq!(updated.identity().0, identity);
+    assert_eq!(
+        gpu.readback(&updated).unwrap(),
+        gpu.readback(&shared).unwrap()
+    );
+    assert_eq!(
+        gpu.readback(&retained).unwrap(),
+        bytemuck::cast_slice::<_, u8>(&samples)
+    );
+}
+
 pub(crate) fn both(
     gpu: &Gpu,
     input: &ReadGuard,
@@ -9,7 +38,7 @@ pub(crate) fn both(
     profile: &mut Profile,
 ) -> Result<(ReadGuard, ReadGuard)> {
     Ok((
-        rgb(gpu, input, residual, params, profile)?,
+        rgb(gpu, input.clone(), residual, params, profile)?,
         detail(gpu, input, residual, mask, params, profile)?,
     ))
 }

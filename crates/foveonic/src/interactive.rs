@@ -1823,7 +1823,13 @@ mod tests {
             )
             .unwrap();
         let finished = graph
-            .add(O::ResidualRgb(params(1.)), &[reconstructed, residual])
+            .add(
+                O::ResidualRgb {
+                    params: params(1.),
+                    wait_for_reconstruction: false,
+                },
+                &[reconstructed, residual],
+            )
             .unwrap();
         let rgb_only = graph.required(&[finished]).unwrap();
         assert!(rgb_only[reconstructed] && rgb_only[residual]);

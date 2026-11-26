@@ -104,9 +104,21 @@ fn prepares_original_dp2_controls_without_captured_request_fields() {
 fn complete_numerical_preparation_tracks_the_selected_chroma_control() {
     let metadata = metadata();
     let chroma_step = 2;
-    let first = prepare_filter(&metadata, chroma_step).unwrap();
+    let first = prepare_filter_on_grid(
+        &metadata,
+        chroma_step,
+        crate::render::Scale::NATIVE,
+        ProcessingQuality::Quality,
+    )
+    .unwrap();
     assert_eq!(first.extent(), [2944, 1836]);
-    let second = prepare_filter(&metadata, 3).unwrap();
+    let second = prepare_filter_on_grid(
+        &metadata,
+        3,
+        crate::render::Scale::NATIVE,
+        ProcessingQuality::Quality,
+    )
+    .unwrap();
     assert!(first.key() != second.key());
 }
 
@@ -221,7 +233,7 @@ fn original_tiger_stage1_preparation_and_two_pass_boundary_match() {
     let output = crate::nodes::color::two_scale_noise::apply(
         &gpu,
         &input,
-        &numerical(&controls).unwrap(),
+        &numerical_scaled(&controls, 1, 1., ProcessingQuality::Quality).unwrap(),
         &mut Default::default(),
     )
     .unwrap();
@@ -245,16 +257,21 @@ fn small_noise_grids_preserve_all_strength_steps_and_native_controls() {
     use super::super::WorkingGrid;
     let metadata = metadata();
     for step in 0..=4 {
-        let full = prepare_filter(&metadata, step).unwrap();
-        assert!(
-            full.key()
-                == prepare_filter_on_grid(&metadata, step, WorkingGrid::NATIVE)
-                    .unwrap()
-                    .key()
+        let full = prepare_filter_on_grid(
+            &metadata,
+            step,
+            WorkingGrid::NATIVE,
+            ProcessingQuality::Quality,
+        )
+        .unwrap();
+        assert_eq!(
+            full.extent(),
+            super::super::calibration::color_extent(&metadata).unwrap()
         );
         for divisor in [2, 4, 8, 16, 64, 1 << 31] {
             let scale = WorkingGrid::new(divisor).unwrap();
-            let prepared = prepare_filter_on_grid(&metadata, step, scale).unwrap();
+            let prepared =
+                prepare_filter_on_grid(&metadata, step, scale, ProcessingQuality::Quality).unwrap();
             assert_eq!(
                 prepared.extent(),
                 super::super::color_grid(&metadata, scale).unwrap().extent

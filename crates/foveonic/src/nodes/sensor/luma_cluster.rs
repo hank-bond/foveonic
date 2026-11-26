@@ -23,14 +23,32 @@ pub struct Cluster {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Params {
-    shape: [u32; 4],
-    candidates: [u32; 4],
+struct Job {
+    first_point: u32,
+    point_count: u32,
+    first_candidate: u32,
+    candidate_count: u32,
 }
+
+/// One batch dispatch: the image width and the batch's first job.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Batch {
+    width: u32,
+    first_job: u32,
+    _padding: [u32; 2],
+}
+
+// Inclusive bounds in row and column order.
+fn overlaps(a: [u32; 4], b: [u32; 4]) -> bool {
+    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
+}
+
 #[derive(Clone, Debug)]
 pub struct Prepared {
     extent: [u32; 2],
-    params: Vec<Params>,
+    jobs: Vec<Job>,
+    batches: Vec<[u32; 2]>,
     points: Vec<[u32; 4]>,
     candidates: Vec<u32>,
 }
@@ -42,7 +60,8 @@ impl Prepared {
         {
             return Err("invalid luma cluster image geometry".into());
         }
-        let mut params = Vec::new();
+        let mut levels: Vec<Vec<Job>> = Vec::new();
+        let mut prior = Vec::new();
         let mut points = Vec::new();
         let mut candidates = Vec::new();
         for cluster in clusters {
@@ -71,6 +90,9 @@ impl Prepared {
             let rh = bottom - top + 1;
             if u64::from(rw) * u64::from(rh) > 10000 || left == 0 || top == 0 {
                 return Err("unsupported clipped luma cluster search region".into());
+            }
+            if cluster.points.is_empty() {
+                continue;
             }
             let mut bad = BTreeSet::new();
             for &[dy, dx] in &cluster.points {
@@ -128,20 +150,37 @@ impl Prepared {
             if candidate_count == 0 {
                 return Err("luma cluster has no eligible candidate patches".into());
             }
-            params.push(Params {
-                shape: [width, height, start, u32::try_from(cluster.points.len())?],
-                candidates: [candidate_start, candidate_count, 0, 0],
+            // The first donor center starts one pixel in and reads two pixels out.
+            // Both read bounds include the cluster's own writes.
+            let reads = [top - 1, left - 1, bottom, right];
+            let writes = [row, col, row + ch - 1, col + cw - 1];
+            let mut level = 0;
+            for &(earlier_reads, earlier_writes, earlier_level) in &prior {
+                if overlaps(reads, earlier_writes) || overlaps(writes, earlier_reads) {
+                    level = level.max(earlier_level + 1);
+                }
+            }
+            prior.push((reads, writes, level));
+            if level == levels.len() {
+                levels.push(Vec::new());
+            }
+            levels[level].push(Job {
+                first_point: start,
+                point_count: u32::try_from(cluster.points.len())?,
+                first_candidate: candidate_start,
+                candidate_count,
             });
         }
-        if points.is_empty() {
-            points.push([0; 4]);
-        }
-        if candidates.is_empty() {
-            candidates.push(0);
+        let mut jobs = Vec::new();
+        let mut batches = Vec::new();
+        for level in levels {
+            batches.push([u32::try_from(jobs.len())?, u32::try_from(level.len())?]);
+            jobs.extend(level);
         }
         Ok(Self {
             extent,
-            params,
+            jobs,
+            batches,
             points,
             candidates,
         })
@@ -152,7 +191,8 @@ impl Prepared {
     pub(crate) fn key(&self) -> Key {
         Key::default()
             .slice(&self.extent)
-            .slice(&self.params)
+            .slice(&self.jobs)
+            .slice(&self.batches)
             .slice(&self.points)
             .slice(&self.candidates)
     }
@@ -167,27 +207,41 @@ pub(crate) fn apply(
     if input.size() != u64::from(width) * u64::from(height) * 4 {
         return Err("luma cluster input does not match its extent".into());
     }
-    if prepared.params.is_empty() {
+    if prepared.jobs.is_empty() {
         return Ok(input.clone());
     }
     let mut output = gpu.storage("Cluster-repaired blue", input.size())?;
     gpu.copy(input, output.write(), input.size());
     let points = gpu.upload("Luma cluster points", &prepared.points)?;
     let candidates = gpu.upload("Luma cluster candidates", &prepared.candidates)?;
-    let mut trace = gpu.trace(profile.mode.gpu(), prepared.params.len() as u32);
-    for params in &prepared.params {
-        let uniform = gpu.uniform(params);
-        gpu.dispatch(
-            Kernel::LumaCluster,
-            &mut [
-                (0, Read(&uniform)),
-                (1, Read(&points)),
-                (2, Read(&candidates)),
-                (3, Write(output.write())),
-            ],
-            [1, 1],
-            &mut trace,
-        );
+    let jobs = gpu.upload("Luma cluster jobs", &prepared.jobs)?;
+    let maximum_groups = gpu.device.limits().max_compute_workgroups_per_dimension;
+    let dispatch_count = prepared
+        .batches
+        .iter()
+        .map(|b| b[1].div_ceil(maximum_groups))
+        .sum();
+    let mut trace = gpu.trace(profile.mode.gpu(), dispatch_count);
+    for &[start, count] in &prepared.batches {
+        for offset in (0..count).step_by(maximum_groups as usize) {
+            let uniform = gpu.uniform(&Batch {
+                width,
+                first_job: start + offset,
+                _padding: [0; 2],
+            });
+            gpu.dispatch(
+                Kernel::LumaCluster,
+                &mut [
+                    (0, Read(&uniform)),
+                    (1, Read(&points)),
+                    (2, Read(&candidates)),
+                    (3, Write(output.write())),
+                    (4, Read(&jobs)),
+                ],
+                [(count - offset).min(maximum_groups), 1],
+                &mut trace,
+            );
+        }
     }
     gpu.finish_trace(&trace, profile)?;
     Ok(output)

@@ -118,14 +118,15 @@ fn gpu_shared_spatial_operations_preserve_flats_and_keep_sources_immutable() {
 fn gpu_local_contrast_weights_fine_bands_above_broad_bands() {
     use crate::{gpu::Gpu, profile::Profile};
     let gpu = Gpu::test_executor();
-    let extent = [1024, 1];
+    let extent = [321, 273];
     let gains = super::super::wavelet_contrast::photographic_gains();
     let mut responses = Vec::new();
     for period in [4., 16., 64., 256.] {
         let omega = std::f32::consts::TAU / period;
         let amplitude = 0.02;
-        let values: Vec<f32> = (0..extent[0])
-            .flat_map(|x| [(-2. + amplitude * (omega * x as f32).cos()).exp2(); 3])
+        let phase = |x, y| (omega * (x + 2 * y) as f32).cos();
+        let values: Vec<f32> = (0..extent[0] * extent[1])
+            .flat_map(|i| [(-2. + amplitude * phase(i % extent[0], i / extent[0])).exp2(); 3])
             .collect();
         let source = gpu.upload("log brightness sinusoid", &values).unwrap();
         // Independently evaluate the five-tap binomial filter's Fourier
@@ -133,7 +134,9 @@ fn gpu_local_contrast_weights_fine_bands_above_broad_bands() {
         let mut base_response = 1.;
         let mut response = 0.;
         for level in 0..6 {
-            let filter_response = (omega * (1 << level) as f32 * 0.5).cos().powi(4);
+            let angle = omega * (1 << level) as f32;
+            // The vertical sinusoid has twice the horizontal frequency.
+            let filter_response = (angle * 0.5).cos().powi(4) * angle.cos().powi(4);
             response += (gains[5 - level] - 1.) * base_response * (1. - filter_response);
             base_response *= filter_response;
         }
@@ -143,14 +146,17 @@ fn gpu_local_contrast_weights_fine_bands_above_broad_bands() {
             let output =
                 local_contrast::apply(&gpu, &source, p, extent, &mut Profile::default()).unwrap();
             let actual = samples(&gpu, &output);
-            for x in 256..768 {
-                let phase = (omega * x as f32).cos();
-                let expected = (-2. + amplitude * phase * (1. + amount * response)).exp2();
-                assert!(
-                    (actual[x * 3] - expected).abs() < 0.000002,
-                    "period {period}, amount {amount}, pixel {x}: {} != {expected}",
-                    actual[x * 3]
-                );
+            let margin = local_contrast::SUPPORT;
+            for y in margin..extent[1] - margin {
+                for x in margin..extent[0] - margin {
+                    let expected =
+                        (-2. + amplitude * phase(x, y) * (1. + amount * response)).exp2();
+                    let pixel = actual[((y * extent[0] + x) * 3) as usize];
+                    assert!(
+                        (pixel - expected).abs() < 0.000002,
+                        "period {period}, amount {amount}, pixel ({x}, {y}): {pixel} != {expected}"
+                    );
+                }
             }
         }
         responses.push(response);

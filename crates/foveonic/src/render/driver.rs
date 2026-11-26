@@ -342,7 +342,7 @@ impl RecipeExecution {
         )
     }
 
-    /// Run skipped nodes and at most one required node without waiting for the GPU.
+    /// Run skipped nodes and at most one required node in the current GPU tick.
     fn step(
         &mut self,
         engine: &Engine,

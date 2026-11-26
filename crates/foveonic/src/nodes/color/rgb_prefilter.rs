@@ -155,9 +155,10 @@ pub(crate) fn apply(
     }
     let balanced = gpu.storage("Camera RGB gain", input.size())?;
     let balanced = gain(gpu, input, balanced, prepared, false, profile)?;
-    let yuv = uv_repair::convert(gpu, &balanced, extent, false, profile)?;
+    let yuv = uv_repair::convert(gpu, &balanced, extent, uv_repair::RGB_TO_YUV, profile)?;
     let classified = uv_repair::apply(gpu, &balanced, &yuv, &prepared.uv, profile)?;
-    let restored = uv_repair::convert(gpu, &classified.yuv, extent, true, profile)?;
+    let restored =
+        uv_repair::convert(gpu, &classified.yuv, extent, uv_repair::YUV_TO_RGB, profile)?;
     let uniform = gpu.uniform(&prepared.params);
     let mut repaired = yuv;
     let mut trace = gpu.trace(profile.mode.gpu(), 2);

@@ -1,5 +1,47 @@
 //! Checks stable cluster priorities and native mono patch-search results.
 use super::*;
+
+fn test_clusters() -> Vec<Cluster> {
+    [([16, 16], 5), ([16, 25], 8), ([48, 48], 5), ([16, 34], 5)]
+        .map(|(origin, margin)| Cluster {
+            origin,
+            extent: [1, 1],
+            margin,
+            points: vec![[0, 0]],
+        })
+        .into()
+}
+
+#[test]
+fn batches_preserve_dependencies_through_the_donor_patch_halo() {
+    let p = Prepared::new([64, 64], test_clusters(), 8).unwrap();
+    assert_eq!(p.batches, [[0, 2], [2, 1], [3, 1]]);
+    let order: Vec<_> = p.jobs.iter().map(|job| job.first_point).collect();
+    assert_eq!(order, [0, 2, 1, 3]);
+}
+
+#[test]
+#[ignore = "requires a GPU"]
+fn batched_repair_matches_catalogue_order() {
+    let gpu = Gpu::new().unwrap();
+    let samples: Vec<f32> = (0..4096_u32)
+        .map(|i| ((i * 17 + i / 11) % 503) as f32)
+        .collect();
+    let input = gpu.upload("Luma cluster input", &samples).unwrap();
+    let mut profile = Profile::default();
+    let p = Prepared::new([64, 64], test_clusters(), 8).unwrap();
+    let batched = apply(&gpu, &input, &p, &mut profile).unwrap();
+    let mut serial = input;
+    for cluster in test_clusters() {
+        let p = Prepared::new([64, 64], vec![cluster], 8).unwrap();
+        serial = apply(&gpu, &serial, &p, &mut profile).unwrap();
+    }
+    assert_eq!(
+        gpu.readback(&batched).unwrap(),
+        gpu.readback(&serial).unwrap()
+    );
+}
+
 #[test]
 fn rejects_clipped_or_duplicate_support() {
     let c = Cluster {

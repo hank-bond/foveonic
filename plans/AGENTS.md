@@ -39,6 +39,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[first-conversion](./first-conversion.md)** Establish the shortest Merrill X3F conversion path through the shader graph to DNG and TIFF. _Read when beginning or resuming the first end-to-end conversion._
 - **[full-option-scaled-pipeline](./full-option-scaled-pipeline.md)** Replace recipe-wide scale exceptions with numeric working grids, graph-owned dependency cuts and complete downstream option support.
 - **[gpu-output-mismatch](./gpu-output-mismatch.md)** Intermittent GPU output differences remain unresolved, with strict regression checks and retained investigation evidence.
+- **[graph-node-performance](./graph-node-performance.md)** Measured graph and shader experiments track rendering latency, memory use and output equivalence across Merrill and Quattro.
 - **[gui-and-batch](./gui-and-batch.md)** Expose the working conversion engine through a minimal GUI and batch CLI using shared settings.
 - **[gui-release-regressions](./gui-release-regressions.md)** Resolve GUI and GPU correctness failures and require packaged desktop checks before releasing 0.8.2.
 - **[loupe-motion-diagnostics](./loupe-motion-diagnostics.md)** Attribute loupe-motion stuttering through sustained input and native presentation timing before changing scheduling.

@@ -241,26 +241,31 @@ pub(crate) fn apply(
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
-    let yuv = uv_repair::convert(gpu, &raw_color, extent, false, profile)?;
-    let mut clamped = gpu.storage("Outlier protected YUV", input.size())?;
-    let mut trace = gpu.trace(profile.mode.gpu(), 1);
-    gpu.dispatch(
-        Kernel::RawColorChroma,
-        &mut [
-            (0, Read(&yuv)),
-            (1, Read(&uniform)),
-            (2, Write(clamped.write())),
-        ],
-        groups,
-        &mut trace,
-    );
-    gpu.finish_trace(&trace, profile)?;
-    let rgb = uv_repair::convert(gpu, &clamped, extent, true, profile)?;
+    let yuv = uv_repair::convert(gpu, &raw_color, extent, uv_repair::RGB_TO_YUV, profile)?;
+    let rgb = limit_chroma(gpu, &yuv, extent, profile)?;
     Ok(Output {
         rgb,
         neutralized,
         raw_color,
     })
+}
+
+/// Clamps each chroma channel between its neighborhood's second-lowest and
+/// second-highest values, then converts the limited YUV back to camera RGB.
+fn limit_chroma(
+    gpu: &Gpu,
+    yuv: &ReadGuard,
+    extent: [u32; 2],
+    profile: &mut Profile,
+) -> Result<ReadGuard> {
+    uv_repair::convert_with(
+        gpu,
+        Kernel::RawColorChroma,
+        yuv,
+        extent,
+        uv_repair::YUV_TO_RGB,
+        profile,
+    )
 }
 
 #[cfg(test)]

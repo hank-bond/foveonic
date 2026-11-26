@@ -1,8 +1,14 @@
 //! Prepares Quattro and Tiger two-pass noise controls and exposure-guided filtering.
 
-use crate::source::{MatrixEncoding, Metadata, Result};
+use crate::{
+    render::ProcessingQuality,
+    source::{MatrixEncoding, Metadata, Result},
+};
 
 const MAXIMUM_NOISE_STEP: u8 = 4;
+const ADAPTIVE_FILTER_ISO: u32 = 400;
+const FILTER_RADII: [u32; 2] = [5, 15];
+const SPEED_COARSE_RADIUS: u32 = 10;
 const REFERENCE_ISO: f64 = 100.;
 const MAXIMUM_STRENGTH_FIT_ISO: f64 = 6400.;
 
@@ -222,40 +228,35 @@ const FILTER_VARIANCE_MIX: [f64; 9] = [
     0.10021776990222239,
 ];
 
-/// Prepares the two-pass numerical filter. Its input must be the complete
-/// preprocessing result; extraction or HLP calibration alone is insufficient.
-pub(super) fn prepare_filter(
-    metadata: &Metadata,
-    chroma_step: u8,
-) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
-    numerical(&prepare(metadata, chroma_step)?)
-}
-
+/// Filtering receives the complete preprocessing result, including highlight restoration.
 pub(super) fn prepare_filter_on_grid(
     metadata: &Metadata,
     chroma_step: u8,
     grid: super::WorkingGrid,
+    quality: ProcessingQuality,
 ) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
-    if grid.is_native() {
-        return prepare_filter(metadata, chroma_step);
-    }
     let mut controls = prepare(metadata, chroma_step)?;
+    if grid.is_native() {
+        return numerical_scaled(&controls, 1, 1., quality);
+    }
     let sampling = super::color_scale(metadata, grid);
     let energy = super::pool_noise_energy(controls.extent, sampling);
     controls.extent = super::color_grid(metadata, grid)?.extent;
-    numerical_scaled(&controls, sampling.divisor(), energy)
-}
-
-fn numerical(controls: &Stage1Controls) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
-    numerical_scaled(controls, 1, 1.)
+    numerical_scaled(&controls, sampling.divisor(), energy, quality)
 }
 
 fn numerical_scaled(
     controls: &Stage1Controls,
     divisor: u32,
     energy: f64,
+    quality: ProcessingQuality,
 ) -> Result<crate::nodes::color::two_scale_noise::Prepared> {
     use crate::nodes::color::{rgb_prefilter, two_scale_noise};
+    let adaptive = controls.estimated_iso >= ADAPTIVE_FILTER_ISO;
+    let mut radii = FILTER_RADII.map(|radius| radius.div_ceil(divisor).max(1));
+    if quality == ProcessingQuality::Speed && !adaptive && !controls.long_exposure {
+        radii[1] = radii[1].min(SPEED_COARSE_RADIUS);
+    }
     let iteration = |index: usize| -> Result<rgb_prefilter::Prepared> {
         let (intensity, range) = conditioning(
             if index == 0 { 0.3 } else { 0.75 },
@@ -275,9 +276,7 @@ fn numerical_scaled(
             intensity,
             range,
             2047. / (8. / controls.bilateral_strengths[index]),
-            (if index == 0 { 5_u32 } else { 15 })
-                .div_ceil(divisor)
-                .max(1),
+            radii[index],
         )
     };
     // The recipe supplies the selected caller's highlight-preservation gains.
@@ -287,7 +286,7 @@ fn numerical_scaled(
         brightness(),
         controls.highlight_preservation,
     )?;
-    if controls.estimated_iso < 400 {
+    if !adaptive {
         return Ok(prepared);
     }
     // The wrapper undoes the Double WB noise scaling before edge guidance.
