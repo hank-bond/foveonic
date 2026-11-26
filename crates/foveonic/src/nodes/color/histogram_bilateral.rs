@@ -169,7 +169,7 @@ pub(crate) fn apply(
             (4, Read(&adaptive)),
             (5, Write(output.write())),
         ],
-        [w.div_ceil(8), h.div_ceil(8)],
+        [w.div_ceil(16), h.div_ceil(16)],
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;

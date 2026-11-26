@@ -120,6 +120,7 @@ impl Prepared {
 fn gain(
     gpu: &Gpu,
     input: &ReadGuard,
+    mut output: ReadGuard,
     prepared: &Prepared,
     inverse: bool,
     profile: &mut Profile,
@@ -127,7 +128,6 @@ fn gain(
     let mut params = prepared.params;
     params.shape[3] = u32::from(inverse);
     let uniform = gpu.uniform(&params);
-    let mut output = gpu.storage("Camera RGB gain", input.size())?;
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
         Kernel::RgbPrefilterGain,
@@ -153,12 +153,13 @@ pub(crate) fn apply(
     if input.size() != u64::from(extent[0]) * u64::from(extent[1]) * 12 {
         return Err("RGB prefilter input does not match its extent".into());
     }
-    let balanced = gain(gpu, input, prepared, false, profile)?;
+    let balanced = gpu.storage("Camera RGB gain", input.size())?;
+    let balanced = gain(gpu, input, balanced, prepared, false, profile)?;
     let yuv = uv_repair::convert(gpu, &balanced, extent, false, profile)?;
     let classified = uv_repair::apply(gpu, &balanced, &yuv, &prepared.uv, profile)?;
     let restored = uv_repair::convert(gpu, &classified.yuv, extent, true, profile)?;
     let uniform = gpu.uniform(&prepared.params);
-    let mut repaired = gpu.storage("UV repaired camera RGB", input.size())?;
+    let mut repaired = yuv;
     let mut trace = gpu.trace(profile.mode.gpu(), 2);
     // The wrapper blends into the converted/repaired image; its separate
     // original WB image supplies the complementary contribution.
@@ -181,7 +182,7 @@ pub(crate) fn apply(
     )?;
     let intensity = gpu.upload("Range intensity conditioning", &prepared.intensity)?;
     let range = gpu.upload("Range weights", &prepared.range)?;
-    let mut filtered = gpu.storage("Range filtered camera RGB", input.size())?;
+    let mut filtered = classified.yuv;
     gpu.dispatch(
         Kernel::RgbPrefilterRange,
         &mut [
@@ -198,8 +199,8 @@ pub(crate) fn apply(
     );
     gpu.finish_trace(&trace, profile)?;
     Ok(Filtered {
-        rgb: gain(gpu, &filtered, prepared, true, profile)?,
-        source_after: gain(gpu, &balanced, prepared, true, profile)?,
+        rgb: gain(gpu, &filtered, restored, prepared, true, profile)?,
+        source_after: gain(gpu, &balanced, repaired, prepared, true, profile)?,
     })
 }
 

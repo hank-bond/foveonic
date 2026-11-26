@@ -102,6 +102,9 @@ pub(crate) fn apply(
     if input.size() != u64::from(prepared.extent[0]) * u64::from(prepared.extent[1]) * 4 {
         return Err("cell gain input extent mismatch".into());
     }
+    if prepared.grid.iter().all(|&gain| gain == 1.) {
+        return Ok(input.clone());
+    }
     let uniform = gpu.uniform(&[
         prepared.shape[0],
         prepared.shape[1],
