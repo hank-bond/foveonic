@@ -24,9 +24,11 @@ pub(super) const TARGETS: &[&str] = &[
     "multi-crop-done",
     "multi-shift",
     "multi-space",
+    // Direct Color picks first: a white-balance pick on a photo filled by one
+    // colour neutralizes that colour, leaving Direct Color nothing to select.
+    "multi-color",
     "multi-white-balance",
     "multi-dehaze",
-    "multi-color",
     "multi-choice",
 ];
 
@@ -49,7 +51,7 @@ const CROP_TARGETS: [&str; 3] = ["multi-crop", "multi-crop-one", "multi-crop-don
 /// a landscape photograph into a portrait one, which would re-arrange the
 /// view if the arrangement did not hold while the tool is armed.
 const CROPPED_BOUNDS: [f64; 4] = [0.1, 0.1, 0.5, 0.9];
-const PICK_TARGETS: [&str; 3] = ["multi-white-balance", "multi-dehaze", "multi-color"];
+const PICK_TARGETS: [&str; 3] = ["multi-color", "multi-white-balance", "multi-dehaze"];
 /// Image points tried in order until a pick's sample is usable, since a photo's
 /// centre can be neutral or dark.
 const PICK_POINTS: [[f32; 2]; 5] = [[0.5, 0.5], [0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]];
