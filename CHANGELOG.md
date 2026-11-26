@@ -13,7 +13,16 @@ Preview X3F photographs in Finder with the space bar, and render the same camera
 
 - Merrill: Edit Fine detail without recomputing the broad blur when Coarse detail is unchanged.
 - Quattro: Compute the detail mask only when sharpening needs it, so Universal and disabled sharpening skip it.
-- Quattro: Reuse intermediate image buffers and speed up shading and blue filtering. On an Apple M1 Pro, native Quality rendering completed 5.3% faster on the DP3 Quattro and 1.9% faster on the DP2 Quattro, and the measured DP3 Quattro editing workflow settled with 82 MiB less memory. Rendered images are unchanged.
+- Quattro: Reuse intermediate image buffers and speed up shading and blue filtering. On an Apple M1 Pro, native Quality rendering completed 5.3% faster on the DP3 Quattro and 1.9% faster on the DP2 Quattro. Rendered images are unchanged.
+- Use less memory for command-line renders and Quick Look previews: GPU pipelines are built only when a photograph needs them, and Quattro processing reuses its intermediate buffers. On an Apple M1 Pro, peak memory when rendering a full-size photograph in Quality:
+
+  | Photograph | 0.9.1 | 0.9.2 |
+  | --- | --- | --- |
+  | SD9 | 0.41 GiB | 0.32 GiB |
+  | SD14 | 0.55 GiB | 0.47 GiB |
+  | DP3 Merrill | 0.75 GiB | 0.68 GiB |
+  | DP2 Quattro | 1.84 GiB | 1.62 GiB |
+  | sd Quattro H | 2.50 GiB | 2.22 GiB |
 
 ### New functionality
 
