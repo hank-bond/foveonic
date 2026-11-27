@@ -65,7 +65,7 @@ Run the maintained comparison serially with explicit local originals:
 ```sh
 DECODER_RESEARCH_FILES=path/to/merrill.x3f:path/to/classic.x3f:path/to/quattro.x3f \
   cargo test --offline --release -p foveonic --lib \
-  x3f::huffman::lookup_tests::profile_fused_original_loading \
+  x3f::huffman::lookup_tests::profile_original_loading \
   -- --ignored --exact --nocapture --test-threads=1
 ```
 

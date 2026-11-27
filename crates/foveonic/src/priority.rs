@@ -623,7 +623,7 @@ mod tests {
         std::thread::spawn(|| {
             decode_priority();
             assert_eq!(qos(), QOS_USER_INITIATED);
-            crate::decode_pool::planes(|_| {
+            crate::decode_pool::plane_parts(0..3, |_| {
                 assert_eq!(qos(), QOS_USER_INITIATED);
                 Ok(())
             })
@@ -650,7 +650,7 @@ mod tests {
             assert_eq!(qos(), QOS_USER_INITIATED);
             Arc::new(Gate::default()).run(Priority::Export, || {
                 assert_eq!(qos(), QOS_UTILITY);
-                crate::decode_pool::planes(|_| {
+                crate::decode_pool::plane_parts(0..3, |_| {
                     assert_eq!(qos(), QOS_UTILITY);
                     Ok(())
                 })
@@ -686,7 +686,7 @@ mod tests {
                     || {
                         assert_eq!(qos(), QOS_UTILITY);
                         let task = decoder_context().unwrap();
-                        task.pool.planes(Some(&task.turn), |_| {
+                        task.pool.parts(0..3, Some(&task.turn), |_| {
                             assert_eq!(qos(), QOS_UTILITY);
                             Ok(())
                         })?;

@@ -98,7 +98,7 @@ fn packed_sensor_matches_serial_planes() {
         .map(|channel| {
             let length = bytes.offset(84 + channel * 4).unwrap();
             let plane = table
-                .decode_bounded(
+                .decode(
                     bytes.range(offset, length).unwrap(),
                     usize::from(bytes.u16(28 + channel * 4).unwrap()),
                     usize::from(bytes.u16(30 + channel * 4).unwrap()),
@@ -251,17 +251,16 @@ fn unsigned_equal_resolution_planes_keep_rgb_and_reduced_special_columns() {
 
 #[test]
 fn packed_special_columns_still_replace_physical_pairs() {
-    let section = unsigned_fixture(64, 8, true, 4);
-    let decoded = decode(&section, 64, 8, 35).unwrap();
-    assert_eq!(
-        decoded.storage,
-        crate::source::SourceStorage::PackedRgbBluePhases
-    );
-    assert_eq!(decoded.pixels.len(), 32 * 4 * 6);
-    assert_eq!(&decoded.pixels[..6], &[10., 20., 31., 29., 30., 30.]);
-    assert!(decoded.pixels[6..]
-        .as_chunks::<6>()
-        .0
-        .iter()
-        .all(|v| *v == [10., 20., 30., 30., 30., 30.]));
+    for (width, extra) in [(64, 4), (34, 5)] {
+        let section = unsigned_fixture(width, 8, true, extra);
+        let decoded = decode(&section, width, 8, 35).unwrap();
+        assert_eq!(decoded.storage, SourceStorage::PackedRgbBluePhases);
+        assert_eq!(decoded.pixels.len(), width / 2 * 4 * 6);
+        assert_eq!(&decoded.pixels[..6], &[10., 20., 31., 29., 30., 30.]);
+        assert!(decoded.pixels[6..]
+            .as_chunks::<6>()
+            .0
+            .iter()
+            .all(|v| *v == [10., 20., 30., 30., 30., 30.]));
+    }
 }

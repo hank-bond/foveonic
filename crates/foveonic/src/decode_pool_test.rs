@@ -6,7 +6,7 @@ use std::{sync::mpsc, time::Duration};
 type Latch = (Mutex<bool>, Condvar);
 
 #[test]
-fn borrowed_cpu_preparation_and_nested_planes_share_capacity_and_cancellation() {
+fn borrowed_cpu_preparation_and_planes_share_capacity_and_cancellation() {
     let pool = Arc::new(Pool::new(2).unwrap());
     let gate = Arc::new(priority::Gate::default());
     let values = [3, 5, 7];
@@ -17,14 +17,16 @@ fn borrowed_cpu_preparation_and_nested_planes_share_capacity_and_cancellation() 
                 turn: Arc::new(Order::default()).issue(),
             },
             || {
+                cpu(|| {
+                    assert!(pool.0.current_thread_index().is_some());
+                    assert!(priority::context().is_some());
+                    Ok(())
+                })?;
+                // The file caller waits outside the pool while planes run on it.
                 assert_eq!(
-                    cpu(|| {
+                    plane_parts(0..3, |channel| {
                         assert!(pool.0.current_thread_index().is_some());
-                        assert!(priority::context().is_some());
-                        planes(|channel| {
-                            assert!(pool.0.current_thread_index().is_some());
-                            Ok(values[channel])
-                        })
+                        Ok(values[channel])
                     })?,
                     values
                 );
@@ -111,7 +113,7 @@ fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
     assert_eq!(pool.threads(), available_workers());
     let caller = std::thread::current().id();
     assert_eq!(
-        planes(|channel| {
+        plane_parts(0..3, |channel| {
             assert!(pool.0.current_thread_index().is_some());
             assert_ne!(std::thread::current().id(), caller);
             assert!(priority::context().is_none());
@@ -139,7 +141,7 @@ fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
                 turn: Arc::new(Order::default()).issue(),
             },
             || {
-                planes(|channel| {
+                plane_parts(0..3, |channel| {
                     assert!(pool.0.current_thread_index().is_some());
                     assert!(Arc::ptr_eq(
                         &pool,
@@ -187,7 +189,7 @@ fn five_workers_start_rgb_rg_then_take_the_next_b_before_the_first_photo_finishe
                     priority::interruptible(Arc::new(priority::Gate::default()), || {
                         priority::decoder(Task { pool, turn }, || {
                             let task = priority::decoder_context().unwrap();
-                            task.pool.planes(Some(&task.turn), |layer| {
+                            task.pool.parts(0..3, Some(&task.turn), |layer| {
                                 started
                                     .send((photo, layer, std::thread::current().id()))
                                     .unwrap();
@@ -255,12 +257,92 @@ fn cancellation_reaches_queued_layers_and_unblocks_later_photo_admission() {
             let _foreground = gate.demand(crate::priority::Priority::Viewport);
             assert!(task
                 .pool
-                .planes(Some(&task.turn), |_| Ok(()))
+                .parts(0..3, Some(&task.turn), |_| Ok(()))
                 .unwrap_err()
                 .is::<priority::Interrupted>());
             Ok(())
         })
         .unwrap();
+    });
+}
+
+#[test]
+fn plane_fragments_share_the_admitted_worker_and_cancel_queued_fragments() {
+    let pool = Arc::new(Pool::new(1).unwrap());
+    let gate = Arc::new(priority::Gate::default());
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    priority::interruptible(gate.clone(), || {
+        let error = priority::decoder(
+            Task {
+                pool,
+                turn: Arc::new(Order::default()).issue(),
+            },
+            || {
+                plane_parts(0..4, |part| {
+                    assert_eq!(rayon::current_num_threads(), 1);
+                    assert_eq!(part, 0);
+                    calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    gate.interrupt_speculative();
+                    priority::checkpoint_or_cancel()
+                })
+            },
+        )
+        .unwrap_err();
+        assert!(error.is::<priority::Interrupted>());
+    });
+    assert_eq!(calls.into_inner(), 1);
+}
+
+#[test]
+fn outside_part_join_completes_while_a_worker_is_paused_by_viewport_demand() {
+    let pool = Pool::new(2).unwrap();
+    let gate = Arc::new(priority::Gate::default());
+    let latches = Arc::new(vec![
+        (Mutex::new(false), Condvar::new()),
+        (Mutex::new(false), Condvar::new()),
+    ]);
+    let timeout = Duration::from_secs(10);
+    let (started, start) = mpsc::channel();
+    let (lower_started, lower_start) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let _release = ReleaseAll(latches.clone());
+        let demand = gate.demand(priority::Priority::Viewport);
+        scope.spawn(|| {
+            let output = pool.parts(0..2, None, |index| {
+                started.send(index).unwrap();
+                let (open, wake) = &latches[index];
+                drop(
+                    wake.wait_while(open.lock().unwrap(), |open| !*open)
+                        .unwrap(),
+                );
+                Ok(index)
+            });
+            done.send(output).unwrap();
+        });
+        let first = start.recv_timeout(timeout).unwrap();
+        let second = start.recv_timeout(timeout).unwrap();
+        assert_ne!(first, second);
+        scope.spawn(|| {
+            pool.0.install(|| {
+                let context = gate.context(priority::Priority::Export);
+                priority::with_context(context, || {
+                    lower_started.send(()).unwrap();
+                    priority::checkpoint();
+                });
+            });
+        });
+        for (index, is_lower_start) in [(first, true), (second, false)] {
+            let (open, wake) = &latches[index];
+            *open.lock().unwrap() = true;
+            wake.notify_one();
+            if is_lower_start {
+                lower_start.recv_timeout(timeout).unwrap();
+            }
+        }
+        let output = finished.recv_timeout(timeout);
+        drop(demand);
+        assert_eq!(output.unwrap().unwrap(), [0, 1]);
     });
 }
 
@@ -290,7 +372,7 @@ fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
                     },
                     || {
                         let task = priority::decoder_context().unwrap();
-                        task.pool.planes(Some(&task.turn), |layer| {
+                        task.pool.parts(0..3, Some(&task.turn), |layer| {
                             started.send(layer).unwrap();
                             let mut released = latches[layer].0.lock().unwrap();
                             while !*released {
@@ -320,7 +402,7 @@ fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
     let next = priority::interruptible(gate, || {
         priority::decoder(Task { pool, turn: second }, || {
             let task = priority::decoder_context().unwrap();
-            task.pool.planes(Some(&task.turn), Ok)
+            task.pool.parts(0..3, Some(&task.turn), Ok)
         })
     })
     .unwrap();
