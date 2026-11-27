@@ -31,34 +31,18 @@ pub struct Prepared {
     // divisor, component count, mean/max/union/signed-mean, declared scale
     controls: [u32; 4],
     origin: [u32; 4],
-    source_bounds: [u32; 4],
 }
 impl Prepared {
     /// Means use only samples covered by the final partial cell. Mask coverage
     /// uses maximum and categorical flags use bitwise union.
     pub(crate) fn new(extent: [u32; 2], divisor: u32, signal: Signal) -> Result<Self> {
-        Self::from_bounds(extent, [0, 0, extent[0], extent[1]], divisor, signal)
-    }
-    pub(crate) fn rgb_region(extent: [u32; 2], bounds: [u32; 4], divisor: u32) -> Result<Self> {
-        Self::from_bounds(extent, bounds, divisor, Signal::Rgb)
-    }
-    fn from_bounds(
-        extent: [u32; 2],
-        bounds: [u32; 4],
-        divisor: u32,
-        signal: Signal,
-    ) -> Result<Self> {
-        let [left, top, right, bottom] = bounds;
         if !divisor.is_power_of_two()
-            || left >= right
-            || top >= bottom
-            || right > extent[0]
-            || bottom > extent[1]
+            || extent.contains(&0)
             || u64::from(extent[0]) * u64::from(extent[1]) > u64::from(u32::MAX) / 3
         {
             return Err("invalid corrected-signal pooling geometry".into());
         }
-        let logical = [right - left, bottom - top].map(|v| v.div_ceil(divisor));
+        let logical = extent.map(|v| v.div_ceil(divisor));
         Ok(Self {
             shape: [extent[0], extent[1], logical[0], logical[1]],
             controls: [
@@ -72,7 +56,6 @@ impl Prepared {
                 0,
             ],
             origin: [0, 0, logical[0], logical[1]],
-            source_bounds: bounds,
         })
     }
     /// Classic signed codes narrow once after the completed two-dimensional mean.
@@ -114,8 +97,7 @@ impl Prepared {
         [self.shape[2], self.shape[3]]
     }
     pub(crate) fn largest_cell_area(&self) -> u64 {
-        let [left, top, right, bottom] = self.source_bounds;
-        [right - left, bottom - top]
+        self.extent()
             .into_iter()
             .map(|side| u64::from(side.min(self.controls[0])))
             .product()
@@ -131,9 +113,6 @@ impl Prepared {
     }
     pub(crate) fn map_view(&self, mut view: crate::image::View) -> crate::image::View {
         let scale = crate::render::Scale::new(self.controls[0]).expect("validated pooling divisor");
-        if self.source_bounds != [0, 0, self.shape[0], self.shape[1]] {
-            view = crate::nodes::finish::image_region::map_view(view, self.source_bounds);
-        }
         view.crop = scale.bounds(view.crop);
         view.extent = scale.extent(view.extent);
         for axis in 0..2 {
@@ -170,7 +149,6 @@ pub(crate) fn apply(
     }
     if prepared.controls[0] == 1
         && [out_width, out_height] == [width, height]
-        && prepared.logical_extent() == [width, height]
         && prepared.origin[..2] == [0, 0]
     {
         return Ok(input.clone());

@@ -1352,8 +1352,6 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                         &mut execution,
                     )
                     .unwrap();
-                    let expected_scale =
-                        super::adaptive_analysis_scale(&settings, caps.thumb_scale()).unwrap();
                     let (params, analysis_params, curve) = built
                         .graph
                         .nodes
@@ -1364,27 +1362,7 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                                 analysis,
                                 curve,
                                 ..
-                            } => {
-                                if quality.is_reduced() && expected_scale != quality {
-                                    let alias = &built.graph.nodes
-                                        [built.graph.outputs[n.inputs[2]].producer];
-                                    let pool = &built.graph.nodes
-                                        [built.graph.outputs[alias.inputs[0]].producer];
-                                    assert!(matches!(
-                                        pool.operation,
-                                        Operation::ReduceLayers {
-                                            data: crate::graph::DataType::LinearRgb(_),
-                                            ..
-                                        }
-                                    ));
-                                    assert_eq!(
-                                        pool.inputs,
-                                        [n.inputs[0]],
-                                        "pool the same pre-tone RGB that receives the response"
-                                    );
-                                }
-                                Some((*params, *analysis, curve.clone()))
-                            }
+                            } => Some((*params, *analysis, curve.clone())),
                             _ => None,
                         })
                         .unwrap();
@@ -1429,6 +1407,8 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                     else {
                         panic!("missing inputs")
                     };
+                    let expected_scale =
+                        super::adaptive_analysis_scale(&settings, caps.thumb_scale()).unwrap();
                     assert_eq!(analysis_rgb.settings.working_scale, expected_scale);
                     assert_eq!(analysis_mask.settings.working_scale, expected_scale);
                     assert_eq!(input.settings.working_scale, quality);
@@ -1478,12 +1458,7 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                     );
                     let fit = gpu.readback(&replay.amounts).unwrap();
                     let sample = (bytes, guide, analysis_params.key(), fit);
-                    // A pooled Fit derives from this working RGB. A directly reconstructed
-                    // analysis grid can still match native patch and whole requests.
-                    let pooled_from =
-                        (quality.is_reduced() && quality != expected_scale).then_some(quality);
-                    let identity = (expected_scale, pooled_from);
-                    if let Some((rgb, mask, key, fit)) = expected.get(&identity) {
+                    if let Some((rgb, mask, key, fit)) = expected.get(&expected_scale) {
                         assert_eq!(
                             &sample.0, rgb,
                             "analysis RGB changed at {quality:?} {region:?}"
@@ -1501,7 +1476,7 @@ fn original_adaptive_tone_reuses_profile_analysis_and_replays_every_working_grid
                             "fitted amounts changed at {quality:?} {region:?}"
                         );
                     } else {
-                        expected.insert(identity, sample);
+                        expected.insert(expected_scale, sample);
                     }
                     assert!(bytemuck::cast_slice::<u8, f32>(
                         &gpu.readback(&actual.buffer).unwrap()

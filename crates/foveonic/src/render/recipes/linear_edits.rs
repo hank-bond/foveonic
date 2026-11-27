@@ -252,23 +252,64 @@ pub(super) fn build(
         let application_scale = settings
             .processing_quality
             .guide_scale(settings.working_scale);
-        let (mask, params, analysis_rgb, analysis_mask, analysis) = if regional
-            || application_scale != settings.working_scale
-        {
-            let (analysis_rgb, analysis_mask, analysis, analysis_mapping) = adaptive_analysis(
-                engine,
-                source,
-                settings,
-                recipe,
-                space,
-                white,
-                dehaze_basis,
-                params,
-                analysis_scale,
-                names,
-                profile,
-                execution,
-            )?;
+        let separate_guide = regional || application_scale != settings.working_scale;
+        let mask = if separate_guide {
+            None
+        } else {
+            let guide =
+                tone_equalizer::Guide::new(extent, tone_equalizer::radius_for_scale(scale), space)?
+                    .with_white(white);
+            let mask = recipe
+                .graph
+                .add(Operation::AdaptiveToneGuide { guide, space }, &[input])?;
+            mask_inspection(&mut recipe.graph, mask, guide, "base-response.mask", names)?;
+            recipe.graph.retain_for_session(mask);
+            Some((mask, guide))
+        };
+        let (analysis_rgb, analysis_mask, analysis, analysis_mapping) =
+            if analysis_scale == settings.working_scale && !separate_guide {
+                let (mask, guide) = mask.expect("whole-photo application prepared its guide");
+                let rgb = recipe.graph.add(
+                    Operation::ImageAlias {
+                        dehaze_basis: None,
+                        data: DataType::LinearRgb(space),
+                        output: "base-response.analysis",
+                    },
+                    &[input],
+                )?;
+                let mask = recipe.graph.add(
+                    Operation::ImageAlias {
+                        dehaze_basis: None,
+                        data: DataType::BrightnessGuide,
+                        output: "base-response.analysis-guide",
+                    },
+                    &[mask],
+                )?;
+                mask_inspection(
+                    &mut recipe.graph,
+                    mask,
+                    guide,
+                    "base-response.analysis-mask",
+                    names,
+                )?;
+                (rgb, mask, params, recipe.rgb_to_native)
+            } else {
+                adaptive_analysis(
+                    engine,
+                    source,
+                    settings,
+                    recipe,
+                    space,
+                    white,
+                    dehaze_basis,
+                    params,
+                    analysis_scale,
+                    names,
+                    profile,
+                    execution,
+                )?
+            };
+        let (mask, params) = if separate_guide {
             let (application_mask, application, application_mapping) =
                 if application_scale == analysis_scale {
                     let guide = tone_equalizer::Guide::new(
@@ -301,71 +342,19 @@ pub(super) fn build(
                         execution,
                     )?
                 };
-            let params = params.with_application_guide(
-                application,
-                guide_mapping(recipe.rgb_to_native, application_mapping)?,
-                application_scale == settings.working_scale,
-            )?;
             (
                 application_mask,
-                params,
-                analysis_rgb,
-                analysis_mask,
-                analysis,
+                params.with_application_guide(
+                    application,
+                    guide_mapping(recipe.rgb_to_native, application_mapping)?,
+                    application_scale == settings.working_scale,
+                )?,
             )
         } else {
-            let (mask, guide) =
-                adaptive_guide(&mut recipe.graph, input, extent, scale, space, white, None)?;
-            mask_inspection(&mut recipe.graph, mask, guide, "base-response.mask", names)?;
-            recipe.graph.retain_for_session(mask);
-
-            let (rgb, analysis_mask, guide, analysis) = if analysis_scale == settings.working_scale
-            {
-                (input, mask, guide, params)
-            } else {
-                let divisor = analysis_scale.divisor() / settings.working_scale.divisor();
-                let pool = crate::nodes::sensor::pool::Prepared::rgb_region(
-                    extent,
-                    recipe.rgb_bounds,
-                    divisor,
-                )?
-                .with_working_scale(analysis_scale);
-                let [width, height] = pool.output_extent();
-                let rgb = recipe.graph.add_scoped(
-                    Operation::ReduceLayers {
-                        prepared: pool,
-                        data: DataType::LinearRgb(space),
-                    },
-                    &[input],
-                    "base-response-analysis",
-                )?;
-                let sampling = scale / divisor as f32;
-                let (mask, guide) = adaptive_guide(
-                    &mut recipe.graph,
-                    rgb,
-                    [width, height],
-                    sampling,
-                    space,
-                    white,
-                    Some("base-response-analysis"),
-                )?;
-                let analysis =
-                    params.with_geometry([width, height], [0, 0, width, height], sampling)?;
-                recipe.graph.prioritize_for_session(rgb);
-                recipe.graph.prioritize_for_session(mask);
-                (rgb, mask, guide, analysis)
-            };
-            let rgb = recipe.graph.add(
-                Operation::ImageAlias {
-                    dehaze_basis: None,
-                    data: DataType::LinearRgb(space),
-                    output: "base-response.analysis",
-                },
-                &[rgb],
-            )?;
-            let analysis_mask =
-                name_analysis_guide(&mut recipe.graph, analysis_mask, guide, names)?;
-            (mask, params, rgb, analysis_mask, analysis)
+            (
+                mask.expect("whole-photo application prepared its guide").0,
+                params,
+            )
         };
         recipe.final_id = recipe.graph.add(
             Operation::AdaptiveTone {
@@ -773,45 +762,6 @@ fn adaptive_rgb(
     Ok(branch)
 }
 
-fn name_analysis_guide(
-    graph: &mut Graph,
-    mask: usize,
-    guide: tone_equalizer::Guide,
-    names: &[&str],
-) -> Result<usize> {
-    let mask = graph.add(
-        Operation::ImageAlias {
-            dehaze_basis: None,
-            data: DataType::BrightnessGuide,
-            output: "base-response.analysis-guide",
-        },
-        &[mask],
-    )?;
-    mask_inspection(graph, mask, guide, "base-response.analysis-mask", names)?;
-    Ok(mask)
-}
-
-/// The guide reads its RGB directly. An inspection alias in between would
-/// prevent numerical reuse of a matching Fast overview guide.
-fn adaptive_guide(
-    graph: &mut Graph,
-    rgb: usize,
-    extent: [u32; 2],
-    scale: f32,
-    space: ColorSpace,
-    white: f32,
-    scope: Option<&str>,
-) -> Result<(usize, tone_equalizer::Guide)> {
-    let guide = tone_equalizer::Guide::new(extent, tone_equalizer::radius_for_scale(scale), space)?
-        .with_white(white);
-    let operation = Operation::AdaptiveToneGuide { guide, space };
-    let mask = match scope {
-        Some(scope) => graph.add_scoped(operation, &[rgb], scope)?,
-        None => graph.add(operation, &[rgb])?,
-    };
-    Ok((mask, guide))
-}
-
 #[allow(clippy::too_many_arguments)]
 fn adaptive_application_guide(
     engine: &Engine,
@@ -842,14 +792,17 @@ fn adaptive_application_guide(
         profile,
         execution,
     )?;
-    let (mask, guide) = adaptive_guide(
-        &mut branch.graph,
-        branch.final_id,
+    let guide = tone_equalizer::Guide::new(
         branch.rgb_extent,
-        scale.factor(),
+        tone_equalizer::radius_for_scale(scale.factor()),
         space,
-        white,
-        None,
+    )?
+    .with_white(white);
+    // Keep the ordinary guide's direct RGB parent. An inspection alias before
+    // the filter would prevent numerical reuse of a matching Fast overview guide.
+    let mask = branch.graph.add(
+        Operation::AdaptiveToneGuide { guide, space },
+        &[branch.final_id],
     )?;
     mask_inspection(&mut branch.graph, mask, guide, "base-response.mask", names)?;
     let geometry = params.with_geometry(branch.rgb_extent, branch.rgb_bounds, scale.factor())?;
@@ -898,16 +851,30 @@ fn adaptive_analysis(
     let guide_rgb = branch.final_id;
     alias(&mut branch, space, "base-response.analysis")?;
     let rgb = branch.final_id;
-    let (mask, guide) = adaptive_guide(
-        &mut branch.graph,
-        guide_rgb,
+    let guide = tone_equalizer::Guide::new(
         branch.rgb_extent,
-        analysis_scale.factor(),
+        tone_equalizer::radius_for_scale(analysis_scale.factor()),
         space,
-        white,
-        None,
+    )?
+    .with_white(white);
+    let mask = branch
+        .graph
+        .add(Operation::AdaptiveToneGuide { guide, space }, &[guide_rgb])?;
+    let mask = branch.graph.add(
+        Operation::ImageAlias {
+            dehaze_basis: None,
+            data: DataType::BrightnessGuide,
+            output: "base-response.analysis-guide",
+        },
+        &[mask],
     )?;
-    let mask = name_analysis_guide(&mut branch.graph, mask, guide, names)?;
+    mask_inspection(
+        &mut branch.graph,
+        mask,
+        guide,
+        "base-response.analysis-mask",
+        names,
+    )?;
     let analysis = params.with_geometry(
         branch.rgb_extent,
         branch.rgb_bounds,

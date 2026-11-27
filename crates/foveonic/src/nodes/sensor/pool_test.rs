@@ -12,9 +12,6 @@ fn pooling_covers_partial_cells_at_every_power_of_two() {
     }
     assert!(Prepared::new([64, 48], 3, Signal::Rgb).is_err());
     assert!(Prepared::new([0, 48], 2, Signal::Rgb).is_err());
-    for bounds in [[2, 0, 2, 3], [0, 2, 3, 1], [0, 0, 6, 4], [0, 0, 4, 6]] {
-        assert!(Prepared::rgb_region([5, 5], bounds, 2).is_err());
-    }
 }
 
 #[test]
@@ -78,26 +75,6 @@ fn pooling_preserves_means_coverage_and_source() {
             );
         }
     }
-    let rgb = |v: f32| [v, -v, 2. * v];
-    let pixels: Vec<_> = (0..6)
-        .flat_map(|y| {
-            (0..8).map(move |x| {
-                if (1..6).contains(&x) && (1..4).contains(&y) {
-                    rgb((10 * y + x) as f32)
-                } else {
-                    [f32::NAN; 3]
-                }
-            })
-        })
-        .collect();
-    let input = gpu.upload("Offset valid RGB rectangle", &pixels).unwrap();
-    let bounded = Prepared::rgb_region([8, 6], [1, 1, 6, 4], 2).unwrap();
-    let output = apply(&gpu, &input, &bounded, &mut Profile::default()).unwrap();
-    let bytes = gpu.readback(&output).unwrap();
-    assert_eq!(
-        bytemuck::cast_slice::<u8, [f32; 3]>(&bytes),
-        [16.5, 18.5, 20., 31.5, 33.5, 35.].map(rgb)
-    );
 }
 
 #[test]
@@ -289,15 +266,6 @@ fn pooling_maps_each_component_frame_with_its_own_origin() {
         prepared.map_view(view),
         crate::image::View {
             crop: [2, 4, 10, 12],
-            rotation: 90,
-            extent: [8, 7]
-        }
-    );
-    let bounded = Prepared::rgb_region([33, 35], view.crop, 4).unwrap();
-    assert_eq!(
-        bounded.map_view(view),
-        crate::image::View {
-            crop: [0, 0, 7, 8],
             rotation: 90,
             extent: [8, 7]
         }

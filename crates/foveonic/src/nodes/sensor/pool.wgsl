@@ -1,4 +1,4 @@
-struct Params { shape: vec4<u32>, controls: vec4<u32>, origin: vec4<u32>, source_bounds: vec4<u32> }
+struct Params { shape: vec4<u32>, controls: vec4<u32>, origin: vec4<u32> }
 @group(0) @binding(0) var<storage, read> source: array<u32>;
 @group(0) @binding(1) var<uniform> p: Params;
 @group(0) @binding(2) var<storage, read_write> destination: array<u32>;
@@ -10,8 +10,8 @@ fn pool_signal(@builtin(global_invocation_id) id: vec3<u32>) {
     // Each edge cell owns its adjacent halo, so its reduction runs only once.
     let output_first = select(p.origin.xy + cell, vec2<u32>(0), cell == vec2<u32>(0));
     let output_end = select(p.origin.xy + cell + vec2<u32>(1), p.shape.zw, cell + vec2<u32>(1) == p.origin.zw);
-    let first = p.source_bounds.xy + cell * p.controls.x;
-    let end = min(p.source_bounds.zw, first + vec2(p.controls.x));
+    let first = cell * p.controls.x;
+    let end = min(p.shape.xy, first + vec2(p.controls.x));
     if p.controls.x == 1u {
         let input = (first.y * p.shape.x + first.x) * p.controls.y;
         for (var y = output_first.y; y < output_end.y; y++) {

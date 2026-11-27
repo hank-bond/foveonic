@@ -61,10 +61,6 @@ When adjacent workgroups repeatedly load the same border pixels, try increasing 
 
 Inspect the final mix at neutral control values. With Merrill Coarse Amount at one, its broad blur cancels and both map inputs can read the Fine boundary. Derive the loop length from the effective controls and use it for dispatch accounting too. Exercise the inspector and non-neutral fallback. Algebraic cancellation can change floating-point rounding. [Merrill Detail measurements](../plans/graph-node-performance.md#skipping-the-broad-blur-at-neutral-coarse-amount)
 
-### Reduce an image the graph already has
-
-Look for a small analysis guide that triggers a second camera reconstruction. At reduced Fit resolutions, Speed Adaptive Tone area-averages the pre-tone RGB the graph already has. Use that exact upstream stage so edits such as white balance and Dehaze reach the guide. Express the reduction relative to the working grid and reuse the existing guide when the grids coincide. Downsampling after nonlinear reconstruction can change pixels, so compare the visible output within the policy’s tolerance. [Adaptive Tone measurements](../plans/graph-node-performance.md#adaptive-tone-at-reduced-fit-resolutions)
-
 ## Correctness
 
 ### Keep the order of floating-point operations when changing storage

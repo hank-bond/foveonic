@@ -40,6 +40,8 @@ On Windows Intel UHD 630, full Quality manual Dehaze fell from 2,350 to 1,667 ms
 
 ## Adaptive Tone at reduced Fit resolutions
 
+Reverted before 0.9.3 (owner, 2026-11-26). The shortcut gave one requested buffer two producers, chosen by the full render's working size. Cross-scale reuse will instead be an engine capability that serves a requested buffer from a finer cached one, enabled in Speed first and compared node by node. The measurements below remain the evidence for it.
+
 The [adaptive recipe](../crates/foveonic/src/render/recipes/linear_edits.rs) previously built a second camera RGB input when Speed requested a smaller whole-photo analysis grid. Two experimental renderers used the existing post-Dehaze, pre-tone RGB instead. One reused the working RGB and its brightness guide directly with Speed's existing 256 × 256 estimator. The other used the existing GPU area mean once to produce the selected analysis dimensions, then prepared its guide. The experimental change applied only to reduced working grids. The [recipe preparation path](../crates/foveonic/src/render/recipes/mod.rs) resolves reduced regional requests to whole-photo renders.
 
 Apple M1 Pro fresh-processing medians in milliseconds with profiling off, after two warm-ups. The leaves used its saved Natural recipe. The latch exercised Strong and the coast exercised Natural with manual Dehaze at 35. The leaves had seven timed samples per build and the other photographs had five.
