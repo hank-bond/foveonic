@@ -1,4 +1,4 @@
-//! Splits large sensor streams on verified Huffman boundaries and reconstructs sensor samples.
+//! Splits sensor and calibration streams on verified Huffman boundaries.
 
 use super::{Bits, Difference, Plane, Table, PREFIX_TABLE_ENTRIES};
 use crate::{diagnostics, priority, source::Result};
@@ -18,7 +18,12 @@ impl Split {
         if fragments <= 1 {
             return None;
         }
-        let input = plane.input;
+        // Compressed bytes do not divide evenly by sample count.
+        let share = (plane.width * plane.height).div_ceil(fragments);
+        Self::plan(table, plane.input, fragments, share + share / 2)
+    }
+
+    fn plan(table: &Table, input: &[u8], fragments: usize, capacity: usize) -> Option<Self> {
         let longest = table.0.iter().map(|s| s.length + s.category).max()? as usize;
         if longest == 0 {
             return None;
@@ -34,10 +39,6 @@ impl Split {
             boundaries.push(next);
         }
         boundaries.push(end);
-        // Compressed bytes do not divide evenly by sample count. Leave room
-        // for changes in compression while keeping scratch bounded.
-        let share = (plane.width * plane.height).div_ceil(fragments);
-        let capacity = share + share / 2;
         Some(Self {
             boundaries,
             longest,
@@ -67,7 +68,15 @@ impl Split {
                 fields.u64("bits", range.len() as u64);
             },
         );
-        unpack(table, lookup, input, range, self.longest, self.capacity)
+        unpack(
+            table,
+            lookup,
+            input,
+            range,
+            self.longest,
+            self.capacity,
+            |difference| difference as u16,
+        )
     }
 }
 
@@ -131,6 +140,68 @@ pub(super) fn reconstruct(
     Ok(Some(output))
 }
 
+pub(super) fn decode_bytes(
+    table: &Table,
+    input: &[u8],
+    length: usize,
+    seed: u8,
+    fragments: usize,
+) -> Result<Option<Vec<u8>>> {
+    priority::checkpoint_or_cancel()?;
+    // Calibration records can vary widely in compressed symbol density.
+    let capacity = 2 * length.div_ceil(fragments);
+    let Some(split) = Split::plan(table, input, fragments, capacity) else {
+        return Ok(None);
+    };
+    let lookup = table.differences();
+    let parts = crate::decode_pool::plane_parts(0..split.len(), |part| {
+        let _scope = diagnostics::scope_with(
+            diagnostics::Category::Cpu,
+            "decode.camf.fragment",
+            |fields| {
+                fields.u64("fragment", part as u64);
+            },
+        );
+        let range = split.boundaries[part]..split.boundaries[part + 1];
+        let mut byte = 0_u8;
+        unpack(
+            table,
+            &lookup,
+            input,
+            range,
+            split.longest,
+            split.capacity,
+            |difference| {
+                byte = byte.wrapping_add(difference as u8);
+                byte
+            },
+        )
+    })?;
+    let mut carry = seed;
+    let mut output = Vec::with_capacity(length);
+    for (index, part) in parts.into_iter().enumerate() {
+        priority::checkpoint_or_cancel()?;
+        let Some(mut part) = part else {
+            return Ok(None);
+        };
+        let remaining = length - output.len();
+        if index + 1 == split.len() {
+            // The declared size selects the last byte even if the input continues.
+            if part.len() < remaining {
+                return Ok(None);
+            }
+            part.truncate(remaining);
+        } else if part.len() > remaining {
+            return Ok(None);
+        }
+        // A chunk starts at zero. Its final byte is its total delta.
+        let sum = part.last().copied().unwrap_or(0);
+        output.extend(part.into_iter().map(|byte| byte.wrapping_add(carry)));
+        carry = carry.wrapping_add(sum);
+    }
+    Ok(Some(output))
+}
+
 // Each set bit is a live candidate token boundary. Start with every possible
 // boundary within one token of the cut, then walk and merge the candidates.
 // See Dougall Johnson, "Parallelising Huffman decoding and x86 disassembly".
@@ -169,34 +240,35 @@ fn at_bit(input: &[u8], start: usize) -> Bits<'_> {
     bits
 }
 
-fn unpack(
+fn unpack<T>(
     table: &Table,
     lookup: &[Difference; PREFIX_TABLE_ENTRIES],
     input: &[u8],
     range: Range<usize>,
     longest: usize,
     capacity: usize,
-) -> Result<Option<Vec<u16>>> {
+    mut sample: impl FnMut(i16) -> T,
+) -> Result<Option<Vec<T>>> {
     let end_byte = range.end.div_ceil(8);
     let padding = end_byte * 8 - range.end;
     let last = end_byte == input.len() && padding == 0;
     let mut bits = at_bit(&input[..end_byte], range.start);
-    let mut differences = Vec::with_capacity(capacity);
+    let mut decoded = Vec::with_capacity(capacity);
     loop {
         priority::checkpoint_or_cancel()?;
         let remaining = bits.data.len() * 8 + bits.buffered_bits as usize;
-        if remaining <= padding || differences.len() == capacity {
-            return Ok((remaining == padding || last).then_some(differences));
+        if remaining <= padding || decoded.len() == capacity {
+            return Ok((remaining == padding || last).then_some(decoded));
         }
         // Each full batch fits without a per-symbol end-position check. Close
         // to the boundary, check after one symbol at a time.
         let batch = ((remaining - padding) / longest)
             .clamp(1, CHECKPOINT_SAMPLES)
-            .min(capacity - differences.len());
+            .min(capacity - decoded.len());
         for _ in 0..batch {
             match table.looked_up_difference(lookup, &mut bits) {
-                Ok(difference) => differences.push(difference as u16),
-                Err(_) => return Ok(last.then_some(differences)),
+                Ok(difference) => decoded.push(sample(difference)),
+                Err(_) => return Ok(last.then_some(decoded)),
             }
         }
     }

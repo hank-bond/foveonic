@@ -4,20 +4,65 @@
 
 use super::bytes::{product, Bytes};
 use super::huffman::Table;
-use crate::input_error::damaged;
 use crate::source::{Matrix, MatrixEncoding, PropertyList, Result};
-use std::collections::BTreeMap;
+use crate::{decode_pool, diagnostics, input_error::damaged, priority, profile::Timing};
+use std::{collections::BTreeMap, time::Instant};
 
 pub(super) type Lists = BTreeMap<String, PropertyList>;
+type Decoded = (Vec<u8>, BTreeMap<String, Matrix>, Lists);
 
 const PACKED_HUFFMAN_COMPRESSION: u32 = 4;
+const BYTE_HUFFMAN_COMPRESSION: u32 = 5;
+const COMPRESSED_LENGTH_OFFSET: usize = 56;
+const MINIMUM_FRAGMENT_BYTES: usize = 256 * 1024;
+const MAXIMUM_FRAGMENTS: usize = 8;
 const MATRIX_BLOCK_VERSION: u32 = 0x0002_0000;
 const LIST_BLOCK_VERSION: u32 = 0x0001_0000;
 const BLOCK_HEADER_BYTES: usize = 20;
 const MAXIMUM_DECODED_BYTES: usize = 64 * 1024 * 1024;
 const BYTE_METADATA_CAPACITY: usize = 0x85bcb8;
 
-pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
+pub(super) fn read(section: &[u8], timings: &mut Vec<Timing>) -> Result<Decoded> {
+    let bytes = Bytes(section);
+    let fragments = if bytes.u32(8).ok() == Some(BYTE_HUFFMAN_COMPRESSION)
+        && priority::decoder_context().is_none()
+    {
+        decode_pool::available_workers()
+            .min(bytes.offset(COMPRESSED_LENGTH_OFFSET).unwrap_or(0) / MINIMUM_FRAGMENT_BYTES)
+            .min(MAXIMUM_FRAGMENTS)
+    } else {
+        1
+    };
+    let unpack = |timings: &mut Vec<Timing>| -> Result<Vec<u8>> {
+        let start = Instant::now();
+        let camf = {
+            let _scope = diagnostics::scope(diagnostics::Category::Cpu, "decode.camf.decompress");
+            decompress(section, fragments)?
+        };
+        timings.push(Timing::elapsed("CAMF decompress", start));
+        Ok(camf)
+    };
+    let parse_metadata = |camf: Vec<u8>, timings: &mut Vec<Timing>| {
+        let start = Instant::now();
+        let (matrices, lists) = {
+            let _scope = diagnostics::scope(diagnostics::Category::Cpu, "decode.camf.parse");
+            parse(&camf)?
+        };
+        timings.push(Timing::elapsed("CAMF parse", start));
+        Ok((camf, matrices, lists))
+    };
+    if fragments < 2 {
+        return decode_pool::cpu(|| {
+            let camf = unpack(timings)?;
+            parse_metadata(camf, timings)
+        });
+    }
+    // Join the fragments from the file caller, then queue the parse as a leaf.
+    let camf = unpack(timings)?;
+    decode_pool::cpu(|| parse_metadata(camf, timings))
+}
+
+fn decompress(section: &[u8], fragments: usize) -> Result<Vec<u8>> {
     let bytes = Bytes(section);
     if bytes.range(0, 4)? != b"SECc" {
         return Err(damaged("invalid camera metadata signature"));
@@ -44,7 +89,7 @@ pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
             })
             .collect());
     }
-    if bytes.u32(8)? == 5 {
+    if bytes.u32(8)? == BYTE_HUFFMAN_COMPRESSION {
         let declared = bytes.offset(12)?;
         if !(BLOCK_HEADER_BYTES..=BYTE_METADATA_CAPACITY).contains(&declared) {
             return Err(damaged("invalid camera metadata size"));
@@ -54,11 +99,17 @@ pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
             .collect::<Result<Vec<_>>>()?;
         // Native decoding zeroes a fixed-capacity tail. Only the declared block
         // prefix belongs to the metadata stream, so retain no allocation padding.
-        return Table::packed(&words)?.decode_bytes(
-            bytes.range(60, bytes.offset(56)?)?,
-            declared,
-            bytes.u16(16)? as u8,
-        );
+        let table = Table::packed(&words)?;
+        let input = bytes.range(60, bytes.offset(COMPRESSED_LENGTH_OFFSET)?)?;
+        let seed = bytes.u16(16)? as u8;
+        if fragments > 1 {
+            if let Some(output) = table.decode_byte_fragments(input, declared, seed, fragments)? {
+                return Ok(output);
+            }
+            // Replay from the beginning to preserve the scalar damage cause.
+            return decode_pool::cpu(|| table.decode_bytes(input, declared, seed));
+        }
+        return table.decode_bytes(input, declared, seed);
     }
     if bytes.u32(8)? != PACKED_HUFFMAN_COMPRESSION {
         return Err("unsupported camera metadata compression".into());
@@ -87,7 +138,7 @@ pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
     if bytes.u16(54)? != 0 {
         return Err(damaged("unterminated camera metadata code table"));
     }
-    let input = bytes.range(60, bytes.offset(56)?)?;
+    let input = bytes.range(60, bytes.offset(COMPRESSED_LENGTH_OFFSET)?)?;
     let plane = Table::new(&codes)?.decode(
         input,
         width,
@@ -285,13 +336,36 @@ mod tests {
         }
         section[56..60].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
         section.extend_from_slice(&compressed);
-        assert_eq!(decompress(&section).unwrap(), expected);
+        assert_eq!(decompress(&section, 1).unwrap(), expected);
         assert_eq!(
-            parse(&decompress(&section).unwrap()).unwrap().0["x"].values,
+            parse(&decompress(&section, 1).unwrap()).unwrap().0["x"].values,
             [1., 2.]
         );
-        section.pop();
-        assert!(decompress(&section).is_err());
+        section.truncate(section.len() - 2);
+        let length = section.len() - 60;
+        section[56..60].copy_from_slice(&(length as u32).to_le_bytes());
+        let scalar = decompress(&section, 1).unwrap_err();
+        let split = decompress(&section, 4).unwrap_err();
+        assert_eq!(split.to_string(), scalar.to_string());
+    }
+
+    #[test]
+    fn byte_fragments_join_with_wrapping_carries_and_ignore_the_trailer() {
+        let table = Table::packed(&[1, 0x8002]).unwrap();
+        let codes = "1011011000".repeat(65);
+        let mut compressed = vec![0; codes.len().div_ceil(8)];
+        for (index, bit) in codes.bytes().enumerate() {
+            compressed[index / 8] |= (bit - b'0') << (7 - index % 8);
+        }
+        compressed.push(0xff);
+        let expected = table.decode_bytes(&compressed, 260, 255).unwrap();
+        assert_eq!(&expected[..8], &[0, 1, 0, 0, 1, 2, 1, 1]);
+        for fragments in [2, 4, 8] {
+            let actual = table
+                .decode_byte_fragments(&compressed, 260, 255, fragments)
+                .unwrap();
+            assert_eq!(actual.as_deref(), Some(expected.as_slice()));
+        }
     }
 
     #[test]
@@ -378,7 +452,7 @@ fn legacy_metadata_matches_reference_bytes() {
             )
         })
         .unwrap();
-    let decoded = decompress(section).unwrap();
+    let decoded = decompress(section, 1).unwrap();
     assert_eq!(
         decoded,
         std::fs::read(std::env::var_os("CLASSIC_CAMF_REFERENCE").unwrap()).unwrap()

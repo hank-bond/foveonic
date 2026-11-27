@@ -169,6 +169,19 @@ impl Table {
         Ok(Self(table))
     }
 
+    pub(super) fn decode_byte_fragments(
+        &self,
+        input: &[u8],
+        length: usize,
+        seed: u8,
+        fragments: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        if fragments < 2 {
+            return Ok(None);
+        }
+        parallel::decode_bytes(self, input, length, seed, fragments)
+    }
+
     pub(super) fn decode_bytes(&self, input: &[u8], length: usize, seed: u8) -> Result<Vec<u8>> {
         let lookup = self.differences();
         let mut bits = Bits::new(input);

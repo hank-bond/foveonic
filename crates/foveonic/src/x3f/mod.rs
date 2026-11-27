@@ -185,25 +185,11 @@ fn decode(data: &[u8]) -> Result<Source> {
     // The file caller joins plane work so a processing worker cannot pause on
     // an unrelated, lower-priority task while waiting for its own fragments.
     let (width, height, storage, pixels, mut timings) = read_pixels(sections.raw)?;
-    let (camf, matrices, lists) = crate::decode_pool::cpu(|| {
-        let start = Instant::now();
-        let camf = {
-            let _scope = diagnostics::scope(Category::Cpu, "decode.camf.decompress");
-            camf::decompress(
-                sections
-                    .camera
-                    .ok_or_else(|| damaged("missing X3F camera metadata"))?,
-            )?
-        };
-        timings.push(Timing::elapsed("CAMF decompress", start));
-        let start = Instant::now();
-        let (matrices, lists) = {
-            let _scope = diagnostics::scope(Category::Cpu, "decode.camf.parse");
-            camf::parse(&camf)?
-        };
-        timings.push(Timing::elapsed("CAMF parse", start));
-        Ok((camf, matrices, lists))
-    })?;
+    crate::priority::checkpoint_or_cancel()?;
+    let camera = sections
+        .camera
+        .ok_or_else(|| damaged("missing X3F camera metadata"))?;
+    let (camf, matrices, lists) = camf::read(camera, &mut timings)?;
     Ok(Source {
         origin: Default::default(),
         metadata: std::sync::Arc::new(Metadata {
