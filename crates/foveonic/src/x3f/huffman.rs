@@ -5,7 +5,11 @@
 use super::bytes::product;
 use crate::diagnostics::{self, Category};
 use crate::input_error::damaged;
-use crate::source::Result;
+use crate::{decode_pool, profile::Timing, source::Result};
+use std::time::Instant;
+
+#[path = "huffman_parallel.rs"]
+mod parallel;
 
 pub(super) const SAMPLE_MAX: u32 = 4095;
 pub(super) const MAXIMUM_PLANE_SAMPLES: usize = 32_000_000;
@@ -13,7 +17,8 @@ const CODE_BITS: usize = 12;
 const PREFIX_TABLE_ENTRIES: usize = 1 << CODE_BITS;
 const PACKED_CATEGORY_COUNT: usize = 18;
 const TWELVE_BIT_CATEGORY_COUNT: usize = 13;
-const SAMPLE_MASK: u32 = 0b1111_1111_1111;
+const REFILL_BYTES: usize = 6;
+const REFILL_BITS: u32 = (REFILL_BYTES * 8) as u32;
 
 #[derive(Clone, Copy)]
 struct Symbol {
@@ -28,6 +33,19 @@ struct Difference {
 }
 
 pub(super) struct Table([Symbol; PREFIX_TABLE_ENTRIES]);
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct Plane<'a> {
+    pub input: &'a [u8],
+    pub width: usize,
+    pub height: usize,
+    pub seed: u16,
+}
+
+enum PlanePart {
+    Whole(Result<(Vec<u16>, Timing)>),
+    Fragment(Result<Option<Vec<u16>>>),
+}
 
 impl Table {
     /// Codes occupy the high bits of a twelve-bit word, in category order.
@@ -104,6 +122,8 @@ impl Table {
         })
     }
 
+    // Sharing the lookup otherwise introduced a call for every decoded difference.
+    #[inline(always)]
     fn looked_up_difference(
         &self,
         lookup: &[Difference; PREFIX_TABLE_ENTRIES],
@@ -153,11 +173,12 @@ impl Table {
     }
 
     pub(super) fn decode_bytes(&self, input: &[u8], length: usize, seed: u8) -> Result<Vec<u8>> {
-        let mut bits = Bits::new(input)?;
+        let lookup = self.differences();
+        let mut bits = Bits::new(input);
         let mut value = seed;
         (0..length)
             .map(|_| {
-                value = value.wrapping_add(self.difference(&mut bits)? as u8);
+                value = value.wrapping_add(self.looked_up_difference(&lookup, &mut bits)? as u8);
                 Ok(value)
             })
             .collect()
@@ -181,6 +202,125 @@ impl Table {
         seed: u16,
         maximum: u16,
     ) -> Result<Vec<u16>> {
+        self.decode_plane(
+            Plane {
+                input,
+                width,
+                height,
+                seed,
+            },
+            maximum,
+            &self.differences(),
+        )
+    }
+
+    pub(super) fn decode_sensor_planes(
+        &self,
+        planes: [Plane<'_>; 3],
+        maximum: u16,
+        fragments: [usize; 3],
+        format: u32,
+    ) -> Result<Vec<(Vec<u16>, Timing)>> {
+        const STAGES: [&str; 3] = [
+            "sensor plane bottom",
+            "sensor plane middle",
+            "sensor plane top",
+        ];
+        crate::priority::checkpoint_or_cancel()?;
+        let lookup = {
+            let _scope = diagnostics::scope(Category::Cpu, "decode.plane.lookup");
+            self.differences()
+        };
+        let decode = |layer: usize| {
+            let plane = planes[layer];
+            let _scope = super::sensor_plane_scope(
+                layer,
+                plane.width,
+                plane.height,
+                plane.input.len(),
+                format,
+            );
+            let start = Instant::now();
+            let samples = self.decode_plane(plane, maximum, &lookup)?;
+            Ok((samples, Timing::elapsed(STAGES[layer], start)))
+        };
+        #[cfg(test)]
+        if lookup_tests::category_only() {
+            return decode_pool::planes(decode);
+        }
+        // Cache prefetch has already admitted multiple photos to fill the pool.
+        if fragments.iter().all(|&count| count <= 1) || crate::priority::decoder_context().is_some()
+        {
+            return decode_pool::planes(decode);
+        }
+        let start = Instant::now();
+        let splits: [_; 3] =
+            std::array::from_fn(|i| parallel::Split::new(self, planes[i], fragments[i]));
+        if splits.iter().all(Option::is_none) {
+            return decode_pool::planes(decode);
+        }
+
+        let counts: [_; 3] =
+            std::array::from_fn(|i| splits[i].as_ref().map_or(1, parallel::Split::len));
+        let jobs: Vec<_> = counts
+            .iter()
+            .enumerate()
+            .flat_map(|(layer, &count)| (0..count).map(move |part| (layer, part)))
+            .collect();
+        let mut results = decode_pool::plane_parts(jobs.into_iter(), |(layer, part)| {
+            Ok(match &splits[layer] {
+                Some(split) => PlanePart::Fragment(split.unpack(
+                    self,
+                    &lookup,
+                    planes[layer].input,
+                    layer,
+                    part,
+                )),
+                None => PlanePart::Whole(decode(layer)),
+            })
+        })?
+        .into_iter();
+        let parts: [_; 3] = counts.map(|count| results.by_ref().take(count).collect::<Vec<_>>());
+        decode_pool::plane_parts(parts.into_iter().enumerate(), |(layer, parts)| {
+            let mut parts = parts.into_iter();
+            let first = match parts.next().ok_or("missing sensor plane data")? {
+                PlanePart::Whole(samples) => return samples,
+                PlanePart::Fragment(first) => first,
+            };
+            let plane = planes[layer];
+            let _scope = super::sensor_plane_scope(
+                layer,
+                plane.width,
+                plane.height,
+                plane.input.len(),
+                format,
+            );
+            let parts = std::iter::once(first)
+                .chain(parts.map(|part| match part {
+                    PlanePart::Fragment(samples) => samples,
+                    PlanePart::Whole(_) => unreachable!("split plane has only fragments"),
+                }))
+                .collect::<Result<Vec<_>>>()?;
+            let samples = match parallel::reconstruct(parts, plane, maximum)? {
+                Some(samples) => samples,
+                // Replay with the scalar order when a join or sample is invalid.
+                None => self.decode_plane(plane, maximum, &lookup)?,
+            };
+            Ok((samples, Timing::elapsed(STAGES[layer], start)))
+        })
+    }
+
+    fn decode_plane(
+        &self,
+        Plane {
+            input,
+            width,
+            height,
+            seed,
+        }: Plane<'_>,
+        maximum: u16,
+        lookup: &[Difference; PREFIX_TABLE_ENTRIES],
+    ) -> Result<Vec<u16>> {
         let count = product(width, height)?;
         if width == 0
             || height == 0
@@ -195,15 +335,11 @@ impl Table {
         if let Some(result) = lookup_tests::dispatch(self, input, width, height, seed, maximum) {
             return result;
         }
-        let lookup = {
-            let _scope = diagnostics::scope(Category::Cpu, "decode.plane.lookup");
-            self.differences()
-        };
         let mut output = {
             let _scope = diagnostics::scope(Category::Cpu, "decode.plane.allocate");
             Vec::with_capacity(count)
         };
-        let mut bits = Bits::new(input)?;
+        let mut bits = Bits::new(input);
         let mut vertical = [[seed; 2]; 2];
         let mut horizontal = [seed; 2];
         let _scope = diagnostics::scope(Category::Cpu, "decode.plane.samples");
@@ -220,7 +356,7 @@ impl Table {
                     horizontal[x & 1]
                 };
                 let value =
-                    (predictor as i16).wrapping_add(self.looked_up_difference(&lookup, &mut bits)?);
+                    (predictor as i16).wrapping_add(self.looked_up_difference(lookup, &mut bits)?);
                 if value as u16 > maximum {
                     return Err(damaged("decoded sample outside declared range"));
                 }
@@ -238,50 +374,48 @@ impl Table {
 
 struct Bits<'a> {
     data: &'a [u8],
-    position: usize,
-    total_bits: usize,
-    packet: u64,
-    packet_start: usize,
-    loaded: bool,
+    buffer: u64,
+    buffered_bits: u32,
 }
 
 impl<'a> Bits<'a> {
-    fn new(data: &'a [u8]) -> Result<Self> {
-        Ok(Self {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
             data,
-            position: 0,
-            total_bits: product(data.len(), 8)?,
-            packet: 0,
-            packet_start: 0,
-            loaded: false,
-        })
+            buffer: 0,
+            buffered_bits: 0,
+        }
     }
 
-    /// Cache a word so prefixes and payloads do not each need fresh byte loads.
-    /// Padding permits lookahead at the tail, not consumption past the real input.
-    /// Advance must still check the number of bits actually available.
+    // Keep the next prefix at the top of the buffer to avoid a variable lookahead shift.
     fn peek(&mut self) -> u16 {
-        if !self.loaded || self.position - self.packet_start > 64 - CODE_BITS {
-            let byte = self.position / 8;
-            self.packet_start = byte * 8;
-            self.packet = if let Some(word) = self.data.get(byte..byte + 8) {
-                u64::from_be_bytes(word.try_into().expect("eight-byte word"))
+        if self.buffered_bits < CODE_BITS as u32 {
+            // Six bytes fit even when eleven bits are still buffered.
+            let (word, bits) = if let Some(word) = self.data.first_chunk::<8>() {
+                self.data = &self.data[REFILL_BYTES..];
+                (
+                    u64::from_be_bytes(*word) & (u64::MAX << (u64::BITS - REFILL_BITS)),
+                    REFILL_BITS,
+                )
             } else {
-                let mut padded = [0_u8; 8];
-                let tail = &self.data[byte..];
-                padded[..tail.len()].copy_from_slice(tail);
-                u64::from_be_bytes(padded)
+                let count = self.data.len().min(REFILL_BYTES);
+                let mut padded = [0; 8];
+                padded[..count].copy_from_slice(&self.data[..count]);
+                self.data = &self.data[count..];
+                (u64::from_be_bytes(padded), (count * 8) as u32)
             };
-            self.loaded = true;
+            self.buffer |= word >> self.buffered_bits;
+            self.buffered_bits += bits;
         }
-        ((self.packet >> (64 - CODE_BITS - (self.position - self.packet_start)))
-            & u64::from(SAMPLE_MASK)) as u16
+        (self.buffer >> (u64::BITS - CODE_BITS as u32)) as u16
     }
     fn advance(&mut self, count: u8) -> Result<()> {
-        if count as usize > self.total_bits - self.position {
-            return Err(damaged("truncated Huffman stream"));
-        }
-        self.position += count as usize;
+        // Callers peek first and consume at most CODE_BITS. A short buffer then means EOF.
+        self.buffered_bits = self
+            .buffered_bits
+            .checked_sub(u32::from(count))
+            .ok_or_else(|| damaged("truncated Huffman stream"))?;
+        self.buffer <<= count;
         Ok(())
     }
     fn read(&mut self, count: u8) -> Result<u16> {
@@ -304,23 +438,24 @@ mod tests {
         let data: Vec<u8> = (0..97).map(|i| (i * 73 + 19) as u8).collect();
         for length in 0..=data.len() {
             let data = &data[..length];
-            let mut bits = Bits::new(data).unwrap();
-            while bits.position <= data.len() * 8 {
+            let mut bits = Bits::new(data);
+            let mut position = 0;
+            loop {
                 let expected = (0..12).fold(0_u16, |v, i| {
-                    let bit = bits.position + i;
+                    let bit = position + i;
                     (v << 1)
                         | data
                             .get(bit / 8)
                             .map_or(0, |b| u16::from((b >> (7 - bit % 8)) & 1))
                 });
                 assert_eq!(bits.peek(), expected);
-                let remaining = data.len() * 8 - bits.position;
+                let remaining = data.len() * 8 - position;
                 if remaining == 0 {
                     assert!(bits.advance(1).is_err());
                     break;
                 }
-                let count = (bits.position % 12 + 1).min(remaining) as u8;
-                assert_eq!(bits.read(count).unwrap(), expected >> (12 - count));
+                assert_eq!(bits.read(1).unwrap(), expected >> 11);
+                position += 1;
             }
         }
     }

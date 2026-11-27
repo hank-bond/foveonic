@@ -10,6 +10,10 @@ use std::{
 // Only the explicitly ignored, serial original-file comparison enables this.
 static CATEGORY_ONLY: AtomicBool = AtomicBool::new(false);
 
+pub(super) fn category_only() -> bool {
+    CATEGORY_ONLY.load(Ordering::Relaxed)
+}
+
 pub(super) fn dispatch(
     table: &Table,
     input: &[u8],
@@ -18,9 +22,7 @@ pub(super) fn dispatch(
     seed: u16,
     maximum: u16,
 ) -> Option<Result<Vec<u16>>> {
-    CATEGORY_ONLY
-        .load(Ordering::Relaxed)
-        .then(|| category_plane(table, input, width, height, seed, maximum))
+    category_only().then(|| category_plane(table, input, width, height, seed, maximum))
 }
 
 fn category_plane(
@@ -32,7 +34,7 @@ fn category_plane(
     maximum: u16,
 ) -> Result<Vec<u16>> {
     let mut output = Vec::with_capacity(width * height);
-    let mut bits = Bits::new(input)?;
+    let mut bits = Bits::new(input);
     let mut vertical = [[seed; 2]; 2];
     let mut horizontal = [seed; 2];
     for y in 0..height {
@@ -84,14 +86,18 @@ fn fused_differences_preserve_payloads_and_every_short_bit_boundary() {
         for prefix in 0..4096u16 {
             let input = [((prefix << 4) >> 8) as u8, (prefix << 4) as u8, 0x95];
             for available in 0..=24 {
-                let mut category = Bits::new(&input).unwrap();
-                category.total_bits = available;
-                let mut fused = Bits::new(&input).unwrap();
-                fused.total_bits = available;
+                let stream = || {
+                    let mut bits = Bits::new(&input);
+                    bits.peek();
+                    bits.buffered_bits = available;
+                    bits
+                };
+                let mut category = stream();
+                let mut fused = stream();
                 let expected = table.difference(&mut category);
                 let actual = table.looked_up_difference(&lookup, &mut fused);
                 if expected.is_ok() {
-                    assert_eq!(category.position, fused.position);
+                    assert_eq!(category.buffered_bits, fused.buffered_bits);
                 }
                 assert_same(expected, actual);
             }
@@ -128,6 +134,104 @@ fn fused_planes_preserve_predictors_damage_and_geometry_limits() {
     crate::priority::interruptible(gate.clone(), || {
         gate.interrupt_speculative();
         let error = table.decode(&[0], 4, 2, 512).unwrap_err();
+        assert!(error.is::<crate::priority::Interrupted>());
+    });
+}
+
+#[test]
+fn split_plane_reconstructs_prediction_across_unaligned_fragments() {
+    let table = Table::new(&[(0, 1), (2048, 2)]).unwrap();
+    for width in [1, 2, 13, 32] {
+        let height = 257;
+        let mut input = Vec::new();
+        let mut bits = 0;
+        for i in 0..width * height {
+            let code = match i % 17 {
+                0..=5 => "100",
+                10..=15 => "101",
+                _ => "0",
+            };
+            for b in code.bytes() {
+                if bits % 8 == 0 {
+                    input.push(0);
+                }
+                *input.last_mut().unwrap() |= (b - b'0') << (7 - bits % 8);
+                bits += 1;
+            }
+        }
+        let expected = table.decode(&input, width, height, 512).unwrap();
+        for fragments in [2, 3, 8] {
+            // Require the split path to succeed without silently using scalar decoding.
+            let plane = Plane {
+                input: &input,
+                width,
+                height,
+                seed: 512,
+            };
+            let actual = reconstruct_split(&table, plane, fragments).unwrap();
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
+fn reconstruct_split(table: &Table, plane: Plane<'_>, fragments: usize) -> Option<Vec<u16>> {
+    let lookup = table.differences();
+    let split = parallel::Split::new(table, plane, fragments)?;
+    let parts = (0..split.len())
+        .map(|part| split.unpack(table, &lookup, plane.input, 0, part).unwrap())
+        .collect();
+    parallel::reconstruct(parts, plane, 4095).unwrap()
+}
+
+#[test]
+fn split_plane_preserves_the_declared_sample_end_and_first_damage() {
+    let table = Table::new(&[(0, 1), (2048, 2)]).unwrap();
+    let mut input = [0; 10];
+    input[9] = 0xff;
+    assert_eq!(
+        reconstruct_split(
+            &table,
+            Plane {
+                input: &input,
+                width: 5,
+                height: 13,
+                seed: 512
+            },
+            3
+        ),
+        Some(vec![512; 65]),
+    );
+    for input in [
+        &input[..8],
+        &input[..],
+        &[0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0xff],
+    ] {
+        let plane = Plane {
+            input,
+            width: 5,
+            height: 15,
+            seed: 0,
+        };
+        assert_same(
+            table.decode_bounded(input, 5, 15, 0, 4095),
+            table
+                .decode_sensor_planes([plane; 3], 4095, [3; 3], 30)
+                .map(|mut planes| planes.remove(0).0),
+        );
+    }
+
+    let gate = std::sync::Arc::new(crate::priority::Gate::default());
+    crate::priority::interruptible(gate.clone(), || {
+        gate.interrupt_speculative();
+        let plane = Plane {
+            input: &input,
+            width: 5,
+            height: 13,
+            seed: 512,
+        };
+        let error = table
+            .decode_sensor_planes([plane; 3], 4095, [3; 3], 30)
+            .unwrap_err();
         assert!(error.is::<crate::priority::Interrupted>());
     });
 }

@@ -265,6 +265,86 @@ fn cancellation_reaches_queued_layers_and_unblocks_later_photo_admission() {
 }
 
 #[test]
+fn plane_fragments_share_the_admitted_worker_and_cancel_queued_fragments() {
+    let pool = Arc::new(Pool::new(1).unwrap());
+    let gate = Arc::new(priority::Gate::default());
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    priority::interruptible(gate.clone(), || {
+        let error = priority::decoder(
+            Task {
+                pool,
+                turn: Arc::new(Order::default()).issue(),
+            },
+            || {
+                plane_parts(0..4, |part| {
+                    assert_eq!(rayon::current_num_threads(), 1);
+                    assert_eq!(part, 0);
+                    calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    gate.interrupt_speculative();
+                    priority::checkpoint_or_cancel()
+                })
+            },
+        )
+        .unwrap_err();
+        assert!(error.is::<priority::Interrupted>());
+    });
+    assert_eq!(calls.into_inner(), 1);
+}
+
+#[test]
+fn outside_part_join_completes_while_a_worker_is_paused_by_viewport_demand() {
+    let pool = Pool::new(2).unwrap();
+    let gate = Arc::new(priority::Gate::default());
+    let latches = Arc::new(vec![
+        (Mutex::new(false), Condvar::new()),
+        (Mutex::new(false), Condvar::new()),
+    ]);
+    let timeout = Duration::from_secs(10);
+    let (started, start) = mpsc::channel();
+    let (lower_started, lower_start) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let _release = ReleaseAll(latches.clone());
+        let demand = gate.demand(priority::Priority::Viewport);
+        scope.spawn(|| {
+            let output = pool.parts(0..2, None, "decode.plane.part", "part", |index| {
+                started.send(index).unwrap();
+                let (open, wake) = &latches[index];
+                drop(
+                    wake.wait_while(open.lock().unwrap(), |open| !*open)
+                        .unwrap(),
+                );
+                Ok(index)
+            });
+            done.send(output).unwrap();
+        });
+        let first = start.recv_timeout(timeout).unwrap();
+        let second = start.recv_timeout(timeout).unwrap();
+        assert_ne!(first, second);
+        scope.spawn(|| {
+            pool.0.install(|| {
+                let context = gate.context(priority::Priority::Export);
+                priority::with_context(context, || {
+                    lower_started.send(()).unwrap();
+                    priority::checkpoint();
+                });
+            });
+        });
+        for (index, is_lower_start) in [(first, true), (second, false)] {
+            let (open, wake) = &latches[index];
+            *open.lock().unwrap() = true;
+            wake.notify_one();
+            if is_lower_start {
+                lower_start.recv_timeout(timeout).unwrap();
+            }
+        }
+        let output = finished.recv_timeout(timeout);
+        drop(demand);
+        assert_eq!(output.unwrap().unwrap(), [0, 1]);
+    });
+}
+
+#[test]
 fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
     let pool = Arc::new(Pool::new(1).unwrap());
     let order = Arc::new(Order::default());

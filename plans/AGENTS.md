@@ -75,5 +75,6 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[viewport-workflows](./viewport-workflows.md)** Review small ownership and quality-policy changes supporting Smart comparisons, persistent zoom and a Full-detail loupe.
 - **[windows-release](./windows-release.md)** Build and validate a Windows x64 test archive for the current release branch.
 - **[windows-work-area](./windows-work-area.md)** Finish and release the 0.9.x fix that keeps the restored window inside the Windows work area, clear of the taskbar.
+- **[x3f-plane-decode-performance](./x3f-plane-decode-performance.md)** Reduce full sensor decode latency for Merrill and Quattro using measured bit-reader, packing, and shared-pool decoder changes.
 
 <!-- INDEX:END -->

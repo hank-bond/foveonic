@@ -22,6 +22,7 @@ Keep decoding independent of photographic adjustments and orientation. Preserve 
 - **[format31.rs](./format31.rs)** Decodes unsigned sensor planes into equal-resolution RGB or RGB/blue-phase cells.
 - **[format6.rs](./format6.rs)** Decode row-local Huffman differences into signed interleaved sensor codes.
 - **[huffman.rs](./huffman.rs)** Decode category-coded differences with two-column and two-row sensor predictors.
+- **[huffman_parallel.rs](./huffman_parallel.rs)** Splits large sensor streams on verified Huffman boundaries and reconstructs sensor samples.
 - **[mod.rs](./mod.rs)** Reads owned X3F sections and decodes sensor samples and camera metadata.
 
 <!-- INDEX:END -->

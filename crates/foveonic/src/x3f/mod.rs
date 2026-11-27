@@ -16,15 +16,10 @@ use crate::profile::Timing;
 use crate::source::{Metadata, Result, SensorSamples, Source, SourceStorage};
 use crate::{diagnostics, diagnostics::Category};
 use bytes::{product, Bytes};
-use huffman::Table;
+use huffman::{Plane, Table};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
-
-// All three independent streams use the same processing CPU pool as Classic
-// rows and speculative photos. The input format, rather than a CPU cap, supplies
-// three plane tasks per photo.
-use crate::decode_pool::planes as decode_planes;
 
 const MINIMUM_FILE_BYTES: u64 = 44; // Forty-byte base header and trailing directory pointer.
 const MAXIMUM_FILE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -48,6 +43,8 @@ const DIRECTORY_HEADER_BYTES: usize = 12;
 const DIRECTORY_ENTRY_BYTES: usize = 12;
 const SENSOR_IMAGE_TYPES: [u32; 2] = [1, 3];
 const SENSOR_HUFFMAN_FORMAT: u32 = 30;
+const MINIMUM_MERRILL_SPLIT_WORKERS: usize = 6;
+const MAXIMUM_MERRILL_FRAGMENTS: usize = 8;
 const PROPERTY_HEADER_BYTES: usize = 24;
 const PROPERTY_ENTRY_BYTES: usize = 8;
 // Bound both the encoded section and its independently owned decoded strings.
@@ -61,7 +58,7 @@ pub(crate) use exif::thumbnail as jpeg_thumbnail;
 pub(crate) fn read_owned(path: &Path, read_complete: impl FnOnce()) -> Result<(Source, Vec<u8>)> {
     let identity = crate::source::FileIdentity::read(path)?;
     let (data, read) = read_original(path, read_complete)?;
-    let (mut source, original) = crate::decode_pool::cpu(|| decode_owned(data, read))?;
+    let (mut source, original) = decode_owned(data, read)?;
     if crate::source::FileIdentity::read(path)? != identity {
         return Err("X3F file changes during decoding".into());
     }
@@ -84,7 +81,7 @@ pub(crate) fn read_cacheable(
     if !permits(family) {
         return Ok(None);
     }
-    let (mut source, original) = crate::decode_pool::cpu(|| decode_owned(data, read))?;
+    let (mut source, original) = decode_owned(data, read)?;
     if crate::source::FileIdentity::read(path)? != identity {
         return Err("X3F file changes during decoding".into());
     }
@@ -186,7 +183,57 @@ fn validate_header(data: &[u8]) -> Result<(u32, Option<[u16; 4]>)> {
 }
 
 fn decode(data: &[u8]) -> Result<Source> {
-    let sections_scope = diagnostics::scope(Category::Cpu, "decode.sections");
+    let sections = crate::decode_pool::cpu(|| read_sections(data))?;
+    // The file caller joins plane work so a processing worker cannot pause on
+    // an unrelated, lower-priority task while waiting for its own fragments.
+    let (width, height, storage, pixels, mut timings) = read_pixels(sections.raw)?;
+    let (camf, matrices, lists) = crate::decode_pool::cpu(|| {
+        let start = Instant::now();
+        let camf = {
+            let _scope = diagnostics::scope(Category::Cpu, "decode.camf.decompress");
+            camf::decompress(
+                sections
+                    .camera
+                    .ok_or_else(|| damaged("missing X3F camera metadata"))?,
+            )?
+        };
+        timings.push(Timing::elapsed("CAMF decompress", start));
+        let start = Instant::now();
+        let (matrices, lists) = {
+            let _scope = diagnostics::scope(Category::Cpu, "decode.camf.parse");
+            camf::parse(&camf)?
+        };
+        timings.push(Timing::elapsed("CAMF parse", start));
+        Ok((camf, matrices, lists))
+    })?;
+    Ok(Source {
+        origin: Default::default(),
+        metadata: std::sync::Arc::new(Metadata {
+            width,
+            height,
+            rotation: sections.rotation,
+            processing_version: sections.processing_version,
+            properties: sections.properties,
+            matrices,
+            lists,
+        }),
+        pixels,
+        storage,
+        camf,
+        timings,
+    })
+}
+
+struct Sections<'a> {
+    raw: &'a [u8],
+    camera: Option<&'a [u8]>,
+    rotation: u32,
+    processing_version: Option<[u16; 4]>,
+    properties: BTreeMap<String, String>,
+}
+
+fn read_sections(data: &[u8]) -> Result<Sections<'_>> {
+    let _sections_scope = diagnostics::scope(Category::Cpu, "decode.sections");
     let bytes = Bytes(data);
     let (rotation, processing_version) = validate_header(data)?;
     let end = data
@@ -275,36 +322,12 @@ fn decode(data: &[u8]) -> Result<Source> {
         adjustments::read(&data[..ranges[0].0])?,
         data,
     )?;
-    let raw = raw.ok_or_else(|| damaged("missing X3F sensor image"))?;
-    drop(sections_scope);
-    let (width, height, storage, pixels, mut timings) = read_pixels(raw)?;
-    let start = Instant::now();
-    let camf = {
-        let _scope = diagnostics::scope(Category::Cpu, "decode.camf.decompress");
-        camf::decompress(camera.ok_or_else(|| damaged("missing X3F camera metadata"))?)?
-    };
-    timings.push(Timing::elapsed("CAMF decompress", start));
-    let start = Instant::now();
-    let (matrices, lists) = {
-        let _scope = diagnostics::scope(Category::Cpu, "decode.camf.parse");
-        camf::parse(&camf)?
-    };
-    timings.push(Timing::elapsed("CAMF parse", start));
-    Ok(Source {
-        origin: Default::default(),
-        metadata: std::sync::Arc::new(Metadata {
-            width,
-            height,
-            rotation,
-            processing_version,
-            properties,
-            matrices,
-            lists,
-        }),
-        pixels,
-        storage,
-        camf,
-        timings,
+    Ok(Sections {
+        raw: raw.ok_or_else(|| damaged("missing X3F sensor image"))?,
+        camera,
+        rotation,
+        processing_version,
+        properties,
     })
 }
 
@@ -528,17 +551,19 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     }
     let table = Table::new(&codes)?;
     // Validate all plane slices before starting the three bounded, independent workers.
-    let mut inputs = [(&[][..], 0_u16); 3];
+    let mut inputs = [Plane::default(); 3];
     let mut start: usize = 76;
     for (channel, input) in inputs.iter_mut().enumerate() {
         let length = bytes.offset(64 + channel * 4)?;
         if length == 0 {
             return Err(damaged("empty compressed sensor plane"));
         }
-        *input = (
-            bytes.range(start, length)?,
-            bytes.u16(28 + channel * 2)? & 0b11_1111_1111,
-        );
+        *input = Plane {
+            input: bytes.range(start, length)?,
+            width,
+            height,
+            seed: bytes.u16(28 + channel * 2)? & 0b11_1111_1111,
+        };
         let aligned = length
             .checked_add(15)
             .ok_or_else(|| damaged("plane length overflow"))?
@@ -551,23 +576,14 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     let start_time = Instant::now();
     let planes = {
         let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.planes");
-        decode_planes(|layer| {
-            let (input, seed) = inputs[layer];
-            let _scope = sensor_plane_scope(layer, width, height, input.len(), format);
-            let start = Instant::now();
-            let pixels = table.decode(input, width, height, seed)?;
-            Ok((
-                pixels,
-                Timing::elapsed(
-                    [
-                        "sensor plane bottom",
-                        "sensor plane middle",
-                        "sensor plane top",
-                    ][layer],
-                    start,
-                ),
-            ))
-        })?
+        let workers = crate::decode_pool::available_workers();
+        let fragments = if workers >= MINIMUM_MERRILL_SPLIT_WORKERS {
+            let count = workers.min(MAXIMUM_MERRILL_FRAGMENTS);
+            std::array::from_fn(|layer| (count - layer).div_ceil(inputs.len()))
+        } else {
+            [1; 3]
+        };
+        table.decode_sensor_planes(inputs, huffman::SAMPLE_MAX as u16, fragments, format)?
     };
     let mut timings = vec![Timing::elapsed("sensor planes wall", start_time)];
     timings.extend(planes.iter().map(|(_, timing)| timing.clone()));

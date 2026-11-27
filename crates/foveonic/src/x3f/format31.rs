@@ -1,10 +1,15 @@
 //! Decodes unsigned sensor planes into equal-resolution RGB or RGB/blue-phase cells.
 
 use super::bytes::{product, Bytes};
-use super::huffman::{Table, MAXIMUM_PLANE_SAMPLES};
+use super::huffman::{Plane, Table, MAXIMUM_PLANE_SAMPLES};
 use crate::diagnostics::{self, Category};
 use crate::input_error::damaged;
 use crate::source::{Result, SourceStorage};
+
+const SPECIAL_COLUMN_STEP: usize = 16;
+const SPECIAL_ROW_STEP: usize = 4;
+const MINIMUM_TOP_PLANE_SAMPLES: usize = 8_000_000;
+const MAXIMUM_TOP_PLANE_FRAGMENTS: usize = 8;
 
 pub(super) struct Decoded {
     pub storage: SourceStorage,
@@ -37,9 +42,10 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
     let divisor = if equal { 1 } else { 2 };
     let low_width = width / divisor;
     let low_height = height / divisor;
-    let extra_samples = product(low_width.div_ceil(16), divisor)?;
+    let extra_samples = product(low_width.div_ceil(SPECIAL_COLUMN_STEP), divisor)?;
     if blue_width != width
-        && (blue_width - width < extra_samples || !height.is_multiple_of(4 * divisor))
+        && (blue_width - width < extra_samples
+            || !height.is_multiple_of(SPECIAL_ROW_STEP * divisor))
     {
         return Err(damaged("invalid special-column sensor geometry"));
     }
@@ -49,7 +55,7 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
     let table = Table::packed(&words)?;
     // Check every compressed slice and allocation bound before starting workers.
     let mut offset = 96usize;
-    let mut inputs = [(&[][..], 0usize, 0usize, 0u16); 3];
+    let mut inputs = [Plane::default(); 3];
     for (channel, input) in inputs.iter_mut().enumerate() {
         let length = bytes.offset(84 + channel * 4)?;
         let plane_width = dimensions[channel * 2];
@@ -63,12 +69,12 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
                 "compressed plane seed exceeds the sensor code range",
             ));
         }
-        *input = (
-            bytes.range(offset, length)?,
-            plane_width,
-            plane_height,
+        *input = Plane {
+            input: bytes.range(offset, length)?,
+            width: plane_width,
+            height: plane_height,
             seed,
-        );
+        };
         offset = offset
             .checked_add(
                 length
@@ -79,41 +85,46 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
             .ok_or_else(|| damaged("compressed plane offset overflow"))?;
     }
     drop(prepare_scope);
+    let top_fragments = if packed && blue_width * height >= MINIMUM_TOP_PLANE_SAMPLES {
+        crate::decode_pool::available_workers()
+            .saturating_sub(2)
+            .clamp(1, MAXIMUM_TOP_PLANE_FRAGMENTS)
+    } else {
+        1
+    };
     let planes = {
         let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.planes");
-        super::decode_planes(|layer| {
-            let (input, width, height, seed) = inputs[layer];
-            let _scope = super::sensor_plane_scope(layer, width, height, input.len(), format);
-            table.decode_bounded(input, width, height, seed, 16383)
-        })?
+        table.decode_sensor_planes(inputs, 16383, [1, 1, top_fragments], format)?
     };
-    let assembly_scope = diagnostics::scope(Category::Cpu, "decode.sensor.assemble");
-    let cells = product(low_width, low_height)?;
-    let mut output = {
-        let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.output.allocate");
-        Vec::with_capacity(product(cells, if equal { 3 } else { 6 })?)
-    };
-    for y in 0..low_height {
-        crate::priority::checkpoint_or_cancel()?;
-        for x in 0..low_width {
-            let index = y * low_width + x;
-            output.push(f32::from(planes[0][index]));
-            output.push(f32::from(planes[1][index]));
-            let blue_x = if blue_width != width && y.is_multiple_of(4) && x.is_multiple_of(16) {
-                width + (x / 16) * divisor
+    let output = crate::decode_pool::cpu(|| {
+        let _assembly_scope = diagnostics::scope(Category::Cpu, "decode.sensor.assemble");
+        let row_samples = product(low_width, if equal { 3 } else { 6 })?;
+        let mut output = {
+            let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.output.allocate");
+            vec![0.; product(row_samples, low_height)?]
+        };
+        let red_rows = planes[0].0.chunks_exact(low_width);
+        let green_rows = planes[1].0.chunks_exact(low_width);
+        let blue_rows = planes[2].0.chunks_exact(blue_width * divisor);
+        for (y, (((output, red), green), blue)) in output
+            .chunks_exact_mut(row_samples)
+            .zip(red_rows)
+            .zip(green_rows)
+            .zip(blue_rows)
+            .enumerate()
+        {
+            crate::priority::checkpoint_or_cancel()?;
+            // Applying sparse replacements separately keeps the regular cell loop branch-free.
+            let special = blue_width != width && y.is_multiple_of(SPECIAL_ROW_STEP);
+            if equal {
+                assemble_equal_row(output, red, green, blue, special);
             } else {
-                x * divisor
-            };
-            for dy in 0..divisor {
-                for dx in 0..divisor {
-                    output.push(f32::from(
-                        planes[2][(y * divisor + dy) * blue_width + blue_x + dx],
-                    ));
-                }
+                let (top, bottom) = blue.split_at(blue_width);
+                assemble_packed_row(output, red, green, top, bottom, special);
             }
         }
-    }
-    drop(assembly_scope);
+        Ok(output)
+    })?;
     Ok(Decoded {
         storage: if equal {
             SourceStorage::InterleavedRgb
@@ -122,6 +133,49 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
         },
         pixels: output,
     })
+}
+
+fn assemble_equal_row(output: &mut [f32], red: &[u16], green: &[u16], blue: &[u16], special: bool) {
+    let cells = output.as_chunks_mut::<3>().0;
+    for (cell, ((&red, &green), &blue)) in cells.iter_mut().zip(red.iter().zip(green).zip(blue)) {
+        *cell = [red, green, blue].map(f32::from);
+    }
+    if special {
+        for (cell, &blue) in cells
+            .iter_mut()
+            .step_by(SPECIAL_COLUMN_STEP)
+            .zip(&blue[red.len()..])
+        {
+            cell[2] = f32::from(blue);
+        }
+    }
+}
+
+fn assemble_packed_row(
+    output: &mut [f32],
+    red: &[u16],
+    green: &[u16],
+    top: &[u16],
+    bottom: &[u16],
+    special: bool,
+) {
+    let cells = output.as_chunks_mut::<6>().0;
+    let top = top.as_chunks::<2>().0;
+    let bottom = bottom.as_chunks::<2>().0;
+    for (cell, ((&red, &green), (&[b00, b01], &[b10, b11]))) in cells
+        .iter_mut()
+        .zip(red.iter().zip(green).zip(top.iter().zip(bottom)))
+    {
+        *cell = [red, green, b00, b01, b10, b11].map(f32::from);
+    }
+    if special {
+        let extra = top[red.len()..].iter().zip(&bottom[red.len()..]);
+        for (cell, (&[b00, b01], &[b10, b11])) in
+            cells.iter_mut().step_by(SPECIAL_COLUMN_STEP).zip(extra)
+        {
+            cell[2..].copy_from_slice(&[b00, b01, b10, b11].map(f32::from));
+        }
+    }
 }
 
 #[cfg(test)]
