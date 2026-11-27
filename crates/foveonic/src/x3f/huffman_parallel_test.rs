@@ -37,6 +37,19 @@ fn an_invalid_code_inside_a_middle_lane_fails_its_fragment() {
 }
 
 #[test]
+fn the_join_keeps_only_the_declared_length_without_growing() {
+    // 32768 one-bit symbols, so the last fragment runs past the declared
+    // length into the stream's padding.
+    let input = vec![0; 4096];
+    let length = 30000;
+    let joined = decode_bytes(&table(), &input, length, 7, 2)
+        .unwrap()
+        .unwrap();
+    assert_eq!(joined.capacity(), length);
+    assert_eq!(joined, table().decode_bytes(&input, length, 7).unwrap());
+}
+
+#[test]
 fn a_short_stream_reuses_boundaries_as_empty_lanes() {
     let input = [0x92, 0x49, 0x24, 0x92];
     let split = Split::plan(&table(), &input, 3, 64).unwrap();

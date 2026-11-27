@@ -86,20 +86,20 @@ impl Split {
 
 /// Join a split stream's fragments with `append`, cut to the declared count.
 /// Only the last fragment may run past it, into the stream's padding.
-fn join(
+fn join<T>(
     parts: Vec<Option<Vec<Vec<u16>>>>,
     count: usize,
-    mut append: impl FnMut(&mut Vec<u16>, Vec<Vec<u16>>),
-) -> Result<Option<Vec<u16>>> {
+    mut append: impl FnMut(&mut Vec<T>, Vec<Vec<u16>>),
+) -> Result<Option<Vec<T>>> {
     let fragments = parts.len();
     let mut output = Vec::with_capacity(count);
     for (i, part) in parts.into_iter().enumerate() {
         priority::checkpoint_or_cancel()?;
-        let Some(lanes) = part else {
+        let Some(mut lanes) = part else {
             return Ok(None);
         };
         let length: usize = lanes.iter().map(Vec::len).sum();
-        let remaining = count - output.len();
+        let mut remaining = count - output.len();
         if if i == fragments - 1 {
             length < remaining
         } else {
@@ -107,9 +107,14 @@ fn join(
         } {
             return Ok(None);
         }
+        // Cut before appending so the output never grows past its exact
+        // reservation, which would leave a freed full-size copy behind.
+        for lane in &mut lanes {
+            lane.truncate(remaining);
+            remaining -= lane.len();
+        }
         append(&mut output, lanes);
     }
-    output.truncate(count);
     Ok(Some(output))
 }
 
@@ -202,7 +207,7 @@ pub(super) fn decode_bytes(
         }))
     })?;
     let mut carry = seed;
-    let append = |output: &mut Vec<u16>, lanes: Vec<Vec<u16>>| {
+    let append = |output: &mut Vec<u8>, lanes: Vec<Vec<u16>>| {
         let total = lanes
             .iter()
             .rev()
@@ -211,15 +216,12 @@ pub(super) fn decode_bytes(
         for lane in lanes {
             output.extend(
                 lane.into_iter()
-                    .map(|byte| u16::from((byte as u8).wrapping_add(carry))),
+                    .map(|byte| (byte as u8).wrapping_add(carry)),
             );
         }
         carry = carry.wrapping_add(total);
     };
-    Ok(
-        join(parts, length, append)?
-            .map(|bytes| bytes.into_iter().map(|byte| byte as u8).collect()),
-    )
+    join(parts, length, append)
 }
 
 // Each set bit is a live candidate token boundary. Start with every possible

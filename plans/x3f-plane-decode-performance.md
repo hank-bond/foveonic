@@ -157,6 +157,8 @@ Every plane then went through fragments: short streams, cache prefetch and packe
 
 Format 6 (SD9, SD10, SD14) stores each row at its own offset, so it needs no boundary search: each worker decodes four rows with the same sample count in lockstep. A group that fails replays its rows serially, so the first damaged row reports its cause. SD9, SD10 and SD14 opened 27-31% faster, with samples unchanged.
 
+A single open's peak memory hid a cost that repeated opens showed. The release slider matrix put a Quattro app session over its 5,000 MB guard, and an sd Quattro H opened 40 times in one process climbed from 755 to 1,034 MiB, while the build without lanes stayed flat at 604 MiB. On macOS 26 the allocator kept freed full-size blocks instead of reusing them: the type-5 CAMF join built a 14.3 MiB `u16` copy before converting to bytes, and a last fragment that ran into the stream's padding doubled the joined output. The join now writes bytes directly and cuts lanes to the declared length before appending. After 200 opens the footprint levels at 653 MiB against 604 MiB, the lane buffers' fixed cost. Prefetching six Quattro photos peaks about 150 MiB higher than without lanes, while one-fragment lanes are held beside their joined output.
+
 ## Further research
 
 - Overlap word refill with lookup on one core. Dougall Johnson's [Apple M1 experiment](https://dougallj.wordpress.com/2022/08/26/reading-bits-with-zero-refill-latency/) uses the old bit buffer for the current lookup while loading the next word. The reported 6% applies to the experimental DEFLATE decoder. X3F needs a separate timing and damage check.
