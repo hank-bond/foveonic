@@ -17,6 +17,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// How long a slider step waits for its control to scroll into view.
+const SLIDER_REVEAL_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 enum Case {
@@ -264,7 +267,7 @@ pub(super) struct Scenario {
     failed: Option<String>,
     drag: Option<super::slider::Drag>,
     drag_checked: bool,
-    drag_reveal_frames: usize,
+    drag_reveal_since: Option<Instant>,
     drag_layout: Option<([f32; 4], [f32; 4], usize)>,
     failure_screenshot: Option<Instant>,
     screenshot_finished: bool,
@@ -542,7 +545,7 @@ impl Scenario {
             failed: None,
             drag: None,
             drag_checked: false,
-            drag_reveal_frames: 0,
+            drag_reveal_since: None,
             drag_layout: None,
             failure_screenshot: None,
             screenshot_finished: false,
@@ -1056,8 +1059,15 @@ impl Scenario {
                                 && !control.visible
                         })
                     });
-                    if offscreen && self.drag_reveal_frames < 10 {
-                        self.drag_reveal_frames += 1;
+                    // Opening option groups and scrolling take more frames on a slower
+                    // or busier host, so wait for the control by time, not frame count.
+                    if offscreen
+                        && self
+                            .drag_reveal_since
+                            .get_or_insert_with(Instant::now)
+                            .elapsed()
+                            < SLIDER_REVEAL_TIMEOUT
+                    {
                         return;
                     }
                     crate::automation::reveal(None);
