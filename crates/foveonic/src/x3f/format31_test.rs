@@ -98,7 +98,7 @@ fn packed_sensor_matches_serial_planes() {
         .map(|channel| {
             let length = bytes.offset(84 + channel * 4).unwrap();
             let plane = table
-                .decode_bounded(
+                .decode(
                     bytes.range(offset, length).unwrap(),
                     usize::from(bytes.u16(28 + channel * 4).unwrap()),
                     usize::from(bytes.u16(30 + channel * 4).unwrap()),

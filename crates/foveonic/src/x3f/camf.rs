@@ -88,7 +88,13 @@ pub(super) fn decompress(section: &[u8]) -> Result<Vec<u8>> {
         return Err(damaged("unterminated camera metadata code table"));
     }
     let input = bytes.range(60, bytes.offset(56)?)?;
-    let plane = Table::new(&codes)?.decode(input, width, height, seed as u16)?;
+    let plane = Table::new(&codes)?.decode(
+        input,
+        width,
+        height,
+        seed as u16,
+        super::huffman::SAMPLE_MAX as u16,
+    )?;
     let mut output = Vec::with_capacity(product(count / 2, 3)?);
     // Two twelve-bit samples occupy three bytes: aaaaaaaa aaaabbbb bbbbbbbb.
     for pair in plane.as_chunks::<2>().0 {

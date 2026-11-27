@@ -43,8 +43,6 @@ const DIRECTORY_HEADER_BYTES: usize = 12;
 const DIRECTORY_ENTRY_BYTES: usize = 12;
 const SENSOR_IMAGE_TYPES: [u32; 2] = [1, 3];
 const SENSOR_HUFFMAN_FORMAT: u32 = 30;
-const MINIMUM_MERRILL_SPLIT_WORKERS: usize = 6;
-const MAXIMUM_MERRILL_FRAGMENTS: usize = 8;
 const PROPERTY_HEADER_BYTES: usize = 24;
 const PROPERTY_ENTRY_BYTES: usize = 8;
 // Bound both the encoded section and its independently owned decoded strings.
@@ -576,14 +574,7 @@ fn read_pixels(section: &[u8]) -> Result<SensorRead> {
     let start_time = Instant::now();
     let planes = {
         let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.planes");
-        let workers = crate::decode_pool::available_workers();
-        let fragments = if workers >= MINIMUM_MERRILL_SPLIT_WORKERS {
-            let count = workers.min(MAXIMUM_MERRILL_FRAGMENTS);
-            std::array::from_fn(|layer| (count - layer).div_ceil(inputs.len()))
-        } else {
-            [1; 3]
-        };
-        table.decode_sensor_planes(inputs, huffman::SAMPLE_MAX as u16, fragments, format)?
+        table.decode_sensor_planes(inputs, huffman::SAMPLE_MAX as u16, format)?
     };
     let mut timings = vec![Timing::elapsed("sensor planes wall", start_time)];
     timings.extend(planes.iter().map(|(_, timing)| timing.clone()));

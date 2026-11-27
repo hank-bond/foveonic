@@ -6,7 +6,7 @@ use std::{sync::mpsc, time::Duration};
 type Latch = (Mutex<bool>, Condvar);
 
 #[test]
-fn borrowed_cpu_preparation_and_nested_planes_share_capacity_and_cancellation() {
+fn borrowed_cpu_preparation_and_planes_share_capacity_and_cancellation() {
     let pool = Arc::new(Pool::new(2).unwrap());
     let gate = Arc::new(priority::Gate::default());
     let values = [3, 5, 7];
@@ -17,14 +17,16 @@ fn borrowed_cpu_preparation_and_nested_planes_share_capacity_and_cancellation() 
                 turn: Arc::new(Order::default()).issue(),
             },
             || {
+                cpu(|| {
+                    assert!(pool.0.current_thread_index().is_some());
+                    assert!(priority::context().is_some());
+                    Ok(())
+                })?;
+                // The file caller waits outside the pool while planes run on it.
                 assert_eq!(
-                    cpu(|| {
+                    plane_parts(0..3, |channel| {
                         assert!(pool.0.current_thread_index().is_some());
-                        assert!(priority::context().is_some());
-                        planes(|channel| {
-                            assert!(pool.0.current_thread_index().is_some());
-                            Ok(values[channel])
-                        })
+                        Ok(values[channel])
                     })?,
                     values
                 );
@@ -111,7 +113,7 @@ fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
     assert_eq!(pool.threads(), available_workers());
     let caller = std::thread::current().id();
     assert_eq!(
-        planes(|channel| {
+        plane_parts(0..3, |channel| {
             assert!(pool.0.current_thread_index().is_some());
             assert_ne!(std::thread::current().id(), caller);
             assert!(priority::context().is_none());
@@ -139,7 +141,7 @@ fn foreground_and_speculative_planes_and_rows_use_the_persistent_host_pool() {
                 turn: Arc::new(Order::default()).issue(),
             },
             || {
-                planes(|channel| {
+                plane_parts(0..3, |channel| {
                     assert!(pool.0.current_thread_index().is_some());
                     assert!(Arc::ptr_eq(
                         &pool,
@@ -187,7 +189,7 @@ fn five_workers_start_rgb_rg_then_take_the_next_b_before_the_first_photo_finishe
                     priority::interruptible(Arc::new(priority::Gate::default()), || {
                         priority::decoder(Task { pool, turn }, || {
                             let task = priority::decoder_context().unwrap();
-                            task.pool.planes(Some(&task.turn), |layer| {
+                            task.pool.parts(0..3, Some(&task.turn), |layer| {
                                 started
                                     .send((photo, layer, std::thread::current().id()))
                                     .unwrap();
@@ -255,7 +257,7 @@ fn cancellation_reaches_queued_layers_and_unblocks_later_photo_admission() {
             let _foreground = gate.demand(crate::priority::Priority::Viewport);
             assert!(task
                 .pool
-                .planes(Some(&task.turn), |_| Ok(()))
+                .parts(0..3, Some(&task.turn), |_| Ok(()))
                 .unwrap_err()
                 .is::<priority::Interrupted>());
             Ok(())
@@ -307,7 +309,7 @@ fn outside_part_join_completes_while_a_worker_is_paused_by_viewport_demand() {
         let _release = ReleaseAll(latches.clone());
         let demand = gate.demand(priority::Priority::Viewport);
         scope.spawn(|| {
-            let output = pool.parts(0..2, None, "decode.plane.part", "part", |index| {
+            let output = pool.parts(0..2, None, |index| {
                 started.send(index).unwrap();
                 let (open, wake) = &latches[index];
                 drop(
@@ -370,7 +372,7 @@ fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
                     },
                     || {
                         let task = priority::decoder_context().unwrap();
-                        task.pool.planes(Some(&task.turn), |layer| {
+                        task.pool.parts(0..3, Some(&task.turn), |layer| {
                             started.send(layer).unwrap();
                             let mut released = latches[layer].0.lock().unwrap();
                             while !*released {
@@ -400,7 +402,7 @@ fn replacing_prefetch_cancels_active_and_queued_layers_before_the_next_photo() {
     let next = priority::interruptible(gate, || {
         priority::decoder(Task { pool, turn: second }, || {
             let task = priority::decoder_context().unwrap();
-            task.pool.planes(Some(&task.turn), Ok)
+            task.pool.parts(0..3, Some(&task.turn), Ok)
         })
     })
     .unwrap();

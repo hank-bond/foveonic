@@ -18,6 +18,8 @@ const PREFIX_TABLE_ENTRIES: usize = 1 << CODE_BITS;
 const PACKED_CATEGORY_COUNT: usize = 18;
 const TWELVE_BIT_CATEGORY_COUNT: usize = 13;
 const REFILL_BYTES: usize = 6;
+/// A plane splits only into fragments at least this long, so short streams stay whole.
+const MINIMUM_FRAGMENT_BYTES: usize = 512 * 1024;
 const REFILL_BITS: u32 = (REFILL_BYTES * 8) as u32;
 
 #[derive(Clone, Copy)]
@@ -40,11 +42,6 @@ pub(super) struct Plane<'a> {
     pub width: usize,
     pub height: usize,
     pub seed: u16,
-}
-
-enum PlanePart {
-    Whole(Result<(Vec<u16>, Timing)>),
-    Fragment(Result<Option<Vec<u16>>>),
 }
 
 impl Table {
@@ -190,16 +187,6 @@ impl Table {
         width: usize,
         height: usize,
         seed: u16,
-    ) -> Result<Vec<u16>> {
-        self.decode_bounded(input, width, height, seed, SAMPLE_MAX as u16)
-    }
-
-    pub(super) fn decode_bounded(
-        &self,
-        input: &[u8],
-        width: usize,
-        height: usize,
-        seed: u16,
         maximum: u16,
     ) -> Result<Vec<u16>> {
         self.decode_plane(
@@ -214,7 +201,18 @@ impl Table {
         )
     }
 
+    /// Decode the three sensor planes on the shared processing pool. Large planes
+    /// split into fragments so one photo fills the pool.
     pub(super) fn decode_sensor_planes(
+        &self,
+        planes: [Plane<'_>; 3],
+        maximum: u16,
+        format: u32,
+    ) -> Result<Vec<(Vec<u16>, Timing)>> {
+        self.decode_split_planes(planes, maximum, fragments(&planes), format)
+    }
+
+    fn decode_split_planes(
         &self,
         planes: [Plane<'_>; 3],
         maximum: u16,
@@ -231,80 +229,53 @@ impl Table {
             let _scope = diagnostics::scope(Category::Cpu, "decode.plane.lookup");
             self.differences()
         };
-        let decode = |layer: usize| {
-            let plane = planes[layer];
-            let _scope = super::sensor_plane_scope(
-                layer,
-                plane.width,
-                plane.height,
-                plane.input.len(),
-                format,
-            );
-            let start = Instant::now();
-            let samples = self.decode_plane(plane, maximum, &lookup)?;
-            Ok((samples, Timing::elapsed(STAGES[layer], start)))
-        };
-        #[cfg(test)]
-        if lookup_tests::category_only() {
-            return decode_pool::planes(decode);
-        }
-        // Cache prefetch has already admitted multiple photos to fill the pool.
-        if fragments.iter().all(|&count| count <= 1) || crate::priority::decoder_context().is_some()
-        {
-            return decode_pool::planes(decode);
-        }
         let start = Instant::now();
-        let splits: [_; 3] =
-            std::array::from_fn(|i| parallel::Split::new(self, planes[i], fragments[i]));
-        if splits.iter().all(Option::is_none) {
-            return decode_pool::planes(decode);
-        }
-
-        let counts: [_; 3] =
-            std::array::from_fn(|i| splits[i].as_ref().map_or(1, parallel::Split::len));
-        let jobs: Vec<_> = counts
-            .iter()
-            .enumerate()
-            .flat_map(|(layer, &count)| (0..count).map(move |part| (layer, part)))
-            .collect();
-        let mut results = decode_pool::plane_parts(jobs.into_iter(), |(layer, part)| {
-            Ok(match &splits[layer] {
-                Some(split) => PlanePart::Fragment(split.unpack(
-                    self,
-                    &lookup,
-                    planes[layer].input,
-                    layer,
-                    part,
-                )),
-                None => PlanePart::Whole(decode(layer)),
+        let scope = |layer: usize| {
+            let plane = planes[layer];
+            super::sensor_plane_scope(layer, plane.width, plane.height, plane.input.len(), format)
+        };
+        let splits: [_; 3] = std::array::from_fn(|layer| {
+            parallel::Split::new(self, planes[layer], fragments[layer])
+        });
+        // One job per whole plane or fragment. A whole plane decodes its samples
+        // directly; a fragment yields differences for the join below.
+        let jobs: Vec<(usize, Option<usize>)> = (0..planes.len())
+            .flat_map(|layer| match &splits[layer] {
+                Some(split) => (0..split.len()).map(|part| (layer, Some(part))).collect(),
+                None => vec![(layer, None)],
             })
+            .collect();
+        let mut decoded = decode_pool::plane_parts(jobs.iter().copied(), |(layer, part)| {
+            match (part, &splits[layer]) {
+                (Some(part), Some(split)) => {
+                    split.unpack(self, &lookup, planes[layer].input, layer, part)
+                }
+                _ => {
+                    let _scope = scope(layer);
+                    self.decode_plane(planes[layer], maximum, &lookup).map(Some)
+                }
+            }
         })?
         .into_iter();
-        let parts: [_; 3] = counts.map(|count| results.by_ref().take(count).collect::<Vec<_>>());
-        decode_pool::plane_parts(parts.into_iter().enumerate(), |(layer, parts)| {
-            let mut parts = parts.into_iter();
-            let first = match parts.next().ok_or("missing sensor plane data")? {
-                PlanePart::Whole(samples) => return samples,
-                PlanePart::Fragment(first) => first,
-            };
-            let plane = planes[layer];
-            let _scope = super::sensor_plane_scope(
-                layer,
-                plane.width,
-                plane.height,
-                plane.input.len(),
-                format,
-            );
-            let parts = std::iter::once(first)
-                .chain(parts.map(|part| match part {
-                    PlanePart::Fragment(samples) => samples,
-                    PlanePart::Whole(_) => unreachable!("split plane has only fragments"),
-                }))
-                .collect::<Result<Vec<_>>>()?;
-            let samples = match parallel::reconstruct(parts, plane, maximum)? {
-                Some(samples) => samples,
-                // Replay with the scalar order when a join or sample is invalid.
-                None => self.decode_plane(plane, maximum, &lookup)?,
+        let per_layer: Vec<Vec<_>> = jobs
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(|group| decoded.by_ref().take(group.len()).collect())
+            .collect();
+        decode_pool::plane_parts(per_layer.into_iter().enumerate(), |(layer, parts)| {
+            let samples = if splits[layer].is_none() {
+                parts
+                    .into_iter()
+                    .next()
+                    .flatten()
+                    .ok_or("missing sensor plane data")?
+            } else {
+                let _scope = scope(layer);
+                match parallel::reconstruct(parts, planes[layer], maximum)? {
+                    Some(samples) => samples,
+                    // Replay in stored order when a join or sample is invalid, so
+                    // damage reports the first technical cause.
+                    None => self.decode_plane(planes[layer], maximum, &lookup)?,
+                }
             };
             Ok((samples, Timing::elapsed(STAGES[layer], start)))
         })
@@ -330,10 +301,6 @@ impl Table {
             || seed > maximum
         {
             return Err("unsupported compressed plane geometry or seed".into());
-        }
-        #[cfg(test)]
-        if let Some(result) = lookup_tests::dispatch(self, input, width, height, seed, maximum) {
-            return result;
         }
         let mut output = {
             let _scope = diagnostics::scope(Category::Cpu, "decode.plane.allocate");
@@ -370,6 +337,28 @@ impl Table {
         }
         Ok(output)
     }
+}
+
+/// Fragments per plane, so one photo's planes fill the processing pool. Decoding
+/// work follows compressed size, so a larger plane gets more fragments. Photos
+/// prefetched for the cache already fill the pool together and decode whole planes.
+fn fragments(planes: &[Plane<'_>; 3]) -> [usize; 3] {
+    if crate::priority::decoder_context().is_some() {
+        return [1; 3];
+    }
+    let workers = decode_pool::available_workers();
+    let total = planes
+        .iter()
+        .map(|plane| plane.input.len())
+        .sum::<usize>()
+        .max(1);
+    planes.map(|plane| {
+        let length = plane.input.len();
+        // The nearest whole share of the workers, and no fragment shorter than the minimum.
+        ((2 * workers * length + total) / (2 * total))
+            .min(length / MINIMUM_FRAGMENT_BYTES)
+            .max(1)
+    })
 }
 
 struct Bits<'a> {
@@ -467,12 +456,11 @@ mod tests {
         words[14] = 0x8001; // fourteen-bit difference = 1 + payload
         let table = Table::packed(&words).unwrap();
         // Prefix one and payload 10_0000_0000_0000: +8192.
-        assert_eq!(
-            table.decode_bounded(&[0xc0, 0], 1, 1, 0, 16383).unwrap(),
-            [8192]
-        );
-        assert!(table.decode(&[0xc0, 0], 1, 1, 0).is_err());
-        assert!(table.decode_bounded(&[0xc0], 1, 1, 0, 16383).is_err());
+        assert_eq!(table.decode(&[0xc0, 0], 1, 1, 0, 16383).unwrap(), [8192]);
+        assert!(table
+            .decode(&[0xc0, 0], 1, 1, 0, SAMPLE_MAX as u16)
+            .is_err());
+        assert!(table.decode(&[0xc0], 1, 1, 0, 16383).is_err());
         let table = Table::packed(&[1, 0x8001]).unwrap();
         // +1 then +1 wraps the byte predictor, while independent image seeds do not.
         assert_eq!(table.decode_bytes(&[0xf0], 2, 255).unwrap(), [0, 1]);
@@ -499,7 +487,7 @@ mod tests {
             input[i / 8] |= (b - b'0') << (7 - i % 8);
         }
         assert_eq!(
-            table.decode(&input, 3, 3, 512).unwrap(),
+            table.decode(&input, 3, 3, 512, SAMPLE_MAX as u16).unwrap(),
             [513, 511, 516, 510, 512, 510, 513, 511, 513]
         );
     }
@@ -507,12 +495,15 @@ mod tests {
     #[test]
     fn lookahead_never_accepts_missing_consumed_bits() {
         let table = Table::new(&[(0, 1)]).unwrap();
-        assert_eq!(table.decode(&[0], 4, 2, 512).unwrap(), vec![512; 8]);
-        assert!(table.decode(&[0], 3, 3, 512).is_err());
-        assert!(table.decode(&[], 1, 1, 512).is_err());
-        assert!(table.decode(&[0x80], 1, 1, 512).is_err());
+        assert_eq!(
+            table.decode(&[0], 4, 2, 512, SAMPLE_MAX as u16).unwrap(),
+            vec![512; 8]
+        );
+        assert!(table.decode(&[0], 3, 3, 512, SAMPLE_MAX as u16).is_err());
+        assert!(table.decode(&[], 1, 1, 512, SAMPLE_MAX as u16).is_err());
+        assert!(table.decode(&[0x80], 1, 1, 512, SAMPLE_MAX as u16).is_err());
         let table = Table::new(&[(0, 1), (2048, 1)]).unwrap();
-        assert!(table.decode(&[0x80], 1, 1, 0).is_err());
+        assert!(table.decode(&[0x80], 1, 1, 0, SAMPLE_MAX as u16).is_err());
     }
 }
 

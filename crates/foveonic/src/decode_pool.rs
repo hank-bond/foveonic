@@ -148,22 +148,12 @@ impl Pool {
     pub fn threads(&self) -> usize {
         self.0.current_num_threads()
     }
-    /// Borrow the compressed planes safely. Each photo contributes three layer jobs
-    /// to the same FIFO workers, without copying compressed data or creating child threads.
-    pub fn planes<T: Send>(
-        &self,
-        turn: Option<&Turn>,
-        decode: impl Fn(usize) -> Result<T> + Sync,
-    ) -> Result<Vec<T>> {
-        const SENSOR_PLANES: usize = 3;
-        self.parts(0..SENSOR_PLANES, turn, "decode.plane", "plane", decode)
-    }
-    fn parts<I: Send, T: Send>(
+    /// Borrow plane work safely: whole planes or fragments join the same FIFO
+    /// workers, without copying compressed data or creating child threads.
+    pub fn parts<I: Send, T: Send>(
         &self,
         parts: impl ExactSizeIterator<Item = I>,
         turn: Option<&Turn>,
-        event: &'static str,
-        index_field: &'static str,
         decode: impl Fn(I) -> Result<T> + Sync,
     ) -> Result<Vec<T>> {
         let mut results: Vec<_> = (0..parts.len()).map(|_| None).collect();
@@ -176,9 +166,9 @@ impl Pool {
                     let _context = diagnostic.map(crate::diagnostics::enter);
                     let _scope = crate::diagnostics::scope_with(
                         crate::diagnostics::Category::Cpu,
-                        event,
+                        "decode.plane.part",
                         |fields| {
-                            fields.u64(index_field, index as u64);
+                            fields.u64("part", index as u64);
                         },
                     );
                     *result = Some(priority::decoding(scheduling, || {
@@ -245,17 +235,8 @@ impl Pool {
     }
 }
 
-/// Decode independent planes using the common processing CPU budget. Speculative
-/// photo admission adds its FIFO turn; foreground decoding has no such turn.
-pub(crate) fn planes<T: Send>(decode: impl Fn(usize) -> Result<T> + Sync) -> Result<Vec<T>> {
-    if let Some(task) = priority::decoder_context() {
-        task.pool.planes(Some(&task.turn), decode)
-    } else {
-        shared()?.planes(None, decode)
-    }
-}
-
-/// Run one flat phase of plane work. The file caller waits outside the pool.
+/// Run one flat phase of plane work on the caller's decoding pool, or the shared one.
+/// The file caller waits outside the pool, so a worker never waits on its own fragments.
 pub(crate) fn plane_parts<I: Send, T: Send>(
     parts: impl ExactSizeIterator<Item = I>,
     decode: impl Fn(I) -> Result<T> + Sync,
@@ -267,7 +248,7 @@ pub(crate) fn plane_parts<I: Send, T: Send>(
         .map_or_else(shared, Ok)?;
     debug_assert!(pool.0.current_thread_index().is_none());
     let turn = task.as_ref().map(|task| task.turn.as_ref());
-    pool.parts(parts, turn, "decode.plane.part", "part", decode)
+    pool.parts(parts, turn, decode)
 }
 
 /// Decode independent rows into disjoint output slices on the same processing

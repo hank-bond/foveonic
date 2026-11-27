@@ -145,6 +145,10 @@ The following comparison used eleven alternating runs per decoder after warmup o
 
 All sample bits match across fifteen originals. Nine retain identical decoded CAMF and typed metadata. Both damaged Merrill files retain their exact technical causes. DP0 Quattro and Merrill HI retain their quarter-scale Metal render digests and geometry. Workspace tests, strict Clippy, formatting, and documentation checks passed. Release-profile original tests passed for serial-plane parity, trace parity, cache round trips, and prefetch cancellation and admission. The debug run of the folder-prefetch original test reached its 15-second deadline. The signed macOS review build is available for owner testing. The benchmark ends at source loading, and Finder Quick Look latency remains unmeasured.
 
+## One parallelism rule
+
+Owner direction, 2026-11-26: parallelism should fill the machine's cores dynamically. Merrill and Quattro each had their own fragment rule, and the decoder separately switched splitting off for cache prefetch. One function now gives each plane a share of the available workers in proportion to its compressed size, never splitting below 512 KiB per fragment, and keeps whole planes when prefetch already fills the pool. Plane decoding has one entry point, one scalar entry replaces `decode` and `decode_bounded`, and the pool has one plane-work method. The test switch that changed the production path for the fused-lookup comparison is gone; that profile now times original opens only. Decoded output is unchanged by construction. A matched timing comparison against the two tuned rules is still to run.
+
 ## Further research
 
 - Overlap word refill with lookup on one core. Dougall Johnson's [Apple M1 experiment](https://dougallj.wordpress.com/2022/08/26/reading-bits-with-zero-refill-latency/) uses the old bit buffer for the current lookup while loading the next word. The reported 6% applies to the experimental DEFLATE decoder. X3F needs a separate timing and damage check.

@@ -8,8 +8,6 @@ use crate::source::{Result, SourceStorage};
 
 const SPECIAL_COLUMN_STEP: usize = 16;
 const SPECIAL_ROW_STEP: usize = 4;
-const MINIMUM_TOP_PLANE_SAMPLES: usize = 8_000_000;
-const MAXIMUM_TOP_PLANE_FRAGMENTS: usize = 8;
 
 pub(super) struct Decoded {
     pub storage: SourceStorage,
@@ -85,16 +83,9 @@ pub(super) fn decode(section: &[u8], width: usize, height: usize, format: u32) -
             .ok_or_else(|| damaged("compressed plane offset overflow"))?;
     }
     drop(prepare_scope);
-    let top_fragments = if packed && blue_width * height >= MINIMUM_TOP_PLANE_SAMPLES {
-        crate::decode_pool::available_workers()
-            .saturating_sub(2)
-            .clamp(1, MAXIMUM_TOP_PLANE_FRAGMENTS)
-    } else {
-        1
-    };
     let planes = {
         let _scope = diagnostics::scope(Category::Cpu, "decode.sensor.planes");
-        table.decode_sensor_planes(inputs, 16383, [1, 1, top_fragments], format)?
+        table.decode_sensor_planes(inputs, 16383, format)?
     };
     let output = crate::decode_pool::cpu(|| {
         let _assembly_scope = diagnostics::scope(Category::Cpu, "decode.sensor.assemble");

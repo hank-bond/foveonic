@@ -1,29 +1,7 @@
-//! Checks fused Huffman differences against category decoding and measures exact original-file loading.
+//! Checks fused Huffman differences against category decoding, split planes, and exact original-file loading.
 
 use super::*;
-use std::{
-    path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Instant,
-};
-
-// Only the explicitly ignored, serial original-file comparison enables this.
-static CATEGORY_ONLY: AtomicBool = AtomicBool::new(false);
-
-pub(super) fn category_only() -> bool {
-    CATEGORY_ONLY.load(Ordering::Relaxed)
-}
-
-pub(super) fn dispatch(
-    table: &Table,
-    input: &[u8],
-    width: usize,
-    height: usize,
-    seed: u16,
-    maximum: u16,
-) -> Option<Result<Vec<u16>>> {
-    category_only().then(|| category_plane(table, input, width, height, seed, maximum))
-}
+use std::{path::PathBuf, time::Instant};
 
 fn category_plane(
     table: &Table,
@@ -115,7 +93,7 @@ fn fused_planes_preserve_predictors_damage_and_geometry_limits() {
                 for seed in [0, 512, 4095] {
                     assert_same(
                         category_plane(&table, &input[..length], width, height, seed, 4095),
-                        table.decode(&input[..length], width, height, seed),
+                        table.decode(&input[..length], width, height, seed, 4095),
                     );
                 }
             }
@@ -128,12 +106,12 @@ fn fused_planes_preserve_predictors_damage_and_geometry_limits() {
         (65536, 1, 0),
         (8192, 8192, 0),
     ] {
-        assert!(table.decode(&[], width, height, seed).is_err());
+        assert!(table.decode(&[], width, height, seed, 4095).is_err());
     }
     let gate = std::sync::Arc::new(crate::priority::Gate::default());
     crate::priority::interruptible(gate.clone(), || {
         gate.interrupt_speculative();
-        let error = table.decode(&[0], 4, 2, 512).unwrap_err();
+        let error = table.decode(&[0], 4, 2, 512, 4095).unwrap_err();
         assert!(error.is::<crate::priority::Interrupted>());
     });
 }
@@ -159,7 +137,7 @@ fn split_plane_reconstructs_prediction_across_unaligned_fragments() {
                 bits += 1;
             }
         }
-        let expected = table.decode(&input, width, height, 512).unwrap();
+        let expected = table.decode(&input, width, height, 512, 4095).unwrap();
         for fragments in [2, 3, 8] {
             // Require the split path to succeed without silently using scalar decoding.
             let plane = Plane {
@@ -213,9 +191,9 @@ fn split_plane_preserves_the_declared_sample_end_and_first_damage() {
             seed: 0,
         };
         assert_same(
-            table.decode_bounded(input, 5, 15, 0, 4095),
+            table.decode(input, 5, 15, 0, 4095),
             table
-                .decode_sensor_planes([plane; 3], 4095, [3; 3], 30)
+                .decode_split_planes([plane; 3], 4095, [3; 3], 30)
                 .map(|mut planes| planes.remove(0).0),
         );
     }
@@ -230,22 +208,15 @@ fn split_plane_preserves_the_declared_sample_end_and_first_damage() {
             seed: 512,
         };
         let error = table
-            .decode_sensor_planes([plane; 3], 4095, [3; 3], 30)
+            .decode_split_planes([plane; 3], 4095, [3; 3], 30)
             .unwrap_err();
         assert!(error.is::<crate::priority::Interrupted>());
     });
 }
 
-struct Reset;
-impl Drop for Reset {
-    fn drop(&mut self) {
-        CATEGORY_ONLY.store(false, Ordering::Relaxed);
-    }
-}
-
 #[test]
 #[ignore = "requires DECODER_RESEARCH_FILES, optional DECODER_RESEARCH_REPEATS, serial test execution"]
-fn profile_fused_original_loading() {
+fn profile_original_loading() {
     let paths: Vec<PathBuf> =
         std::env::split_paths(&std::env::var_os("DECODER_RESEARCH_FILES").unwrap()).collect();
     let repeats: usize = std::env::var("DECODER_RESEARCH_REPEATS")
@@ -254,23 +225,18 @@ fn profile_fused_original_loading() {
     for path in paths {
         let expected = crate::source::Source::open(&path).unwrap();
         for repeat in 0..repeats {
-            for category_only in [true, false] {
-                CATEGORY_ONLY.store(category_only, Ordering::Relaxed);
-                let reset = Reset;
-                let began = Instant::now();
-                let source = crate::source::Source::open(&path).unwrap();
-                let milliseconds = began.elapsed().as_secs_f64() * 1000.;
-                drop(reset);
-                assert_eq!(source.samples(), expected.samples());
-                println!(
-                    "{}",
-                    crate::profile::report(
-                        "decoder_fused_loading",
-                        crate::profile::Mode::Off,
-                        serde_json::json!({"source":path,"category_only":category_only,"repeat":repeat,"open_ms":milliseconds,"stages":source.load_timings(),"exact":true})
-                    )
-                );
-            }
+            let began = Instant::now();
+            let source = crate::source::Source::open(&path).unwrap();
+            let milliseconds = began.elapsed().as_secs_f64() * 1000.;
+            assert_eq!(source.samples(), expected.samples());
+            println!(
+                "{}",
+                crate::profile::report(
+                    "decoder_original_loading",
+                    crate::profile::Mode::Off,
+                    serde_json::json!({"source":path,"repeat":repeat,"open_ms":milliseconds,"stages":source.load_timings(),"exact":true})
+                )
+            );
         }
     }
 }

@@ -2001,7 +2001,7 @@
     },
     {
       "suite": "foveonic",
-      "test": "x3f::huffman::lookup_tests::profile_fused_original_loading",
+      "test": "x3f::huffman::lookup_tests::profile_original_loading",
       "reason": "Profiling, timing, or benchmark, not a maintained correctness gate.",
       "requirements": "requires DECODER_RESEARCH_FILES, optional DECODER_RESEARCH_REPEATS, serial test execution",
       "source": "crates/foveonic/src/x3f/huffman_lookup_test.rs"
