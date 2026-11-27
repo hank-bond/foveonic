@@ -14,7 +14,7 @@ Keep original samples and clipping provenance immutable. Preserve ordered repair
 
 - **[banding.rs](./banding.rs)** Prepares coordinate-only row-correction weights while keeping photo measurements on the GPU.
 - **[blue_despeckle.rs](./blue_despeckle.rs)** Repairs immutable blue planes with paired dark-speckle, general-neighborhood, or neighbor-range equations.
-- **[blue_mismatch.rs](./blue_mismatch.rs)** Repairs odd-phase blue runs after validating the source counter initialization precondition.
+- **[blue_mismatch.rs](./blue_mismatch.rs)** Repairs odd-phase blue runs, counting each column's run from zero.
 - **[blue_pattern.rs](./blue_pattern.rs)** Removes directional blue phase patterns through explicit coarse masks and ordered pair corrections.
 - **[blue_refresh.rs](./blue_refresh.rs)** Refreshes RGB blue from four spatial blue phases while preserving red and green.
 - **[calibrated_defects.rs](./calibrated_defects.rs)** Repairs serial-matched persistent sensor locations before noise filtering and restores clipped defects afterward.

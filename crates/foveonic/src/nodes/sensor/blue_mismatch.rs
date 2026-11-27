@@ -1,4 +1,4 @@
-//! Repairs odd-phase blue runs after validating the source counter initialization precondition.
+//! Repairs odd-phase blue runs, counting each column's run from zero.
 use crate::{
     gpu::{
         Binding::{Read, Write},
@@ -69,9 +69,6 @@ pub(crate) fn apply(
     }
     let mut output = gpu.storage("Blue mismatch repair", input.size())?;
     gpu.copy(input, output.write(), input.size());
-    let mut status = gpu.storage("Blue mismatch initialization", 4)?;
-    let zero = gpu.upload("Zero initialization status", &[0_u32])?;
-    gpu.copy(&zero, status.write(), 4);
     let params = gpu.uniform(&prepared.params);
     let mut trace = gpu.trace(profile.mode.gpu(), 1);
     gpu.dispatch(
@@ -80,7 +77,6 @@ pub(crate) fn apply(
             (0, Read(input)),
             (1, Read(&params)),
             (2, Write(output.write())),
-            (3, Write(status.write())),
         ],
         [
             ((prepared.params.rectangle[2] - prepared.params.rectangle[0]).div_ceil(2))
@@ -90,11 +86,6 @@ pub(crate) fn apply(
         &mut trace,
     );
     gpu.finish_trace(&trace, profile)?;
-    if gpu.readback(&status)?.iter().any(|&b| b != 0) {
-        return Err(
-            "blue mismatch first scan row would read an uninitialized reference counter".into(),
-        );
-    }
     Ok(output)
 }
 #[cfg(test)]
