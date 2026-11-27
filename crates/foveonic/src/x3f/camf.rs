@@ -22,11 +22,9 @@ const BYTE_METADATA_CAPACITY: usize = 0x85bcb8;
 
 pub(super) fn read(section: &[u8], timings: &mut Vec<Timing>) -> Result<Decoded> {
     let bytes = Bytes(section);
-    let fragments = if bytes.u32(8).ok() == Some(BYTE_HUFFMAN_COMPRESSION) {
-        super::huffman::fragments([bytes.offset(COMPRESSED_LENGTH_OFFSET).unwrap_or(0)])[0]
-    } else {
-        1
-    };
+    // Both Huffman types keep the compressed length at the same offset.
+    let fragments =
+        super::huffman::fragments([bytes.offset(COMPRESSED_LENGTH_OFFSET).unwrap_or(0)])[0];
     let start = Instant::now();
     let camf = {
         let _scope = diagnostics::scope(diagnostics::Category::Cpu, "decode.camf.decompress");
@@ -44,8 +42,9 @@ pub(super) fn read(section: &[u8], timings: &mut Vec<Timing>) -> Result<Decoded>
     })
 }
 
-/// Decompress the camera metadata. Split decoding joins its fragments from this
-/// caller, outside the processing pool; whole-stream decoding runs in the pool.
+/// Decompress the camera metadata. Huffman streams split into `fragments` and
+/// join them from this caller, outside the processing pool. A byte stream that
+/// cannot split replays serially in the pool.
 fn decompress(section: &[u8], fragments: usize) -> Result<Vec<u8>> {
     let bytes = Bytes(section);
     if bytes.range(0, 4)? != b"SECc" {
@@ -124,15 +123,22 @@ fn decompress(section: &[u8], fragments: usize) -> Result<Vec<u8>> {
     }
     let input = bytes.range(60, bytes.offset(COMPRESSED_LENGTH_OFFSET)?)?;
     let table = Table::new(&codes)?;
-    let plane = decode_pool::cpu(|| {
-        table.decode(
-            input,
-            width,
-            height,
-            seed as u16,
+    let plane = super::huffman::Plane {
+        input,
+        width,
+        height,
+        seed: seed as u16,
+    };
+    let scope = |_| diagnostics::scope(diagnostics::Category::Cpu, "decode.camf.plane");
+    let [(plane, _)]: [_; 1] = table
+        .decode_planes(
+            [plane],
             super::huffman::SAMPLE_MAX as u16,
-        )
-    })?;
+            [fragments],
+            scope,
+        )?
+        .try_into()
+        .expect("one plane");
     let mut output = Vec::with_capacity(product(count / 2, 3)?);
     // Two twelve-bit samples occupy three bytes: aaaaaaaa aaaabbbb bbbbbbbb.
     for pair in plane.as_chunks::<2>().0 {
@@ -334,6 +340,74 @@ mod tests {
         let scalar = decompress(&section, 1).unwrap_err();
         let split = decompress(&section, 4).unwrap_err();
         assert_eq!(split.to_string(), scalar.to_string());
+    }
+
+    #[test]
+    fn packed_planes_decode_the_same_in_fragments_and_report_the_same_damage() {
+        // Thirteen four-bit category prefixes; category 1 carries one sign bit.
+        let codes: Vec<(u16, u8)> = (0..13).map(|i| (i << 8, 4)).collect();
+        let pattern = ["0000", "00011", "0000", "00010", "00011", "00011", "00010"];
+        let (width, height) = (64, 8);
+        let bits: String = (0..width * height)
+            .map(|i| pattern[i % pattern.len()])
+            .collect();
+        let mut compressed = vec![0; bits.len().div_ceil(8)];
+        for (index, bit) in bits.bytes().enumerate() {
+            compressed[index / 8] |= (bit - b'0') << (7 - index % 8);
+        }
+        let declared = width * height / 2 * 3;
+        let mut section = vec![0; 60];
+        section[..4].copy_from_slice(b"SECc");
+        section[8..12].copy_from_slice(&PACKED_HUFFMAN_COMPRESSION.to_le_bytes());
+        section[12..16].copy_from_slice(&(declared as u32).to_le_bytes());
+        section[16..20].copy_from_slice(&512_u32.to_le_bytes());
+        section[20..24].copy_from_slice(&(width as u32).to_le_bytes());
+        section[24..28].copy_from_slice(&(height as u32).to_le_bytes());
+        for (i, &(code, length)) in codes.iter().enumerate() {
+            section[28 + i * 2] = length;
+            section[29 + i * 2] = (code >> 4) as u8;
+        }
+        section[56..60].copy_from_slice(&(compressed.len() as u32).to_le_bytes());
+        section.extend_from_slice(&compressed);
+
+        let plane = Table::new(&codes)
+            .unwrap()
+            .decode(&compressed, width, height, 512, 4095)
+            .unwrap();
+        let expected: Vec<u8> = plane
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|pair| {
+                [
+                    (pair[0] >> 4) as u8,
+                    ((pair[0] << 4) | (pair[1] >> 8)) as u8,
+                    pair[1] as u8,
+                ]
+            })
+            .collect();
+        for fragments in [1, 2, 3] {
+            assert_eq!(
+                decompress(&section, fragments).unwrap(),
+                expected,
+                "{fragments}"
+            );
+        }
+
+        section.truncate(section.len() - 8);
+        let length = section.len() - 60;
+        section[56..60].copy_from_slice(&(length as u32).to_le_bytes());
+        let serial = Table::new(&codes)
+            .unwrap()
+            .decode(&section[60..], width, height, 512, 4095)
+            .unwrap_err()
+            .to_string();
+        for fragments in [1, 3] {
+            assert_eq!(
+                decompress(&section, fragments).unwrap_err().to_string(),
+                serial
+            );
+        }
     }
 
     #[test]

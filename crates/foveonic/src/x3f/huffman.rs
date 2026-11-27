@@ -6,7 +6,7 @@ use super::bytes::product;
 use crate::diagnostics::{self, Category};
 use crate::input_error::damaged;
 use crate::{decode_pool, profile::Timing, source::Result};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[path = "huffman_parallel.rs"]
 mod parallel;
@@ -18,7 +18,8 @@ const PREFIX_TABLE_ENTRIES: usize = 1 << CODE_BITS;
 const PACKED_CATEGORY_COUNT: usize = 18;
 const TWELVE_BIT_CATEGORY_COUNT: usize = 13;
 const REFILL_BYTES: usize = 6;
-/// A plane splits only into fragments at least this long, so short streams stay whole.
+/// A plane splits only into fragments at least this long. A shorter stream is
+/// one fragment, still decoded in lanes.
 const MINIMUM_FRAGMENT_BYTES: usize = 512 * 1024;
 const REFILL_BITS: u32 = (REFILL_BYTES * 8) as u32;
 
@@ -42,6 +43,23 @@ pub(super) struct Plane<'a> {
     pub width: usize,
     pub height: usize,
     pub seed: u16,
+}
+
+impl Plane<'_> {
+    /// The sample count, once the geometry and seed are supported.
+    fn samples(&self, maximum: u16) -> Result<usize> {
+        let count = product(self.width, self.height)?;
+        if self.width == 0
+            || self.height == 0
+            || self.width > u16::MAX as usize
+            || self.height > u16::MAX as usize
+            || count > MAXIMUM_PLANE_SAMPLES
+            || self.seed > maximum
+        {
+            return Err("unsupported compressed plane geometry or seed".into());
+        }
+        Ok(count)
+    }
 }
 
 impl Table {
@@ -191,6 +209,8 @@ impl Table {
             .collect()
     }
 
+    /// Serial decoding, the reference the split path must match.
+    #[cfg(test)]
     pub(super) fn decode(
         &self,
         input: &[u8],
@@ -211,23 +231,12 @@ impl Table {
         )
     }
 
-    /// Decode the three sensor planes on the shared processing pool. Large planes
-    /// split into fragments so one photo fills the pool.
+    /// Decode the three sensor planes on the shared processing pool, split into
+    /// fragments so one photo fills the pool.
     pub(super) fn decode_sensor_planes(
         &self,
         planes: [Plane<'_>; 3],
         maximum: u16,
-        format: u32,
-    ) -> Result<Vec<(Vec<u16>, Timing)>> {
-        let lengths = planes.map(|plane| plane.input.len());
-        self.decode_split_planes(planes, maximum, fragments(lengths), format)
-    }
-
-    fn decode_split_planes(
-        &self,
-        planes: [Plane<'_>; 3],
-        maximum: u16,
-        fragments: [usize; 3],
         format: u32,
     ) -> Result<Vec<(Vec<u16>, Timing)>> {
         const STAGES: [&str; 3] = [
@@ -235,86 +244,98 @@ impl Table {
             "sensor plane middle",
             "sensor plane top",
         ];
-        crate::priority::checkpoint_or_cancel()?;
-        let lookup = {
-            let _scope = diagnostics::scope(Category::Cpu, "decode.plane.lookup");
-            self.differences()
-        };
-        let start = Instant::now();
+        let lengths = planes.map(|plane| plane.input.len());
         let scope = |layer: usize| {
             let plane = planes[layer];
             super::sensor_plane_scope(layer, plane.width, plane.height, plane.input.len(), format)
         };
-        let splits: [_; 3] = std::array::from_fn(|layer| {
+        let planes = self.decode_planes(planes, maximum, fragments(lengths), scope)?;
+        Ok(planes
+            .into_iter()
+            .enumerate()
+            .map(|(layer, (samples, elapsed))| {
+                let stage = STAGES[layer];
+                (
+                    samples,
+                    Timing {
+                        stage,
+                        milliseconds: elapsed.as_secs_f64() * 1000.,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    /// Every plane decodes through fragments and their lanes, and reports when
+    /// it finished. A plane that cannot be split, or whose fragments do not
+    /// join, replays serially so damage reports the first technical cause.
+    /// Call from the file's thread, outside the processing pool.
+    pub(super) fn decode_planes<const N: usize>(
+        &self,
+        planes: [Plane<'_>; N],
+        maximum: u16,
+        fragments: [usize; N],
+        scope: impl Fn(usize) -> diagnostics::Scope + Sync,
+    ) -> Result<Vec<(Vec<u16>, Duration)>> {
+        crate::priority::checkpoint_or_cancel()?;
+        for plane in &planes {
+            plane.samples(maximum)?;
+        }
+        let start = Instant::now();
+        let lookup = {
+            let _scope = diagnostics::scope(Category::Cpu, "decode.plane.lookup");
+            self.differences()
+        };
+        let splits: [_; N] = std::array::from_fn(|layer| {
             parallel::Split::new(self, planes[layer], fragments[layer])
         });
-        // One job per whole plane or fragment. A whole plane decodes its samples
-        // directly; a fragment yields differences for the join below.
-        let jobs: Vec<(usize, Option<usize>)> = (0..planes.len())
-            .flat_map(|layer| match &splits[layer] {
-                Some(split) => (0..split.len()).map(|part| (layer, Some(part))).collect(),
-                None => vec![(layer, None)],
+        let jobs: Vec<(usize, &parallel::Split, usize)> = splits
+            .iter()
+            .enumerate()
+            .filter_map(|(layer, split)| split.as_ref().map(|split| (layer, split)))
+            .flat_map(|(layer, split)| (0..split.len()).map(move |part| (layer, split, part)))
+            .collect();
+        let mut decoded =
+            decode_pool::plane_parts(jobs.iter().copied(), |(layer, split, part)| {
+                split.unpack(self, &lookup, planes[layer].input, layer, part)
+            })?
+            .into_iter();
+        let per_layer: Vec<Vec<_>> = splits
+            .iter()
+            .map(|split| {
+                decoded
+                    .by_ref()
+                    .take(split.as_ref().map_or(0, parallel::Split::len))
+                    .collect()
             })
             .collect();
-        let mut decoded = decode_pool::plane_parts(jobs.iter().copied(), |(layer, part)| {
-            match (part, &splits[layer]) {
-                (Some(part), Some(split)) => {
-                    split.unpack(self, &lookup, planes[layer].input, layer, part)
-                }
-                _ => {
-                    let _scope = scope(layer);
-                    self.decode_plane(planes[layer], maximum, &lookup)
-                        .map(|samples| Some(vec![samples]))
-                }
-            }
-        })?
-        .into_iter();
-        let per_layer: Vec<Vec<_>> = jobs
-            .chunk_by(|a, b| a.0 == b.0)
-            .map(|group| decoded.by_ref().take(group.len()).collect())
-            .collect();
         decode_pool::plane_parts(per_layer.into_iter().enumerate(), |(layer, parts)| {
-            let samples = if splits[layer].is_none() {
-                parts
-                    .into_iter()
-                    .next()
-                    .flatten()
-                    .and_then(|lanes| lanes.into_iter().next())
-                    .ok_or("missing sensor plane data")?
-            } else {
-                let _scope = scope(layer);
-                match parallel::reconstruct(parts, planes[layer], maximum)? {
-                    Some(samples) => samples,
-                    // Replay in stored order when a join or sample is invalid, so
-                    // damage reports the first technical cause.
-                    None => self.decode_plane(planes[layer], maximum, &lookup)?,
-                }
+            let _scope = scope(layer);
+            let joined = match &splits[layer] {
+                Some(_) => parallel::reconstruct(parts, planes[layer], maximum)?,
+                None => None,
             };
-            Ok((samples, Timing::elapsed(STAGES[layer], start)))
+            let samples = match joined {
+                Some(samples) => samples,
+                None => self.decode_plane(planes[layer], maximum, &lookup)?,
+            };
+            Ok((samples, start.elapsed()))
         })
     }
 
     fn decode_plane(
         &self,
-        Plane {
+        plane: Plane<'_>,
+        maximum: u16,
+        lookup: &[Difference; PREFIX_TABLE_ENTRIES],
+    ) -> Result<Vec<u16>> {
+        let count = plane.samples(maximum)?;
+        let Plane {
             input,
             width,
             height,
             seed,
-        }: Plane<'_>,
-        maximum: u16,
-        lookup: &[Difference; PREFIX_TABLE_ENTRIES],
-    ) -> Result<Vec<u16>> {
-        let count = product(width, height)?;
-        if width == 0
-            || height == 0
-            || width > u16::MAX as usize
-            || height > u16::MAX as usize
-            || count > MAXIMUM_PLANE_SAMPLES
-            || seed > maximum
-        {
-            return Err("unsupported compressed plane geometry or seed".into());
-        }
+        } = plane;
         let mut output = {
             let _scope = diagnostics::scope(Category::Cpu, "decode.plane.allocate");
             Vec::with_capacity(count)
@@ -355,7 +376,7 @@ impl Table {
 /// Fragments per compressed stream decoded together, so one photo fills the
 /// processing pool. Decoding work follows compressed length, so a longer stream
 /// gets more fragments. Photos prefetched for the cache already fill the pool
-/// together and decode whole streams.
+/// together, so each of their streams is one fragment.
 pub(super) fn fragments<const N: usize>(lengths: [usize; N]) -> [usize; N] {
     if crate::priority::decoder_context().is_some() {
         return [1; N];

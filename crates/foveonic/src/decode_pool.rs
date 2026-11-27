@@ -148,7 +148,7 @@ impl Pool {
     pub fn threads(&self) -> usize {
         self.0.current_num_threads()
     }
-    /// Borrow plane work safely: whole planes or fragments join the same FIFO
+    /// Borrow plane work safely: fragments and plane joins share the same FIFO
     /// workers, without copying compressed data or creating child threads.
     pub fn parts<I: Send, T: Send>(
         &self,

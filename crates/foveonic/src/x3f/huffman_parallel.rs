@@ -18,9 +18,6 @@ pub(super) struct Split {
 
 impl Split {
     pub(super) fn new(table: &Table, plane: Plane<'_>, fragments: usize) -> Option<Self> {
-        if fragments <= 1 {
-            return None;
-        }
         // Compressed bytes do not divide evenly by sample count, so a fragment
         // may hold somewhat more than its share before it counts as damaged.
         let share = (plane.width * plane.height).div_ceil(fragments);

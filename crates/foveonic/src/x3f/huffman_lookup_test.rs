@@ -107,6 +107,21 @@ fn fused_planes_preserve_predictors_damage_and_geometry_limits() {
         (8192, 8192, 0),
     ] {
         assert!(table.decode(&[], width, height, seed, 4095).is_err());
+        // Enough zero codes for every sample, so the split path decodes them
+        // all unless it checks the geometry first.
+        let zeros = vec![0; 8192];
+        let plane = Plane {
+            input: &zeros,
+            width,
+            height,
+            seed,
+        };
+        for fragments in [1, 3] {
+            assert!(
+                split_planes(&table, [plane; 3], fragments).is_err(),
+                "{width}x{height} seed {seed}"
+            );
+        }
     }
     let gate = std::sync::Arc::new(crate::priority::Gate::default());
     crate::priority::interruptible(gate.clone(), || {
@@ -138,7 +153,7 @@ fn split_plane_reconstructs_prediction_across_unaligned_fragments() {
             }
         }
         let expected = table.decode(&input, width, height, 512, 4095).unwrap();
-        for fragments in [2, 3, 8] {
+        for fragments in [1, 2, 3, 8] {
             // Require the split path to succeed without silently using scalar decoding.
             let plane = Plane {
                 input: &input,
@@ -150,6 +165,12 @@ fn split_plane_reconstructs_prediction_across_unaligned_fragments() {
             assert_eq!(actual, expected);
         }
     }
+}
+
+fn split_planes(table: &Table, planes: [Plane<'_>; 3], fragments: usize) -> Result<Vec<Vec<u16>>> {
+    let scope = |_| diagnostics::scope(Category::Cpu, "test.plane");
+    let planes = table.decode_planes(planes, 4095, [fragments; 3], scope)?;
+    Ok(planes.into_iter().map(|(samples, _)| samples).collect())
 }
 
 fn reconstruct_split(table: &Table, plane: Plane<'_>, fragments: usize) -> Option<Vec<u16>> {
@@ -192,9 +213,7 @@ fn split_plane_preserves_the_declared_sample_end_and_first_damage() {
         };
         assert_same(
             table.decode(input, 5, 15, 0, 4095),
-            table
-                .decode_split_planes([plane; 3], 4095, [3; 3], 30)
-                .map(|mut planes| planes.remove(0).0),
+            split_planes(&table, [plane; 3], 3).map(|mut planes| planes.remove(0)),
         );
     }
 
@@ -207,9 +226,7 @@ fn split_plane_preserves_the_declared_sample_end_and_first_damage() {
             height: 13,
             seed: 512,
         };
-        let error = table
-            .decode_split_planes([plane; 3], 4095, [3; 3], 30)
-            .unwrap_err();
+        let error = split_planes(&table, [plane; 3], 3).unwrap_err();
         assert!(error.is::<crate::priority::Interrupted>());
     });
 }
