@@ -11,9 +11,20 @@ Open photographs faster by decoding them on every processor core, and render and
 
 ### Performance improvements
 
-- Open original photographs faster. Each compressed sensor layer, and a Quattro photograph's camera calibration, is split into pieces decoded on all processor cores.
+- Open original photographs faster. Each compressed sensor layer, and a Quattro photograph's camera calibration, is split into pieces decoded on all processor cores. Opening times on an Apple Silicon Mac, compared with 0.9.2:
+
+  | Photograph | 0.9.2 | 0.9.3 | |
+  |---|---|---|---|
+  | Merrill, HI | 130 ms | 62 ms | 2.1× faster |
+  | DP3 Merrill, MED | 69 ms | 37 ms | 1.9× faster |
+  | DP3 Merrill, LOW | 40 ms | 24 ms | 1.6× faster |
+  | DP0 Quattro | 275 ms | 75 ms | 3.7× faster |
+  | DP2 Quattro | 244 ms | 68 ms | 3.6× faster |
+  | sd Quattro H | 315 ms | 83 ms | 3.8× faster |
+
+  This matters most where nothing is decoded ahead of time, such as opening a photograph from Finder or Preview. The trade-off is memory: decoding every layer at once holds more while a photograph opens, so peak memory is up to about 100 MB higher than in 0.9.2.
 - Quattro: Pan around a zoomed photograph faster when Reference sharpening is off, by preparing a smaller margin around each region.
-- Quattro: Render with less memory and work by reusing intermediate buffers, applying the reconstruction residual in place and converting limited chroma straight to camera RGB.
+- Quattro: Render with less memory and work by reusing intermediate buffers, applying the reconstruction residual in place and converting limited chroma straight to camera RGB. Full-size renders are up to 28% faster, for example 881 → 634 ms for a DP0 Quattro in Speed.
 - Quattro: In Speed, shorten two filters below their ISO limits and sample half the taps of the coarse color filter at native size.
 - Use less memory for Clarity: its six blur levels share one buffer instead of allocating two for each level.
 - Merrill: In Speed, sample highlight restoration's donor colors on a grid of at most about a million points.
