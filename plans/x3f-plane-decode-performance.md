@@ -155,7 +155,7 @@ Owner direction, 2026-11-27: exhaust decoding before the 0.9.3 cut. Huff0, the e
 
 Every plane then went through fragments: short streams, cache prefetch and packed type-4 CAMF now decode one fragment in lanes instead of serially. The serial decoder remains the fallback for a plane that cannot split or whose fragments do not join, and the test reference. Merrill's type-4 CAMF halved, so Merrill opens fell 35-41% in total. Six Quattro photos prefetched three at a time decoded 14% faster. Geometry checks moved to one owner on the plane, so the split path rejects unsupported planes before allocating. Output matches serial decoding on fifteen originals in three modes: normal split, one fragment, and serial.
 
-Format 6 (SD9, SD10, SD14) uses its own row decoder and is not yet in lanes.
+Format 6 (SD9, SD10, SD14) stores each row at its own offset, so it needs no boundary search: each worker decodes four rows with the same sample count in lockstep. A group that fails replays its rows serially, so the first damaged row reports its cause. SD9, SD10 and SD14 opened 27-31% faster, with samples unchanged.
 
 ## Further research
 

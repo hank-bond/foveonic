@@ -12,6 +12,9 @@ use crate::source::Result;
 const SYMBOLS: usize = 1024;
 const DATA_OFFSET: usize = 6172;
 const PREFIX_BITS: usize = 12;
+/// Rows each worker decodes in lockstep. Rows are independent and have the
+/// same sample count, so one core overlaps their symbol lookups.
+const ROW_LANES: usize = 4;
 
 #[derive(Default)]
 struct Node {
@@ -76,38 +79,74 @@ impl Table {
         Ok(Self { nodes, prefixes })
     }
 
-    fn row(&self, input: &[u8], output: &mut [f32]) -> Result<()> {
-        let mut position = 0;
-        let total = product(input.len(), 8)?;
-        let mut accumulators = [0_i16; 3];
-        for (sample, value) in output.iter_mut().enumerate() {
-            let byte = position / 8;
-            let mut word = [0_u8; 4];
-            let available = input.len().saturating_sub(byte).min(4);
-            word[..available].copy_from_slice(&input[byte..byte + available]);
-            let prefix =
-                ((u32::from_be_bytes(word) << (position % 8)) >> (32 - PREFIX_BITS)) as usize;
-            let (node, length) = self.prefixes[prefix];
-            position += length;
-            let mut index = node.ok_or_else(|| damaged("unassigned format-6 Huffman prefix"))?;
-            while self.nodes[index].delta.is_none() {
-                if position >= total {
-                    return Err(damaged("truncated format-6 Huffman row"));
-                }
-                let bit = (input[position / 8] >> (7 - position % 8)) & 1;
-                position += 1;
-                index = self.nodes[index].children[bit as usize]
-                    .ok_or_else(|| damaged("unassigned format-6 Huffman suffix"))?;
-            }
-            if position > total {
+    /// Decode one difference at `position`, a bit offset into the row.
+    #[inline(always)]
+    fn difference(&self, input: &[u8], total: usize, position: &mut usize) -> Result<i16> {
+        let byte = *position / 8;
+        let mut word = [0_u8; 4];
+        let available = input.len().saturating_sub(byte).min(4);
+        word[..available].copy_from_slice(&input[byte..byte + available]);
+        let prefix = ((u32::from_be_bytes(word) << (*position % 8)) >> (32 - PREFIX_BITS)) as usize;
+        let (node, length) = self.prefixes[prefix];
+        *position += length;
+        let mut index = node.ok_or_else(|| damaged("unassigned format-6 Huffman prefix"))?;
+        while self.nodes[index].delta.is_none() {
+            if *position >= total {
                 return Err(damaged("truncated format-6 Huffman row"));
             }
+            let bit = (input[*position / 8] >> (7 - *position % 8)) & 1;
+            *position += 1;
+            index = self.nodes[index].children[bit as usize]
+                .ok_or_else(|| damaged("unassigned format-6 Huffman suffix"))?;
+        }
+        if *position > total {
+            return Err(damaged("truncated format-6 Huffman row"));
+        }
+        Ok(self.nodes[index].delta.expect("leaf"))
+    }
+
+    fn row(&self, input: &[u8], output: &mut [f32]) -> Result<()> {
+        let total = product(input.len(), 8)?;
+        let mut position = 0;
+        let mut accumulators = [0_i16; 3];
+        for (sample, value) in output.iter_mut().enumerate() {
             let channel = sample % 3;
             accumulators[channel] =
-                accumulators[channel].wrapping_add(self.nodes[index].delta.expect("leaf"));
+                accumulators[channel].wrapping_add(self.difference(input, total, &mut position)?);
             *value = f32::from(accumulators[channel]);
         }
         Ok(())
+    }
+
+    /// Decode rows with the same sample count in lockstep. False on any damage,
+    /// so the caller replays them in order and reports the first row's cause.
+    // Every lane advances one sample per step, and the lane indexes five arrays.
+    #[allow(clippy::needless_range_loop)]
+    fn rows(&self, inputs: [&[u8]; ROW_LANES], outputs: [&mut [f32]; ROW_LANES]) -> bool {
+        let mut totals = [0; ROW_LANES];
+        for (total, input) in totals.iter_mut().zip(inputs) {
+            let Ok(bits) = product(input.len(), 8) else {
+                return false;
+            };
+            *total = bits;
+        }
+        let mut positions = [0; ROW_LANES];
+        let mut accumulators = [[0_i16; 3]; ROW_LANES];
+        let samples = outputs[0].len();
+        for sample in 0..samples {
+            let channel = sample % 3;
+            for lane in 0..ROW_LANES {
+                let Ok(difference) =
+                    self.difference(inputs[lane], totals[lane], &mut positions[lane])
+                else {
+                    return false;
+                };
+                let accumulator = &mut accumulators[lane][channel];
+                *accumulator = accumulator.wrapping_add(difference);
+                outputs[lane][sample] = f32::from(*accumulator);
+            }
+        }
+        true
     }
 }
 
@@ -166,9 +205,20 @@ fn decode_rows(
     row_samples: usize,
     output: &mut [f32],
 ) -> Result<()> {
-    for (bounds, row) in rows.windows(2).zip(output.chunks_exact_mut(row_samples)) {
+    let row = |index: usize| &data[rows[index]..rows[index + 1]];
+    for (group, outputs) in output.chunks_mut(row_samples * ROW_LANES).enumerate() {
         crate::priority::checkpoint_or_cancel()?;
-        table.row(&data[bounds[0]..bounds[1]], row)?;
+        let first = group * ROW_LANES;
+        if outputs.len() == row_samples * ROW_LANES {
+            let mut lanes = outputs.chunks_exact_mut(row_samples);
+            let lanes = std::array::from_fn(|_| lanes.next().expect("full group"));
+            if table.rows(std::array::from_fn(|lane| row(first + lane)), lanes) {
+                continue;
+            }
+        }
+        for (offset, output) in outputs.chunks_exact_mut(row_samples).enumerate() {
+            table.row(row(first + offset), output)?;
+        }
     }
     Ok(())
 }
@@ -185,6 +235,35 @@ mod tests {
         assert_eq!(row, [32767., -1., 32767., -2., -2., 32766.]);
         table.row(&[0], &mut row).unwrap();
         assert_eq!(row, [-1., -1., -1., -2., -2., -2.]);
+    }
+
+    #[test]
+    fn lockstep_rows_match_serial_rows_and_report_the_first_damaged_row() {
+        let table = Table::new(&[1 << 27, (1 << 27) | 1], &[-1, 32767]).unwrap();
+        let data = [0b1011_0000, 0b0110_1100, 0xff, 0, 0b1001_0110];
+        let rows = [0, 1, 2, 3, 4, 5];
+        let mut lanes = vec![0.; 5 * 6];
+        decode_rows(&table, &data, &rows, 6, &mut lanes).unwrap();
+        let mut serial = vec![0.; 5 * 6];
+        for (index, output) in serial.as_chunks_mut::<6>().0.iter_mut().enumerate() {
+            table
+                .row(&data[rows[index]..rows[index + 1]], output)
+                .unwrap();
+        }
+        assert_eq!(lanes, serial);
+
+        // Row 0 decodes two samples before an unassigned prefix. Row 1 is empty
+        // and fails first in lockstep, but row 0's cause must be reported.
+        let table = Table::new(&[2 << 27], &[1]).unwrap();
+        let data = [0b0000_1000, 0, 0];
+        let rows = [0, 1, 1, 2, 3];
+        let mut output = vec![0.; 4 * 3];
+        let error = decode_rows(&table, &data, &rows, 3, &mut output).unwrap_err();
+        let first = table.row(&data[..1], &mut [0.; 3]).unwrap_err();
+        assert_eq!(error.to_string(), first.to_string());
+        assert!(error
+            .to_string()
+            .contains("unassigned format-6 Huffman prefix"));
     }
 
     #[test]
