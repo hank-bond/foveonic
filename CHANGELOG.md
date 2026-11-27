@@ -33,7 +33,7 @@ Open photographs faster by decoding them on every processor core, and render and
 
 ### Behavior changes
 
-- Classic: Open photographs with noise reduction on, as Merrill photographs already do, including in Finder previews and from the command line. Photographs with a saved recipe keep their setting.
+- Classic: Open photographs with noise reduction on, as Merrill photographs already do, including in Finder previews and from the command line. Photographs with a saved recipe keep their setting. Noise reduction makes a full-size Classic render about 65 ms slower on an M1 Pro.
 - Speed may look very slightly different from Quality in Quattro photographs below ISO 400 or 800, and in Merrill photographs with clipped highlights. Quality is unchanged.
 
 ### Bug fixes
