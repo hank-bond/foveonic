@@ -6,6 +6,9 @@ use std::ops::Range;
 
 const SCOUT_BITS: usize = 4096;
 const CHECKPOINT_SAMPLES: usize = 4096;
+/// Verified sub-ranges each fragment decodes in lockstep. Their symbol lookups
+/// are independent, so one core overlaps them instead of waiting on each.
+const LANES: usize = 4;
 
 pub(super) struct Split {
     boundaries: Vec<usize>,
@@ -18,7 +21,8 @@ impl Split {
         if fragments <= 1 {
             return None;
         }
-        // Compressed bytes do not divide evenly by sample count.
+        // Compressed bytes do not divide evenly by sample count, so a fragment
+        // may hold somewhat more than its share before it counts as damaged.
         let share = (plane.width * plane.height).div_ceil(fragments);
         Self::plan(table, plane.input, fragments, share + share / 2)
     }
@@ -29,11 +33,15 @@ impl Split {
             return None;
         }
         let end = input.len().checked_mul(8)?;
+        let cuts = fragments * LANES;
         let mut boundaries = vec![0];
-        for i in 1..fragments {
-            let cut = input.len() / fragments * i * 8;
-            let next = scout(table, input, cut, longest)?;
-            if next <= boundaries[i - 1] || next >= end {
+        for i in 1..cuts {
+            // `end * i / cuts` without overflow.
+            let cut = end / cuts * i + end % cuts * i / cuts;
+            // In a short stream a search can end at or before the previous
+            // boundary. Reusing that verified boundary leaves an empty lane.
+            let next = scout(table, input, cut, longest)?.max(boundaries[i - 1]);
+            if next >= end {
                 return None;
             }
             boundaries.push(next);
@@ -47,7 +55,14 @@ impl Split {
     }
 
     pub(super) fn len(&self) -> usize {
-        self.boundaries.len() - 1
+        (self.boundaries.len() - 1) / LANES
+    }
+
+    /// The lane boundaries of one fragment.
+    fn fragment(&self, part: usize) -> &[usize; LANES + 1] {
+        self.boundaries[part * LANES..=(part + 1) * LANES]
+            .try_into()
+            .expect("whole lanes per fragment")
     }
 
     pub(super) fn unpack(
@@ -57,31 +72,52 @@ impl Split {
         input: &[u8],
         layer: usize,
         part: usize,
-    ) -> Result<Option<Vec<u16>>> {
-        let range = self.boundaries[part]..self.boundaries[part + 1];
+    ) -> Result<Option<Vec<Vec<u16>>>> {
+        let bounds = self.fragment(part);
         let _scope = diagnostics::scope_with(
             diagnostics::Category::Cpu,
             "decode.plane.fragment",
             |fields| {
                 fields.u64("plane", layer as u64);
                 fields.u64("fragment", part as u64);
-                fields.u64("bits", range.len() as u64);
+                fields.u64("bits", (bounds[LANES] - bounds[0]) as u64);
             },
         );
-        unpack(
-            table,
-            lookup,
-            input,
-            range,
-            self.longest,
-            self.capacity,
-            |difference| difference as u16,
-        )
+        unpack(table, lookup, input, bounds, self.longest, self.capacity)
     }
 }
 
+/// Join a split stream's fragments with `append`, cut to the declared count.
+/// Only the last fragment may run past it, into the stream's padding.
+fn join(
+    parts: Vec<Option<Vec<Vec<u16>>>>,
+    count: usize,
+    mut append: impl FnMut(&mut Vec<u16>, Vec<Vec<u16>>),
+) -> Result<Option<Vec<u16>>> {
+    let fragments = parts.len();
+    let mut output = Vec::with_capacity(count);
+    for (i, part) in parts.into_iter().enumerate() {
+        priority::checkpoint_or_cancel()?;
+        let Some(lanes) = part else {
+            return Ok(None);
+        };
+        let length: usize = lanes.iter().map(Vec::len).sum();
+        let remaining = count - output.len();
+        if if i == fragments - 1 {
+            length < remaining
+        } else {
+            length > remaining
+        } {
+            return Ok(None);
+        }
+        append(&mut output, lanes);
+    }
+    output.truncate(count);
+    Ok(Some(output))
+}
+
 pub(super) fn reconstruct(
-    parts: Vec<Option<Vec<u16>>>,
+    parts: Vec<Option<Vec<Vec<u16>>>>,
     Plane {
         width,
         height,
@@ -91,27 +127,14 @@ pub(super) fn reconstruct(
     maximum: u16,
 ) -> Result<Option<Vec<u16>>> {
     let _scope = diagnostics::scope(diagnostics::Category::Cpu, "decode.plane.reconstruct");
-    let count = width * height;
-    let fragments = parts.len();
-    let mut output = Vec::with_capacity(count);
-    for (i, part) in parts.into_iter().enumerate() {
-        priority::checkpoint_or_cancel()?;
-        let Some(mut differences) = part else {
-            return Ok(None);
-        };
-        let remaining = count - output.len();
-        if i == fragments - 1 {
-            // The declared sample count ends the stream. Padding after it can
-            // contain arbitrary bits, including an incomplete or invalid code.
-            if differences.len() < remaining {
-                return Ok(None);
-            }
-            differences.truncate(remaining);
-        } else if differences.len() > remaining {
-            return Ok(None);
+    let append = |output: &mut Vec<u16>, lanes: Vec<Vec<u16>>| {
+        for lane in lanes {
+            output.extend_from_slice(&lane);
         }
-        output.extend_from_slice(&differences);
-    }
+    };
+    let Some(mut output) = join(parts, width * height, append)? else {
+        return Ok(None);
+    };
 
     let mut vertical = [[seed; 2]; 2];
     for (y, row) in output.chunks_exact_mut(width).enumerate() {
@@ -162,44 +185,44 @@ pub(super) fn decode_bytes(
                 fields.u64("fragment", part as u64);
             },
         );
-        let range = split.boundaries[part]..split.boundaries[part + 1];
-        let mut byte = 0_u8;
-        unpack(
+        let lanes = unpack(
             table,
             &lookup,
             input,
-            range,
+            split.fragment(part),
             split.longest,
             split.capacity,
-            |difference| {
-                byte = byte.wrapping_add(difference as u8);
-                byte
-            },
-        )
+        )?;
+        // Each fragment sums its own bytes from zero on the pool. The join then
+        // adds the total of the fragments before it (a prefix sum).
+        Ok(lanes.map(|mut lanes| {
+            let mut byte = 0_u8;
+            for difference in lanes.iter_mut().flatten() {
+                byte = byte.wrapping_add(*difference as u8);
+                *difference = u16::from(byte);
+            }
+            lanes
+        }))
     })?;
     let mut carry = seed;
-    let mut output = Vec::with_capacity(length);
-    for (index, part) in parts.into_iter().enumerate() {
-        priority::checkpoint_or_cancel()?;
-        let Some(mut part) = part else {
-            return Ok(None);
-        };
-        let remaining = length - output.len();
-        if index + 1 == split.len() {
-            // The declared size selects the last byte even if the input continues.
-            if part.len() < remaining {
-                return Ok(None);
-            }
-            part.truncate(remaining);
-        } else if part.len() > remaining {
-            return Ok(None);
+    let append = |output: &mut Vec<u16>, lanes: Vec<Vec<u16>>| {
+        let total = lanes
+            .iter()
+            .rev()
+            .find_map(|lane| lane.last())
+            .map_or(0, |&byte| byte as u8);
+        for lane in lanes {
+            output.extend(
+                lane.into_iter()
+                    .map(|byte| u16::from((byte as u8).wrapping_add(carry))),
+            );
         }
-        // A chunk starts at zero. Its final byte is its total delta.
-        let sum = part.last().copied().unwrap_or(0);
-        output.extend(part.into_iter().map(|byte| byte.wrapping_add(carry)));
-        carry = carry.wrapping_add(sum);
-    }
-    Ok(Some(output))
+        carry = carry.wrapping_add(total);
+    };
+    Ok(
+        join(parts, length, append)?
+            .map(|bytes| bytes.into_iter().map(|byte| byte as u8).collect()),
+    )
 }
 
 // Each set bit is a live candidate token boundary. Start with every possible
@@ -240,36 +263,145 @@ fn at_bit(input: &[u8], start: usize) -> Bits<'_> {
     bits
 }
 
-fn unpack<T>(
-    table: &Table,
-    lookup: &[Difference; PREFIX_TABLE_ENTRIES],
-    input: &[u8],
-    range: Range<usize>,
-    longest: usize,
-    capacity: usize,
-    mut sample: impl FnMut(i16) -> T,
-) -> Result<Option<Vec<T>>> {
-    let end_byte = range.end.div_ceil(8);
-    let padding = end_byte * 8 - range.end;
-    let last = end_byte == input.len() && padding == 0;
-    let mut bits = at_bit(&input[..end_byte], range.start);
-    let mut decoded = Vec::with_capacity(capacity);
-    loop {
-        priority::checkpoint_or_cancel()?;
-        let remaining = bits.data.len() * 8 + bits.buffered_bits as usize;
-        if remaining <= padding || decoded.len() == capacity {
-            return Ok((remaining == padding || last).then_some(decoded));
+/// One lane of a fragment: a verified range decoded into its own differences,
+/// stored as wrapping `u16` so the sample predictors add them directly.
+struct Lane<'a> {
+    bits: Bits<'a>,
+    padding: usize,
+    failed: bool,
+    differences: Vec<u16>,
+}
+
+impl<'a> Lane<'a> {
+    fn new(input: &'a [u8], range: Range<usize>, capacity: usize) -> Self {
+        let end_byte = range.end.div_ceil(8);
+        let padding = end_byte * 8 - range.end;
+        Self {
+            bits: at_bit(&input[..end_byte], range.start),
+            padding,
+            failed: false,
+            differences: Vec::with_capacity(capacity.div_ceil(LANES)),
         }
-        // Each full batch fits without a per-symbol end-position check. Close
-        // to the boundary, check after one symbol at a time.
-        let batch = ((remaining - padding) / longest)
-            .clamp(1, CHECKPOINT_SAMPLES)
-            .min(capacity - decoded.len());
-        for _ in 0..batch {
-            match table.looked_up_difference(lookup, &mut bits) {
-                Ok(difference) => decoded.push(sample(difference)),
-                Err(_) => return Ok(last.then_some(decoded)),
+    }
+
+    fn remaining(&self) -> usize {
+        self.bits.data.len() * 8 + self.bits.buffered_bits as usize
+    }
+
+    /// Symbols that fit before the boundary without a per-symbol end check.
+    fn room(&self, longest: usize) -> usize {
+        self.remaining().saturating_sub(self.padding) / longest
+    }
+
+    /// Decode to the lane's boundary, using at most `spare` more differences.
+    /// Says whether it got there, rather than stopping at an invalid code or
+    /// running out of spare capacity.
+    fn finish(
+        &mut self,
+        table: &Table,
+        lookup: &[Difference; PREFIX_TABLE_ENTRIES],
+        longest: usize,
+        spare: usize,
+    ) -> Result<bool> {
+        let limit = self.differences.len() + spare;
+        loop {
+            if self.failed {
+                return Ok(false);
+            }
+            priority::checkpoint_or_cancel()?;
+            let remaining = self.remaining();
+            if remaining <= self.padding || self.differences.len() == limit {
+                return Ok(remaining == self.padding);
+            }
+            // Close to the boundary, check after one symbol at a time.
+            let batch = self
+                .room(longest)
+                .clamp(1, CHECKPOINT_SAMPLES)
+                .min(limit - self.differences.len());
+            for _ in 0..batch {
+                if !self.step(table, lookup) {
+                    break;
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn step(&mut self, table: &Table, lookup: &[Difference; PREFIX_TABLE_ENTRIES]) -> bool {
+        match table.looked_up_difference(lookup, &mut self.bits) {
+            Ok(difference) => {
+                self.differences.push(difference as u16);
+                true
+            }
+            Err(_) => {
+                self.failed = true;
+                false
             }
         }
     }
 }
+
+/// Decode one fragment's lanes in lockstep while each has room, then finish
+/// each lane alone. The lanes share the fragment's `capacity`, which bounds
+/// the work a damaged stream can cause.
+fn unpack(
+    table: &Table,
+    lookup: &[Difference; PREFIX_TABLE_ENTRIES],
+    input: &[u8],
+    bounds: &[usize; LANES + 1],
+    longest: usize,
+    capacity: usize,
+) -> Result<Option<Vec<Vec<u16>>>> {
+    let mut lanes: [Lane; LANES] =
+        std::array::from_fn(|lane| Lane::new(input, bounds[lane]..bounds[lane + 1], capacity));
+    let used = |lanes: &[Lane]| {
+        lanes
+            .iter()
+            .map(|lane| lane.differences.len())
+            .sum::<usize>()
+    };
+    'lockstep: loop {
+        priority::checkpoint_or_cancel()?;
+        let room = lanes.iter().map(|lane| lane.room(longest)).min();
+        let batch = room
+            .expect("a fragment has lanes")
+            .min((capacity - used(&lanes)) / LANES)
+            .min(CHECKPOINT_SAMPLES);
+        if batch == 0 {
+            break;
+        }
+        for _ in 0..batch {
+            for lane in &mut lanes {
+                if !lane.step(table, lookup) {
+                    break 'lockstep;
+                }
+            }
+        }
+    }
+    // The declared sample count ends the stream. Padding after it can hold
+    // an invalid code, so in the stream's last fragment the first lane that
+    // stops early ends it and the join keeps only the declared samples.
+    let stream_end = bounds[LANES] == input.len() * 8;
+    for index in 0..LANES {
+        let spare = capacity - used(&lanes);
+        if !lanes[index].finish(table, lookup, longest, spare)? {
+            if !stream_end {
+                return Ok(None);
+            }
+            return Ok(Some(
+                lanes
+                    .into_iter()
+                    .take(index + 1)
+                    .map(|lane| lane.differences)
+                    .collect(),
+            ));
+        }
+    }
+    Ok(Some(
+        lanes.into_iter().map(|lane| lane.differences).collect(),
+    ))
+}
+
+#[cfg(test)]
+#[path = "huffman_parallel_test.rs"]
+mod tests;

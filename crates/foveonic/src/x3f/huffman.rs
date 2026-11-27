@@ -263,7 +263,8 @@ impl Table {
                 }
                 _ => {
                     let _scope = scope(layer);
-                    self.decode_plane(planes[layer], maximum, &lookup).map(Some)
+                    self.decode_plane(planes[layer], maximum, &lookup)
+                        .map(|samples| Some(vec![samples]))
                 }
             }
         })?
@@ -278,6 +279,7 @@ impl Table {
                     .into_iter()
                     .next()
                     .flatten()
+                    .and_then(|lanes| lanes.into_iter().next())
                     .ok_or("missing sensor plane data")?
             } else {
                 let _scope = scope(layer);
