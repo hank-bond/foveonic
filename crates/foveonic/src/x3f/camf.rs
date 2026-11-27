@@ -5,7 +5,7 @@
 use super::bytes::{product, Bytes};
 use super::huffman::Table;
 use crate::source::{Matrix, MatrixEncoding, PropertyList, Result};
-use crate::{decode_pool, diagnostics, input_error::damaged, priority, profile::Timing};
+use crate::{decode_pool, diagnostics, input_error::damaged, profile::Timing};
 use std::{collections::BTreeMap, time::Instant};
 
 pub(super) type Lists = BTreeMap<String, PropertyList>;
@@ -14,8 +14,6 @@ type Decoded = (Vec<u8>, BTreeMap<String, Matrix>, Lists);
 const PACKED_HUFFMAN_COMPRESSION: u32 = 4;
 const BYTE_HUFFMAN_COMPRESSION: u32 = 5;
 const COMPRESSED_LENGTH_OFFSET: usize = 56;
-const MINIMUM_FRAGMENT_BYTES: usize = 256 * 1024;
-const MAXIMUM_FRAGMENTS: usize = 8;
 const MATRIX_BLOCK_VERSION: u32 = 0x0002_0000;
 const LIST_BLOCK_VERSION: u32 = 0x0001_0000;
 const BLOCK_HEADER_BYTES: usize = 20;
@@ -24,25 +22,18 @@ const BYTE_METADATA_CAPACITY: usize = 0x85bcb8;
 
 pub(super) fn read(section: &[u8], timings: &mut Vec<Timing>) -> Result<Decoded> {
     let bytes = Bytes(section);
-    let fragments = if bytes.u32(8).ok() == Some(BYTE_HUFFMAN_COMPRESSION)
-        && priority::decoder_context().is_none()
-    {
-        decode_pool::available_workers()
-            .min(bytes.offset(COMPRESSED_LENGTH_OFFSET).unwrap_or(0) / MINIMUM_FRAGMENT_BYTES)
-            .min(MAXIMUM_FRAGMENTS)
+    let fragments = if bytes.u32(8).ok() == Some(BYTE_HUFFMAN_COMPRESSION) {
+        super::huffman::fragments([bytes.offset(COMPRESSED_LENGTH_OFFSET).unwrap_or(0)])[0]
     } else {
         1
     };
-    let unpack = |timings: &mut Vec<Timing>| -> Result<Vec<u8>> {
-        let start = Instant::now();
-        let camf = {
-            let _scope = diagnostics::scope(diagnostics::Category::Cpu, "decode.camf.decompress");
-            decompress(section, fragments)?
-        };
-        timings.push(Timing::elapsed("CAMF decompress", start));
-        Ok(camf)
+    let start = Instant::now();
+    let camf = {
+        let _scope = diagnostics::scope(diagnostics::Category::Cpu, "decode.camf.decompress");
+        decompress(section, fragments)?
     };
-    let parse_metadata = |camf: Vec<u8>, timings: &mut Vec<Timing>| {
+    timings.push(Timing::elapsed("CAMF decompress", start));
+    decode_pool::cpu(|| {
         let start = Instant::now();
         let (matrices, lists) = {
             let _scope = diagnostics::scope(diagnostics::Category::Cpu, "decode.camf.parse");
@@ -50,18 +41,11 @@ pub(super) fn read(section: &[u8], timings: &mut Vec<Timing>) -> Result<Decoded>
         };
         timings.push(Timing::elapsed("CAMF parse", start));
         Ok((camf, matrices, lists))
-    };
-    if fragments < 2 {
-        return decode_pool::cpu(|| {
-            let camf = unpack(timings)?;
-            parse_metadata(camf, timings)
-        });
-    }
-    // Join the fragments from the file caller, then queue the parse as a leaf.
-    let camf = unpack(timings)?;
-    decode_pool::cpu(|| parse_metadata(camf, timings))
+    })
 }
 
+/// Decompress the camera metadata. Split decoding joins its fragments from this
+/// caller, outside the processing pool; whole-stream decoding runs in the pool.
 fn decompress(section: &[u8], fragments: usize) -> Result<Vec<u8>> {
     let bytes = Bytes(section);
     if bytes.range(0, 4)? != b"SECc" {
@@ -106,10 +90,10 @@ fn decompress(section: &[u8], fragments: usize) -> Result<Vec<u8>> {
             if let Some(output) = table.decode_byte_fragments(input, declared, seed, fragments)? {
                 return Ok(output);
             }
-            // Replay from the beginning to preserve the scalar damage cause.
-            return decode_pool::cpu(|| table.decode_bytes(input, declared, seed));
         }
-        return table.decode_bytes(input, declared, seed);
+        // Whole streams, and a failed split replayed from the start, keep the
+        // scalar damage cause.
+        return decode_pool::cpu(|| table.decode_bytes(input, declared, seed));
     }
     if bytes.u32(8)? != PACKED_HUFFMAN_COMPRESSION {
         return Err("unsupported camera metadata compression".into());
@@ -139,13 +123,16 @@ fn decompress(section: &[u8], fragments: usize) -> Result<Vec<u8>> {
         return Err(damaged("unterminated camera metadata code table"));
     }
     let input = bytes.range(60, bytes.offset(COMPRESSED_LENGTH_OFFSET)?)?;
-    let plane = Table::new(&codes)?.decode(
-        input,
-        width,
-        height,
-        seed as u16,
-        super::huffman::SAMPLE_MAX as u16,
-    )?;
+    let table = Table::new(&codes)?;
+    let plane = decode_pool::cpu(|| {
+        table.decode(
+            input,
+            width,
+            height,
+            seed as u16,
+            super::huffman::SAMPLE_MAX as u16,
+        )
+    })?;
     let mut output = Vec::with_capacity(product(count / 2, 3)?);
     // Two twelve-bit samples occupy three bytes: aaaaaaaa aaaabbbb bbbbbbbb.
     for pair in plane.as_chunks::<2>().0 {

@@ -176,9 +176,6 @@ impl Table {
         seed: u8,
         fragments: usize,
     ) -> Result<Option<Vec<u8>>> {
-        if fragments < 2 {
-            return Ok(None);
-        }
         parallel::decode_bytes(self, input, length, seed, fragments)
     }
 
@@ -222,7 +219,8 @@ impl Table {
         maximum: u16,
         format: u32,
     ) -> Result<Vec<(Vec<u16>, Timing)>> {
-        self.decode_split_planes(planes, maximum, fragments(&planes), format)
+        let lengths = planes.map(|plane| plane.input.len());
+        self.decode_split_planes(planes, maximum, fragments(lengths), format)
     }
 
     fn decode_split_planes(
@@ -352,21 +350,17 @@ impl Table {
     }
 }
 
-/// Fragments per plane, so one photo's planes fill the processing pool. Decoding
-/// work follows compressed size, so a larger plane gets more fragments. Photos
-/// prefetched for the cache already fill the pool together and decode whole planes.
-fn fragments(planes: &[Plane<'_>; 3]) -> [usize; 3] {
+/// Fragments per compressed stream decoded together, so one photo fills the
+/// processing pool. Decoding work follows compressed length, so a longer stream
+/// gets more fragments. Photos prefetched for the cache already fill the pool
+/// together and decode whole streams.
+pub(super) fn fragments<const N: usize>(lengths: [usize; N]) -> [usize; N] {
     if crate::priority::decoder_context().is_some() {
-        return [1; 3];
+        return [1; N];
     }
     let workers = decode_pool::available_workers();
-    let total = planes
-        .iter()
-        .map(|plane| plane.input.len())
-        .sum::<usize>()
-        .max(1);
-    planes.map(|plane| {
-        let length = plane.input.len();
+    let total = lengths.iter().sum::<usize>().max(1);
+    lengths.map(|length| {
         // The nearest whole share of the workers, and no fragment shorter than the minimum.
         ((2 * workers * length + total) / (2 * total))
             .min(length / MINIMUM_FRAGMENT_BYTES)
