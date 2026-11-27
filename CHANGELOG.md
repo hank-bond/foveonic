@@ -11,16 +11,16 @@ Open photographs faster by decoding them on every processor core, and render and
 
 ### Performance improvements
 
-- Open original photographs faster. Each compressed sensor layer, and a Quattro photograph's camera calibration, is split into pieces decoded on all processor cores. Opening times on an Apple Silicon Mac, compared with 0.9.2:
+- Open original photographs faster. Each compressed sensor layer, and the camera calibration, is split into pieces decoded on all processor cores, and each piece decodes four parts at once on its core. Classic SD9, SD10 and SD14 photographs decode four rows at once. Opening times on an Apple Silicon Mac, compared with 0.9.2:
 
   | Photograph | 0.9.2 | 0.9.3 | |
   |---|---|---|---|
-  | Merrill, HI | 130 ms | 62 ms | 2.1× faster |
-  | DP3 Merrill, MED | 69 ms | 37 ms | 1.9× faster |
-  | DP3 Merrill, LOW | 40 ms | 24 ms | 1.6× faster |
-  | DP0 Quattro | 275 ms | 75 ms | 3.7× faster |
-  | DP2 Quattro | 244 ms | 68 ms | 3.6× faster |
-  | sd Quattro H | 315 ms | 83 ms | 3.8× faster |
+  | Merrill, HI | 130 ms | 37 ms | 3.5× faster |
+  | DP3 Merrill, MED | 69 ms | 24 ms | 2.9× faster |
+  | DP3 Merrill, LOW | 40 ms | 16 ms | 2.5× faster |
+  | DP0 Quattro | 275 ms | 57 ms | 4.9× faster |
+  | DP2 Quattro | 244 ms | 48 ms | 5.1× faster |
+  | sd Quattro H | 316 ms | 56 ms | 5.7× faster |
 
   This matters most where nothing is decoded ahead of time, such as opening a photograph from Finder or Preview. The trade-off is memory: decoding every layer at once holds more while a photograph opens, so peak memory is up to about 100 MB higher than in 0.9.2, and after browsing several photographs memory can stay about that much higher.
 - Quattro: Pan around a zoomed photograph faster when Reference sharpening is off, by preparing a smaller margin around each region.
@@ -38,6 +38,7 @@ Open photographs faster by decoding them on every processor core, and render and
 
 ### Bug fixes
 
+- Quattro: Render sd Quattro photographs that failed with "blue mismatch first scan row would read an uninitialized reference counter" ([#3](https://github.com/hank-bond/foveonic/issues/3)). A blue repair run may now start on the first row it scans.
 - macOS: Show the app's own Dock icon, including its dark version when the Dark icon style is selected, instead of a fixed light image.
 - Windows: Keep the window clear of the taskbar wherever it sits, and shrink a remembered window that no longer fits the screen. On a screen too small for the minimum window size, the minimum gives way so the whole window stays reachable.
 
@@ -45,6 +46,7 @@ Open photographs faster by decoding them on every processor core, and render and
 
 - **[Parallelising Huffman decoding](https://dougallj.wordpress.com/2022/07/30/parallelising-huffman-decoding-and-x86-disassembly-by-synchronising-non-self-synchronising-prefix-codes/)** (Dougall Johnson, 2022). The method we use to find safe places to split a compressed stream so its pieces can decode at the same time. We use it for both the sensor data and the camera calibration.
 - **[Parallel Huffman Decoding with Applications to JPEG Files](https://www.openu.ac.il/home/wiseman/computer2003.pdf)** (Klein and Wiseman, 2003). The research behind it: why this kind of stream falls back into step soon after an arbitrary split.
+- **[Huff0](https://github.com/Cyan4973/FiniteStateEntropy)** (Yann Collet), the Huffman decoder in zstd, and Klaus Post's [Go port](https://pkg.go.dev/github.com/klauspost/compress/huff0). It decodes four independent streams interleaved on one core so their lookups overlap. We decode four verified lanes of each piece the same way.
 - **[Prefix Sums and Their Applications](https://www.cs.cmu.edu/~guyb/papers/Ble93.pdf)** (Guy Blelloch, 1993). How the camera-calibration pieces fit back together: each piece decodes as if it started from zero, then is shifted by the running total of the pieces before it.
 - **[FlashRAW 0.5.0](https://github.com/ybouane/flashraw/tree/v0.5.0).** Its [bit reader](https://github.com/ybouane/flashraw/blob/v0.5.0/crates/flashraw-core/src/bits.rs) shaped ours, and its [parallel entropy decoder](https://github.com/ybouane/flashraw/blob/v0.5.0/crates/flashraw-codecs/src/par_entropy.rs) showed the same idea working in other raw formats.
 
