@@ -22,7 +22,7 @@ Open photographs faster by decoding them on every processor core, and render and
   | DP2 Quattro | 244 ms | 68 ms | 3.6× faster |
   | sd Quattro H | 315 ms | 83 ms | 3.8× faster |
 
-  This matters most where nothing is decoded ahead of time, such as opening a photograph from Finder or Preview. The trade-off is memory: decoding every layer at once holds more while a photograph opens, so peak memory is up to about 100 MB higher than in 0.9.2.
+  This matters most where nothing is decoded ahead of time, such as opening a photograph from Finder or Preview. The trade-off is memory: decoding every layer at once holds more while a photograph opens, so peak memory is up to about 100 MB higher than in 0.9.2, and after browsing several photographs memory can stay about that much higher.
 - Quattro: Pan around a zoomed photograph faster when Reference sharpening is off, by preparing a smaller margin around each region.
 - Quattro: Render with less memory and work by reusing intermediate buffers, applying the reconstruction residual in place and converting limited chroma straight to camera RGB. Full-size renders are up to 28% faster, for example 881 → 634 ms for a DP0 Quattro in Speed.
 - Quattro: In Speed, shorten two filters below their ISO limits and sample half the taps of the coarse color filter at native size.
@@ -33,6 +33,7 @@ Open photographs faster by decoding them on every processor core, and render and
 
 ### Behavior changes
 
+- Classic: Open photographs with noise reduction on, as Merrill photographs already do, including in Finder previews and from the command line. Photographs with a saved recipe keep their setting.
 - Speed may look very slightly different from Quality in Quattro photographs below ISO 400 or 800, and in Merrill photographs with clipped highlights. Quality is unchanged.
 
 ### Bug fixes

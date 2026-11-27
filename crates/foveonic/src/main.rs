@@ -80,7 +80,7 @@ Options (also available for batch):
   --row-correction          Reduce additive per-row sensor banding (default on)
   --no-row-correction       Disable per-row banding correction
   --repair-badness MIN       Enable ordered repair with a manual cutoff in 0..15
-  --reconstruction          Enable noise/detail processing (on by default for Merrill)
+  --reconstruction          Enable noise/detail processing (on by default)
   --fine-detail FACTOR      Fine texture restoration 0..2, default 1
   --coarse-detail FACTOR    Coarse texture restoration 0..2, default 1
   --fine-size FACTOR        Fine boundary size 0.5..2, default 1

@@ -290,8 +290,11 @@ fn smoke_sessions_neither_read_nor_write_fixture_recipes() {
 }
 
 #[test]
-fn fresh_merrill_capture_defaults_enable_noise_before_rendering() {
+fn fresh_capture_defaults_enable_noise_before_rendering() {
     for model in [
+        "SIGMA SD9",
+        "SIGMA SD14",
+        "SIGMA DP2",
         "SIGMA DP1 Merrill",
         "SIGMA DP2 Merrill",
         "SIGMA DP3 Merrill",

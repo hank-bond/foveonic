@@ -157,7 +157,8 @@ pub struct Settings {
     pub merrill_noise_method: MerrillNoiseMethod,
     /// Optional directional cleanup, retaining settings while inactive.
     pub merrill_banding: MerrillBandingControls,
-    /// Optional color noise and detail settings. None selects the recipe baseline.
+    /// Optional color noise and detail settings. None means off for Classic,
+    /// the camera default for Merrill (legacy recipes) and the recorded controls for Quattro.
     /// Mandatory sensor reconstruction still runs when these adjustments are off.
     pub reconstruction: Option<crate::noise::Controls>,
     /// None selects the recipe base. Some is a manual amount. Zero skips final

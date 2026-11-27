@@ -201,6 +201,29 @@ fn classic_resets_noise_adjustments_without_disabling_reconstruction() {
 }
 
 #[test]
+fn classic_camera_defaults_reconstruct_in_color_and_monochrome() {
+    let metadata = Metadata {
+        processing_version: None,
+        width: 2640,
+        height: 1760,
+        rotation: 0,
+        properties: [("CAMMODEL".into(), "SIGMA SD14".into())].into(),
+        matrices: Default::default(),
+        lists: Default::default(),
+    };
+    let capabilities = ControlCapabilities::from_metadata(&metadata).unwrap();
+    for rendering in [Rendering::Color, Rendering::Monochrome] {
+        let fresh = crate::render::camera_settings(&metadata, Some(rendering)).unwrap();
+        assert_eq!(
+            fresh.reconstruction,
+            Some(Default::default()),
+            "{rendering:?}"
+        );
+        assert!(capabilities.validate(&fresh).is_ok(), "{rendering:?}");
+    }
+}
+
+#[test]
 fn merrill_recipes_without_noise_controls_get_the_camera_default_and_keep_an_explicit_off() {
     let metadata = Metadata {
         processing_version: None,

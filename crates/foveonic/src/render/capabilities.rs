@@ -139,7 +139,7 @@ impl ControlCapabilities {
     ) -> Result<()> {
         if self.family == ProcessingFamily::Quattro {
             super::recipes::quattro::apply_capture_defaults(settings, metadata)?;
-        } else if self.family == ProcessingFamily::Merrill {
+        } else {
             settings.reconstruction = Some(self.default_noise_controls());
         }
         Ok(())
