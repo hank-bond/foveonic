@@ -5,6 +5,30 @@ kind: reference
 
 # Changelog
 
+## 0.9.3
+
+Open photographs faster by decoding them on every processor core, and render and pan Quattro photographs with less waiting.
+
+### Performance improvements
+
+- Open original photographs faster. Each compressed sensor layer, and a Quattro photograph's camera calibration, is split into pieces decoded on all processor cores.
+- Quattro: Pan around a zoomed photograph faster when Reference sharpening is off, by preparing a smaller margin around each region.
+- Quattro: Render with less memory and work by reusing intermediate buffers, applying the reconstruction residual in place and converting limited chroma straight to camera RGB.
+- Quattro: In Speed, shorten two filters below their ISO limits and sample half the taps of the coarse color filter at native size.
+- Use less memory for Clarity: its six blur levels share one buffer instead of allocating two for each level.
+- Merrill: In Speed, sample highlight restoration's donor colors on a grid of at most about a million points.
+- Repair Quattro's sparse blue defects in one pass instead of one per cluster.
+- Measure Dehaze's brightness with direct histograms when its color is set manually.
+
+### Behavior changes
+
+- Speed may look very slightly different from Quality in Quattro photographs below ISO 400 or 800, and in Merrill photographs with clipped highlights. Quality is unchanged.
+
+### Bug fixes
+
+- macOS: Show the app's own Dock icon, including its dark version when the Dark icon style is selected, instead of a fixed light image.
+- Windows: Keep the window clear of the taskbar wherever it sits, and shrink a remembered window that no longer fits the screen. On a screen too small for the minimum window size, the minimum gives way so the whole window stays reachable.
+
 ## 0.9.2
 
 Preview X3F photographs in Finder with the space bar, and render the same camera defaults from the command line as in the app.
