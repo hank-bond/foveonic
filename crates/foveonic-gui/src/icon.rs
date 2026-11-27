@@ -1,7 +1,10 @@
 //! Loads window and startup artwork while leaving macOS Dock appearances to the app bundle.
 
+#[cfg(not(target_os = "macos"))]
 const PNG: &[u8] = include_bytes!("../assets/icon.png");
 
+/// The window icon on Windows and Linux. macOS takes the Dock icon from the bundle.
+#[cfg(not(target_os = "macos"))]
 pub fn window_icon() -> eframe::egui::IconData {
     let image = image::load_from_memory(PNG)
         .expect("embedded application icon")
@@ -42,6 +45,7 @@ pub fn startup_icons(context: &eframe::egui::Context) -> [eframe::egui::TextureH
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn icon_has_a_light_background_transparent_exterior_and_preserved_artwork() {
         let icon = super::window_icon();

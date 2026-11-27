@@ -2010,13 +2010,22 @@ fn run() -> eframe::Result {
     let background = std::env::var_os("FOVEONIC_GUI_SCENARIO_BACKGROUND").is_some();
     let mut viewport = egui::ViewportBuilder::default()
         .with_app_id(preferences::APP_ID)
-        .with_icon(icon::window_icon())
         .with_inner_size(if smoke::screenshot_active() {
             smoke::screenshot_recipe().window_size
         } else {
             [1440., 1000.]
         })
         .with_min_inner_size([1000., 600.]);
+    // macOS takes the Dock icon, with its dark appearance, from the app bundle.
+    // An empty icon tells eframe not to replace it with egui's own.
+    #[cfg(target_os = "macos")]
+    {
+        viewport = viewport.with_icon(egui::IconData::default());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        viewport = viewport.with_icon(icon::window_icon());
+    }
     if background {
         viewport = viewport
             .with_active(false)
