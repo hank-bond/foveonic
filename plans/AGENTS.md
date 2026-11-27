@@ -29,6 +29,7 @@ Keep plans self-contained. Referenced filesystem paths must be checked in; do no
 - **[comparable-runs](./comparable-runs.md)** Generate a render run from any revision and compare two runs for pixel changes and timing, and time every behavioral step, so release checks need nothing stored on one machine.
 - **[complete-reference-algorithms](./complete-reference-algorithms.md)** Track remaining reference-algorithm follow-ups and the completed default photographic output resizer.
 - **[coordination-overhead-profile](./coordination-overhead-profile.md)** Measure data movement, preparation, scheduling, synchronization and delivery overhead before selecting current-architecture optimizations.
+- **[cross-scale-reuse](./cross-scale-reuse.md)** Serve a requested buffer from the same buffer cached at a finer scale, as an engine capability enabled in Speed first and compared node by node.
 - **[dehaze](./dehaze.md)** Adapt recovered haze estimation and patch picking into a saved GPU Dehaze correction.
 - **[display-color-management](./display-color-management.md)** Integrate ICC-derived display limits, managed macOS presentation and gamut-preserving previews.
 - **[dng-export](./dng-export.md)** Implement uncompressed uint16 DNG export through the existing TIFF writer, with baked technical corrections and one embedded appearance; evaluate compression later.
