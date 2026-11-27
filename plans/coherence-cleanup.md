@@ -59,6 +59,12 @@ Record duplicated paths found after 2026-11-22 here, with where they are and wha
 - [ ] **Stage profile beside the trace.** Owner, 2026-11-24. Perfetto is the one trace recorder, but each render also keeps its own list of stage names and times (`Profile`), which tests, the profiling example and the comparable-runs stage times read. Find what the profile records that a trace does not, and what needs it with tracing off. Then either read stages from the trace or state why the profile stays.
 - [ ] **One GPU wait per delivered image.** Delivery waits once per finished frame instead of once per tick, which may limit the gain from wide rendering. Not measured.
 
+## Features for 0.10.0
+
+Owner direction, 2026-11-27. These build on the settings and export work above.
+
+- [ ] **Preview and convert from Finder.** Quick Look previews follow two app settings, resolution and default recipe, and a Finder Quick Action converts with the same settings into every supported format. See the [Quick Look plan](./quick-look-previews.md#preview-and-convert-from-finder-0100). Depends on `AppSettings` and on one export path.
+
 ## Audit
 
 - [ ] Before closing this plan, audit the app against the principle's list and record what is left and why.

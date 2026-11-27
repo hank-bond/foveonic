@@ -86,3 +86,18 @@ Recorded in the [coherence cleanup](./coherence-cleanup.md). Each builds on this
 - A typed As Shot choice, in the `Settings` split into recipe and render parameters.
 - One export path for the GUI and the command line, in scheduler step 10.
 - The smaller command-line copies found while reviewing slice 1.
+
+## Preview and convert from Finder (0.10.0)
+
+Owner direction, 2026-11-27: preview a photograph in Finder with your own default recipe and convert it right there, without opening the app. 0.9.3's faster decoding makes this practical. The space-bar preview cannot use the decode cache, and an sd Quattro H now decodes in 56 ms instead of 316 ms, so rendering is most of the wait.
+
+1. **Quick Look previews follow app settings.** Two settings, managed in the app:
+   - Preview resolution: the [reduced working size](../docs/specs/quick-look-previews.md) or full size. Measure full-size preview renders per camera family before choosing the default.
+   - Recipe: the camera defaults, as now, or the user's default recipe for the photograph's camera family. This changes the spec's "camera's default recipe only" rule; saved recipes beside the file stay ignored unless decided otherwise.
+2. **A Finder Quick Action converts with the same settings.** Right-click or the preview pane's Quick Actions renders the photograph with the preview's recipe choice, at full size, into each supported output format (TIFF, JPEG, PNG, JPEG XL). It writes beside the original, or asks where, and never opens the app. It shares the command line's export path; it does not add another.
+
+How settings reach the extensions:
+
+- A Quick Look or action extension has no settings screen. The app owns these settings and shares them through an App Group named after the team ID, which the app and its extensions join. Each preview or conversion reads the shared preferences, so changes in the app apply to the next one. This fits the `AppSettings` rework in the [coherence cleanup](./coherence-cleanup.md): one owner for preferences, with these keys stored where the extensions can read them.
+- The user's family default recipes live in application storage and need the same shared location.
+- Release builds are signed with the Developer ID and can claim the group. Local builds are signed ad hoc and cannot, so they would fall back to camera defaults and the reduced size. Decide how that stays clear during local testing.
